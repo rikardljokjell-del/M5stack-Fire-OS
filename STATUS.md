@@ -9,8 +9,10 @@ All backendkode, tester, dokumentasjon og startskript er samlet i
 Lokale avhengigheter, testresultater, pakker og logger ligger også under denne
 mappen, men genererte runtime-data og hemmeligheter holdes utenfor Git.
 
-`M5Stack-device/` er opprettet med kun en tom `.gitkeep` for GitHub-visning.
-Mappen er reservert og skal ellers stå urørt. FIRE OS-koden er ikke endret.
+`M5Stack-device/` inneholder nå FIRE OS-firmwareprosjektet som er migrert fra
+det eksisterende PlatformIO-prosjektet. Bygget er kontrollert med PlatformIO i
+den nye repo-plasseringen. Genererte `.pio/`-filer og lokale avhengighetsmapper
+er ikke lagt i Git.
 
 ## Implementert backend
 
@@ -37,9 +39,9 @@ med simulerte svar. Mock-resultater er ikke live AI-generering.
 ## Gjenstår
 
 1. Sette OpenAI-nøkkel lokalt og kontrollere faktisk modell-/kontotilgang.
-2. Motta og lese FIRE OS-prosjektet; bekrefte bibliotekversjoner og OS-API-er.
+2. Verifisere siste firmwareendringer på fysisk M5Stack fra `M5Stack-device/`.
 3. Implementere og teste device-runtime, begrensede hardwareadaptere og trygg SD-overføring etter egen autorisasjon.
-4. Verifisere kjøring og rollback på fysisk M5Stack. Dagens kjøring er PC-simulering.
+4. Verifisere kjøring og rollback på fysisk M5Stack.
 5. Implementere lyd først etter fungerende tekst-/device-flyt.
 
 Ingen automatisk Windows-oppstart eller brannmuråpning er aktivert.

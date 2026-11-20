@@ -1,0 +1,9 @@
+# FIRE OS external-loader proof of concept, 16 MB flash.
+# Isolated from the stable FIRE OS environments.
+# Name,     Type, SubType, Offset,   Size,    Flags
+nvs,        data, nvs,     0x9000,   0x5000,
+otadata,    data, ota,     0xe000,   0x2000,
+factory,    app,  factory, 0x10000,  0x300000,
+ota_0,      app,  ota_0,   0x310000, 0x500000,
+ota_1,      app,  ota_1,   0x810000, 0x500000,
+appdata,    data, spiffs,  0xd10000, 0x2f0000,

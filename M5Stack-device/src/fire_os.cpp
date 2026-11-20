@@ -1,0 +1,4769 @@
+#include "fire_os.h"
+
+#include <M5Unified.h>
+#ifdef FIRE_OS_BLE
+#include <driver/rmt.h>
+#endif
+#include <utility/led/LED_Strip_Class.hpp>
+#include <Preferences.h>
+#include <SD.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <driver/gpio.h>
+#include <esp_system.h>
+#include <esp_sleep.h>
+#include <esp_ota_ops.h>
+#include <sys/time.h>
+#include <time.h>
+#include <esp_sntp.h>
+#ifdef FIRE_OS_BLE
+#include <NimBLEDevice.h>
+#endif
+
+namespace {
+constexpr uint8_t kSdCsPin = 4;
+constexpr char kSdNameCharset[] =
+    " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.";
+constexpr uint8_t kButtonPins[] = {39, 38, 37};
+constexpr uint16_t kBg = 0x1082;
+constexpr uint16_t kPanel = 0x18E3;
+constexpr uint16_t kText = 0xE73C;
+constexpr uint16_t kMuted = 0x7BEF;
+constexpr uint16_t kCyan = 0x05FF;
+constexpr uint16_t kOrange = 0xFD20;
+constexpr uint16_t kGreen = 0x07E0;
+constexpr uint16_t kRed = 0xF800;
+constexpr uint16_t kPurple = 0xC81F;
+constexpr uint16_t kDurationMinutes[] = {
+    0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
+    11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
+constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
+                                         150, 180, 210, 235, 255};
+constexpr uint8_t kBrightnessStepCount = 10;
+constexpr uint8_t kVolumeStepCount = 10;
+constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
+
+struct TimezoneInfo {
+  const char* label;
+  const char* daylight;
+  const char* standard;
+};
+
+// POSIX TZ rules keep automatic summer time local and deterministic without
+// requiring a network connection. The labels are intentionally short enough
+// for the 320x240 settings page.
+constexpr TimezoneInfo kTimezones[kTimezoneCount] = {
+    {"UTC", "UTC0", "UTC0"},
+    {"Europe/Oslo", "CET-1CEST,M3.5.0,M10.5.0/3", "CET-1"},
+    {"Europe/London", "GMT0BST,M3.5.0/1,M10.5.0/2", "GMT0"},
+    {"Europe/Berlin", "CET-1CEST,M3.5.0,M10.5.0/3", "CET-1"},
+    {"America/New_York", "EST5EDT,M3.2.0/2,M11.1.0/2", "EST5"},
+    {"America/Los_Angeles", "PST8PDT,M3.2.0/2,M11.1.0/2", "PST8"},
+    {"Asia/Tokyo", "JST-9", "JST-9"},
+};
+
+Preferences preferences;
+M5Canvas ui(&M5.Display);
+WebServer wifiSetupServer(80);
+FireOS* activeFireOs = nullptr;
+bool bluetoothRadioReady = false;
+
+void configureFireRgbStrip() {
+#ifdef FIRE_OS_BLE
+  pinMode(15, OUTPUT_OPEN_DRAIN);
+  rmt_config_t config = {};
+  config.rmt_mode = RMT_MODE_TX;
+  config.channel = RMT_CHANNEL_0;
+  config.gpio_num = GPIO_NUM_15;
+  config.clk_div = 2;
+  config.mem_block_num = 1;
+  config.tx_config.loop_en = false;
+  config.tx_config.carrier_en = false;
+  config.tx_config.idle_output_en = true;
+  config.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
+  rmt_config(&config);
+  rmt_driver_install(config.channel, 0, 0);
+#else
+  auto bus = std::make_shared<m5::LedBus_RMT>();
+  auto busConfig = bus->getConfig();
+  busConfig.pin_data = 15;
+  bus->setConfig(busConfig);
+
+  auto strip = std::make_shared<m5::LED_Strip_Class>();
+  auto stripConfig = strip->getConfig();
+  stripConfig.led_count = 10;
+  strip->setConfig(stripConfig);
+  strip->setBus(bus);
+  M5.Led.setLedInstance(strip);
+  M5.Led.setAutoDisplay(false);
+  pinMode(15, OUTPUT_OPEN_DRAIN);
+  M5.Led.begin();
+#endif
+}
+
+#ifdef FIRE_OS_BLE
+void writeFireRgbRaw(uint8_t red, uint8_t green, uint8_t blue,
+                     uint8_t brightness) {
+  static rmt_item32_t items[10 * 24 + 1];
+  const uint8_t r = static_cast<uint16_t>(red) * brightness / 255;
+  const uint8_t g = static_cast<uint16_t>(green) * brightness / 255;
+  const uint8_t b = static_cast<uint16_t>(blue) * brightness / 255;
+  const uint8_t bytes[] = {g, r, b};  // FIRE strip is GRB ordered.
+  uint16_t item = 0;
+  for (uint8_t pixel = 0; pixel < 10; ++pixel) {
+    for (uint8_t byte : bytes) {
+      for (int8_t bit = 7; bit >= 0; --bit) {
+        const bool one = (byte >> bit) & 1;
+        items[item].level0 = 1;
+        items[item].duration0 = one ? 28 : 14;
+        items[item].level1 = 0;
+        items[item].duration1 = one ? 24 : 32;
+        ++item;
+      }
+    }
+  }
+  items[item].level0 = 0;
+  items[item].duration0 = 2000;
+  items[item].level1 = 0;
+  items[item].duration1 = 0;
+  rmt_write_items(RMT_CHANNEL_0, items, item + 1, true);
+}
+#endif
+
+
+#ifdef FIRE_OS_BLE
+constexpr char kBluetoothServiceUuid[] =
+    "7d3f0001-5b9a-4f2a-9c61-6f8d7c110001";
+constexpr char kBluetoothCharacteristicUuid[] =
+    "7d3f0002-5b9a-4f2a-9c61-6f8d7c110001";
+NimBLEServer* bluetoothServer = nullptr;
+NimBLECharacteristic* bluetoothCharacteristic = nullptr;
+NimBLEScan* bluetoothScan = nullptr;
+NimBLEClient* bluetoothClient = nullptr;
+bool bluetoothPeripheralConnected = false;
+String bluetoothPeripheralAddress;
+uint8_t bluetoothPeripheralAddressType = 0;
+
+class FireBluetoothServerCallbacks final : public NimBLEServerCallbacks {
+ public:
+  void onConnect(NimBLEServer*, NimBLEConnInfo& connInfo) override {
+    bluetoothPeripheralConnected = true;
+    bluetoothPeripheralAddress = connInfo.getAddress().toString().c_str();
+    bluetoothPeripheralAddressType = connInfo.getAddress().getType();
+  }
+
+  void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override {
+    bluetoothPeripheralConnected = false;
+    bluetoothPeripheralAddress = "";
+  }
+};
+
+class FireBluetoothCallbacks final : public NimBLECharacteristicCallbacks {
+ public:
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override {
+    Serial.printf("FIRE BLE RX: %s\n", characteristic->getValue().c_str());
+  }
+};
+#endif
+
+String twoDigits(uint8_t value) {
+  return value < 10 ? String("0") + String(value) : String(value);
+}
+
+uint8_t daysInMonth(uint16_t year, uint8_t month) {
+  static constexpr uint8_t days[] = {31, 28, 31, 30, 31, 30,
+                                     31, 31, 30, 31, 30, 31};
+  if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) {
+    return 29;
+  }
+  return days[month - 1];
+}
+
+String formatBytes(uint32_t bytes) {
+  if (bytes >= 1024UL * 1024UL) {
+    return String(bytes / (1024UL * 1024UL)) + " MB";
+  }
+  return String(bytes / 1024UL) + " KB";
+}
+
+String durationLabel(uint8_t option) {
+  const uint16_t minutes = kDurationMinutes[min<uint8_t>(option, 20)];
+  return minutes == 0 ? "Always on" : String(minutes) + " min";
+}
+
+const char* doubleClickActionLabel(uint8_t action) {
+  switch (action) {
+    case 1:
+      return "Apps";
+    case 2:
+      return "Power";
+    case 3:
+      return "All settings";
+    case 4:
+      return "Display & Sound";
+    case 5:
+      return "Wi-Fi";
+    case 6:
+      return "Bluetooth";
+    case 7:
+      return "Menu Layout";
+    case 8:
+      return "System Info";
+    default:
+      return "Disabled";
+  }
+}
+
+uint8_t nearestBrightnessStep(uint8_t brightness) {
+  uint8_t best = 0;
+  uint8_t distance = 255;
+  for (uint8_t index = 0; index < kBrightnessStepCount; ++index) {
+    const uint8_t current = kBrightnessValues[index];
+    const uint8_t currentDistance = current > brightness ? current - brightness
+                                                         : brightness - current;
+    if (currentDistance < distance) {
+      distance = currentDistance;
+      best = index;
+    }
+  }
+  return best;
+}
+
+uint8_t volumeValue(uint8_t step) {
+  return static_cast<uint8_t>(step * 100 / (kVolumeStepCount - 1));
+}
+
+uint8_t nearestVolumeStep(uint8_t volume) {
+  uint8_t best = 0;
+  uint8_t distance = 255;
+  for (uint8_t index = 0; index < kVolumeStepCount; ++index) {
+    const uint8_t current = volumeValue(index);
+    const uint8_t currentDistance = current > volume ? current - volume
+                                                     : volume - current;
+    if (currentDistance < distance) {
+      distance = currentDistance;
+      best = index;
+    }
+  }
+  return best;
+}
+
+String cleanFooterLabel(const char* raw) {
+  String text(raw);
+  if (text.startsWith("A/C  ")) return text.substring(5);
+  if (text.startsWith("A  ") || text.startsWith("B  ") ||
+      text.startsWith("C  ")) {
+    text = text.substring(3);
+  }
+  if (text.endsWith("  A") || text.endsWith("  B") ||
+      text.endsWith("  C")) {
+    text.remove(text.length() - 3);
+  }
+  return text;
+}
+
+String wifiFailureReason(wl_status_t status) {
+  switch (status) {
+    case WL_NO_SSID_AVAIL:
+      return "network not found";
+    case WL_CONNECT_FAILED:
+      return "password rejected or connection failed";
+    case WL_CONNECTION_LOST:
+      return "connection lost";
+    case WL_DISCONNECTED:
+      return "disconnected";
+    default:
+      return "status " + String(static_cast<int>(status));
+  }
+}
+
+void handleWifiSetupRoot() {
+  const String token = wifiSetupServer.arg("token");
+  if (activeFireOs == nullptr || !activeFireOs->wifiSetupTokenValid(token)) {
+    wifiSetupServer.send(403, "text/plain", "Invalid or missing setup token");
+    return;
+  }
+  const String html =
+      "<!doctype html><html><meta name='viewport' content='width=device-width'>"
+      "<title>FIRE OS setup</title><style>body{font-family:sans-serif;max-width:480px;"
+      "margin:24px auto;padding:0 16px}input{width:100%;padding:10px;margin:6px 0 16px;"
+      "box-sizing:border-box}button{padding:12px 18px}</style><body>"
+      "<h2>FIRE OS setup</h2><p>Leave a field empty to keep its current value.</p>"
+      "<form method='post' action='/save'><label>Wi-Fi SSID</label>"
+      "<input name='ssid' autocomplete='off'><label>Wi-Fi password</label>"
+      "<input name='password' type='password' autocomplete='off'>"
+      "<label>OpenAI API key</label><input name='api' type='password' "
+      "autocomplete='off'><input type='hidden' name='token' value='" +
+      token + "'><button type='submit'>Save</button></form></body></html>";
+  wifiSetupServer.send(200, "text/html", html);
+}
+
+void handleWifiSetupSave() {
+  if (activeFireOs == nullptr) {
+    wifiSetupServer.send(500, "text/plain", "OS unavailable");
+    return;
+  }
+  if (!activeFireOs->wifiSetupTokenValid(wifiSetupServer.arg("token"))) {
+    wifiSetupServer.send(403, "text/plain", "Invalid setup token");
+    return;
+  }
+  const String ssid = wifiSetupServer.arg("ssid");
+  const String password = wifiSetupServer.arg("password");
+  const String apiKey = wifiSetupServer.arg("api");
+  activeFireOs->saveMobileSetupFields(ssid, password, apiKey);
+  wifiSetupServer.send(200, "text/html",
+                       "<html><body><h2>Saved</h2><p>FIRE OS kept empty fields "
+                       "unchanged. You can close this page.</p></body></html>");
+}
+}  // namespace
+
+void DateTimeService::begin() {
+  preferences.begin("fire_os", false);
+  timezoneIndex_ = min<uint8_t>(preferences.getUChar("tz", 1), kTimezoneCount - 1);
+  dstAuto_ = preferences.getBool("dst", true);
+  applyTimezone();
+
+  // Prefer the hardware RTC so time survives a normal reboot and does not
+  // depend on Wi-Fi. M5Unified reports false when this FIRE revision has no
+  // usable RTC, in which case the persisted epoch is used below.
+  if (M5.Rtc.isEnabled()) {
+    const auto rtc = M5.Rtc.getDateTime();
+    if (rtc.date.year >= 2020 && rtc.date.year <= 2099 &&
+        rtc.date.month >= 1 && rtc.date.month <= 12 && rtc.date.date >= 1 &&
+        rtc.date.date <= 31 && rtc.time.hours >= 0 && rtc.time.hours <= 23 &&
+        rtc.time.minutes >= 0 && rtc.time.minutes <= 59 &&
+        rtc.time.seconds >= 0 && rtc.time.seconds <= 59) {
+      tm local{};
+      local.tm_year = rtc.date.year - 1900;
+      local.tm_mon = rtc.date.month - 1;
+      local.tm_mday = rtc.date.date;
+      local.tm_hour = rtc.time.hours;
+      local.tm_min = rtc.time.minutes;
+      local.tm_sec = rtc.time.seconds;
+      local.tm_isdst = -1;
+      const time_t epoch = mktime(&local);
+      timeval tv{};
+      tv.tv_sec = epoch;
+      settimeofday(&tv, nullptr);
+      configured_ = epoch > 1000000000UL;
+      if (configured_) {
+        preferences.putULong("epoch", static_cast<uint32_t>(epoch));
+        return;
+      }
+    }
+  }
+
+  const uint32_t savedEpoch = preferences.getULong("epoch", 0);
+  configured_ = savedEpoch > 1000000000UL;
+  if (configured_) {
+    timeval tv{};
+    tv.tv_sec = savedEpoch;
+    settimeofday(&tv, nullptr);
+  }
+}
+
+void DateTimeService::applyTimezone() const {
+  const TimezoneInfo& zone = kTimezones[timezoneIndex_];
+  setenv("TZ", dstAuto_ ? zone.daylight : zone.standard, 1);
+  tzset();
+}
+
+bool DateTimeService::setLocalDateTime(uint16_t year, uint8_t month,
+                                       uint8_t day, uint8_t hour,
+                                       uint8_t minute) {
+  if (year < 2020 || year > 2099 || month < 1 || month > 12 || day < 1 ||
+      day > daysInMonth(year, month) || hour > 23 || minute > 59) {
+    return false;
+  }
+  applyTimezone();
+  tm local{};
+  local.tm_year = year - 1900;
+  local.tm_mon = month - 1;
+  local.tm_mday = day;
+  local.tm_hour = hour;
+  local.tm_min = minute;
+  local.tm_sec = 0;
+  local.tm_isdst = -1;
+  const time_t epoch = mktime(&local);
+  if (epoch <= 0) return false;
+  timeval tv{};
+  tv.tv_sec = epoch;
+  settimeofday(&tv, nullptr);
+  if (M5.Rtc.isEnabled()) M5.Rtc.setDateTime(&local);
+  configured_ = true;
+  return true;
+}
+
+bool DateTimeService::setSystemLocalDateTime(const tm& localTime) {
+  tm normalized = localTime;
+  normalized.tm_isdst = -1;
+  const time_t epoch = mktime(&normalized);
+  if (epoch <= 0) return false;
+  timeval tv{};
+  tv.tv_sec = epoch;
+  settimeofday(&tv, nullptr);
+  if (M5.Rtc.isEnabled()) M5.Rtc.setDateTime(&normalized);
+  configured_ = true;
+  save();
+  return true;
+}
+
+void DateTimeService::setTimezone(uint8_t index) {
+  timezoneIndex_ = min<uint8_t>(index, kTimezoneCount - 1);
+  applyTimezone();
+}
+
+void DateTimeService::setDstAuto(bool enabled) {
+  dstAuto_ = enabled;
+  applyTimezone();
+}
+
+void DateTimeService::reset() {
+  timezoneIndex_ = 1;
+  dstAuto_ = true;
+  applyTimezone();
+  setLocalDateTime(2026, 1, 1, 0, 0);
+  save();
+}
+
+void DateTimeService::save() {
+  preferences.putUChar("tz", timezoneIndex_);
+  preferences.putBool("dst", dstAuto_);
+  preferences.putULong("epoch", static_cast<uint32_t>(time(nullptr)));
+}
+
+String DateTimeService::localDateTime() const {
+  tm local{};
+  const time_t now = time(nullptr);
+  localtime_r(&now, &local);
+  return String(local.tm_year + 1900) + "-" + twoDigits(local.tm_mon + 1) +
+         "-" + twoDigits(local.tm_mday) + " " + twoDigits(local.tm_hour) +
+         ":" + twoDigits(local.tm_min);
+}
+
+String DateTimeService::statusDateTime() const {
+  static const char* const months[] = {"jan", "feb", "mar", "apr", "may",
+                                       "jun", "jul", "aug", "sep", "oct",
+                                       "nov", "dec"};
+  tm local{};
+  const time_t now = time(nullptr);
+  localtime_r(&now, &local);
+  return twoDigits(local.tm_hour) + ":" + twoDigits(local.tm_min) +
+         "   " + twoDigits(local.tm_mday) + "/" +
+         months[constrain(local.tm_mon, 0, 11)] + "/" +
+         String(local.tm_year + 1900);
+}
+
+String DateTimeService::localTime() const {
+  tm local{};
+  const time_t now = time(nullptr);
+  localtime_r(&now, &local);
+  return twoDigits(local.tm_hour) + ":" + twoDigits(local.tm_min);
+}
+
+String DateTimeService::timezoneLabel() const {
+  return kTimezones[timezoneIndex_].label;
+}
+
+String DateTimeService::timezoneLabel(uint8_t index) const {
+  return kTimezones[min<uint8_t>(index, kTimezoneCount - 1)].label;
+}
+
+const char* DateTimeService::timezoneRule() const {
+  const TimezoneInfo& zone = kTimezones[timezoneIndex_];
+  return dstAuto_ ? zone.daylight : zone.standard;
+}
+
+void FireOS::begin() {
+  activeFireOs = this;
+  Serial.begin(115200);
+  auto config = M5.config();
+  config.output_power = true;
+  config.internal_imu = true;
+  config.internal_rtc = true;
+  config.internal_spk = true;
+  config.internal_mic = true;
+  config.led_brightness = 80;
+  M5.begin(config);
+  configureFireRgbStrip();
+  initSdCard();
+
+  pinMode(kButtonPins[0], INPUT);
+  pinMode(kButtonPins[1], INPUT);
+  pinMode(kButtonPins[2], INPUT);
+
+  delay(100);
+  safeMode_ = allButtonsHeldAtBoot();
+  dateTime_.begin();
+  loadSettings();
+  if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
+  const esp_partition_t* runningPartition = esp_ota_get_running_partition();
+  const bool runningFactory = runningPartition &&
+                              runningPartition->subtype ==
+                                  ESP_PARTITION_SUBTYPE_APP_FACTORY;
+  if (safeMode_ && selectedBootAppPath_.length() > 0) {
+    // Recovery from a compatible external app returns here and clears the
+    // automatic target so FIRE OS remains usable.
+    selectedBootAppPath_ = "";
+    saveSettings();
+  } else if (!safeMode_ && runningFactory &&
+             selectedBootAppPath_.length() > 0) {
+    if (launchSelectedBootApp()) return;
+    selectedBootAppPath_ = "";
+    saveSettings();
+  }
+  // Do not let optional BLE initialization block the first FIRE OS frame.
+  // The UI, audio and recovery path must be usable even if the radio stack
+  // is damaged or unavailable after an external firmware attempt.
+  bluetoothEnabled_ = false;
+  bluetoothBootInitPending_ = false;
+  if (wifiMode_ == 1) {
+    wifiEnabled_ = true;
+    WiFi.setHostname("M5Stack-FIRE");
+    WiFi.mode(WIFI_STA);
+    if (wifiSsid_.length() > 0) beginWifiConnection();
+  }
+  if (wifiTimeSync_) {
+    startTimeSync();
+  }
+
+  M5.Display.setRotation(0);
+  M5.Display.setBrightness(brightness_);
+  M5.Speaker.setVolume(volume_);
+  // Keep boot non-blocking. The previous synchronous LED animation could
+  // stall before the first FIRE OS frame on some M5Unified/RMT combinations.
+  // Boot feedback is handled after the UI is alive.
+  ui.setColorDepth(16);
+  ui.createSprite(320, 240);
+  lastActivity_ = millis();
+  bootFeedbackActive_ = bootRgbPulse_ || bootMelody_;
+  bootFeedbackStarted_ = millis();
+  bootFeedbackLastFrame_ = 0;
+  bootFeedbackNote_ = 0;
+
+  if (safeMode_) {
+    Serial.println("FIRE OS safe mode: all three buttons held at boot");
+  } else {
+    Serial.println("FIRE OS started");
+  }
+  draw();
+}
+
+void FireOS::update() {
+  M5.update();
+  updateBootFeedback();
+  if (screen_ == Screen::AiDeveloper) updateAiDeveloperMock();
+#ifdef FIRE_OS_BLE
+  if (bluetoothPeripheralConnected && bluetoothPeripheralAddress.length() > 0) {
+    bool saved = false;
+    for (uint8_t index = 0; index < bluetoothSavedCount_; ++index) {
+      if (bluetoothSavedAddresses_[index] == bluetoothPeripheralAddress) {
+        saved = true;
+        break;
+      }
+    }
+    if (!saved) {
+      const uint8_t index = bluetoothSavedCount_ < kMaxBluetoothSavedDevices
+                                ? bluetoothSavedCount_++
+                                : kMaxBluetoothSavedDevices - 1;
+      bluetoothSavedNames_[index] = bluetoothPeripheralAddress;
+      bluetoothSavedAddresses_[index] = bluetoothPeripheralAddress;
+      bluetoothSavedAddressTypes_[index] = bluetoothPeripheralAddressType;
+      bluetoothSavedName_ = bluetoothPeripheralAddress;
+      bluetoothSavedAddress_ = bluetoothPeripheralAddress;
+      saveSettings();
+    }
+  }
+#endif
+  pollButtons();
+  if (wifiSetupActive_) wifiSetupServer.handleClient();
+  updateWifiState();
+  updateTimeSync();
+  manageDisplayPower();
+  if (carouselAnimating_) {
+    carouselOffset_ += 48;
+    if (carouselOffset_ >= kCarouselDistance) {
+      carouselOffset_ = kCarouselDistance;
+      carouselAnimating_ = false;
+    }
+  }
+  draw();
+  delay(25);
+}
+
+void FireOS::updateBootFeedback() {
+  if (!bootFeedbackActive_) return;
+  const uint32_t elapsed = millis() - bootFeedbackStarted_;
+  constexpr uint32_t kDurationMs = 2400;
+  if (elapsed >= kDurationMs) {
+    if (bootRgbPulse_) {
+#ifdef FIRE_OS_BLE
+      writeFireRgbRaw(0, 0, 0, 0);
+#else
+      M5.Led.setBrightness(0);
+      M5.Led.setAllColor(0, 0, 0);
+      M5.Led.display();
+#endif
+    }
+    bootFeedbackActive_ = false;
+    return;
+  }
+
+  if (bootMelody_ && M5.Speaker.isEnabled()) {
+    static const uint32_t noteAt[] = {0, 180, 360};
+    static const float notes[] = {523.251f, 659.255f, 783.991f};
+    while (bootFeedbackNote_ < 3 && elapsed >= noteAt[bootFeedbackNote_]) {
+      M5.Speaker.tone(notes[bootFeedbackNote_],
+                      bootFeedbackNote_ == 2 ? 100 : 70);
+      ++bootFeedbackNote_;
+    }
+  }
+
+  if (bootRgbPulse_ && elapsed - bootFeedbackLastFrame_ >= 45) {
+    bootFeedbackLastFrame_ = elapsed;
+    static const uint8_t colors[][3] = {
+        {255, 0, 0}, {0, 90, 255}, {0, 255, 40}, {255, 80, 0}};
+    const uint32_t colorElapsed = elapsed % 600;
+    const uint8_t color = (elapsed / 600) % 4;
+    const uint8_t brightness = colorElapsed < 300
+                                   ? static_cast<uint8_t>(colorElapsed * 255 / 300)
+                                   : static_cast<uint8_t>((600 - colorElapsed) *
+                                                          255 / 300);
+#ifdef FIRE_OS_BLE
+    writeFireRgbRaw(colors[color][0], colors[color][1], colors[color][2],
+                    brightness);
+#else
+    M5.Led.setBrightness(brightness);
+    M5.Led.setAllColor(colors[color][0], colors[color][1], colors[color][2]);
+    M5.Led.display();
+#endif
+  }
+}
+
+void FireOS::updateAiDeveloperMock() {
+  const uint32_t elapsed = millis() - aiWorkflowStarted_;
+  if (aiWorkflowState_ == 2 && elapsed >= 1300) {
+    aiWorkflowState_ = 3;
+    aiDeveloperMode_ = 2;
+    aiWorkflowStarted_ = millis();
+  } else if (aiWorkflowState_ == 4) {
+    aiBuildProgress_ = min<uint8_t>(100, elapsed / 55);
+    if (aiBuildProgress_ >= 100) {
+      aiWorkflowState_ = 5;
+      aiDeveloperMode_ = 3;
+      aiWorkflowStarted_ = millis();
+    }
+  } else if (aiWorkflowState_ == 6 && elapsed >= 2200) {
+    aiWorkflowState_ = 5;
+    aiDeveloperMode_ = 3;
+    aiWorkflowStarted_ = millis();
+  }
+}
+
+void FireOS::loadSettings() {
+  const uint8_t storedBrightness = preferences.getUChar("brightness", 180);
+  const uint8_t storedVolume = preferences.getUChar("volume", 90);
+  brightnessStep_ = min<uint8_t>(preferences.getUChar("brightness_step",
+                                                       nearestBrightnessStep(storedBrightness)),
+                                 kBrightnessStepCount - 1);
+  volumeStep_ = min<uint8_t>(preferences.getUChar("volume_step",
+                                                   nearestVolumeStep(storedVolume)),
+                            kVolumeStepCount - 1);
+  brightness_ = kBrightnessValues[brightnessStep_];
+  volume_ = volumeValue(volumeStep_);
+  const bool legacyWifi = preferences.getBool("wifi", false);
+  wifiMode_ = preferences.isKey("wifi_mode")
+                  ? min<uint8_t>(preferences.getUChar("wifi_mode", 0), 2)
+                  : (legacyWifi ? 1 : 0);
+  wifiTimeSync_ = preferences.getBool("wifi_time_sync", false);
+  timeSyncLast_ = preferences.getString("wifi_time_last", "");
+  wifiEnabled_ = false;
+  wifiSsid_ = preferences.getString("wifi_ssid", "");
+  wifiPassword_ = preferences.getString("wifi_pass", "");
+  aiApiKey_ = preferences.getString("openai_key", "");
+  loadSavedWifiNetworks();
+  bluetoothEnabled_ = false;
+  bluetoothMode_ = 0;
+  bluetoothMode_ = min<uint8_t>(preferences.getUChar("bt_mode", 0), 2);
+  bluetoothSavedName_ = preferences.getString("bt_saved_name", "");
+  bluetoothSavedAddress_ = preferences.getString("bt_saved_addr", "");
+  loadSavedBluetoothDevices();
+  buttonSoundsEnabled_ = preferences.getBool("button_sounds", true);
+  bootRgbPulse_ = preferences.getBool("boot_rgb", true);
+  bootMelody_ = preferences.getBool("boot_melody", true);
+  selectedBootAppPath_ = preferences.getString("boot_app", "");
+  mainVisible_[0] = preferences.getBool("menu_apps", true);
+  mainVisible_[1] = preferences.getBool("menu_settings", true);
+  mainVisible_[2] = preferences.getBool("menu_power", true);
+  mainVisible_[3] = preferences.getBool("menu_files", true);
+  mainVisible_[4] = preferences.getBool("menu_ai", true);
+  if (!mainVisible_[0] && !mainVisible_[1] && !mainVisible_[2] &&
+      !mainVisible_[3] && !mainVisible_[4]) {
+    mainVisible_[1] = true;
+  }
+  const bool durationV2 = preferences.getBool("duration_v2", false);
+  if (durationV2) {
+    sleepOption_ = min<uint8_t>(preferences.getUChar("sleep", 0),
+                                kDurationCount - 1);
+    dimOption_ = min<uint8_t>(preferences.getUChar("dim", 5),
+                              kDurationCount - 1);
+    screenOffOption_ = min<uint8_t>(preferences.getUChar("screenoff", 10),
+                                    kDurationCount - 1);
+  } else {
+    // Convert the previous 0/1/5/10/15/30/60-minute index format once.
+    const uint8_t legacyMinutes[] = {0, 1, 5, 10, 15, 20, 20};
+    sleepOption_ = legacyMinutes[min<uint8_t>(preferences.getUChar("sleep", 0), 6)];
+    dimOption_ = legacyMinutes[min<uint8_t>(preferences.getUChar("dim", 2), 6)];
+    screenOffOption_ = legacyMinutes[min<uint8_t>(preferences.getUChar("screenoff", 3), 6)];
+    preferences.putBool("duration_v2", true);
+  }
+  for (uint8_t index = 0; index < kButtonCount; ++index) {
+    doubleClickAction_[index] = min<uint8_t>(
+        preferences.getUChar(("dbl_" + String(index)).c_str(), 0),
+        kDoubleClickActionCount - 1);
+  }
+  WiFi.setHostname("M5Stack-FIRE");
+  if (wifiMode_ != 1) WiFi.mode(WIFI_OFF);
+}
+
+void FireOS::saveSettings() {
+  preferences.putUChar("brightness", brightness_);
+  preferences.putUChar("volume", volume_);
+  preferences.putUChar("brightness_step", brightnessStep_);
+  preferences.putUChar("volume_step", volumeStep_);
+  preferences.putBool("wifi", wifiEnabled_);
+  preferences.putUChar("wifi_mode", wifiMode_);
+  preferences.putBool("wifi_time_sync", wifiTimeSync_);
+  preferences.putString("wifi_time_last", timeSyncLast_);
+  preferences.putString("wifi_ssid", wifiSsid_);
+  preferences.putString("wifi_pass", wifiPassword_);
+  preferences.putString("openai_key", aiApiKey_);
+  saveSavedWifiNetworks();
+  preferences.putBool("bluetooth", bluetoothEnabled_);
+  preferences.putUChar("bt_mode", bluetoothMode_);
+  preferences.putString("bt_saved_name", bluetoothSavedName_);
+  preferences.putString("bt_saved_addr", bluetoothSavedAddress_);
+  saveSavedBluetoothDevices();
+  preferences.putBool("button_sounds", buttonSoundsEnabled_);
+  preferences.putBool("boot_rgb", bootRgbPulse_);
+  preferences.putBool("boot_melody", bootMelody_);
+  preferences.putString("boot_app", selectedBootAppPath_);
+  preferences.putBool("menu_apps", mainVisible_[0]);
+  preferences.putBool("menu_settings", mainVisible_[1]);
+  preferences.putBool("menu_power", mainVisible_[2]);
+  preferences.putBool("menu_files", mainVisible_[3]);
+  preferences.putBool("menu_ai", mainVisible_[4]);
+  preferences.putUChar("sleep", sleepOption_);
+  preferences.putUChar("dim", dimOption_);
+  preferences.putUChar("screenoff", screenOffOption_);
+  preferences.putBool("duration_v2", true);
+  for (uint8_t index = 0; index < kButtonCount; ++index) {
+    preferences.putUChar(("dbl_" + String(index)).c_str(), doubleClickAction_[index]);
+  }
+}
+
+void FireOS::loadSavedWifiNetworks() {
+  wifiSavedCount_ = 0;
+  for (uint8_t index = 0; index < 5; ++index) {
+    const String ssid = preferences.getString(("wifi_ssid_" + String(index)).c_str(), "");
+    if (ssid.length() == 0) continue;
+    wifiSavedSsid_[wifiSavedCount_] = ssid;
+    wifiSavedPassword_[wifiSavedCount_] =
+        preferences.getString(("wifi_pass_" + String(index)).c_str(), "");
+    ++wifiSavedCount_;
+  }
+  if (wifiSavedCount_ == 0 && wifiSsid_.length() > 0) {
+    wifiSavedSsid_[0] = wifiSsid_;
+    wifiSavedPassword_[0] = wifiPassword_;
+    wifiSavedCount_ = 1;
+  }
+  if (wifiSavedCount_ > 0) {
+    wifiSsid_ = wifiSavedSsid_[0];
+    wifiPassword_ = wifiSavedPassword_[0];
+  }
+}
+
+void FireOS::loadSavedBluetoothDevices() {
+  bluetoothSavedCount_ = min<uint8_t>(
+      preferences.getUChar("bt_saved_count", 0), kMaxBluetoothSavedDevices);
+  for (uint8_t index = 0; index < kMaxBluetoothSavedDevices; ++index) {
+    bluetoothSavedNames_[index] = preferences.getString(
+        ("bt_name_" + String(index)).c_str(), "");
+    bluetoothSavedAddresses_[index] = preferences.getString(
+        ("bt_addr_" + String(index)).c_str(), "");
+    bluetoothSavedAddressTypes_[index] = preferences.getUChar(
+        ("bt_type_" + String(index)).c_str(), 0);
+  }
+  if (bluetoothSavedCount_ == 0 && bluetoothSavedAddress_.length() > 0) {
+    bluetoothSavedCount_ = 1;
+    bluetoothSavedNames_[0] = bluetoothSavedName_;
+    bluetoothSavedAddresses_[0] = bluetoothSavedAddress_;
+  }
+}
+
+void FireOS::saveSavedBluetoothDevices() {
+  preferences.putUChar("bt_saved_count", bluetoothSavedCount_);
+  for (uint8_t index = 0; index < kMaxBluetoothSavedDevices; ++index) {
+    preferences.putString(("bt_name_" + String(index)).c_str(),
+                          bluetoothSavedNames_[index]);
+    preferences.putString(("bt_addr_" + String(index)).c_str(),
+                          bluetoothSavedAddresses_[index]);
+    preferences.putUChar(("bt_type_" + String(index)).c_str(),
+                         bluetoothSavedAddressTypes_[index]);
+  }
+}
+
+bool FireOS::initSdCard() {
+  sdLastProbe_ = millis();
+  // SD.begin() initializes the default VSPI bus (18/19/23 on FIRE).
+  sdReady_ = SD.begin(kSdCsPin);
+  if (!sdReady_) sdMessage_ = "SD card not detected";
+  return sdReady_;
+}
+
+String FireOS::sdParentPath(const String& path) const {
+  if (path == "/" || path.length() == 0) return "/";
+  const int slash = path.lastIndexOf('/');
+  if (slash <= 0) return "/";
+  return path.substring(0, slash);
+}
+
+String FireOS::sdJoinPath(const String& base, const String& name) const {
+  if (base == "/" || base.length() == 0) return "/" + name;
+  return base + "/" + name;
+}
+
+String FireOS::sdBaseName(const String& path) const {
+  const int slash = path.lastIndexOf('/');
+  return slash >= 0 ? path.substring(slash + 1) : path;
+}
+
+String FireOS::sdStorageLabel() const {
+  if (!sdReady_) return "SD: not present";
+  const uint32_t total = static_cast<uint32_t>(SD.totalBytes());
+  const uint32_t used = static_cast<uint32_t>(SD.usedBytes());
+  const uint32_t free = total > used ? total - used : 0;
+  return "Free " + formatBytes(free) + " / " + formatBytes(total);
+}
+
+bool FireOS::sdIsTextFile(const String& name) const {
+  String lower = name;
+  lower.toLowerCase();
+  return lower.endsWith(".txt") || lower.endsWith(".log") ||
+         lower.endsWith(".csv") || lower.endsWith(".json") ||
+         lower.endsWith(".ini") || lower.endsWith(".md") ||
+         lower.endsWith(".xml") || lower.endsWith(".cpp") ||
+         lower.endsWith(".h");
+}
+
+bool FireOS::sdIsImageFile(const String& name) const {
+  String lower = name;
+  lower.toLowerCase();
+  return lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
+         lower.endsWith(".png") || lower.endsWith(".bmp");
+}
+
+void FireOS::refreshSdDirectory() {
+  if (!sdReady_ && !initSdCard()) return;
+  File directory = SD.open(sdPath_);
+  if (!directory || !directory.isDirectory()) {
+    sdMessage_ = "Cannot open folder";
+    sdPath_ = "/";
+    return;
+  }
+  sdEntryCount_ = 0;
+  File entry = directory.openNextFile();
+  while (entry && sdEntryCount_ < kMaxFileEntries) {
+    const uint8_t index = sdEntryCount_++;
+    String rawName = entry.name();
+    while (rawName.endsWith("/") && rawName.length() > 1) {
+      rawName.remove(rawName.length() - 1);
+    }
+    const String entryName = sdBaseName(rawName);
+    // Normalize the path against the currently open directory. Some Arduino
+    // SD/FAT implementations return only a basename from File::name().
+    sdEntryNames_[index] = entryName;
+    sdEntryPaths_[index] = sdJoinPath(sdPath_, entryName);
+    sdEntrySizes_[index] = entry.isDirectory() ? 0 : entry.size();
+    sdEntryDirectories_[index] = entry.isDirectory();
+    entry.close();
+    entry = directory.openNextFile();
+  }
+  directory.close();
+  for (uint8_t i = 0; i < sdEntryCount_; ++i) {
+    for (uint8_t j = i + 1; j < sdEntryCount_; ++j) {
+      bool swap = false;
+      if (sdSortMode_ == 0) {
+        swap = sdEntryNames_[j].compareTo(sdEntryNames_[i]) < 0;
+      } else {
+        swap = sdEntrySizes_[j] < sdEntrySizes_[i];
+      }
+      if (swap) {
+        const String name = sdEntryNames_[i];
+        sdEntryNames_[i] = sdEntryNames_[j];
+        sdEntryNames_[j] = name;
+        const String path = sdEntryPaths_[i];
+        sdEntryPaths_[i] = sdEntryPaths_[j];
+        sdEntryPaths_[j] = path;
+        const uint32_t size = sdEntrySizes_[i];
+        sdEntrySizes_[i] = sdEntrySizes_[j];
+        sdEntrySizes_[j] = size;
+        const bool dir = sdEntryDirectories_[i];
+        sdEntryDirectories_[i] = sdEntryDirectories_[j];
+        sdEntryDirectories_[j] = dir;
+      }
+    }
+  }
+  const uint8_t itemCount = sdEntryCount_ + 1;
+  if (sdSelection_ >= itemCount) sdSelection_ = itemCount - 1;
+  if (sdSelection_ < sdOffset_) sdOffset_ = sdSelection_;
+  if (sdSelection_ >= sdOffset_ + kFileVisibleRows) {
+    sdOffset_ = sdSelection_ - kFileVisibleRows + 1;
+  }
+}
+
+void FireOS::openSelectedSdEntry() {
+  if (sdSelection_ >= sdEntryCount_) {
+    if (sdPath_ == "/") {
+      back();
+    } else {
+      sdPath_ = sdParentPath(sdPath_);
+      sdSelection_ = 0;
+      sdOffset_ = 0;
+      refreshSdDirectory();
+    }
+    return;
+  }
+  if (sdEntryDirectories_[sdSelection_]) {
+    sdPath_ = sdEntryPaths_[sdSelection_];
+    sdSelection_ = 0;
+    sdOffset_ = 0;
+    refreshSdDirectory();
+  } else if (sdIsTextFile(sdEntryNames_[sdSelection_])) {
+    previewSelectedSdFile();
+  } else if (sdIsImageFile(sdEntryNames_[sdSelection_])) {
+    previewSelectedSdImage();
+  } else {
+    sdMessage_ = "Preview not supported";
+  }
+}
+
+void FireOS::previewSelectedSdImage() {
+  releaseSdImageBuffer();
+  File file = SD.open(sdEntryPaths_[sdSelection_], FILE_READ);
+  if (!file) {
+    sdMessage_ = "Cannot open image";
+    return;
+  }
+  const size_t fileSize = file.size();
+  constexpr size_t kMaxPreviewBytes = 768 * 1024;
+  if (fileSize == 0 || fileSize > kMaxPreviewBytes) {
+    file.close();
+    sdMessage_ = fileSize > kMaxPreviewBytes ? "Image too large" : "Empty image";
+    return;
+  }
+  sdImageBuffer_ = static_cast<uint8_t*>(
+      ESP.getPsramSize() > 0 ? ps_malloc(fileSize) : malloc(fileSize));
+  if (!sdImageBuffer_) {
+    file.close();
+    sdMessage_ = "Not enough memory";
+    return;
+  }
+  const size_t readBytes = file.read(sdImageBuffer_, fileSize);
+  file.close();
+  if (readBytes != fileSize) {
+    releaseSdImageBuffer();
+    sdMessage_ = "Cannot read image";
+    return;
+  }
+  String lower = sdEntryNames_[sdSelection_];
+  lower.toLowerCase();
+  sdImagePreviewType_ = lower.endsWith(".png") ? 2 : lower.endsWith(".bmp") ? 3 : 1;
+  sdImagePreviewPath_ = sdEntryPaths_[sdSelection_];
+  sdImageBufferSize_ = fileSize;
+  sdImageRendered_ = false;
+  sdImagePreview_ = true;
+}
+
+void FireOS::releaseSdImageBuffer() {
+  if (sdImageBuffer_) {
+    free(sdImageBuffer_);
+    sdImageBuffer_ = nullptr;
+  }
+  sdImageBufferSize_ = 0;
+}
+
+void FireOS::previewSelectedSdFile() {
+  File file = SD.open(sdEntryPaths_[sdSelection_], FILE_READ);
+  if (!file) {
+    sdMessage_ = "Cannot open file";
+    return;
+  }
+  sdPreviewLineCount_ = 0;
+  while (file.available() && sdPreviewLineCount_ < 8) {
+    String line = file.readStringUntil('\n');
+    line.replace("\r", "");
+    if (line.length() > 48) line = line.substring(0, 48);
+    sdPreviewLines_[sdPreviewLineCount_++] = line;
+  }
+  file.close();
+  sdPreview_ = true;
+}
+
+void FireOS::deleteSelectedSdEntry() {
+  bool ok = false;
+  if (sdSelection_ < sdEntryCount_) {
+    ok = sdEntryDirectories_[sdSelection_]
+             ? SD.rmdir(sdEntryPaths_[sdSelection_])
+             : SD.remove(sdEntryPaths_[sdSelection_]);
+  }
+  sdDeleteConfirm_ = false;
+  sdMessage_ = ok ? "Deleted" : "Delete failed (folder empty?)";
+  refreshSdDirectory();
+}
+
+void FireOS::copySelectedSdEntry() {
+  if (sdSelection_ >= sdEntryCount_ || sdEntryDirectories_[sdSelection_]) {
+    sdMessage_ = "Copy folders not supported";
+    return;
+  }
+  String base = "copy_" + sdEntryNames_[sdSelection_];
+  String destination = sdJoinPath(sdPath_, base);
+  uint8_t suffix = 1;
+  while (SD.exists(destination) && suffix < 100) {
+    destination = sdJoinPath(sdPath_, "copy" + String(suffix++) + "_" +
+                                         sdEntryNames_[sdSelection_]);
+  }
+  File source = SD.open(sdEntryPaths_[sdSelection_], FILE_READ);
+  File target = SD.open(destination, FILE_WRITE);
+  if (!source || !target) {
+    sdMessage_ = "Copy failed";
+  } else {
+    uint8_t buffer[256];
+    while (source.available()) {
+      const size_t amount = source.read(buffer, sizeof(buffer));
+      if (amount == 0 || target.write(buffer, amount) != amount) break;
+    }
+    sdMessage_ = "Copied";
+  }
+  source.close();
+  target.close();
+  refreshSdDirectory();
+}
+
+void FireOS::moveSelectedSdEntry() {
+  if (sdSelection_ >= sdEntryCount_ || sdPath_ == "/") {
+    sdMessage_ = "Already at root";
+    return;
+  }
+  const String destination = sdJoinPath(sdParentPath(sdPath_),
+                                        sdEntryNames_[sdSelection_]);
+  sdMessage_ = SD.rename(sdEntryPaths_[sdSelection_], destination)
+                   ? "Moved to parent folder"
+                   : "Move failed";
+  refreshSdDirectory();
+}
+
+void FireOS::commitSdNameEditor() {
+  sdNameBuffer_.trim();
+  if (sdNameBuffer_.length() == 0) {
+    sdMessage_ = "Name cannot be empty";
+    sdNameEditor_ = false;
+    return;
+  }
+  bool ok = false;
+  if (sdNameIsNewFolder_) {
+    ok = SD.mkdir(sdJoinPath(sdPath_, sdNameBuffer_));
+  } else if (sdSelection_ < sdEntryCount_) {
+    ok = SD.rename(sdEntryPaths_[sdSelection_],
+                   sdJoinPath(sdPath_, sdNameBuffer_));
+  }
+  sdMessage_ = ok ? "Saved" : "Name already exists or invalid";
+  sdNameEditor_ = false;
+  refreshSdDirectory();
+}
+
+void FireOS::handleFileExplorerAction(uint8_t index) {
+  if (index == 0) {
+    sdActionMenu_ = false;
+    openSelectedSdEntry();
+  } else if (index == 1) {
+    sdActionMenu_ = false;
+    copySelectedSdEntry();
+  } else if (index == 2) {
+    sdActionMenu_ = false;
+    moveSelectedSdEntry();
+  } else if (index == 3) {
+    if (sdSelection_ < sdEntryCount_) {
+      sdNameBuffer_ = sdEntryNames_[sdSelection_].substring(0, 20);
+      sdNameCursor_ = 0;
+      sdNameIsNewFolder_ = false;
+      sdNameEditor_ = true;
+      sdActionMenu_ = false;
+    }
+  } else if (index == 4) {
+    sdDeleteConfirm_ = true;
+    sdActionMenu_ = false;
+  } else if (index == 5) {
+    sdNameBuffer_ = "NewFolder";
+    sdNameCursor_ = 0;
+    sdNameIsNewFolder_ = true;
+    sdNameEditor_ = true;
+    sdActionMenu_ = false;
+  } else if (index == 6) {
+    sdSortMode_ = (sdSortMode_ + 1) % 2;
+    sdMessage_ = sdSortMode_ == 0 ? "Sorted by name" : "Sorted by size";
+    sdActionMenu_ = false;
+    refreshSdDirectory();
+  } else {
+    sdActionMenu_ = false;
+  }
+}
+
+void FireOS::handleFileExplorerButton(uint8_t index) {
+  if (sdImagePreview_) {
+    if (index == 1 || index == 2) {
+      sdImagePreview_ = false;
+      sdImageRendered_ = false;
+      releaseSdImageBuffer();
+    }
+    return;
+  }
+  if (sdPreview_) {
+    if (index == 1 || index == 2) sdPreview_ = false;
+    return;
+  }
+  if (sdNameEditor_) {
+    if (index == 0 || index == 2) {
+      const int length = strlen(kSdNameCharset);
+      int position = strchr(kSdNameCharset, sdNameBuffer_[sdNameCursor_]) -
+                     kSdNameCharset;
+      position = (position + (index == 0 ? length - 1 : 1)) % length;
+      sdNameBuffer_[sdNameCursor_] = kSdNameCharset[position];
+    } else {
+      if (sdNameCursor_ + 1 < sdNameBuffer_.length()) {
+        ++sdNameCursor_;
+      } else {
+        commitSdNameEditor();
+      }
+    }
+    return;
+  }
+  if (sdDeleteConfirm_) {
+    if (index == 1) deleteSelectedSdEntry();
+    else if (index == 0 || index == 2) sdDeleteConfirm_ = false;
+    return;
+  }
+  if (sdActionMenu_) {
+    if (index == 0) {
+      sdActionIndex_ = (sdActionIndex_ + 7) % 8;
+    } else if (index == 2) {
+      sdActionIndex_ = (sdActionIndex_ + 1) % 8;
+    } else {
+      handleFileExplorerAction(sdActionIndex_);
+    }
+    return;
+  }
+  const uint8_t itemCount = sdEntryCount_ + 1;
+  if (index == 0 && sdSelection_ > 0) --sdSelection_;
+  if (index == 2 && sdSelection_ + 1 < itemCount) ++sdSelection_;
+  if (index == 0 || index == 2) {
+    if (sdSelection_ < sdOffset_) sdOffset_ = sdSelection_;
+    if (sdSelection_ >= sdOffset_ + kFileVisibleRows)
+      sdOffset_ = sdSelection_ - kFileVisibleRows + 1;
+  } else {
+    openSelectedSdEntry();
+  }
+}
+
+String FireOS::externalAppBaseName(const String& path) const {
+  return sdBaseName(path);
+}
+
+void FireOS::scanExternalApps() {
+  externalAppCount_ = 0;
+  if (!sdReady_ && !initSdCard()) return;
+  File apps = SD.open("/apps");
+  if (!apps || !apps.isDirectory()) return;
+  File entry = apps.openNextFile();
+  while (entry && externalAppCount_ < kMaxExternalApps) {
+    String name = entry.name();
+    if (!name.startsWith("/")) name = "/apps/" + name;
+    String lowerName = name;
+    lowerName.toLowerCase();
+    if (!entry.isDirectory() && lowerName.endsWith(".bin")) {
+      const uint8_t index = externalAppCount_++;
+      externalAppPaths_[index] = name;
+      externalAppNames_[index] = externalAppBaseName(name);
+      externalAppOffsets_[index] = 0;
+      externalAppSizes_[index] = entry.size();
+      externalAppCompatible_[index] =
+          inspectExternalImage(entry, externalAppOffsets_[index],
+                               externalAppSizes_[index], false);
+    }
+    entry.close();
+    entry = apps.openNextFile();
+  }
+  apps.close();
+  for (uint8_t i = 0; i < externalAppCount_; ++i) {
+    for (uint8_t j = i + 1; j < externalAppCount_; ++j) {
+      if (externalAppNames_[j].compareTo(externalAppNames_[i]) < 0) {
+        const String name = externalAppNames_[i];
+        externalAppNames_[i] = externalAppNames_[j];
+        externalAppNames_[j] = name;
+        const String path = externalAppPaths_[i];
+        externalAppPaths_[i] = externalAppPaths_[j];
+        externalAppPaths_[j] = path;
+        const uint32_t size = externalAppSizes_[i];
+        externalAppSizes_[i] = externalAppSizes_[j];
+        externalAppSizes_[j] = size;
+        const uint32_t offset = externalAppOffsets_[i];
+        externalAppOffsets_[i] = externalAppOffsets_[j];
+        externalAppOffsets_[j] = offset;
+        const bool compatible = externalAppCompatible_[i];
+        externalAppCompatible_[i] = externalAppCompatible_[j];
+        externalAppCompatible_[j] = compatible;
+      }
+    }
+  }
+  if (externalAppSelection_ >= externalAppCount_) {
+    externalAppSelection_ = externalAppCount_ == 0 ? 0 : externalAppCount_ - 1;
+  }
+}
+
+bool FireOS::deleteExternalApp(const String& path) {
+  if (path.length() == 0 || (!sdReady_ && !initSdCard())) return false;
+  const bool deleted = SD.remove(path);
+  if (deleted && selectedBootAppPath_ == path) {
+    selectedBootAppPath_ = "";
+    saveSettings();
+  }
+  return deleted;
+}
+
+bool FireOS::inspectExternalImage(File& file, uint32_t& imageOffset,
+                                  uint32_t& imageSize,
+                                  bool verifyChecksum) const {
+  imageOffset = 0;
+  imageSize = 0;
+  if (!file || file.size() < 32) return false;
+
+  uint32_t candidateOffsets[2] = {0, 0x10000};
+  for (uint8_t candidate = 0; candidate < 2; ++candidate) {
+    const uint32_t offset = candidateOffsets[candidate];
+    if (offset + 24 > file.size()) continue;
+    uint8_t header[24] = {};
+    if (!file.seek(offset) || file.read(header, sizeof(header)) !=
+                                  sizeof(header)) {
+      continue;
+    }
+    if (header[0] != 0xE9 || header[1] == 0 || header[1] > 16 ||
+        header[12] != 0 || header[13] != 0) {
+      continue;
+    }
+
+    uint32_t cursor = offset + sizeof(header);
+    uint8_t checksum = 0xEF;
+    bool valid = true;
+    for (uint8_t segment = 0; segment < header[1]; ++segment) {
+      if (cursor + 8 > file.size()) {
+        valid = false;
+        break;
+      }
+      uint8_t segmentHeader[8] = {};
+      if (!file.seek(cursor) ||
+          file.read(segmentHeader, sizeof(segmentHeader)) !=
+              sizeof(segmentHeader)) {
+        valid = false;
+        break;
+      }
+      const uint32_t length =
+          static_cast<uint32_t>(segmentHeader[4]) |
+          (static_cast<uint32_t>(segmentHeader[5]) << 8) |
+          (static_cast<uint32_t>(segmentHeader[6]) << 16) |
+          (static_cast<uint32_t>(segmentHeader[7]) << 24);
+      if (length > file.size() - cursor - 8) {
+        valid = false;
+        break;
+      }
+      const uint32_t dataStart = cursor + 8;
+      if (verifyChecksum) {
+        if (!file.seek(dataStart)) {
+          valid = false;
+          break;
+        }
+        uint32_t remaining = length;
+        uint8_t checksumBuffer[256] = {};
+        while (remaining > 0) {
+          const size_t request = min<size_t>(sizeof(checksumBuffer), remaining);
+          const size_t amount = file.read(checksumBuffer, request);
+          if (amount == 0) {
+            valid = false;
+            break;
+          }
+          for (size_t byte = 0; byte < amount; ++byte)
+            checksum ^= checksumBuffer[byte];
+          remaining -= amount;
+        }
+      }
+      if (!valid) break;
+      cursor = dataStart + length;
+      cursor = (cursor + 15u) & ~15u;
+    }
+    if (!valid || cursor >= file.size()) continue;
+
+    if (verifyChecksum) {
+      uint8_t storedChecksum = 0;
+      if (!file.seek(cursor) || file.read(&storedChecksum, 1) != 1 ||
+          storedChecksum != checksum) {
+        continue;
+      }
+    }
+
+    // One checksum byte follows the aligned segment data. Newer images may
+    // also contain a 32-byte validation hash; include it when present.
+    uint32_t totalSize = cursor - offset + 1;
+    if (offset + totalSize + 32 <= file.size()) {
+      uint8_t nextByte = 0xFF;
+      if (file.seek(offset + totalSize) && file.read(&nextByte, 1) == 1 &&
+          nextByte != 0xFF) {
+        totalSize += 32;
+      }
+    }
+    imageOffset = offset;
+    imageSize = totalSize;
+    return true;
+  }
+  return false;
+}
+
+bool FireOS::installExternalApp(const String& path, bool rebootAfterInstall,
+                                bool makeBootApp) {
+  const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
+  File source = SD.open(path, FILE_READ);
+  uint32_t imageOffset = 0;
+  uint32_t imageSize = 0;
+  const bool validImage = source &&
+                          inspectExternalImage(source, imageOffset, imageSize,
+                                               true);
+  if (!source || !target || !validImage || imageSize > target->size) {
+    source.close();
+    externalAppMessage_ = validImage ? "Rejected: app too large"
+                                     : "Rejected: incompatible .bin";
+    return false;
+  }
+  if (!source.seek(imageOffset)) {
+    source.close();
+    externalAppMessage_ = "Cannot read app image";
+    return false;
+  }
+  esp_ota_handle_t handle = 0;
+  if (esp_ota_begin(target, imageSize, &handle) != ESP_OK) {
+    source.close();
+    externalAppMessage_ = "Install could not start";
+    return false;
+  }
+  uint8_t buffer[4096];
+  bool ok = true;
+  uint32_t remaining = imageSize;
+  while (remaining > 0) {
+    const size_t request = min<size_t>(sizeof(buffer), remaining);
+    const size_t amount = source.read(buffer, request);
+    if (amount == 0 || esp_ota_write(handle, buffer, amount) != ESP_OK) {
+      ok = false;
+      break;
+    }
+    remaining -= amount;
+  }
+  source.close();
+  if (esp_ota_end(handle) != ESP_OK) ok = false;
+  if (ok && esp_ota_set_boot_partition(target) != ESP_OK) ok = false;
+  if (!ok) {
+    externalAppMessage_ = "Install failed; FIRE OS retained";
+    return false;
+  }
+  if (rebootAfterInstall) {
+    if (makeBootApp) {
+      selectedBootAppPath_ = path;
+      saveSettings();
+    }
+    ESP.restart();
+  }
+  externalAppMessage_ = "Installed to inactive slot";
+  return true;
+}
+
+bool FireOS::launchSelectedBootApp() {
+  if (selectedBootAppPath_.length() == 0) return false;
+  if (!sdReady_ && !initSdCard()) return false;
+  return installExternalApp(selectedBootAppPath_, true, true);
+}
+
+void FireOS::saveSavedWifiNetworks() {
+  for (uint8_t index = 0; index < 5; ++index) {
+    preferences.remove(("wifi_ssid_" + String(index)).c_str());
+    preferences.remove(("wifi_pass_" + String(index)).c_str());
+  }
+  for (uint8_t index = 0; index < wifiSavedCount_ && index < 5; ++index) {
+    preferences.putString(("wifi_ssid_" + String(index)).c_str(),
+                          wifiSavedSsid_[index]);
+    preferences.putString(("wifi_pass_" + String(index)).c_str(),
+                          wifiSavedPassword_[index]);
+  }
+}
+
+bool FireOS::allButtonsHeldAtBoot() const {
+  return digitalRead(kButtonPins[0]) == LOW &&
+         digitalRead(kButtonPins[1]) == LOW && digitalRead(kButtonPins[2]) == LOW;
+}
+
+void FireOS::pollButtons() {
+  const uint32_t now = millis();
+  for (uint8_t index = 0; index < kButtonCount; ++index) {
+    if (buttons_[index].clickPending &&
+        now - buttons_[index].lastClickAt > kDoubleClickWindowMs) {
+      buttons_[index].clickPending = false;
+      onButton(index, false);
+    }
+    const bool pressed = digitalRead(kButtonPins[index]) == LOW;
+    if (pressed && !buttons_[index].down) {
+      buttons_[index].down = true;
+      buttons_[index].longTriggered = false;
+      buttons_[index].started = now;
+      buttons_[index].wakeOnly = displayPowerState_ != 0;
+      if (displayPowerState_ != 0) {
+        wakeDisplay();
+      } else {
+        lastActivity_ = now;
+      }
+    } else if (pressed && buttons_[index].down &&
+               !buttons_[index].wakeOnly && !buttons_[index].longTriggered &&
+               now - buttons_[index].started >= kLongPressMs) {
+      buttons_[index].longTriggered = true;
+      buttons_[index].clickPending = false;
+      lastActivity_ = now;
+      onButton(index, true);
+    } else if (!pressed && buttons_[index].down) {
+      const bool shortPress = !buttons_[index].longTriggered &&
+                              !buttons_[index].wakeOnly;
+      buttons_[index].down = false;
+      buttons_[index].wakeOnly = false;
+      if (shortPress) {
+        if (doubleClickAction_[index] == 0) {
+          onButton(index, false);
+        } else if (buttons_[index].clickPending &&
+                   now - buttons_[index].lastClickAt <= kDoubleClickWindowMs) {
+          buttons_[index].clickPending = false;
+          onDoubleClick(index);
+        } else {
+          buttons_[index].clickPending = true;
+          buttons_[index].lastClickAt = now;
+        }
+      }
+    }
+  }
+}
+
+void FireOS::onButton(uint8_t index, bool longPress) {
+  playButtonSound(index, longPress);
+  if (longPress) {
+    if (screen_ == Screen::FileExplorer && index == 1 && !sdPreview_ &&
+        !sdNameEditor_ && !sdDeleteConfirm_) {
+      sdActionMenu_ = true;
+      sdActionIndex_ = 0;
+      return;
+    }
+    if (screen_ == Screen::Bluetooth && bluetoothScanDialog_) {
+      bluetoothScanDialog_ = false;
+      bluetoothUnknownDialog_ = false;
+      return;
+    }
+    if (index == 0) {
+      home();
+    } else if (index == 1 && screen_ != Screen::QuickSettings) {
+      openQuickSettings();
+    } else if (index == 2) {
+      if (screen_ == Screen::Settings) {
+        goToBootApp();
+      } else {
+        back();
+      }
+    }
+    return;
+  }
+
+  if (screen_ == Screen::DateTime) {
+    handleDateTimeButton(index);
+    return;
+  }
+  if (screen_ == Screen::DisplaySound) {
+    handleDisplaySoundButton(index);
+    return;
+  }
+  if (screen_ == Screen::Boot) {
+    handleBootButton(index);
+    return;
+  }
+  if (screen_ == Screen::Help) {
+    handleHelpButton(index);
+    return;
+  }
+  if (screen_ == Screen::AppsSettings) {
+    handleAppsSettingsButton(index);
+    return;
+  }
+  if (screen_ == Screen::AiDeveloper) {
+    handleAiDeveloperButton(index);
+    return;
+  }
+  if (screen_ == Screen::AiApi) {
+    handleAiApiButton(index);
+    return;
+  }
+  if (screen_ == Screen::Wifi) {
+    handleWifiButton(index);
+    return;
+  }
+  if (screen_ == Screen::Bluetooth) {
+    if (bluetoothScanDialog_) {
+      handleBluetoothScanDialogButton(index);
+      return;
+    }
+    if (bluetoothSavedDialog_) {
+      handleBluetoothSavedDialogButton(index);
+      return;
+    }
+    handleBluetoothButton(index);
+    return;
+  }
+  if (screen_ == Screen::FileExplorer) {
+    handleFileExplorerButton(index);
+    return;
+  }
+  if (screen_ == Screen::MainMenuSettings || screen_ == Screen::Shortcuts) {
+    handleAppsSettingsButton(index);
+    return;
+  }
+  if (screen_ == Screen::QuickSettings) {
+    handleQuickButton(index);
+    return;
+  }
+  if (screen_ == Screen::FactoryReset) {
+    handleFactoryResetButton(index);
+    return;
+  }
+  if (screen_ == Screen::Power) {
+    handlePowerButton(index);
+    return;
+  }
+  if (screen_ == Screen::PowerActions) {
+    handlePowerActionsButton(index);
+    return;
+  }
+
+  if (index == 0) {
+    if (screen_ == Screen::Main) {
+      const uint8_t nextIndex = nextVisibleMain(mainIndex_, -1);
+      startMainSlide(nextIndex, 1);
+    } else if (screen_ == Screen::Apps) {
+      handleAppsButton(index);
+    } else if (screen_ == Screen::Placeholder || screen_ == Screen::Debug ||
+               screen_ == Screen::SystemInfo) {
+      // Short left press never means Home. Home is long left only.
+    } else if (screen_ == Screen::Settings) {
+      settingsIndex_ = (settingsIndex_ + kSettingsCount - 1) % kSettingsCount;
+    }
+  } else if (index == 2) {
+    if (screen_ == Screen::Main) {
+      const uint8_t nextIndex = nextVisibleMain(mainIndex_, 1);
+      startMainSlide(nextIndex, -1);
+    } else if (screen_ == Screen::Apps) {
+      handleAppsButton(index);
+    } else if (screen_ == Screen::Placeholder || screen_ == Screen::Debug ||
+               screen_ == Screen::SystemInfo) {
+      back();
+    } else if (screen_ == Screen::Settings) {
+      settingsIndex_ = (settingsIndex_ + 1) % kSettingsCount;
+    }
+  } else if (index == 1) {
+    if (screen_ == Screen::Main) {
+      if (mainIndex_ == 0) {
+        open(Screen::Apps);
+      } else if (mainIndex_ == 1) {
+        open(Screen::Settings);
+      } else if (mainIndex_ == 2) {
+        powerIndex_ = 1;
+        powerEditing_ = false;
+        open(Screen::Power);
+      } else if (mainIndex_ == 3) {
+        open(Screen::FileExplorer);
+      } else {
+        open(Screen::AiDeveloper);
+      }
+    } else if (screen_ == Screen::Apps) {
+      handleAppsButton(index);
+    } else if (screen_ == Screen::Settings) {
+      if (settingsIndex_ == 0) {
+        openDateTimeEditor();
+      } else if (settingsIndex_ == 1) {
+        detailIndex_ = 0;
+        detailEditing_ = false;
+        open(Screen::DisplaySound);
+      } else if (settingsIndex_ == 2) {
+        detailIndex_ = 0;
+        open(Screen::Wifi);
+      } else if (settingsIndex_ == 3) {
+        detailIndex_ = 0;
+        open(Screen::Bluetooth);
+      } else if (settingsIndex_ == 4) {
+        open(Screen::FileExplorer);
+      } else if (settingsIndex_ == 5) {
+        detailIndex_ = 0;
+        detailEditing_ = false;
+        open(Screen::Boot);
+      } else if (settingsIndex_ == 6) {
+        detailIndex_ = 0;
+        open(Screen::MainMenuSettings);
+      } else if (settingsIndex_ == 7) {
+        detailIndex_ = 0;
+        open(Screen::Shortcuts);
+      } else if (settingsIndex_ == 8) {
+        detailIndex_ = 0;
+        open(Screen::AppsSettings);
+      } else if (settingsIndex_ == 9) {
+        open(Screen::Debug);
+      } else if (settingsIndex_ == 10) {
+        open(Screen::SystemInfo);
+      } else if (settingsIndex_ == 11) {
+        helpPage_ = 0;
+        open(Screen::Help);
+      } else if (settingsIndex_ == 13) {
+        open(Screen::AiApi);
+      } else if (settingsIndex_ == 14) {
+        powerIndex_ = 0;
+        powerEditing_ = false;
+        open(Screen::Power);
+      } else if (settingsIndex_ == 15) {
+        back();
+      } else if (settingsIndex_ == 12) {
+        factoryResetArmed_ = false;
+        open(Screen::FactoryReset);
+      } else {
+        placeholderIndex_ = settingsIndex_;
+        open(Screen::Placeholder);
+      }
+    } else if (screen_ == Screen::Placeholder || screen_ == Screen::Debug ||
+               screen_ == Screen::SystemInfo) {
+      // B is reserved for select/action. Back is always long A.
+    }
+  }
+}
+
+void FireOS::onDoubleClick(uint8_t index) {
+  playButtonSound(index, false);
+  switch (doubleClickAction_[index]) {
+    case 1:
+      open(Screen::Apps);
+      break;
+    case 2:
+      powerIndex_ = 0;
+      powerEditing_ = false;
+      open(Screen::Power);
+      break;
+    case 3:
+      open(Screen::Settings);
+      break;
+    case 4:
+      detailIndex_ = 0;
+      detailEditing_ = false;
+      open(Screen::DisplaySound);
+      break;
+    case 5:
+      wifiIndex_ = 0;
+      open(Screen::Wifi);
+      break;
+    case 6:
+      bluetoothIndex_ = 0;
+      open(Screen::Bluetooth);
+      break;
+    case 7:
+      detailIndex_ = 0;
+      open(Screen::MainMenuSettings);
+      break;
+    case 8:
+      open(Screen::SystemInfo);
+      break;
+    default:
+      break;
+  }
+}
+
+void FireOS::playButtonSound(uint8_t index, bool longPress) {
+  if (!buttonSoundsEnabled_ || !M5.Speaker.isEnabled()) return;
+  const float frequency = index == 1 ? 740.0f : 560.0f;
+  M5.Speaker.tone(frequency, longPress ? 28 : 18, 0, true);
+}
+
+void FireOS::open(Screen screen) {
+  if (screen_ == Screen::Bluetooth && screen != Screen::Bluetooth) {
+    closeBluetoothSettings();
+  }
+  previousScreen_ = screen_;
+  screen_ = screen;
+  if (screen == Screen::Bluetooth) {
+    if (bluetoothMode_ == 2) {
+      bluetoothEnabled_ = false;
+      bluetoothStatus_ = "Bluetooth Off";
+    } else {
+      bluetoothEnabled_ = initBluetooth();
+      setBluetoothVisibility(bluetoothEnabled_);
+    }
+  }
+  if (screen == Screen::Apps) {
+    externalAppSelection_ = 0;
+    externalAppOffset_ = 0;
+    externalAppMessage_ = "";
+    scanExternalApps();
+  }
+  if (screen == Screen::AppsSettings) {
+    externalAppSelection_ = 0;
+    externalAppOffset_ = 0;
+    externalAppMessage_ = "";
+    appManagerActionMenu_ = false;
+    appManagerActionIndex_ = 0;
+    appManagerDeleteConfirm_ = false;
+    scanExternalApps();
+  }
+  if (screen == Screen::AiDeveloper) {
+    aiDeveloperMode_ = 0;
+    aiWorkflowState_ = 0;
+    aiBuildProgress_ = 0;
+    aiWorkflowStarted_ = millis();
+    aiRestPhase_ = 0;
+    aiRestPhaseStarted_ = millis();
+    aiRestPhaseDuration_ = 30000 + (esp_random() % 30001);
+  }
+  if (screen == Screen::AiApi) {
+    wifiIndex_ = 0;
+  }
+  if (screen == Screen::FileExplorer) {
+    sdPath_ = "/";
+    sdSelection_ = 0;
+    sdOffset_ = 0;
+    sdActionMenu_ = false;
+    sdDeleteConfirm_ = false;
+    sdNameEditor_ = false;
+    sdPreview_ = false;
+    sdImagePreview_ = false;
+    sdImageRendered_ = false;
+    releaseSdImageBuffer();
+    sdMessage_.clear();
+    initSdCard();
+    refreshSdDirectory();
+  }
+}
+
+uint8_t FireOS::visibleMainCount() const {
+  uint8_t count = 0;
+  for (uint8_t index = 0; index < kMainCount; ++index) {
+    if (mainVisible_[index]) ++count;
+  }
+  return count;
+}
+
+uint8_t FireOS::mainItemAtPosition(uint8_t position) const {
+  uint8_t visible = 0;
+  for (uint8_t index = 0; index < kMainCount; ++index) {
+    if (!mainVisible_[index]) continue;
+    if (visible++ == position) return index;
+  }
+  return 1;  // Settings remains the recovery fallback.
+}
+
+uint8_t FireOS::nextVisibleMain(uint8_t current, int8_t direction) const {
+  const uint8_t count = visibleMainCount();
+  if (count == 0) return 1;
+  uint8_t position = 0;
+  for (uint8_t index = 0; index < count; ++index) {
+    if (mainItemAtPosition(index) == current) {
+      position = index;
+      break;
+    }
+  }
+  position = static_cast<uint8_t>((position + count + direction) % count);
+  return mainItemAtPosition(position);
+}
+
+void FireOS::startMainSlide(uint8_t nextIndex, int8_t direction) {
+  if (carouselAnimating_ || nextIndex == mainIndex_) return;
+  carouselFromIndex_ = mainIndex_;
+  carouselToIndex_ = nextIndex;
+  carouselDirection_ = direction;
+  carouselOffset_ = 0;
+  carouselAnimating_ = true;
+  mainIndex_ = nextIndex;
+}
+
+void FireOS::back() {
+  if (screen_ == Screen::Main) return;
+  if (screen_ == Screen::Bluetooth) closeBluetoothSettings();
+  screen_ = previousScreen_;
+}
+
+void FireOS::home() {
+  goToBootApp();
+}
+
+void FireOS::goToBootApp() {
+  if (screen_ == Screen::Bluetooth) closeBluetoothSettings();
+  // The current Boot setting is Default. Keep this single routing point so a
+  // future installed-app boot target cannot create a second Home behavior.
+  screen_ = Screen::Main;
+  mainIndex_ = mainItemAtPosition(0);
+  carouselAnimating_ = false;
+  carouselOffset_ = 0;
+}
+
+void FireOS::openQuickSettings() {
+  if (screen_ == Screen::Bluetooth) closeBluetoothSettings();
+  previousScreen_ = screen_;
+  quickIndex_ = 0;
+  quickEditing_ = false;
+  screen_ = Screen::QuickSettings;
+}
+
+void FireOS::openDateTimeEditor() {
+  tm local{};
+  const time_t now = time(nullptr);
+  localtime_r(&now, &local);
+  editYear_ = local.tm_year + 1900;
+  editMonth_ = local.tm_mon + 1;
+  editDay_ = local.tm_mday;
+  editHour_ = local.tm_hour;
+  editMinute_ = local.tm_min;
+  editTimezone_ = dateTime_.timezoneIndex();
+  editDstAuto_ = dateTime_.dstAuto();
+  dateField_ = 0;
+  dateEditing_ = false;
+  open(Screen::DateTime);
+}
+
+void FireOS::handleDateTimeButton(uint8_t index) {
+  if (dateEditing_) {
+    if (index == 0) {
+      adjustDateField(-1);
+    } else if (index == 2) {
+      adjustDateField(1);
+    } else {
+      dateEditing_ = false;
+    }
+    return;
+  }
+
+  if (index == 0) {
+    dateField_ = (dateField_ + kDateFieldCount - 1) % kDateFieldCount;
+  } else if (index == 2) {
+    dateField_ = (dateField_ + 1) % kDateFieldCount;
+  } else {
+    if (dateField_ == 0) {
+      wifiTimeSync_ = !wifiTimeSync_;
+      saveSettings();
+      timeSyncPending_ = false;
+      timeSyncConfigured_ = false;
+      timeSyncStatus_ = wifiTimeSync_ ? "Wi-Fi sync on; use Sync now"
+                                      : "Wi-Fi sync off";
+    } else if (dateField_ == 1) {
+      if (wifiTimeSync_) {
+        startTimeSync();
+      } else {
+        timeSyncStatus_ = "Enable Wi-Fi sync first";
+      }
+    } else if (dateField_ <= 8) {
+      dateEditing_ = true;
+    } else if (dateField_ == 9) {
+      commitDateTime();
+      screen_ = Screen::Settings;
+    } else {
+      screen_ = Screen::Settings;
+    }
+  }
+}
+
+void FireOS::handleDisplaySoundButton(uint8_t index) {
+  if (detailEditing_) {
+    if (index == 0 || index == 2) {
+      const int8_t direction = index == 0 ? -1 : 1;
+      if (detailIndex_ == 0) {
+        brightnessStep_ = (brightnessStep_ + kBrightnessStepCount + direction) %
+                          kBrightnessStepCount;
+        brightness_ = kBrightnessValues[brightnessStep_];
+        M5.Display.setBrightness(brightness_);
+      } else if (detailIndex_ == 1) {
+        volumeStep_ = (volumeStep_ + kVolumeStepCount + direction) %
+                      kVolumeStepCount;
+        volume_ = volumeValue(volumeStep_);
+        M5.Speaker.setVolume(volume_);
+      } else if (detailIndex_ == 2) {
+        dimOption_ = (dimOption_ + kDurationCount + direction) % kDurationCount;
+      } else if (detailIndex_ == 3) {
+        screenOffOption_ = (screenOffOption_ + kDurationCount + direction) %
+                           kDurationCount;
+      }
+      saveSettings();
+    } else if (index == 1) {
+      detailEditing_ = false;
+      saveSettings();
+    }
+    return;
+  }
+
+  constexpr uint8_t kCount = 6;
+  if (index == 0) {
+    detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
+  } else if (index == 2) {
+    detailIndex_ = (detailIndex_ + 1) % kCount;
+  } else {
+    if (detailIndex_ <= 3) {
+      detailEditing_ = true;
+    } else if (detailIndex_ == 4) {
+      buttonSoundsEnabled_ = !buttonSoundsEnabled_;
+      saveSettings();
+    } else {
+      back();
+    }
+  }
+}
+
+void FireOS::handleBootButton(uint8_t index) {
+  if (bootAppPicker_) {
+    const uint8_t itemCount = externalAppCount_ + 1;
+    if (index == 0) {
+      bootAppSelection_ = (bootAppSelection_ + itemCount - 1) % itemCount;
+    } else if (index == 2) {
+      bootAppSelection_ = (bootAppSelection_ + 1) % itemCount;
+    } else {
+      selectedBootAppPath_ = bootAppSelection_ == 0
+                                 ? ""
+                                 : externalAppPaths_[bootAppSelection_ - 1];
+      saveSettings();
+      bootAppPicker_ = false;
+    }
+    if (bootAppSelection_ < bootAppOffset_) bootAppOffset_ = bootAppSelection_;
+    if (bootAppSelection_ >= bootAppOffset_ + 6)
+      bootAppOffset_ = bootAppSelection_ - 5;
+    return;
+  }
+  constexpr uint8_t kCount = 4;
+  if (index == 0) {
+    detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
+  } else if (index == 2) {
+    detailIndex_ = (detailIndex_ + 1) % kCount;
+  } else if (detailIndex_ == 1) {
+    bootRgbPulse_ = !bootRgbPulse_;
+    saveSettings();
+  } else if (detailIndex_ == 2) {
+    bootMelody_ = !bootMelody_;
+    saveSettings();
+  } else if (detailIndex_ == 3) {
+    back();
+  } else if (detailIndex_ == 0) {
+    scanExternalApps();
+    bootAppSelection_ = selectedBootAppPath_.length() == 0 ? 0 : 1;
+    for (uint8_t i = 0; i < externalAppCount_; ++i) {
+      if (externalAppPaths_[i] == selectedBootAppPath_) {
+        bootAppSelection_ = i + 1;
+        break;
+      }
+    }
+    bootAppOffset_ = bootAppSelection_ > 5 ? bootAppSelection_ - 5 : 0;
+    bootAppPicker_ = true;
+  }
+}
+
+void FireOS::playBootRgbPulse() {
+  struct BootColor {
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+  };
+  const BootColor colors[] = {{255, 0, 0}, {0, 90, 255}, {0, 255, 40},
+                              {255, 80, 0}};
+  const bool playMelody = bootMelody_ && M5.Speaker.isEnabled();
+  const uint32_t melodyNotesAt[] = {0, 80, 160};
+  const float melodyNotes[] = {523.251f, 659.255f, 783.991f};
+  uint8_t nextMelodyNote = 0;
+  const uint32_t pulseStarted = millis();
+  auto updateMelody = [&]() {
+    if (!playMelody) return;
+    const uint32_t elapsed = millis() - pulseStarted;
+    while (nextMelodyNote < 3 && elapsed >= melodyNotesAt[nextMelodyNote]) {
+      M5.Speaker.tone(melodyNotes[nextMelodyNote],
+                      nextMelodyNote == 2 ? 100 : 70);
+      ++nextMelodyNote;
+    }
+  };
+  updateMelody();
+  for (uint8_t color = 0; color < 4; ++color) {
+    for (int level = 0; level <= 255; level += 51) {
+      M5.Led.setBrightness(static_cast<uint8_t>(level));
+      M5.Led.setAllColor(colors[color].red, colors[color].green,
+                         colors[color].blue);
+      M5.Led.display();
+      delay(42);
+      updateMelody();
+    }
+    for (int level = 204; level >= 0; level -= 51) {
+      M5.Led.setBrightness(static_cast<uint8_t>(level));
+      M5.Led.display();
+      delay(42);
+      updateMelody();
+    }
+  }
+  M5.Led.setBrightness(0);
+  M5.Led.setAllColor(0, 0, 0);
+  M5.Led.display();
+}
+
+void FireOS::playBootMelody() {
+  if (!M5.Speaker.isEnabled()) return;
+  M5.Speaker.tone(523.251f, 70);
+  delay(80);
+  M5.Speaker.tone(659.255f, 70);
+  delay(80);
+  M5.Speaker.tone(783.991f, 100);
+  delay(110);
+}
+
+void FireOS::handleHelpButton(uint8_t index) {
+  if (index == 0) {
+    helpPage_ = (helpPage_ + 2) % 3;
+  } else if (index == 2) {
+    helpPage_ = (helpPage_ + 1) % 3;
+  } else {
+    back();
+  }
+}
+
+void FireOS::handleAiDeveloperButton(uint8_t index) {
+  if (index == 1) {
+    if (aiWorkflowState_ == 0) {
+      aiWorkflowState_ = 1;
+      aiDeveloperMode_ = 1;
+    } else if (aiWorkflowState_ == 1) {
+      aiWorkflowState_ = 2;
+      aiDeveloperMode_ = 2;
+      aiWorkflowStarted_ = millis();
+    }
+  } else if (index == 0 && aiWorkflowState_ == 3) {
+    aiWorkflowState_ = 4;
+    aiDeveloperMode_ = 2;
+    aiBuildProgress_ = 0;
+    aiWorkflowStarted_ = millis();
+  } else if (index == 2 &&
+             (aiWorkflowState_ == 3 || aiWorkflowState_ == 5)) {
+    aiWorkflowState_ = 0;
+    aiDeveloperMode_ = 0;
+    aiBuildProgress_ = 0;
+    aiWorkflowStarted_ = millis();
+  } else if (index == 0 && aiWorkflowState_ == 5) {
+    aiWorkflowState_ = 6;
+    aiDeveloperMode_ = 3;
+    aiWorkflowStarted_ = millis();
+  } else if (index == 0) {
+    aiDeveloperMode_ = 0;
+    aiWorkflowState_ = 0;
+    aiBuildProgress_ = 0;
+    aiWorkflowStarted_ = millis();
+    aiRestPhase_ = 0;
+    aiRestPhaseStarted_ = millis();
+    aiRestPhaseDuration_ = 30000 + (esp_random() % 30001);
+  }
+}
+
+void FireOS::handleAiApiButton(uint8_t index) {
+  if (wifiSetupActive_) {
+    if (index == 1 || index == 2) stopWifiSetup();
+    return;
+  }
+  constexpr uint8_t kCount = 3;
+  if (index == 0) {
+    detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
+  } else if (index == 2) {
+    detailIndex_ = (detailIndex_ + 1) % kCount;
+  } else if (detailIndex_ == 0 || detailIndex_ == 1) {
+    startAiApiSetup();
+  } else {
+    back();
+  }
+}
+
+void FireOS::handleAppsButton(uint8_t index) {
+  const uint8_t itemCount = externalAppCount_ + 1;  // Includes Back.
+  if (index == 0 || index == 2) {
+    externalAppSelection_ =
+        (externalAppSelection_ + itemCount + (index == 0 ? -1 : 1)) %
+        itemCount;
+    if (externalAppSelection_ < externalAppOffset_)
+      externalAppOffset_ = externalAppSelection_;
+    if (externalAppSelection_ >= externalAppOffset_ + 5)
+      externalAppOffset_ = externalAppSelection_ - 4;
+  } else if (index == 1) {
+    if (externalAppSelection_ == externalAppCount_) {
+      back();
+      return;
+    }
+    if (externalAppCount_ == 0) {
+      scanExternalApps();
+      externalAppMessage_ = "No external apps found";
+      return;
+    }
+    externalAppMessage_ = "Installing...";
+    draw();
+    // Starting an app from Apps is a temporary launch. The Boot App setting
+    // must remain unchanged so FIRE OS is restored after the app reboots.
+    installExternalApp(externalAppPaths_[externalAppSelection_], true, false);
+  }
+}
+
+void FireOS::handleAppsSettingsButton(uint8_t index) {
+  if (screen_ == Screen::AppsSettings) {
+    if (appManagerDeleteConfirm_) {
+      if (index == 1) {
+        const bool deleted = externalAppSelection_ < externalAppCount_ &&
+                             deleteExternalApp(
+                                 externalAppPaths_[externalAppSelection_]);
+        appManagerDeleteConfirm_ = false;
+        appManagerActionMenu_ = false;
+        externalAppMessage_ = deleted ? "App deleted" : "Delete failed";
+        scanExternalApps();
+        if (externalAppSelection_ > externalAppCount_)
+          externalAppSelection_ = externalAppCount_;
+      } else if (index == 0 || index == 2) {
+        appManagerDeleteConfirm_ = false;
+      }
+      return;
+    }
+    if (appManagerActionMenu_) {
+      constexpr uint8_t kActionCount = 3;
+      if (index == 0) {
+        appManagerActionIndex_ =
+            (appManagerActionIndex_ + kActionCount - 1) % kActionCount;
+      } else if (index == 2) {
+        appManagerActionIndex_ =
+            (appManagerActionIndex_ + 1) % kActionCount;
+      } else if (appManagerActionIndex_ == 0) {
+        externalAppMessage_ = "Installing...";
+        appManagerActionMenu_ = false;
+        draw();
+        installExternalApp(externalAppPaths_[externalAppSelection_], true,
+                           false);
+      } else if (appManagerActionIndex_ == 1) {
+        appManagerDeleteConfirm_ = true;
+      } else {
+        appManagerActionMenu_ = false;
+      }
+      return;
+    }
+
+    const uint8_t itemCount = externalAppCount_ + 1;  // Includes Back.
+    if (index == 0 || index == 2) {
+      externalAppSelection_ =
+          (externalAppSelection_ + itemCount + (index == 0 ? -1 : 1)) %
+          itemCount;
+      if (externalAppSelection_ < externalAppOffset_)
+        externalAppOffset_ = externalAppSelection_;
+      if (externalAppSelection_ >= externalAppOffset_ + 6)
+        externalAppOffset_ = externalAppSelection_ - 5;
+    } else if (externalAppSelection_ == externalAppCount_) {
+      back();
+    } else if (externalAppCount_ == 0) {
+      externalAppMessage_ = "No apps in /apps";
+    } else {
+      appManagerActionIndex_ = 0;
+      appManagerActionMenu_ = true;
+    }
+    return;
+  }
+  if (screen_ == Screen::MainMenuSettings) {
+    constexpr uint8_t kCount = 6;
+    if (index == 0) {
+      detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
+    } else if (index == 2) {
+      detailIndex_ = (detailIndex_ + 1) % kCount;
+    } else if (detailIndex_ < 5) {
+      if (detailIndex_ == 1 && mainVisible_[1] && visibleMainCount() == 1) {
+        // Keep Settings reachable as the recovery entry when every other
+        // main-menu item has been hidden.
+        return;
+      }
+      mainVisible_[detailIndex_] = !mainVisible_[detailIndex_];
+      if (visibleMainCount() == 0) mainVisible_[1] = true;
+      if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
+      saveSettings();
+    } else {
+      back();
+    }
+    return;
+  }
+  if (screen_ == Screen::Shortcuts) {
+    if (shortcutPicker_) {
+      if (index == 0 || index == 2) {
+        shortcutPickerAction_ =
+            (shortcutPickerAction_ + kDoubleClickActionCount +
+             (index == 0 ? -1 : 1)) % kDoubleClickActionCount;
+        if (shortcutPickerAction_ < shortcutPickerOffset_)
+          shortcutPickerOffset_ = shortcutPickerAction_;
+        if (shortcutPickerAction_ >= shortcutPickerOffset_ + 7)
+          shortcutPickerOffset_ = shortcutPickerAction_ - 6;
+      } else {
+        doubleClickAction_[shortcutPickerButton_] = shortcutPickerAction_;
+        shortcutPicker_ = false;
+        saveSettings();
+      }
+      return;
+    }
+    constexpr uint8_t kCount = 7;
+    if (index == 0) {
+      detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
+    } else if (index == 2) {
+      detailIndex_ = (detailIndex_ + 1) % kCount;
+    } else if (detailIndex_ >= 3 && detailIndex_ <= 5) {
+      shortcutPickerButton_ = detailIndex_ - 3;
+      shortcutPickerAction_ = doubleClickAction_[shortcutPickerButton_];
+      shortcutPickerOffset_ = shortcutPickerAction_ > 6
+                                  ? shortcutPickerAction_ - 6
+                                  : 0;
+      shortcutPicker_ = true;
+    } else if (detailIndex_ == 6) {
+      back();
+    }
+    return;
+  }
+  if (index == 2 || index == 1) back();
+}
+
+void FireOS::handleWifiButton(uint8_t index) {
+  if (wifiSavedDialog_) {
+    if (index == 0 || index == 2) {
+      const uint8_t itemCount = wifiSavedCount_ + 4;
+      if (index == 0 && wifiSavedSelection_ > 0) --wifiSavedSelection_;
+      if (index == 2 && wifiSavedSelection_ + 1 < itemCount) {
+        ++wifiSavedSelection_;
+      }
+      if (wifiSavedSelection_ < wifiSavedOffset_) {
+        wifiSavedOffset_ = wifiSavedSelection_;
+      } else if (wifiSavedSelection_ >= wifiSavedOffset_ + 6) {
+        wifiSavedOffset_ = wifiSavedSelection_ - 5;
+      }
+      if (wifiSavedSelection_ < wifiSavedCount_) {
+        wifiSavedTarget_ = wifiSavedSelection_;
+      }
+    } else if (index == 1) {
+      if (wifiSavedSelection_ < wifiSavedCount_) {
+        wifiSsid_ = wifiSavedSsid_[wifiSavedSelection_];
+        wifiPassword_ = wifiSavedPassword_[wifiSavedSelection_];
+        wifiSavedTarget_ = wifiSavedSelection_;
+        wifiSavedDialog_ = false;
+        wifiDeleteArmed_ = false;
+        wifiMode_ = 1;
+        saveSettings();
+        beginWifiConnection();
+      } else if (wifiSavedSelection_ == wifiSavedCount_) {
+        if (wifiSavedTarget_ < wifiSavedCount_) {
+          moveSelectedWifiNetwork(-1);
+        }
+      } else if (wifiSavedSelection_ == wifiSavedCount_ + 1) {
+        if (wifiSavedTarget_ + 1 < wifiSavedCount_) {
+          moveSelectedWifiNetwork(1);
+        }
+      } else if (wifiSavedSelection_ == wifiSavedCount_ + 2) {
+        if (wifiDeleteArmed_) deleteSelectedWifiNetwork();
+        else wifiDeleteArmed_ = true;
+      } else {
+        wifiSavedDialog_ = false;
+        wifiDeleteArmed_ = false;
+      }
+    }
+    return;
+  }
+  if (wifiScanDialog_) {
+    if (index == 0 || index == 2) {
+      if (wifiScanCount_ > 0) {
+        if (index == 0 && wifiScanSelection_ > 0) --wifiScanSelection_;
+        if (index == 2 && wifiScanSelection_ + 1 < wifiScanCount_) {
+          ++wifiScanSelection_;
+        }
+        if (wifiScanSelection_ < wifiScanOffset_) {
+          wifiScanOffset_ = wifiScanSelection_;
+        } else if (wifiScanSelection_ >= wifiScanOffset_ + 5) {
+          wifiScanOffset_ = wifiScanSelection_ - 4;
+        }
+      }
+    } else if (index == 1) {
+      wifiScanDialog_ = false;
+      WiFi.scanDelete();
+      wifiScanCount_ = -1;
+    }
+    return;
+  }
+  if (wifiSetupActive_) {
+    if (index == 1 || index == 2) stopWifiSetup();
+    return;
+  }
+  constexpr uint8_t kCount = 5;
+  if (index == 0) {
+    wifiIndex_ = (wifiIndex_ + kCount - 1) % kCount;
+  } else if (index == 2) {
+    wifiIndex_ = (wifiIndex_ + 1) % kCount;
+  } else {
+    switch (wifiIndex_) {
+      case 0:
+        wifiMode_ = (wifiMode_ + 1) % 3;
+        saveSettings();
+        applyWifiMode();
+        break;
+      case 1:
+        scanWifiNetworks();
+        break;
+      case 2:
+        startWifiSetup();
+        break;
+      case 3:
+        wifiSavedDialog_ = true;
+        wifiSavedSelection_ = 0;
+        wifiSavedTarget_ = 0;
+        wifiSavedOffset_ = 0;
+        wifiDeleteArmed_ = false;
+        break;
+      case 4:
+        stopWifiSetup();
+        back();
+        break;
+    }
+  }
+}
+
+void FireOS::handleBluetoothButton(uint8_t index) {
+  constexpr uint8_t kCount = 8;
+  if (index == 0) {
+    bluetoothIndex_ = (bluetoothIndex_ + kCount - 1) % kCount;
+  } else if (index == 2) {
+    bluetoothIndex_ = (bluetoothIndex_ + 1) % kCount;
+  } else {
+    switch (bluetoothIndex_) {
+      case 0:
+        bluetoothMode_ = (bluetoothMode_ + 1) % 3;
+        if (bluetoothMode_ == 1) {
+          bluetoothEnabled_ = initBluetooth();
+          setBluetoothVisibility(bluetoothEnabled_);
+        } else {
+          disconnectBluetoothDevice();
+          bluetoothEnabled_ = false;
+          setBluetoothVisibility(false);
+#ifdef FIRE_OS_BLE
+          if (bluetoothRadioReady) {
+            NimBLEDevice::deinit(true);
+            bluetoothRadioReady = false;
+          }
+#endif
+        }
+        saveSettings();
+        bluetoothStatus_ = bluetoothMode_ == 2
+                               ? "Bluetooth policy: Off"
+                               : bluetoothMode_ == 0
+                                     ? "Bluetooth policy: Auto"
+                                     : bluetoothEnabled_
+                                           ? "Bluetooth enabled"
+                                           : "BLE start failed";
+        break;
+      case 1:
+        scanBluetoothDevices();
+        break;
+      case 2:
+        if (bluetoothScanCount_ > 0) {
+          bluetoothScanSelection_ = 0;
+          bluetoothScanOffset_ = 0;
+          bluetoothScanDialog_ = true;
+        } else {
+          scanBluetoothDevices();
+        }
+        break;
+      case 3:
+        if (bluetoothSavedCount_ > 0) {
+          bluetoothSavedSelection_ = 0;
+          bluetoothSavedOffset_ = 0;
+          bluetoothSavedDeleteArmed_ = false;
+          bluetoothSavedDialog_ = true;
+        } else {
+          bluetoothStatus_ = "No saved devices";
+        }
+        break;
+      case 4:
+        if (bluetoothConnected_) {
+          disconnectBluetoothDevice();
+          bluetoothStatus_ = "Disconnected";
+        } else {
+          bluetoothStatus_ = "No connected devices";
+        }
+        break;
+      case 5:
+        bluetoothVisible_ = !bluetoothVisible_;
+        setBluetoothVisibility(bluetoothVisible_);
+        bluetoothStatus_ = bluetoothVisible_ ? "Visible to nearby devices"
+                                              : "Hidden from new devices";
+        break;
+      case 6:
+        {
+          bool activeConnection = bluetoothConnected_;
+#ifdef FIRE_OS_BLE
+          activeConnection = activeConnection || bluetoothPeripheralConnected;
+#endif
+          bluetoothStatus_ = bluetoothRadioReady
+                                 ? (activeConnection
+                                        ? "Connected / Wi-Fi coexist"
+                                        : "BLE ready / Wi-Fi coexist")
+                                 : "BLE radio off";
+        }
+        break;
+      case 7:
+        back();
+        break;
+    }
+  }
+}
+
+void FireOS::scanWifiNetworks() {
+  wifiEnabled_ = true;
+  WiFi.setHostname("M5Stack-FIRE");
+  WiFi.mode(WIFI_STA);
+  wifiScanCount_ = -1;
+  wifiScanDialog_ = false;
+  wifiScanActive_ = true;
+  wifiOperationStarted_ = millis();
+  WiFi.scanNetworks(true, true);
+  wifiStatus_ = "Scanning networks...";
+}
+
+void FireOS::connectSavedWifi() {
+  if (wifiSsid_.length() == 0) {
+    wifiStatus_ = "No saved network";
+    return;
+  }
+  wifiEnabled_ = true;
+  wifiMode_ = 1;
+  beginWifiConnection();
+}
+
+void FireOS::beginWifiConnection() {
+  if (wifiSsid_.length() == 0) {
+    wifiConnectActive_ = false;
+    wifiStatus_ = "No saved network";
+    return;
+  }
+  WiFi.setHostname("M5Stack-FIRE");
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  // Force a fresh association so a corrected password is used immediately.
+  WiFi.disconnect(false, false);
+  delay(75);
+  WiFi.begin(wifiSsid_.c_str(), wifiPassword_.c_str());
+  wifiConnectActive_ = true;
+  wifiOperationStarted_ = millis();
+  wifiStatus_ = "Connecting to " + wifiSsid_;
+}
+
+void FireOS::updateWifiState() {
+  const wl_status_t status = WiFi.status();
+  if (wifiScanActive_) {
+    const int result = WiFi.scanComplete();
+    if (result >= 0) {
+      wifiScanCount_ = result;
+      wifiScanActive_ = false;
+      wifiScanDialog_ = true;
+      wifiScanSelection_ = 0;
+      wifiScanOffset_ = 0;
+      wifiStatus_ = "Scan complete";
+    } else if (result == WIFI_SCAN_FAILED ||
+               millis() - wifiOperationStarted_ > 15000) {
+      wifiScanActive_ = false;
+      wifiStatus_ = "Scan failed";
+      WiFi.scanDelete();
+    }
+  }
+
+  if (wifiConnectActive_) {
+    if (status == WL_CONNECTED) {
+      wifiConnectActive_ = false;
+      wifiEnabled_ = true;
+      wifiStatus_ = "Connected: " + WiFi.SSID();
+      stopWifiSetup();
+    } else if (millis() - wifiOperationStarted_ > 15000) {
+      wifiConnectActive_ = false;
+      wifiStatus_ = "Connection failed: check password/network (" +
+                    wifiFailureReason(status) + ")";
+    }
+  }
+
+  wifiEnabled_ = WiFi.getMode() != WIFI_OFF;
+  if (status == WL_CONNECTED && !wifiScanActive_ && !wifiConnectActive_) {
+    wifiStatus_ = "Connected: " + WiFi.SSID();
+  }
+}
+
+void FireOS::startTimeSync() {
+  if (!wifiTimeSync_) return;
+  if (wifiMode_ == 2) {
+    timeSyncPending_ = false;
+    timeSyncConfigured_ = false;
+    timeSyncStatus_ = "Wi-Fi policy is Off";
+    return;
+  }
+  timeSyncPending_ = true;
+  timeSyncConfigured_ = false;
+  timeSyncStarted_ = millis();
+  timeSyncLastConnectAttempt_ = 0;
+  timeSyncStatus_ = "Waiting for Wi-Fi...";
+  if (WiFi.status() != WL_CONNECTED) requestWifi(true);
+}
+
+void FireOS::updateTimeSync() {
+  if (!timeSyncPending_) return;
+  if (wifiMode_ == 2) {
+    timeSyncPending_ = false;
+    timeSyncConfigured_ = false;
+    timeSyncStatus_ = "Wi-Fi policy is Off";
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiSsid_.length() == 0) {
+      timeSyncPending_ = false;
+      timeSyncConfigured_ = false;
+      timeSyncStatus_ = "Connect Wi-Fi to sync time";
+      return;
+    }
+    // Auto and On both reconnect as needed during a boot sync. The normal
+    // Wi-Fi state machine may have timed out once; retry without restarting
+    // the entire OS.
+    if (!wifiConnectActive_ &&
+        millis() - timeSyncLastConnectAttempt_ >= 5000) {
+      timeSyncLastConnectAttempt_ = millis();
+      beginWifiConnection();
+      timeSyncStatus_ = "Connecting Wi-Fi for time...";
+    }
+    if (millis() - timeSyncStarted_ > 45000) {
+      timeSyncPending_ = false;
+      timeSyncConfigured_ = false;
+      timeSyncStatus_ = "Wi-Fi time sync timed out";
+    }
+    return;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    // NTP provides UTC. configTzTime converts it to the selected local zone
+    // before getLocalTime() returns the value. This avoids applying Oslo's
+    // offset a second time in setSystemLocalDateTime().
+    if (!timeSyncConfigured_) {
+      configTzTime(dateTime_.timezoneRule(), "pool.ntp.org", "time.nist.gov",
+                   "time.google.com");
+      timeSyncConfigured_ = true;
+      timeSyncStatus_ = "Synchronizing time...";
+    }
+    tm local{};
+    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED &&
+        getLocalTime(&local, 100) && local.tm_year + 1900 >= 2020) {
+      if (dateTime_.setSystemLocalDateTime(local)) {
+        timeSyncLast_ = dateTime_.localDateTime();
+        preferences.putString("wifi_time_last", timeSyncLast_);
+        timeSyncStatus_ = "Last Wi-Fi sync: " + timeSyncLast_;
+        timeSyncPending_ = false;
+        timeSyncConfigured_ = false;
+        if (wifiMode_ == 0) requestWifi(false);
+      }
+    }
+  } else if (millis() - timeSyncStarted_ > 15000) {
+    timeSyncStatus_ = "Connect to Wi-Fi for time sync";
+    timeSyncPending_ = false;
+    timeSyncConfigured_ = false;
+  }
+}
+
+void FireOS::startWifiSetup() {
+  wifiSetupPassword_ = "fire-connect-2026";
+  wifiSetupToken_ = String(static_cast<unsigned long>(esp_random()), HEX);
+  aiApiSetupActive_ = false;
+
+  WiFi.setHostname("M5Stack-FIRE");
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAPsetHostname("M5Stack-FIRE");
+  WiFi.softAP("FIRE-Setup", wifiSetupPassword_.c_str());
+  wifiSetupServer.on("/", HTTP_GET, handleWifiSetupRoot);
+  wifiSetupServer.on("/save", HTTP_POST, handleWifiSetupSave);
+  wifiSetupServer.begin();
+  wifiSetupActive_ = true;
+  wifiStatus_ = "FIRE-Setup " + WiFi.softAPIP().toString();
+}
+
+void FireOS::startAiApiSetup() {
+  if (wifiSetupActive_) stopWifiSetup();
+  wifiSetupPassword_ = "fire-connect-2026";
+  wifiSetupToken_ = String(static_cast<unsigned long>(esp_random()), HEX);
+  aiApiSetupActive_ = true;
+  WiFi.setHostname("M5Stack-FIRE");
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAPsetHostname("M5Stack-FIRE");
+  WiFi.softAP("FIRE-Setup", wifiSetupPassword_.c_str());
+  wifiSetupServer.on("/", HTTP_GET, handleWifiSetupRoot);
+  wifiSetupServer.on("/save", HTTP_POST, handleWifiSetupSave);
+  wifiSetupServer.begin();
+  wifiSetupActive_ = true;
+}
+
+void FireOS::stopWifiSetup() {
+  if (!wifiSetupActive_) return;
+  wifiSetupServer.stop();
+  WiFi.softAPdisconnect(true);
+  wifiSetupActive_ = false;
+  aiApiSetupActive_ = false;
+  wifiSetupPassword_ = "";
+  wifiSetupToken_ = "";
+}
+
+void FireOS::saveWifiCredentials(const String& ssid, const String& password) {
+  wifiSsid_ = ssid;
+  wifiPassword_ = password;
+  wifiMode_ = 1;
+  wifiEnabled_ = true;
+  uint8_t existing = wifiSavedCount_;
+  for (uint8_t index = 0; index < wifiSavedCount_; ++index) {
+    if (wifiSavedSsid_[index] == ssid) {
+      existing = index;
+      break;
+    }
+  }
+  if (existing < wifiSavedCount_) {
+    wifiSavedPassword_[existing] = password;
+  } else {
+    if (wifiSavedCount_ < 5) ++wifiSavedCount_;
+    for (uint8_t index = wifiSavedCount_ - 1; index > 0; --index) {
+      wifiSavedSsid_[index] = wifiSavedSsid_[index - 1];
+      wifiSavedPassword_[index] = wifiSavedPassword_[index - 1];
+    }
+    wifiSavedSsid_[0] = ssid;
+    wifiSavedPassword_[0] = password;
+  }
+  saveSettings();
+  stopWifiSetup();
+  beginWifiConnection();
+}
+
+void FireOS::saveMobileSetupFields(const String& ssid, const String& password,
+                                   const String& apiKey) {
+  if (ssid.length() > 0 || password.length() > 0) {
+    const String newSsid = ssid.length() > 0 ? ssid : wifiSsid_;
+    const String newPassword = password.length() > 0 ? password : wifiPassword_;
+    if (newSsid.length() > 0) saveWifiCredentials(newSsid, newPassword);
+  }
+  if (apiKey.length() > 0) aiApiKey_ = apiKey;
+  saveSettings();
+  if (wifiSetupActive_) stopWifiSetup();
+}
+
+bool FireOS::wifiSetupTokenValid(const String& token) const {
+  return wifiSetupActive_ && token.length() > 0 && token == wifiSetupToken_;
+}
+
+void FireOS::requestWifi(bool enabled) {
+  if (enabled) {
+    wifiMode_ = wifiMode_ == 2 ? 2 : wifiMode_;
+    if (wifiMode_ == 2) {
+      wifiStatus_ = "Wi-Fi policy is Off";
+      return;
+    }
+    wifiEnabled_ = true;
+    if (wifiSsid_.length() > 0) beginWifiConnection();
+    else applyWifiMode();
+  } else {
+    wifiConnectActive_ = false;
+    WiFi.disconnect(false, false);
+    WiFi.mode(WIFI_OFF);
+    wifiEnabled_ = false;
+    wifiStatus_ = "Wi-Fi off";
+  }
+}
+
+void FireOS::applyWifiMode() {
+  if (wifiMode_ == 2 || (wifiMode_ == 0 && !wifiConnectActive_)) {
+    WiFi.disconnect(false, false);
+    WiFi.mode(WIFI_OFF);
+    wifiEnabled_ = false;
+    return;
+  }
+  wifiEnabled_ = true;
+  if (wifiSsid_.length() > 0) beginWifiConnection();
+}
+
+void FireOS::deleteSelectedWifiNetwork() {
+  if (wifiSavedCount_ == 0 || wifiSavedTarget_ >= wifiSavedCount_) return;
+  for (uint8_t index = wifiSavedTarget_; index + 1 < wifiSavedCount_; ++index) {
+    wifiSavedSsid_[index] = wifiSavedSsid_[index + 1];
+    wifiSavedPassword_[index] = wifiSavedPassword_[index + 1];
+  }
+  --wifiSavedCount_;
+  if (wifiSavedCount_ == 0) {
+    wifiSsid_ = "";
+    wifiPassword_ = "";
+    wifiConnectActive_ = false;
+    WiFi.disconnect(false, false);
+  } else {
+    wifiSavedTarget_ = min<uint8_t>(wifiSavedTarget_, wifiSavedCount_ - 1);
+    wifiSavedSelection_ = min<uint8_t>(wifiSavedSelection_, wifiSavedCount_ + 3);
+    wifiSsid_ = wifiSavedSsid_[wifiSavedTarget_];
+    wifiPassword_ = wifiSavedPassword_[wifiSavedTarget_];
+  }
+  saveSettings();
+  wifiDeleteArmed_ = false;
+}
+
+void FireOS::moveSelectedWifiNetwork(int8_t direction) {
+  if (wifiSavedCount_ < 2 || wifiSavedTarget_ >= wifiSavedCount_) return;
+  const int target = static_cast<int>(wifiSavedTarget_) + direction;
+  if (target < 0 || target >= wifiSavedCount_) return;
+  String ssid = wifiSavedSsid_[wifiSavedTarget_];
+  String password = wifiSavedPassword_[wifiSavedTarget_];
+  wifiSavedSsid_[wifiSavedTarget_] = wifiSavedSsid_[target];
+  wifiSavedPassword_[wifiSavedTarget_] = wifiSavedPassword_[target];
+  wifiSavedSsid_[target] = ssid;
+  wifiSavedPassword_[target] = password;
+  wifiSavedTarget_ = target;
+  wifiSavedSelection_ = target;
+  saveSettings();
+  if (wifiSsid_ == wifiSavedSsid_[target]) {
+    wifiPassword_ = wifiSavedPassword_[target];
+  }
+}
+
+void FireOS::scanBluetoothDevices() {
+  if (bluetoothMode_ == 2) {
+    bluetoothStatus_ = "Bluetooth is off";
+    return;
+  }
+  if (!initBluetooth()) {
+    bluetoothStatus_ = "BLE start failed";
+    return;
+  }
+  bluetoothEnabled_ = true;
+#ifdef FIRE_OS_BLE
+  bluetoothScanDialog_ = true;
+  bluetoothUnknownDialog_ = false;
+  bluetoothScanSelection_ = 0;
+  bluetoothScanOffset_ = 0;
+  bluetoothStatus_ = "Scanning BLE...";
+  bluetoothScanCount_ = 0;
+  for (uint8_t index = 0; index < kMaxBluetoothDevices; ++index) {
+    bluetoothNames_[index] = "";
+    bluetoothAddresses_[index] = "";
+    bluetoothRssi_[index] = 0;
+    bluetoothAddressTypes_[index] = 0;
+  }
+  bluetoothScan->clearResults();
+  // Active scan requests scan responses, where many devices publish their
+  // human-readable name. The longer window improves name coverage without
+  // keeping the radio scanning continuously.
+  NimBLEScanResults results = bluetoothScan->getResults(3000, false);
+  const int count = results.getCount();
+  bluetoothScanCount_ = min(count, static_cast<int>(kMaxBluetoothDevices));
+  for (int index = 0; index < bluetoothScanCount_; ++index) {
+    const NimBLEAdvertisedDevice* device = results.getDevice(index);
+    bluetoothAddresses_[index] = device->getAddress().toString().c_str();
+    bluetoothAddressTypes_[index] = device->getAddress().getType();
+    bluetoothRssi_[index] = device->getRSSI();
+    bluetoothNames_[index] = device->getName().length() > 0
+                                 ? device->getName().c_str()
+                                 : bluetoothAddresses_[index];
+  }
+  bluetoothStatus_ = count > kMaxBluetoothDevices
+                         ? "Showing " + String(kMaxBluetoothDevices) + " of " +
+                               String(count) + " devices"
+                         : "Found " + String(count) + " BLE device(s)";
+  bluetoothScan->clearResults();
+#else
+  bluetoothStatus_ = "BLE support not compiled";
+  bluetoothScanCount_ = 0;
+#endif
+}
+
+bool FireOS::isUnknownBluetoothDevice(uint8_t index) const {
+  if (index >= bluetoothScanCount_) return true;
+  const String& name = bluetoothNames_[index];
+  if (name.length() == 0) return true;
+  if (name.length() != 17) return false;
+  for (uint8_t position = 0; position < 17; ++position) {
+    if (position == 2 || position == 5 || position == 8 || position == 11 ||
+        position == 14) {
+      if (name[position] != ':') return false;
+    } else {
+      const char value = name[position];
+      const bool hex = (value >= '0' && value <= '9') ||
+                       (value >= 'a' && value <= 'f') ||
+                       (value >= 'A' && value <= 'F');
+      if (!hex) return false;
+    }
+  }
+  return true;
+}
+
+uint8_t FireOS::bluetoothDeviceListCount(bool unknownOnly) const {
+  if (unknownOnly) {
+    uint8_t count = 0;
+    for (uint8_t index = 0; index < bluetoothScanCount_; ++index) {
+      if (isUnknownBluetoothDevice(index)) ++count;
+    }
+    return count;
+  }
+
+  uint8_t knownCount = 0;
+  for (uint8_t index = 0; index < bluetoothScanCount_; ++index) {
+    if (!isUnknownBluetoothDevice(index)) ++knownCount;
+  }
+  const bool hasUnknown = knownCount != bluetoothScanCount_;
+  return knownCount + (hasUnknown ? 1 : 0);
+}
+
+int8_t FireOS::bluetoothDeviceListIndex(uint8_t listIndex,
+                                        bool unknownOnly) const {
+  if (unknownOnly) {
+    uint8_t visible = 0;
+    for (uint8_t index = 0; index < bluetoothScanCount_; ++index) {
+      if (!isUnknownBluetoothDevice(index)) continue;
+      if (visible++ == listIndex) return index;
+    }
+    return -1;
+  }
+
+  uint8_t knownVisible = 0;
+  const bool hasUnknown = bluetoothDeviceListCount(true) > 0;
+  if (hasUnknown) {
+    if (listIndex == 0) return -1;  // The Unknown devices group row.
+    listIndex--;
+  }
+  for (uint8_t index = 0; index < bluetoothScanCount_; ++index) {
+    if (isUnknownBluetoothDevice(index)) continue;
+    if (knownVisible++ == listIndex) return index;
+  }
+  return -1;
+}
+
+void FireOS::handleBluetoothScanDialogButton(uint8_t index) {
+  const uint8_t deviceCount = bluetoothDeviceListCount(bluetoothUnknownDialog_);
+  const uint8_t backItem = deviceCount;
+  if (index == 0) {
+    const uint8_t itemCount = backItem + 1;
+    bluetoothScanSelection_ =
+        (bluetoothScanSelection_ + itemCount - 1) % itemCount;
+  } else if (index == 2) {
+    const uint8_t itemCount = backItem + 1;
+    bluetoothScanSelection_ = (bluetoothScanSelection_ + 1) % itemCount;
+  } else {
+    if (bluetoothScanSelection_ == backItem) {
+      if (bluetoothUnknownDialog_) {
+        bluetoothUnknownDialog_ = false;
+        bluetoothScanSelection_ = 0;
+        bluetoothScanOffset_ = 0;
+      } else {
+        bluetoothScanDialog_ = false;
+      }
+      return;
+    }
+    if (!bluetoothUnknownDialog_ &&
+        bluetoothDeviceListIndex(bluetoothScanSelection_, false) < 0) {
+      bluetoothUnknownDialog_ = true;
+      bluetoothScanSelection_ = 0;
+      bluetoothScanOffset_ = 0;
+      return;
+    }
+    const int8_t deviceIndex = bluetoothDeviceListIndex(
+        bluetoothScanSelection_, bluetoothUnknownDialog_);
+    if (deviceIndex < 0) return;
+    bluetoothStatus_ = "Pairing with " + bluetoothNames_[deviceIndex];
+    const bool connected = connectBluetoothDevice(deviceIndex);
+    bluetoothStatus_ = connected
+                           ? "Connected to " +
+                                 bluetoothNames_[deviceIndex]
+                           : "Pairing failed - try again";
+    bluetoothScanDialog_ = false;
+    return;
+  }
+  if (bluetoothScanSelection_ < bluetoothScanOffset_) {
+    bluetoothScanOffset_ = bluetoothScanSelection_;
+  } else if (bluetoothScanSelection_ >= bluetoothScanOffset_ + 5) {
+    bluetoothScanOffset_ = bluetoothScanSelection_ - 4;
+  }
+}
+
+void FireOS::handleBluetoothSavedDialogButton(uint8_t index) {
+  const uint8_t deleteItem = bluetoothSavedCount_;
+  const uint8_t backItem = bluetoothSavedCount_ + 1;
+  const uint8_t itemCount = backItem + 1;
+  if (index == 0) {
+    bluetoothSavedSelection_ =
+        (bluetoothSavedSelection_ + itemCount - 1) % itemCount;
+  } else if (index == 2) {
+    bluetoothSavedSelection_ = (bluetoothSavedSelection_ + 1) % itemCount;
+  } else if (bluetoothSavedSelection_ == deleteItem) {
+    if (bluetoothSavedDeleteArmed_) {
+      deleteSelectedBluetoothDevice();
+    } else {
+      bluetoothSavedDeleteArmed_ = true;
+      bluetoothStatus_ = "Press B again to delete";
+    }
+  } else if (bluetoothSavedSelection_ == backItem) {
+    bluetoothSavedDialog_ = false;
+    bluetoothSavedDeleteArmed_ = false;
+  } else {
+    const uint8_t selected = bluetoothSavedSelection_;
+    bluetoothStatus_ = "Connecting to " + bluetoothSavedNames_[selected];
+    bluetoothScanCount_ = 1;
+    bluetoothNames_[0] = bluetoothSavedNames_[selected];
+    bluetoothAddresses_[0] = bluetoothSavedAddresses_[selected];
+    bluetoothAddressTypes_[0] = bluetoothSavedAddressTypes_[selected];
+    const bool connected = connectBluetoothDevice(0);
+    bluetoothStatus_ = connected
+                           ? "Connected to " + bluetoothSavedNames_[selected]
+                           : "Connection failed - device unavailable";
+    bluetoothSavedDialog_ = false;
+  }
+  if (bluetoothSavedSelection_ < bluetoothSavedOffset_) {
+    bluetoothSavedOffset_ = bluetoothSavedSelection_;
+  } else if (bluetoothSavedSelection_ >= bluetoothSavedOffset_ + 5) {
+    bluetoothSavedOffset_ = bluetoothSavedSelection_ - 4;
+  }
+}
+
+bool FireOS::initBluetooth() {
+#ifdef FIRE_OS_BLE
+  if (bluetoothRadioReady) return true;
+  NimBLEDevice::init("M5Stack-FIRE");
+  NimBLEDevice::setSecurityAuth(true, true, true);
+  NimBLEDevice::setPower(ESP_PWR_LVL_N0);
+  bluetoothServer = NimBLEDevice::createServer();
+  bluetoothServer->setCallbacks(new FireBluetoothServerCallbacks());
+  NimBLEService* service = bluetoothServer->createService(kBluetoothServiceUuid);
+  bluetoothCharacteristic = service->createCharacteristic(
+      kBluetoothCharacteristicUuid,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY);
+  bluetoothCharacteristic->setCallbacks(new FireBluetoothCallbacks());
+  bluetoothCharacteristic->setValue("FIRE OS BLE");
+  bluetoothServer->start();
+  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
+  advertising->addServiceUUID(kBluetoothServiceUuid);
+  advertising->start();
+  bluetoothScan = NimBLEDevice::getScan();
+  bluetoothScan->setActiveScan(true);
+  bluetoothScan->setMaxResults(40);
+  bluetoothRadioReady = true;
+  bluetoothStatus_ = "BLE ready / Hidden";
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool FireOS::connectBluetoothDevice(uint8_t index) {
+#ifdef FIRE_OS_BLE
+  if (index >= bluetoothScanCount_ || bluetoothAddresses_[index].length() == 0 ||
+      !initBluetooth()) {
+    return false;
+  }
+  if (bluetoothClient != nullptr && bluetoothClient->isConnected()) {
+    bluetoothClient->disconnect();
+  }
+  bluetoothClient = NimBLEDevice::createClient();
+  if (!bluetoothClient->connect(
+          NimBLEAddress(std::string(bluetoothAddresses_[index].c_str()),
+                        bluetoothAddressTypes_[index]))) {
+    bluetoothClient = nullptr;
+    bluetoothConnected_ = false;
+    return false;
+  }
+  bluetoothConnected_ = true;
+  bluetoothSavedName_ = bluetoothNames_[index];
+  bluetoothSavedAddress_ = bluetoothAddresses_[index];
+  uint8_t savedIndex = bluetoothSavedCount_;
+  for (uint8_t item = 0; item < bluetoothSavedCount_; ++item) {
+    if (bluetoothSavedAddresses_[item] == bluetoothAddresses_[index]) {
+      savedIndex = item;
+      break;
+    }
+  }
+  if (savedIndex >= kMaxBluetoothSavedDevices) {
+    savedIndex = kMaxBluetoothSavedDevices - 1;
+  }
+  if (savedIndex == bluetoothSavedCount_ &&
+      bluetoothSavedCount_ < kMaxBluetoothSavedDevices) {
+    ++bluetoothSavedCount_;
+  }
+  bluetoothSavedNames_[savedIndex] = bluetoothNames_[index];
+  bluetoothSavedAddresses_[savedIndex] = bluetoothAddresses_[index];
+  bluetoothSavedAddressTypes_[savedIndex] = bluetoothAddressTypes_[index];
+  saveSettings();
+  return true;
+#else
+  return false;
+#endif
+}
+
+void FireOS::disconnectBluetoothDevice() {
+#ifdef FIRE_OS_BLE
+  if (bluetoothClient != nullptr && bluetoothClient->isConnected()) {
+    bluetoothClient->disconnect();
+  }
+#endif
+  bluetoothConnected_ = false;
+}
+
+void FireOS::deleteSelectedBluetoothDevice() {
+  if (bluetoothSavedCount_ == 0 ||
+      bluetoothSavedSelection_ >= bluetoothSavedCount_) {
+    return;
+  }
+  for (uint8_t index = bluetoothSavedSelection_;
+       index + 1 < bluetoothSavedCount_; ++index) {
+    bluetoothSavedNames_[index] = bluetoothSavedNames_[index + 1];
+    bluetoothSavedAddresses_[index] = bluetoothSavedAddresses_[index + 1];
+    bluetoothSavedAddressTypes_[index] = bluetoothSavedAddressTypes_[index + 1];
+  }
+  --bluetoothSavedCount_;
+  bluetoothSavedSelection_ = min<uint8_t>(bluetoothSavedSelection_,
+                                          bluetoothSavedCount_ == 0
+                                              ? 0
+                                              : bluetoothSavedCount_ - 1);
+  bluetoothSavedDeleteArmed_ = false;
+  saveSettings();
+  bluetoothStatus_ = "Saved device deleted";
+}
+
+void FireOS::setBluetoothVisibility(bool visible) {
+#ifdef FIRE_OS_BLE
+  if (!bluetoothRadioReady || bluetoothMode_ == 2) {
+    bluetoothVisible_ = false;
+    return;
+  }
+  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
+  if (visible) {
+    advertising->start();
+    bluetoothVisible_ = true;
+    bluetoothStatus_ = "Visible / accepting connections";
+  } else {
+    advertising->stop();
+    bluetoothVisible_ = false;
+    bluetoothStatus_ = bluetoothPeripheralConnected || bluetoothConnected_
+                           ? "Connected / hidden"
+                           : "Ready / hidden";
+  }
+#else
+  bluetoothVisible_ = false;
+#endif
+}
+
+void FireOS::closeBluetoothSettings() {
+  bluetoothScanDialog_ = false;
+  bluetoothUnknownDialog_ = false;
+  setBluetoothVisibility(false);
+#ifdef FIRE_OS_BLE
+  if (bluetoothRadioReady && bluetoothMode_ != 1 && !bluetoothConnected_ &&
+      !bluetoothPeripheralConnected) {
+    NimBLEDevice::deinit(true);
+    bluetoothRadioReady = false;
+    bluetoothEnabled_ = false;
+  }
+#endif
+}
+
+void FireOS::handleQuickButton(uint8_t index) {
+  if (quickEditing_) {
+    if (index == 0 || index == 2) {
+      const int8_t direction = index == 0 ? -1 : 1;
+      if (quickIndex_ == 0) {
+        brightnessStep_ = (brightnessStep_ + kBrightnessStepCount + direction) %
+                          kBrightnessStepCount;
+        brightness_ = kBrightnessValues[brightnessStep_];
+        M5.Display.setBrightness(brightness_);
+      } else if (quickIndex_ == 1) {
+        volumeStep_ = (volumeStep_ + kVolumeStepCount + direction) %
+                      kVolumeStepCount;
+        volume_ = volumeValue(volumeStep_);
+        M5.Speaker.setVolume(volume_);
+      }
+      saveSettings();
+    } else if (index == 1) {
+      quickEditing_ = false;
+      saveSettings();
+    }
+    return;
+  }
+
+  if (index == 0) {
+    quickIndex_ = (quickIndex_ + kQuickCount - 1) % kQuickCount;
+  } else if (index == 2) {
+    quickIndex_ = (quickIndex_ + 1) % kQuickCount;
+  } else {
+    switch (quickIndex_) {
+      case 0:
+        quickEditing_ = true;
+        break;
+      case 1:
+        quickEditing_ = true;
+        break;
+      case 2:
+        wifiMode_ = (wifiMode_ + 1) % 3;
+        saveSettings();
+        applyWifiMode();
+        break;
+      case 3:
+        bluetoothMode_ = (bluetoothMode_ + 1) % 3;
+        if (bluetoothMode_ == 1) {
+          bluetoothEnabled_ = initBluetooth();
+        } else {
+          disconnectBluetoothDevice();
+          bluetoothEnabled_ = false;
+          setBluetoothVisibility(false);
+#ifdef FIRE_OS_BLE
+          if (bluetoothRadioReady && bluetoothMode_ == 2) {
+            NimBLEDevice::deinit(true);
+            bluetoothRadioReady = false;
+          }
+#endif
+        }
+        saveSettings();
+        break;
+      case 4:
+        open(Screen::FileExplorer);
+        break;
+      case 5:
+        powerActionIndex_ = 0;
+        open(Screen::PowerActions);
+        break;
+      case 6:
+        open(Screen::Settings);
+        break;
+      case 7:
+        screen_ = previousScreen_;
+        break;
+    }
+  }
+}
+
+void FireOS::handleFactoryResetButton(uint8_t index) {
+  if (index == 0) {
+    home();
+  } else if (index == 2) {
+    back();
+  } else if (factoryResetArmed_) {
+    resetSettings();
+    home();
+  } else {
+    factoryResetArmed_ = true;
+  }
+}
+
+void FireOS::handlePowerButton(uint8_t index) {
+  if (powerEditing_) {
+    if (index == 0 || index == 2) {
+      const int8_t direction = index == 0 ? -1 : 1;
+      if (powerIndex_ == 2) {
+        sleepOption_ = (sleepOption_ + kDurationCount + direction) %
+                       kDurationCount;
+      } else if (powerIndex_ == 3) {
+        dimOption_ = (dimOption_ + kDurationCount + direction) % kDurationCount;
+      } else if (powerIndex_ == 4) {
+        screenOffOption_ = (screenOffOption_ + kDurationCount + direction) %
+                           kDurationCount;
+      }
+    } else if (index == 1) {
+      powerEditing_ = false;
+      saveSettings();
+    }
+    return;
+  }
+
+  if (index == 0) {
+    powerIndex_ = (powerIndex_ + kPowerCount - 1) % kPowerCount;
+  } else if (index == 2) {
+    powerIndex_ = (powerIndex_ + 1) % kPowerCount;
+  } else {
+    switch (powerIndex_) {
+      case 0:
+        ESP.restart();
+        break;
+      case 1:
+        M5.Power.powerOff();
+        break;
+      case 2:
+        powerEditing_ = true;
+        break;
+      case 3:
+        powerEditing_ = true;
+        break;
+      case 4:
+        powerEditing_ = true;
+        break;
+      case 5:
+        back();
+        break;
+    }
+  }
+}
+
+void FireOS::handlePowerActionsButton(uint8_t index) {
+  if (index == 0) {
+    powerActionIndex_ = (powerActionIndex_ + kPowerActionCount - 1) %
+                        kPowerActionCount;
+  } else if (index == 2) {
+    powerActionIndex_ = (powerActionIndex_ + 1) % kPowerActionCount;
+  } else if (powerActionIndex_ == 0) {
+    M5.Power.powerOff();
+  } else if (powerActionIndex_ == 1) {
+    ESP.restart();
+  } else if (powerActionIndex_ == 2) {
+    enterLightSleep();
+  } else {
+    back();
+  }
+}
+
+void FireOS::manageDisplayPower() {
+  const uint32_t idleMs = millis() - lastActivity_;
+  const uint32_t dimMs = static_cast<uint32_t>(kDurationMinutes[dimOption_]) * 60000UL;
+  const uint32_t offMs = static_cast<uint32_t>(kDurationMinutes[screenOffOption_]) * 60000UL;
+  const uint32_t sleepMs = static_cast<uint32_t>(kDurationMinutes[sleepOption_]) * 60000UL;
+
+  if (sleepMs > 0 && idleMs >= sleepMs) {
+    M5.Power.powerOff();
+    return;
+  }
+
+  if (offMs > 0 && idleMs >= offMs && displayPowerState_ < 2) {
+    M5.Display.setBrightness(0);
+    displayPowerState_ = 2;
+  } else if (dimMs > 0 && idleMs >= dimMs && displayPowerState_ == 0) {
+    M5.Display.setBrightness(max<uint8_t>(8, brightness_ / 3));
+    displayPowerState_ = 1;
+  }
+}
+
+void FireOS::wakeDisplay() {
+  lastActivity_ = millis();
+  displayPowerState_ = 0;
+  M5.Display.setBrightness(brightness_);
+}
+
+void FireOS::enterLightSleep() {
+  if (digitalRead(kButtonPins[0]) == LOW || digitalRead(kButtonPins[1]) == LOW ||
+      digitalRead(kButtonPins[2]) == LOW) {
+    return;
+  }
+  M5.Display.setBrightness(0);
+  displayPowerState_ = 2;
+  for (const uint8_t pin : kButtonPins) {
+    gpio_wakeup_enable(static_cast<gpio_num_t>(pin), GPIO_INTR_LOW_LEVEL);
+  }
+  esp_sleep_enable_gpio_wakeup();
+  esp_light_sleep_start();
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+  wakeDisplay();
+}
+
+void FireOS::adjustDateField(int8_t amount) {
+  switch (dateField_) {
+    case 0:
+      break;
+    case 1:
+      break;
+    case 2:
+      editYear_ = constrain(static_cast<int>(editYear_) + amount, 2020, 2099);
+      break;
+    case 3:
+      editMonth_ = (editMonth_ - 1 + amount + 12) % 12 + 1;
+      clampDate();
+      break;
+    case 4:
+      editDay_ = (editDay_ - 1 + amount + daysInMonth(editYear_, editMonth_)) %
+                     daysInMonth(editYear_, editMonth_) +
+                 1;
+      break;
+    case 5:
+      editHour_ = (editHour_ + 24 + amount) % 24;
+      break;
+    case 6:
+      editMinute_ = (editMinute_ + 60 + amount) % 60;
+      break;
+    case 7:
+      editTimezone_ = (editTimezone_ + kTimezoneCount + amount) % kTimezoneCount;
+      break;
+    case 8:
+      editDstAuto_ = !editDstAuto_;
+      break;
+  }
+}
+
+void FireOS::clampDate() {
+  editDay_ = min<uint8_t>(editDay_, daysInMonth(editYear_, editMonth_));
+}
+
+void FireOS::commitDateTime() {
+  dateTime_.setTimezone(editTimezone_);
+  dateTime_.setDstAuto(editDstAuto_);
+  if (dateTime_.setLocalDateTime(editYear_, editMonth_, editDay_, editHour_,
+                                 editMinute_)) {
+    dateTime_.save();
+  }
+}
+
+void FireOS::resetSettings() {
+  stopWifiSetup();
+  preferences.clear();
+  brightnessStep_ = 6;
+  volumeStep_ = 8;
+  brightness_ = kBrightnessValues[brightnessStep_];
+  volume_ = volumeValue(volumeStep_);
+  sleepOption_ = 0;
+  dimOption_ = 5;
+  screenOffOption_ = 10;
+  doubleClickAction_[0] = 0;
+  doubleClickAction_[1] = 0;
+  doubleClickAction_[2] = 0;
+  buttonSoundsEnabled_ = true;
+  bootRgbPulse_ = true;
+  bootMelody_ = true;
+  selectedBootAppPath_ = "";
+  mainVisible_[0] = true;
+  mainVisible_[1] = true;
+  mainVisible_[2] = true;
+  mainVisible_[3] = true;
+  mainVisible_[4] = true;
+  wifiEnabled_ = false;
+  wifiMode_ = 0;
+  wifiTimeSync_ = false;
+  timeSyncPending_ = false;
+  timeSyncConfigured_ = false;
+  timeSyncStatus_ = "";
+  timeSyncLast_ = "";
+  wifiSsid_ = "";
+  wifiPassword_ = "";
+  aiApiKey_ = "";
+  wifiSavedCount_ = 0;
+  wifiSavedSelection_ = 0;
+  wifiSavedTarget_ = 0;
+  wifiSavedOffset_ = 0;
+  wifiSavedDialog_ = false;
+  wifiDeleteArmed_ = false;
+  wifiStatus_ = "Wi-Fi off";
+  wifiScanActive_ = false;
+  wifiScanDialog_ = false;
+  wifiConnectActive_ = false;
+  wifiScanCount_ = -1;
+  WiFi.scanDelete();
+  WiFi.disconnect(true, true);
+  WiFi.setHostname("M5Stack-FIRE");
+  WiFi.mode(WIFI_OFF);
+  bluetoothEnabled_ = false;
+  bluetoothVisible_ = false;
+  bluetoothRadioReady = false;
+  bluetoothScanCount_ = -1;
+  bluetoothSavedCount_ = 0;
+  bluetoothSavedDialog_ = false;
+  bluetoothSavedDeleteArmed_ = false;
+  bluetoothStatus_ = "Bluetooth unavailable";
+#ifdef FIRE_OS_BLE
+  bluetoothPeripheralConnected = false;
+#endif
+  M5.Display.setBrightness(brightness_);
+  M5.Speaker.setVolume(volume_);
+  displayPowerState_ = 0;
+  lastActivity_ = millis();
+  dateTime_.reset();
+}
+
+void FireOS::setWifi(bool enabled) {
+  wifiEnabled_ = enabled;
+  if (enabled) {
+    wifiMode_ = 1;
+    if (wifiSsid_.length() > 0) {
+      beginWifiConnection();
+    } else {
+      WiFi.setHostname("M5Stack-FIRE");
+      WiFi.mode(WIFI_STA);
+      wifiConnectActive_ = false;
+      wifiStatus_ = "Wi-Fi on; no saved network";
+    }
+  } else {
+    wifiMode_ = 2;
+    stopWifiSetup();
+    wifiConnectActive_ = false;
+    WiFi.scanDelete();
+    WiFi.disconnect(true, true);
+    WiFi.mode(WIFI_OFF);
+    wifiStatus_ = "Wi-Fi off";
+  }
+  saveSettings();
+}
+
+void FireOS::draw() {
+  if (screen_ == Screen::FileExplorer && sdImagePreview_ && sdImageRendered_) {
+    return;
+  }
+  ui.fillSprite(kBg);
+  if (screen_ == Screen::QuickSettings) {
+    drawScreen(previousScreen_);
+    drawQuickSettings();
+  } else {
+    drawScreen(screen_);
+  }
+  ui.pushSprite(0, 0);
+  if (screen_ == Screen::FileExplorer && sdImagePreview_) {
+    M5.Display.fillRect(0, 28, 320, 188, kBg);
+    bool drawn = false;
+    if (!sdImageBuffer_ || sdImageBufferSize_ == 0) {
+      M5.Display.setTextColor(TFT_ORANGE, kBg);
+      M5.Display.drawString("Image buffer unavailable", 24, 100);
+      sdImageRendered_ = true;
+      return;
+    }
+    if (sdImagePreviewType_ == 1) {
+      drawn = M5.Display.drawJpg(sdImageBuffer_, sdImageBufferSize_, 10, 30,
+                                 300, 182, 0, 0, 1.0f, 0.0f);
+    } else if (sdImagePreviewType_ == 2) {
+      drawn = M5.Display.drawPng(sdImageBuffer_, sdImageBufferSize_, 10, 30,
+                                 300, 182, 0, 0, 1.0f, 0.0f);
+    } else if (sdImagePreviewType_ == 3) {
+      drawn = M5.Display.drawBmp(sdImageBuffer_, sdImageBufferSize_, 10, 30,
+                                 300, 182, 0, 0, 1.0f, 0.0f);
+    }
+    if (!drawn) {
+      M5.Display.setTextColor(TFT_ORANGE, kBg);
+      M5.Display.drawString("Image preview failed", 24, 100);
+    }
+    sdImageRendered_ = true;
+  }
+}
+
+void FireOS::drawScreen(Screen screen) {
+  switch (screen) {
+    case Screen::Main:
+      drawMain();
+      break;
+    case Screen::Apps:
+      drawApps();
+      break;
+    case Screen::Settings:
+      drawSettings();
+      break;
+    case Screen::DateTime:
+      drawDateTime();
+      break;
+    case Screen::DisplaySound:
+      drawDisplaySound();
+      break;
+    case Screen::Wifi:
+      drawWifi();
+      break;
+    case Screen::Bluetooth:
+      drawBluetooth();
+      break;
+    case Screen::Boot:
+      drawBoot();
+      break;
+    case Screen::MainMenuSettings:
+      drawMainMenuSettings();
+      break;
+    case Screen::Shortcuts:
+      drawShortcuts();
+      break;
+    case Screen::AppsSettings:
+      drawAppsSettings();
+      break;
+    case Screen::Help:
+      drawHelp();
+      break;
+    case Screen::QuickSettings:
+      break;
+    case Screen::Placeholder:
+      drawPlaceholder();
+      break;
+    case Screen::Debug:
+      drawDebug();
+      break;
+    case Screen::SystemInfo:
+      drawSystemInfo();
+      break;
+    case Screen::Power:
+      drawPower();
+      break;
+    case Screen::PowerActions:
+      drawPowerActions();
+      break;
+    case Screen::FactoryReset:
+      drawFactoryReset();
+      break;
+    case Screen::FileExplorer:
+      drawFileExplorer();
+      break;
+    case Screen::AiDeveloper:
+      drawAiDeveloper();
+      break;
+    case Screen::AiApi:
+      drawAiApi();
+      break;
+  }
+}
+
+void FireOS::drawStatusBar(const char* title) {
+  (void)title;
+  ui.fillRect(0, 0, 320, 28, kPanel);
+  const String statusDateTime = dateTime_.statusDateTime();
+  const String clock = statusDateTime.substring(0, 5);
+  drawText(6, 9, clock, TFT_WHITE, 1, kPanel);
+  drawText(7, 9, clock, TFT_WHITE, 1, kPanel);  // compact bold clock
+  ui.setTextDatum(MC_DATUM);
+  drawText(160, 14, statusDateTime.substring(8), TFT_WHITE, 1, kPanel);
+  ui.setTextDatum(TL_DATUM);
+  const uint8_t wifiState = WiFi.status() == WL_CONNECTED
+                                ? 2
+                                : (wifiConnectActive_ || wifiScanActive_ ||
+                                   wifiSetupActive_)
+                                      ? 1
+                                      : 0;
+  drawWifiIcon(252, 6, wifiState);
+  drawBluetoothIcon(276, 5, bluetoothEnabled_);
+  drawBatteryIcon(298, 6, batteryLevel(), batteryCharging());
+}
+
+void FireOS::drawFooter(const char* left, const char* middle, const char* right) {
+  ui.fillRect(0, 216, 320, 24, kPanel);
+  drawText(8, 222, cleanFooterLabel(left), kMuted, 1, kPanel);
+  ui.setTextDatum(MC_DATUM);
+  drawText(160, 222, cleanFooterLabel(middle), TFT_WHITE, 1, kPanel);
+  ui.setTextDatum(MR_DATUM);
+  drawText(312, 222, cleanFooterLabel(right), kMuted, 1, kPanel);
+  ui.setTextDatum(TL_DATUM);
+}
+
+void FireOS::drawMain() {
+  drawStatusBar(safeMode_ ? "FIRE OS  SAFE" : "FIRE OS");
+  // Visibility can change in Menu Layout while the previous carousel index is
+  // still cached. Normalize before drawing so a hidden card is never shown at
+  // boot or after returning Home.
+  if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
+  constexpr int32_t kLargeCard = 150;
+  constexpr int32_t kSmallCard = 58;
+  constexpr int32_t kCenterX = 160;
+  constexpr int32_t kCenterY = 120;
+  if (carouselAnimating_) {
+    const uint8_t previous = nextVisibleMain(carouselToIndex_, -1);
+    const uint8_t next = nextVisibleMain(carouselToIndex_, 1);
+    if (visibleMainCount() > 1) {
+      drawMainCard(previous, 48 - kSmallCard / 2, kCenterY - kSmallCard / 2,
+                   kSmallCard);
+      drawMainCard(next, 272 - kSmallCard / 2, kCenterY - kSmallCard / 2,
+                   kSmallCard);
+    }
+    const int32_t oldSize = kLargeCard -
+                            (kLargeCard - kSmallCard) * carouselOffset_ /
+                                kCarouselDistance;
+    const int32_t newSize = kSmallCard +
+                            (kLargeCard - kSmallCard) * carouselOffset_ /
+                                kCarouselDistance;
+    const int32_t oldCenter = kCenterX + carouselDirection_ * carouselOffset_;
+    const int32_t newCenter = kCenterX - carouselDirection_ *
+                                          (kCarouselDistance - carouselOffset_);
+    drawMainCard(carouselFromIndex_, oldCenter - oldSize / 2,
+                 kCenterY - oldSize / 2, oldSize);
+    drawMainCard(carouselToIndex_, newCenter - newSize / 2,
+                 kCenterY - newSize / 2, newSize);
+  } else {
+    const uint8_t previous = nextVisibleMain(mainIndex_, -1);
+    const uint8_t next = nextVisibleMain(mainIndex_, 1);
+    if (visibleMainCount() > 1) {
+      drawMainCard(previous, 48 - kSmallCard / 2, kCenterY - kSmallCard / 2,
+                   kSmallCard);
+      drawMainCard(next, 272 - kSmallCard / 2, kCenterY - kSmallCard / 2,
+                   kSmallCard);
+    }
+    drawMainCard(mainIndex_, kCenterX - kLargeCard / 2,
+                 kCenterY - kLargeCard / 2, kLargeCard);
+  }
+  ui.setTextDatum(TL_DATUM);
+  const uint8_t count = visibleMainCount();
+  const int firstDot = 160 - static_cast<int>(count - 1) * 5;
+  for (uint8_t position = 0; position < count; ++position) {
+    const uint8_t item = mainItemAtPosition(position);
+    const uint16_t color = item == 0 ? kCyan
+                          : item == 1 ? kPurple
+                          : item == 2 ? kOrange
+                          : item == 3 ? kGreen
+                                      : kCyan;
+    ui.fillCircle(firstDot + position * 10, 207, 3,
+                  item == mainIndex_ ? color : kMuted);
+  }
+  drawFooter("Previous", "Open", "Next");
+}
+
+void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size) {
+  const uint16_t accent = item == 0 ? kCyan
+                        : item == 1 ? kPurple
+                        : item == 2 ? kOrange
+                        : item == 3 ? kGreen
+                                    : kCyan;
+  const bool large = size >= 100;
+  const int32_t centerX = x + size / 2;
+  const int32_t centerY = y + size / 2;
+  const int32_t iconCenterY = large ? centerY : y + size - 20;
+  ui.setTextDatum(MC_DATUM);
+  drawText(centerX, y + (large ? 20 : 11),
+           item == 0 ? "Apps"
+           : item == 1 ? "Settings"
+           : item == 2 ? "Power"
+           : item == 3 ? "Files"
+                       : "AI Developer",
+           TFT_WHITE, large ? 2 : 1, kBg);
+  const int iconSize = large ? 78 : 36;
+  ui.fillRoundRect(centerX - iconSize / 2, iconCenterY - iconSize / 2,
+                   iconSize, iconSize, large ? 10 : 6, kBg);
+  ui.drawRoundRect(centerX - iconSize / 2, iconCenterY - iconSize / 2,
+                   iconSize, iconSize, large ? 10 : 6, accent);
+
+  if (item == 0) {
+    const int tile = large ? 22 : 9;
+    const int gap = large ? 5 : 3;
+    const int startX = centerX - tile - gap / 2;
+    const int startY = iconCenterY - tile - gap / 2;
+    for (uint8_t row = 0; row < 2; ++row) {
+      for (uint8_t column = 0; column < 2; ++column) {
+        ui.fillRoundRect(startX + column * (tile + gap),
+                         startY + row * (tile + gap), tile, tile,
+                         large ? 5 : 3, accent);
+      }
+    }
+  } else if (item == 1) {
+    const int radius = large ? 25 : 12;
+    ui.drawCircle(centerX, iconCenterY, radius, accent);
+    ui.drawCircle(centerX, iconCenterY, large ? 9 : 5, accent);
+    const int tooth = large ? 10 : 6;
+    ui.fillRect(centerX - tooth / 2, iconCenterY - radius - 4, tooth, tooth,
+                accent);
+    ui.fillRect(centerX - tooth / 2, iconCenterY + radius - 5, tooth, tooth,
+                accent);
+    ui.fillRect(centerX - radius - 4, iconCenterY - tooth / 2, tooth, tooth,
+                accent);
+    ui.fillRect(centerX + radius - 5, iconCenterY - tooth / 2, tooth, tooth,
+                accent);
+  } else if (item == 2) {
+    const int radius = large ? 26 : 13;
+    ui.drawCircle(centerX, iconCenterY, radius, accent);
+    ui.drawLine(centerX, iconCenterY - radius - 8, centerX, iconCenterY, accent);
+    ui.drawArc(centerX, iconCenterY, radius - 5, radius - 5, 45, 315, accent);
+  } else if (item == 3) {
+    const int width = large ? 54 : 26;
+    const int height = large ? 42 : 21;
+    ui.drawRoundRect(centerX - width / 2, iconCenterY - height / 2,
+                     width, height, large ? 5 : 3, accent);
+    ui.drawLine(centerX - width / 2, iconCenterY - height / 2 + 7,
+                centerX + width / 2, iconCenterY - height / 2 + 7, accent);
+    ui.drawLine(centerX - width / 2 + 8, iconCenterY - height / 2,
+                centerX - width / 2 + 14, iconCenterY - height / 2 - 6,
+                accent);
+  } else {
+    const int radius = large ? 25 : 12;
+    ui.drawCircle(centerX, iconCenterY, radius, accent);
+    ui.fillCircle(centerX - (large ? 9 : 5), iconCenterY - (large ? 5 : 3),
+                  large ? 4 : 2, accent);
+    ui.fillCircle(centerX + (large ? 9 : 5), iconCenterY - (large ? 5 : 3),
+                  large ? 4 : 2, accent);
+    ui.drawArc(centerX, iconCenterY + (large ? 5 : 3), large ? 14 : 7,
+               large ? 8 : 4, 205, 335, accent);
+  }
+
+  ui.setTextDatum(TL_DATUM);
+}
+
+void FireOS::drawApps() {
+  drawStatusBar("Apps");
+  drawText(16, 35, "SD /apps", kMuted, 1);
+  const uint8_t itemCount = externalAppCount_ + 1;
+  const uint8_t visible = min<uint8_t>(5, itemCount - externalAppOffset_);
+  for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = externalAppOffset_ + row;
+    const int y = 60 + row * 25;
+    const bool selected = item == externalAppSelection_;
+    if (selected) ui.fillRoundRect(12, y - 3, 296, 21, 4, kCyan);
+    if (item == externalAppCount_) {
+      drawText(22, y + 1, "Back", selected ? kBg : kText, 1,
+               selected ? kCyan : kBg);
+      continue;
+    }
+    String name = externalAppNames_[item];
+    if (name.length() > 28) name = name.substring(0, 25) + "...";
+    const uint16_t nameColor = selected
+                                   ? kBg
+                                   : (externalAppCompatible_[item] ? kText
+                                                                   : kOrange);
+    drawText(22, y + 1, name, nameColor, 1,
+             selected ? kCyan : kBg);
+    ui.setTextDatum(MR_DATUM);
+    drawText(300, y + 1, formatBytes(externalAppSizes_[item]),
+             selected ? kBg
+                      : (externalAppCompatible_[item] ? kMuted : kOrange),
+             1, selected ? kCyan : kBg);
+    ui.setTextDatum(TL_DATUM);
+  }
+  if (externalAppCount_ == 0)
+    drawText(18, 182, "No .bin apps; select Back", kMuted, 1);
+  if (externalAppMessage_.length() > 0) {
+    drawText(16, 190, externalAppMessage_, kOrange, 1);
+  }
+  drawFooter("A  UP", "B  OPEN", "DOWN  C");
+}
+
+void FireOS::drawSettings() {
+  static const char* labels[kSettingsCount] = {
+      "Date / Time",       "Display & Sound", "Wi-Fi",       "Bluetooth",
+      "File Explorer",     "Boot",             "Menu Layout",  "Shortcuts",
+      "App Manager",       "Debug",            "System Info",   "Help",
+      "Factory Reset",     "AI API",           "Power",         "Back",
+  };
+  drawStatusBar("Settings");
+  drawText(16, 37, "System settings", kMuted, 1);
+  const uint8_t first = settingsIndex_ < 5 ? 0 : settingsIndex_ - 4;
+  for (uint8_t row = 0; row < 6; ++row) {
+    const uint8_t item = first + row;
+    if (item >= kSettingsCount) break;
+    drawRow(row, labels[item], item == settingsIndex_);
+  }
+  drawFooter("A  UP", "B  OPEN", "DOWN  C");
+}
+
+void FireOS::drawDateTime() {
+  static const char* fields[] = {"Wi-Fi sync", "Sync now", "Year", "Month",
+                                 "Day",       "Hour",     "Minute", "Timezone",
+                                 "Summer time", "Save",    "Back"};
+  drawStatusBar("Date / Time");
+  drawText(16, 31, dateTime_.localDateTime(), TFT_WHITE, 1);
+  String status = timeSyncPending_ ? timeSyncStatus_ : timeSyncLast_;
+  if (!timeSyncPending_ && status.length() > 0) {
+    status = "Last Wi-Fi sync: " + status;
+  }
+  if (status.length() == 0) {
+    status = wifiTimeSync_ ? "Wi-Fi sync enabled" : "Wi-Fi sync disabled";
+  }
+  if (status.length() > 38) status = status.substring(0, 38);
+  drawText(16, 47, status, timeSyncPending_ ? kCyan : kMuted, 1);
+  String values[] = {wifiTimeSync_ ? "On" : "Off", "", String(editYear_),
+                     String(editMonth_), String(editDay_), String(editHour_),
+                     String(editMinute_), dateTime_.timezoneLabel(editTimezone_),
+                     editDstAuto_ ? "Auto" : "Off", "", ""};
+  for (uint8_t row = 0; row < kDateFieldCount; ++row) {
+    const int y = 62 + row * 14;
+    const bool selected = row == dateField_;
+    const uint16_t highlight = dateEditing_ && row == dateField_ ? kOrange : kCyan;
+    if (selected) ui.fillRoundRect(10, y - 1, 300, 14, 4, highlight);
+    drawText(18, y + 1, fields[row], selected ? kBg : kText, 1,
+             selected ? highlight : kBg);
+    ui.setTextDatum(MR_DATUM);
+    drawText(302, y + 1, values[row], selected ? kBg : TFT_WHITE, 1,
+             selected ? highlight : kBg);
+    ui.setTextDatum(TL_DATUM);
+  }
+  drawFooter("Previous", dateEditing_ ? "Finish" : "Edit", "Next");
+}
+
+void FireOS::drawDisplaySound() {
+  drawStatusBar("Display & Sound");
+  drawLevelRow(0, "Brightness", brightnessStep_, kBrightnessStepCount,
+               detailIndex_ == 0, kCyan, detailEditing_ && detailIndex_ == 0);
+  drawLevelRow(1, "Volume", volumeStep_, kVolumeStepCount, detailIndex_ == 1,
+               kGreen, detailEditing_ && detailIndex_ == 1);
+  drawRow(2, "Dim screen after", detailIndex_ == 2,
+          durationLabel(dimOption_), detailEditing_ && detailIndex_ == 2);
+  drawRow(3, "Screen off after", detailIndex_ == 3,
+          durationLabel(screenOffOption_), detailEditing_ && detailIndex_ == 3);
+  drawRow(4, "Button sounds", detailIndex_ == 4,
+          buttonSoundsEnabled_ ? "ON" : "OFF");
+  drawRow(5, "Back", detailIndex_ == 5);
+  drawFooter("Previous", detailEditing_ ? "Finish" : "Edit", "Next");
+}
+
+void FireOS::drawWifi() {
+  drawStatusBar("Wi-Fi");
+  if (wifiSavedDialog_) {
+    ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
+    drawText(24, 42, "Saved networks", TFT_WHITE, 2, kPanel);
+    const uint8_t itemCount = wifiSavedCount_ + 4;
+    const int visible = min<int>(itemCount - wifiSavedOffset_, 6);
+    for (int row = 0; row < visible; ++row) {
+      const uint8_t item = wifiSavedOffset_ + row;
+      const int y = 67 + row * 22;
+      const bool selected = item == wifiSavedSelection_;
+      if (selected) ui.fillRoundRect(18, y - 4, 284, 19, 4, kCyan);
+      String label;
+      if (item < wifiSavedCount_) {
+        label = wifiSavedSsid_[item];
+      } else if (item == wifiSavedCount_) {
+        label = "Move selected up";
+      } else if (item == wifiSavedCount_ + 1) {
+        label = "Move selected down";
+      } else if (item == wifiSavedCount_ + 2) {
+        label = wifiDeleteArmed_ ? "Confirm delete" : "Delete selected";
+      } else {
+        label = "Back";
+      }
+      drawText(24, y, label, selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+    if (wifiSavedCount_ == 0) drawText(24, 67, "No saved networks", kMuted, 1, kPanel);
+    drawFooter("Previous", "Select / Connect", "Next");
+    return;
+  }
+  if (wifiScanDialog_) {
+    ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
+    drawText(24, 42, "Networks found", TFT_WHITE, 2, kPanel);
+    const int visible = min(wifiScanCount_ - static_cast<int>(wifiScanOffset_), 5);
+    for (int row = 0; row < visible; ++row) {
+      const int index = wifiScanOffset_ + row;
+      String ssid = WiFi.SSID(index);
+      if (ssid.length() == 0) ssid = "Hidden network";
+      if (ssid.length() > 25) ssid = ssid.substring(0, 25);
+      const int y = 76 + row * 23;
+      if (index == wifiScanSelection_) {
+        ui.fillRoundRect(18, y - 4, 284, 20, 4, kCyan);
+      }
+      drawText(24, y, ssid, index == wifiScanSelection_ ? kBg : kText, 1,
+               index == wifiScanSelection_ ? kCyan : kPanel);
+      drawText(270, y, String(WiFi.RSSI(index)),
+               index == wifiScanSelection_ ? kBg : kMuted, 1,
+               index == wifiScanSelection_ ? kCyan : kPanel);
+    }
+    if (visible == 0) drawText(24, 85, "No networks found", kMuted, 1, kPanel);
+    if (wifiScanCount_ > 5) {
+      drawText(24, 194, String(wifiScanSelection_ + 1) + "/" +
+                           String(wifiScanCount_), kMuted, 1, kPanel);
+    } else {
+      drawText(24, 194, "Center closes", kMuted, 1, kPanel);
+    }
+    drawFooter("Previous", "Close", "Next");
+    return;
+  }
+
+  if (wifiSetupActive_) {
+    ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
+    drawText(24, 41, "Mobile Wi-Fi setup", TFT_WHITE, 2, kPanel);
+    const String url = "http://" + WiFi.softAPIP().toString() +
+                       "/?token=" + wifiSetupToken_;
+    ui.qrcode(url, 190, 60, 112, 4);
+    drawText(24, 78, "1. Join network", kText, 1, kPanel);
+    drawText(24, 96, "FIRE-Setup", kCyan, 1, kPanel);
+    drawText(24, 120, "2. Password", kText, 1, kPanel);
+    drawText(24, 138, "fire-connect-2026", kCyan, 1, kPanel);
+    drawText(24, 166, "3. Scan QR and enter", kText, 1, kPanel);
+    drawText(24, 184, "your home Wi-Fi details", kMuted, 1, kPanel);
+    drawFooter("", "Close", "");
+    return;
+  }
+
+  const String modeLabel = wifiMode_ == 0
+                               ? (wifiEnabled_ ? "Auto (ON)" : "Auto (OFF)")
+                               : wifiMode_ == 1 ? "On" : "Off";
+  drawRow(0, "Mode", wifiIndex_ == 0, modeLabel);
+  drawRow(1, wifiScanActive_ ? "Scanning..." : "Scan networks", wifiIndex_ == 1);
+  drawRow(2, "Mobile setup", wifiIndex_ == 2);
+  drawRow(3, "Saved networks", wifiIndex_ == 3);
+  drawRow(4, "Back", wifiIndex_ == 4);
+  if (wifiStatus_.length() > 0) {
+    String status = wifiStatus_;
+    if (status.length() > 36) status = status.substring(0, 36);
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 43, status,
+             wifiScanActive_ || wifiConnectActive_ ? kCyan : kMuted, 1, kBg);
+    ui.setTextDatum(TL_DATUM);
+  }
+  drawFooter("Previous", "Select", "Next");
+}
+
+void FireOS::drawBluetooth() {
+  drawStatusBar("Bluetooth");
+  static const char* labels[] = {"Mode",          "Scan Devices",
+                                 "Pair Device",   "Saved Devices",
+                                 "Connected",     "Visibility",
+                                 "Advanced",      "Back"};
+  const uint8_t first = bluetoothIndex_ < 5 ? 0 : bluetoothIndex_ - 4;
+  for (uint8_t row = 0; row < 6; ++row) {
+    const uint8_t item = first + row;
+    if (item >= 8) break;
+    String value;
+    if (item == 0) {
+      value = bluetoothMode_ == 0
+                  ? (bluetoothEnabled_ ? "Auto (ON)" : "Auto (OFF)")
+                  : bluetoothMode_ == 1 ? "On" : "Off";
+    }
+    if (item == 5) value = bluetoothVisible_ ? "VISIBLE" : "HIDDEN";
+    drawRow(row, labels[item], bluetoothIndex_ == item, value);
+  }
+  bool activeConnection = bluetoothConnected_;
+#ifdef FIRE_OS_BLE
+  activeConnection = activeConnection || bluetoothPeripheralConnected;
+#endif
+  if (activeConnection) {
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 197, "Connected", kGreen, 1, kBg);
+    ui.setTextDatum(TL_DATUM);
+  } else if (bluetoothStatus_.length() > 0) {
+    String status = bluetoothStatus_;
+    if (status.length() > 34) status = status.substring(0, 34);
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 197, status, kMuted, 1, kBg);
+    ui.setTextDatum(TL_DATUM);
+  } else {
+    ui.setTextDatum(MC_DATUM);
+    const String status = bluetoothMode_ == 2
+                              ? "Bluetooth Off"
+                              : bluetoothVisible_
+                                    ? "Visible / accepting connections"
+                                    : bluetoothRadioReady
+                                          ? "Ready / hidden"
+                                          : "Auto / standby";
+    drawText(160, 197, status, kMuted, 1, kBg);
+    ui.setTextDatum(TL_DATUM);
+  }
+  drawFooter("Previous", "Select", "Next");
+  if (bluetoothScanDialog_) drawBluetoothScanDialog();
+  if (bluetoothSavedDialog_) drawBluetoothSavedDialog();
+}
+
+void FireOS::drawBluetoothScanDialog() {
+  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
+  ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
+  drawText(18, 39, bluetoothUnknownDialog_ ? "Unknown devices" : "BLE devices",
+           TFT_WHITE, 2, kPanel);
+
+  const uint8_t deviceCount = bluetoothDeviceListCount(bluetoothUnknownDialog_);
+  if (deviceCount == 0) {
+    drawText(18, 78, "No devices found", kMuted, 1, kPanel);
+    drawText(18, 102, "Select Back to close", kText, 1, kPanel);
+  } else {
+    const uint8_t visible = min<uint8_t>(5, deviceCount - bluetoothScanOffset_);
+    for (uint8_t row = 0; row < visible; ++row) {
+      const uint8_t item = bluetoothScanOffset_ + row;
+      const bool selected = item == bluetoothScanSelection_;
+      const int y = 64 + row * 25;
+      if (selected) ui.fillRoundRect(15, y - 3, 290, 21, 4, kCyan);
+      const int8_t deviceIndex =
+          bluetoothDeviceListIndex(item, bluetoothUnknownDialog_);
+      String name;
+      String signal;
+      if (deviceIndex < 0) {
+        name = "Unknown devices";
+        uint8_t unknownCount = bluetoothDeviceListCount(true);
+        signal = String(unknownCount) + " found";
+      } else {
+        name = bluetoothNames_[deviceIndex];
+        signal = String(bluetoothRssi_[deviceIndex]) + " dBm";
+      }
+      if (name.length() > 23) name = name.substring(0, 23);
+      drawText(22, y + 1, name, selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+      ui.setTextDatum(MR_DATUM);
+      drawText(298, y + 1, signal,
+               selected ? kBg : kMuted, 1, selected ? kCyan : kPanel);
+      ui.setTextDatum(TL_DATUM);
+    }
+  }
+
+  const uint8_t backItem = deviceCount;
+  const bool backSelected = bluetoothScanSelection_ == backItem;
+  if (backSelected) ui.fillRoundRect(15, 188, 290, 18, 4, kCyan);
+  drawText(22, 191, "Back", backSelected ? kBg : kText, 1,
+           backSelected ? kCyan : kPanel);
+  ui.setTextDatum(MC_DATUM);
+  drawText(160, 204, bluetoothUnknownDialog_ ? "A/C move   B pair/back"
+                                             : "A/C move   B select",
+           kMuted, 1, kPanel);
+  ui.setTextDatum(TL_DATUM);
+}
+
+void FireOS::drawBluetoothSavedDialog() {
+  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
+  ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
+  drawText(18, 39, "Saved devices", TFT_WHITE, 2, kPanel);
+
+  const uint8_t itemCount = bluetoothSavedCount_ + 2;
+  const uint8_t visible = min<uint8_t>(5, itemCount - bluetoothSavedOffset_);
+  for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = bluetoothSavedOffset_ + row;
+    const bool selected = item == bluetoothSavedSelection_;
+    const int y = 64 + row * 25;
+    if (selected) ui.fillRoundRect(15, y - 3, 290, 21, 4, kCyan);
+    String label;
+    if (item < bluetoothSavedCount_) {
+      label = bluetoothSavedNames_[item];
+    } else if (item == bluetoothSavedCount_) {
+      label = bluetoothSavedDeleteArmed_ ? "Confirm delete" : "Delete selected";
+    } else {
+      label = "Back";
+    }
+    if (label.length() > 29) label = label.substring(0, 29);
+    drawText(22, y + 1, label, selected ? kBg : kText, 1,
+             selected ? kCyan : kPanel);
+  }
+  ui.setTextDatum(MC_DATUM);
+  drawText(160, 204, "A/C move   B connect/select", kMuted, 1, kPanel);
+  ui.setTextDatum(TL_DATUM);
+}
+
+void FireOS::drawBoot() {
+  drawStatusBar("Boot");
+  const String bootLabel = selectedBootAppPath_.length() == 0
+                               ? "Default"
+                               : externalAppBaseName(selectedBootAppPath_);
+  drawRow(0, "Boot app", detailIndex_ == 0, bootLabel);
+  drawRow(1, "RGB pulse", detailIndex_ == 1, bootRgbPulse_ ? "ON" : "OFF");
+  drawRow(2, "Startup melody", detailIndex_ == 2, bootMelody_ ? "ON" : "OFF");
+  drawRow(3, "Back", detailIndex_ == 3);
+  drawText(16, 177, "App auto-boot becomes available", kMuted, 1);
+  drawText(16, 192, "when the app registry is installed.", kMuted, 1);
+  if (bootAppPicker_) {
+    ui.fillRoundRect(12, 32, 296, 180, 10, kPanel);
+    drawText(24, 40, "Choose Boot App", TFT_WHITE, 2, kPanel);
+    const uint8_t itemCount = externalAppCount_ + 1;
+    const uint8_t visible = min<uint8_t>(6, itemCount - bootAppOffset_);
+    for (uint8_t row = 0; row < visible; ++row) {
+      const uint8_t item = bootAppOffset_ + row;
+      const bool selected = item == bootAppSelection_;
+      const int y = 72 + row * 22;
+      if (selected) ui.fillRoundRect(18, y - 3, 284, 19, 4, kCyan);
+      const String name = item == 0 ? "FIRE OS (Default)"
+                                    : externalAppNames_[item - 1];
+      drawText(26, y, name, selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+    drawFooter("Previous", "Select", "Next");
+    return;
+  }
+  drawFooter("Previous", "Select", "Next");
+}
+
+void FireOS::drawMainMenuSettings() {
+  drawStatusBar("Menu Layout");
+  drawText(16, 38, "System menu layout", kMuted, 1);
+  drawRow(0, "Apps", detailIndex_ == 0, mainVisible_[0] ? "Visible" : "Hidden");
+  drawRow(1, "Settings", detailIndex_ == 1, mainVisible_[1] ? "Visible" : "Hidden");
+  drawRow(2, "Power", detailIndex_ == 2, mainVisible_[2] ? "Visible" : "Hidden");
+  drawRow(3, "File Explorer", detailIndex_ == 3,
+          mainVisible_[3] ? "Visible" : "Hidden");
+  drawRow(4, "AI Developer", detailIndex_ == 4,
+          mainVisible_[4] ? "Visible" : "Hidden");
+  drawRow(5, "Back", detailIndex_ == 5);
+  drawText(16, 192, "B toggles visibility.", kMuted, 1);
+  drawFooter("Previous", "Select", "Next");
+}
+
+void FireOS::drawShortcuts() {
+  drawStatusBar("Shortcuts");
+  drawText(16, 37, "Hold all 3 buttons at boot = Default", kMuted, 1);
+  const char* labels[] = {"Long left",    "Long center",  "Long right",
+                          "Double left",  "Double center", "Double right",
+                          "Back"};
+  const char* values[] = {"Home", "Quick Settings", "Back",
+                          doubleClickActionLabel(doubleClickAction_[0]),
+                          doubleClickActionLabel(doubleClickAction_[1]),
+                          doubleClickActionLabel(doubleClickAction_[2]), ""};
+  for (uint8_t row = 0; row < 7; ++row) {
+    const int y = 53 + row * 22;
+    const bool selected = row == detailIndex_;
+    if (selected) ui.fillRoundRect(10, y - 2, 300, 19, 5, kCyan);
+    drawText(20, y + 2, labels[row], selected ? kBg : kText, 1,
+             selected ? kCyan : kBg);
+    if (values[row][0] != '\0') {
+      ui.setTextDatum(MR_DATUM);
+      drawText(300, y + 2, values[row], selected ? kBg : kMuted, 1,
+               selected ? kCyan : kBg);
+      ui.setTextDatum(TL_DATUM);
+    }
+  }
+  if (shortcutPicker_) {
+    static const char* const actions[] = {
+        "Disabled", "Apps", "Power", "All settings", "Display & Sound",
+        "Wi-Fi", "Bluetooth", "Menu Layout", "System Info"};
+    ui.fillRoundRect(12, 32, 296, 180, 10, kPanel);
+    drawText(24, 40, "Choose shortcut", TFT_WHITE, 2, kPanel);
+    const uint8_t visible = min<uint8_t>(7, kDoubleClickActionCount -
+                                             shortcutPickerOffset_);
+    for (uint8_t row = 0; row < visible; ++row) {
+      const uint8_t item = shortcutPickerOffset_ + row;
+      const int y = 70 + row * 19;
+      const bool selected = item == shortcutPickerAction_;
+      if (selected) ui.fillRoundRect(18, y - 3, 284, 17, 4, kCyan);
+      drawText(26, y, actions[item], selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+  }
+  drawFooter("Previous", "Select", "Next");
+}
+
+void FireOS::drawAiDeveloper() {
+  // AI Developer is intentionally immersive: no system status bar or panel.
+  ui.fillSprite(TFT_BLACK);
+  static const char* const states[] = {"REST", "LISTEN", "THINK", "TALK"};
+  const uint32_t now = millis();
+  static uint32_t nextBlinkAt = 0;
+  static uint32_t blinkUntil = 0;
+  static uint32_t nextFeatureAt = 0;
+  static uint32_t featureSeed = 0;
+  if (nextBlinkAt == 0) nextBlinkAt = now + 900;
+  if (now >= nextBlinkAt) {
+    blinkUntil = now + 90 + (esp_random() % 110);
+    nextBlinkAt = now + 1500 + (esp_random() % 3000);
+  }
+  if (now >= nextFeatureAt) {
+    featureSeed = esp_random();
+    nextFeatureAt = now + 350 + (featureSeed % 1100);
+  }
+  const bool blink = now < blinkUntil;
+  const int cx = 160;
+  const int cy = 108;
+  const uint16_t line = TFT_WHITE;
+  if (aiDeveloperMode_ == 0 && aiRestPhaseStarted_ != 0 &&
+      now - aiRestPhaseStarted_ >= aiRestPhaseDuration_) {
+    aiRestPhase_ = static_cast<uint8_t>((aiRestPhase_ + 1) % 3);
+    aiRestPhaseStarted_ = now;
+    aiRestPhaseDuration_ = 30000 + (esp_random() % 30001);
+  }
+  const bool tired = aiDeveloperMode_ == 0 && aiRestPhase_ == 1;
+  const bool sleeping = aiDeveloperMode_ == 0 && aiRestPhase_ == 2;
+  static uint32_t nextSquintAt = 0;
+  static uint32_t squintUntil = 0;
+  if (nextSquintAt == 0) nextSquintAt = now + 700;
+  if (now >= nextSquintAt) {
+    if ((esp_random() % 100) < 45)
+      squintUntil = now + 180 + (esp_random() % 420);
+    nextSquintAt = now + 900 + (esp_random() % 2600);
+  }
+  const bool squint = !sleeping && now < squintUntil;
+  const int eyeDrift = static_cast<int>((featureSeed >> 4) % 7) - 3;
+  const int eyeY = cy - 22 + static_cast<int>((featureSeed >> 8) % 5) - 2;
+  const int eyeLeft = cx - 52 + eyeDrift;
+  const int eyeRight = cx + 52 + eyeDrift;
+  const int leftEyeY = eyeY + static_cast<int>((featureSeed >> 16) % 5) - 2;
+  const int rightEyeY = eyeY + static_cast<int>((featureSeed >> 20) % 5) - 2;
+
+  // One face language across every state, with mode-specific posture and
+  // motion. Eyes stay solid white while gaze and brows vary subtly.
+  if (sleeping) {
+    ui.drawLine(eyeLeft - 13, leftEyeY, eyeLeft + 13, leftEyeY, line);
+    ui.drawLine(eyeRight - 13, rightEyeY, eyeRight + 13, rightEyeY, line);
+  } else if (blink) {
+    ui.drawLine(eyeLeft - 13, leftEyeY, eyeLeft + 13, leftEyeY, line);
+    ui.drawLine(eyeRight - 13, rightEyeY, eyeRight + 13, rightEyeY, line);
+  } else if (squint || tired) {
+    const int height = tired ? 5 : 7;
+    ui.fillRoundRect(eyeLeft - 13, leftEyeY - height / 2, 26, height,
+                     height / 2, line);
+    ui.fillRoundRect(eyeRight - 13, rightEyeY - height / 2, 26, height,
+                     height / 2, line);
+  } else {
+    ui.fillCircle(eyeLeft, leftEyeY, 12, line);
+    ui.fillCircle(eyeRight, rightEyeY, 12, line);
+  }
+
+  const int browTilt = static_cast<int>((featureSeed >> 24) % 9) - 4;
+  if (aiDeveloperMode_ == 1) {
+    // Listening: raised brows, alert gaze and small sound-wave marks.
+    ui.drawLine(eyeLeft - 15, leftEyeY - 22, eyeLeft + 9,
+                leftEyeY - 27 - browTilt, line);
+    ui.drawLine(eyeRight - 9, rightEyeY - 27 - browTilt,
+                eyeRight + 15, rightEyeY - 22, line);
+    ui.drawLine(cx - 82, cy + 7, cx - 72, cy + 7, line);
+    ui.drawLine(cx + 72, cy + 7, cx + 82, cy + 7, line);
+  } else if (aiDeveloperMode_ == 2) {
+    // Thinking: one brow is higher and the gaze drifts upward.
+    ui.drawLine(eyeLeft - 15, leftEyeY - 28 - browTilt,
+                eyeLeft + 9, leftEyeY - 23, line);
+    ui.drawLine(eyeRight - 9, rightEyeY - 23,
+                eyeRight + 15, rightEyeY - 28 + browTilt, line);
+  } else if (aiDeveloperMode_ == 3) {
+    // Talking: relaxed, asymmetric brows while the mouth animates.
+    ui.drawLine(eyeLeft - 15, leftEyeY - 24,
+                eyeLeft + 9, leftEyeY - 26 - browTilt, line);
+    ui.drawLine(eyeRight - 9, rightEyeY - 26 + browTilt,
+                eyeRight + 15, rightEyeY - 24, line);
+  } else {
+    // Resting: gentle, slightly changing expression.
+    const int tiredDrop = tired ? 7 : 0;
+    ui.drawLine(eyeLeft - 15, leftEyeY - 25 + tiredDrop - browTilt,
+                eyeLeft + 9, leftEyeY - 25 + tiredDrop, line);
+    ui.drawLine(eyeRight - 9, rightEyeY - 25 + tiredDrop,
+                eyeRight + 15, rightEyeY - 25 + tiredDrop - browTilt, line);
+  }
+
+  const int mouthY = cy + 48 + static_cast<int>((featureSeed >> 18) % 5) - 2;
+  if (aiDeveloperMode_ == 3) {
+    // TALK: a fast, open sideways-D mouth. The top remains straight while
+    // the lower half changes rapidly to suggest syllables.
+    static const uint8_t openings[] = {3, 9, 15, 5, 12, 4, 17, 7};
+    const uint8_t phoneme =
+        static_cast<uint8_t>((now / 70 + (featureSeed & 3)) % 8);
+    const int mouthHalfWidth = 29 + static_cast<int>((featureSeed >> 12) % 9);
+    const int mouthHeight = openings[phoneme];
+    const int left = cx - mouthHalfWidth;
+    const int right = cx + mouthHalfWidth;
+    const int bottom = mouthY + mouthHeight;
+    ui.drawLine(left, mouthY, right, mouthY, line);
+    ui.drawLine(left, mouthY, left + 7, bottom - 2, line);
+    ui.drawLine(left + 7, bottom - 2, cx, bottom, line);
+    ui.drawLine(cx, bottom, right - 7, bottom - 2, line);
+    ui.drawLine(right - 7, bottom - 2, right, mouthY, line);
+    const int talkCorner = static_cast<int>((featureSeed >> 28) % 7) - 3;
+    ui.drawLine(left - 6, mouthY + talkCorner, left, mouthY, line);
+    ui.drawLine(right, mouthY, right + 6, mouthY - talkCorner, line);
+  } else {
+    const int mouthHalfWidth = aiDeveloperMode_ == 1
+                                   ? 20 + static_cast<int>((featureSeed >> 12) % 5)
+                               : aiDeveloperMode_ == 2
+                                   ? 25 + static_cast<int>((featureSeed >> 12) % 7)
+                                   : 29 + static_cast<int>((featureSeed >> 12) % 9);
+    const int centerOffset = sleeping
+                                 ? 0
+                             : tired
+                                 ? -1
+                             : aiDeveloperMode_ == 0
+                                 ? 4
+                             : aiDeveloperMode_ == 2 ? -2 : 1;
+    const int adjustedWidth = sleeping ? 16 : tired ? 23 : mouthHalfWidth;
+    const int left = cx - adjustedWidth;
+    const int right = cx + adjustedWidth;
+    ui.drawLine(left, mouthY, cx, mouthY + centerOffset, line);
+    ui.drawLine(cx, mouthY + centerOffset, right, mouthY, line);
+    const int cornerTilt = static_cast<int>((featureSeed >> 28) % 7) - 3;
+    ui.drawLine(left - 6, mouthY + cornerTilt, left, mouthY, line);
+    ui.drawLine(right, mouthY, right + 6, mouthY - cornerTilt, line);
+  }
+
+  const char* stateLabel = states[aiDeveloperMode_];
+  static const char* const workflowLabels[] = {
+      "PRESS CENTER TO LISTEN", "LISTENING", "UNDERSTANDING...",
+      "READY TO BUILD", "BUILDING...", "READY TO RUN", "RUNNING"};
+  ui.setTextDatum(MC_DATUM);
+  drawText(cx, 190, stateLabel, kMuted, 1, TFT_BLACK);
+  drawText(cx, 207, workflowLabels[min<uint8_t>(aiWorkflowState_, 6)],
+           kMuted, 1, TFT_BLACK);
+  if (aiWorkflowState_ == 3) {
+    drawText(160, 226, "A BUILD    C ABORT", 0x7BEF, 1, TFT_BLACK);
+  } else if (aiWorkflowState_ == 5) {
+    drawText(160, 226, "A RUN      C ABORT", 0x7BEF, 1, TFT_BLACK);
+  }
+  if (aiWorkflowState_ == 4) {
+    ui.drawRoundRect(45, 218, 230, 7, 3, 0x5AEB);
+    ui.fillRoundRect(47, 220,
+                     static_cast<int32_t>(226 * aiBuildProgress_ / 100), 3,
+                     1, 0x5AEB);
+  }
+  ui.setTextDatum(TL_DATUM);
+
+#ifdef FIRE_OS_BLE
+  static uint32_t lastLedUpdate = 0;
+  if (now - lastLedUpdate >= 80) {
+    lastLedUpdate = now;
+    const uint8_t brightness = static_cast<uint8_t>(
+        40 + ((now / 12) % 180));
+    writeFireRgbRaw(0, 150, 220, brightness);
+  }
+#endif
+}
+
+void FireOS::drawAiApi() {
+  drawStatusBar("AI API");
+  if (wifiSetupActive_) {
+    ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
+    drawText(24, 41, "Mobile AI setup", TFT_WHITE, 2, kPanel);
+    const String url = "http://" + WiFi.softAPIP().toString() +
+                       "/?token=" + wifiSetupToken_;
+    ui.qrcode(url, 190, 60, 112, 4);
+    drawText(24, 78, "1. Join network", kText, 1, kPanel);
+    drawText(24, 96, "FIRE-Setup", kCyan, 1, kPanel);
+    drawText(24, 120, "2. Password", kText, 1, kPanel);
+    drawText(24, 138, "fire-connect-2026", kCyan, 1, kPanel);
+    drawText(24, 166, "3. Scan QR and enter", kText, 1, kPanel);
+    drawText(24, 184, "Wi-Fi/API fields", kMuted, 1, kPanel);
+    drawFooter("", "Close", "");
+    return;
+  }
+  drawRow(0, "Mobile setup", detailIndex_ == 0);
+  drawRow(1, "OpenAI API key", detailIndex_ == 1,
+          aiApiKey_.length() > 0 ? "Configured" : "Not set");
+  drawRow(2, "Back", detailIndex_ == 2);
+  drawText(16, 190, "Empty web fields keep old values.", kMuted, 1);
+  drawFooter("Previous", "Select", "Next");
+}
+
+void FireOS::drawAppsSettings() {
+  drawStatusBar("App Manager");
+  if (appManagerDeleteConfirm_) {
+    ui.fillRoundRect(18, 54, 284, 112, 10, kPanel);
+    drawText(32, 68, "Delete app?", TFT_WHITE, 2, kPanel);
+    String name = externalAppSelection_ < externalAppCount_
+                      ? externalAppNames_[externalAppSelection_]
+                      : "Selected app";
+    if (name.length() > 27) name = name.substring(0, 24) + "...";
+    drawText(32, 101, name, kText, 1, kPanel);
+    drawText(32, 128, "B delete   A/C cancel", kOrange, 1, kPanel);
+    drawFooter("Cancel", "Delete", "Cancel");
+    return;
+  }
+  if (appManagerActionMenu_) {
+    ui.fillRoundRect(18, 40, 284, 150, 10, kPanel);
+    String name = externalAppNames_[externalAppSelection_];
+    if (name.length() > 26) name = name.substring(0, 23) + "...";
+    drawText(30, 50, name, TFT_WHITE, 1, kPanel);
+    static const char* actions[] = {"Launch", "Delete", "Back"};
+    for (uint8_t row = 0; row < 3; ++row) {
+      const int y = 82 + row * 27;
+      const bool selected = row == appManagerActionIndex_;
+      if (selected) ui.fillRoundRect(26, y - 4, 268, 22, 5, kCyan);
+      drawText(38, y, actions[row], selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+    drawFooter("A  UP", "B  SELECT", "DOWN  C");
+    return;
+  }
+
+  drawText(16, 34, "SD /apps  (.bin)", kMuted, 1);
+  const uint8_t itemCount = externalAppCount_ + 1;
+  const uint8_t visible = min<uint8_t>(6, itemCount - externalAppOffset_);
+  for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = externalAppOffset_ + row;
+    const int y = 54 + row * 22;
+    const bool selected = item == externalAppSelection_;
+    if (selected) ui.fillRoundRect(12, y - 3, 296, 19, 4, kCyan);
+    if (item == externalAppCount_) {
+      drawText(22, y, "Back", selected ? kBg : kText, 1,
+               selected ? kCyan : kBg);
+      continue;
+    }
+    String name = externalAppNames_[item];
+    if (name.length() > 26) name = name.substring(0, 23) + "...";
+    const uint16_t nameColor = selected
+                                   ? kBg
+                                   : (externalAppCompatible_[item] ? kText
+                                                                   : kOrange);
+    drawText(22, y, name, nameColor, 1,
+             selected ? kCyan : kBg);
+    ui.setTextDatum(MR_DATUM);
+    drawText(300, y, formatBytes(externalAppSizes_[item]),
+             selected ? kBg
+                      : (externalAppCompatible_[item] ? kMuted : kOrange),
+             1, selected ? kCyan : kBg);
+    ui.setTextDatum(TL_DATUM);
+  }
+  if (externalAppCount_ == 0)
+    drawText(20, 100, "No .bin apps in /apps", kMuted, 1);
+  if (externalAppMessage_.length() > 0)
+    drawText(16, 190, externalAppMessage_, kOrange, 1);
+  drawFooter("A  UP", "B  ACTIONS", "DOWN  C");
+}
+
+void FireOS::drawHelp() {
+  drawStatusBar("Help");
+  if (helpPage_ == 0) {
+    drawText(18, 48, "FIRE OS", kCyan, 2);
+    drawText(18, 86, "Use the left and right buttons", kText, 1);
+    drawText(18, 104, "to move through menus.", kText, 1);
+    drawText(18, 134, "Select with the center button.", kMuted, 1);
+    drawText(18, 164, "Hold left for Home.", kMuted, 1);
+  } else if (helpPage_ == 1) {
+    drawText(18, 48, "Navigation", kCyan, 2);
+    drawText(18, 86, "Lists: left/right move selection.", kText, 1);
+    drawText(18, 108, "Center selects or edits.", kText, 1);
+    drawText(18, 130, "Back is the final list item.", kText, 1);
+    drawText(18, 160, "Quick Settings is a temporary overlay.", kMuted, 1);
+  } else {
+    drawText(18, 48, "Hardware", kCyan, 2);
+    drawText(18, 86, "LCD, buttons, audio, IMU and LEDs", kText, 1);
+    drawText(18, 108, "are shared OS services.", kText, 1);
+    drawText(18, 138, "Wi-Fi, Bluetooth and SD are optional.", kMuted, 1);
+    drawText(18, 160, "The OS can boot without them.", kMuted, 1);
+  }
+  drawFooter("Previous", "Back", "Next");
+}
+
+void FireOS::drawQuickSettings() {
+  ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
+  drawText(24, 40, "Quick Settings", TFT_WHITE, 2, kPanel);
+  drawLevelRow(0, "Brightness", brightnessStep_, kBrightnessStepCount,
+               quickIndex_ == 0, kCyan, quickEditing_ && quickIndex_ == 0);
+  drawLevelRow(1, "Volume", volumeStep_, kVolumeStepCount, quickIndex_ == 1,
+               kGreen, quickEditing_ && quickIndex_ == 1);
+  const String wifiModeLabel = wifiMode_ == 0 ? "Auto" : wifiMode_ == 1 ? "On" : "Off";
+  String wifiValue;
+  if (wifiMode_ == 2) {
+    wifiValue = "Off";
+  } else if (WiFi.status() == WL_CONNECTED) {
+    wifiValue = WiFi.SSID() + " (" + wifiModeLabel + ")";
+  } else if (wifiConnectActive_) {
+    wifiValue = "Connecting (" + wifiModeLabel + ")";
+  } else {
+    wifiValue = "Disconnected (" + wifiModeLabel + ")";
+  }
+  if (wifiValue.length() > 21) wifiValue = wifiValue.substring(0, 21);
+
+  const String bluetoothModeLabel = bluetoothMode_ == 0
+                                        ? "Auto"
+                                        : bluetoothMode_ == 1 ? "On" : "Off";
+  String bluetoothValue;
+  bool activeBluetoothConnection = bluetoothConnected_;
+#ifdef FIRE_OS_BLE
+  bool peripheralConnection = false;
+  peripheralConnection = bluetoothPeripheralConnected;
+  activeBluetoothConnection = activeBluetoothConnection || peripheralConnection;
+#endif
+  if (bluetoothMode_ == 2) {
+    bluetoothValue = "Off";
+  } else if (activeBluetoothConnection) {
+    bluetoothValue = "";
+#ifdef FIRE_OS_BLE
+    if (peripheralConnection && bluetoothPeripheralAddress.length() > 0) {
+      bluetoothValue += bluetoothPeripheralAddress;
+    } else
+#endif
+    if (bluetoothSavedName_.length() > 0) {
+      bluetoothValue += bluetoothSavedName_;
+    } else {
+      bluetoothValue += "Connected";
+    }
+    bluetoothValue += " (" + bluetoothModeLabel + ")";
+  } else if (bluetoothVisible_) {
+    bluetoothValue = "Visible (" + bluetoothModeLabel + ")";
+  } else {
+    bluetoothValue = "Disconnected (" + bluetoothModeLabel + ")";
+  }
+  if (bluetoothValue.length() > 21) bluetoothValue = bluetoothValue.substring(0, 21);
+  const String sdValue = sdStorageLabel();
+
+  auto drawQuickRow = [&](uint8_t item, const String& label,
+                          const String& value) {
+    const int y = 105 + static_cast<int>(item - 2) * 17;
+    const bool selected = quickIndex_ == item;
+    if (selected) ui.fillRoundRect(10, y - 3, 300, 18, 5, kCyan);
+    drawText(20, y + 1, label, selected ? kBg : kText, 1,
+             selected ? kCyan : kPanel);
+    if (value.length() > 0) {
+      ui.setTextDatum(MR_DATUM);
+      drawText(300, y + 1, value, selected ? kBg : kMuted, 1,
+               selected ? kCyan : kPanel);
+      ui.setTextDatum(TL_DATUM);
+    }
+  };
+  drawQuickRow(2, "Wi-Fi", wifiValue);
+  drawQuickRow(3, "Bluetooth", bluetoothValue);
+  drawQuickRow(4, "SD card", sdValue);
+  drawQuickRow(5, "Power", "");
+  drawQuickRow(6, "All settings", "");
+  drawQuickRow(7, "Back", "");
+  drawFooter("", quickEditing_ ? "Adjust" : "Select", "");
+}
+
+void FireOS::drawFileExplorer() {
+  drawStatusBar("File Explorer");
+  if (sdImagePreview_) {
+    drawText(20, 42, "Image preview", TFT_WHITE, 2, kPanel);
+    drawText(20, 68, sdBaseName(sdImagePreviewPath_), kMuted, 1, kPanel);
+    drawFooter("", "Close", "");
+    return;
+  }
+  if (sdPreview_) {
+    ui.fillRoundRect(10, 32, 300, 180, 10, kPanel);
+    drawText(20, 40, sdBaseName(sdEntryPaths_[sdSelection_]), TFT_WHITE, 1,
+             kPanel);
+    for (uint8_t line = 0; line < sdPreviewLineCount_; ++line) {
+      drawText(18, 62 + line * 17, sdPreviewLines_[line], kText, 1, kPanel);
+    }
+    drawFooter("", "Close", "");
+    return;
+  }
+  if (sdNameEditor_) {
+    ui.fillRoundRect(10, 32, 300, 180, 10, kPanel);
+    drawText(20, 42, sdNameIsNewFolder_ ? "New folder" : "Rename", TFT_WHITE,
+             2, kPanel);
+    drawText(20, 80, sdNameBuffer_, kCyan, 2, kPanel);
+    ui.drawLine(20 + sdNameCursor_ * 12, 102,
+                30 + sdNameCursor_ * 12, 102, kOrange);
+    drawText(20, 135, "A/C change character", kMuted, 1, kPanel);
+    drawText(20, 153, "B next / save", kMuted, 1, kPanel);
+    drawFooter("", "Save", "");
+    return;
+  }
+  if (sdDeleteConfirm_) {
+    ui.fillRoundRect(18, 54, 284, 120, 10, kPanel);
+    drawText(32, 68, "Delete selected?", kOrange, 2, kPanel);
+    drawText(32, 104, sdSelection_ < sdEntryCount_ ? sdEntryNames_[sdSelection_]
+                                                   : "", kText, 1, kPanel);
+    drawText(32, 132, "B confirm   A/C cancel", kMuted, 1, kPanel);
+    drawFooter("Cancel", "Delete", "");
+    return;
+  }
+  if (sdActionMenu_) {
+    static const char* actions[] = {"Open",  "Copy", "Move", "Rename",
+                                    "Delete", "New folder", "Sort", "Back"};
+    ui.fillRoundRect(12, 32, 296, 180, 10, kPanel);
+    drawText(24, 40, "File actions", TFT_WHITE, 2, kPanel);
+    for (uint8_t row = 0; row < 7; ++row) {
+      const uint8_t action = (sdActionIndex_ + row) % 8;
+      const int y = 70 + row * 19;
+      const bool selected = row == 0;
+      if (selected) ui.fillRoundRect(18, y - 3, 284, 17, 4, kCyan);
+      drawText(26, y, actions[action], selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+    drawFooter("Previous", "Select", "Next");
+    return;
+  }
+  if (!sdReady_) {
+    drawText(20, 62, "SD card not present", kOrange, 2);
+    drawText(20, 100, "Insert a FAT32 card", kText, 1);
+    drawFooter("", "Retry", "Back");
+    return;
+  }
+  String pathLabel = sdPath_;
+  if (pathLabel.length() > 28) pathLabel = "..." + pathLabel.substring(pathLabel.length() - 25);
+  drawText(16, 34, pathLabel, kCyan, 1);
+  drawText(16, 48, sdStorageLabel(), kMuted, 1);
+  if (sdMessage_.length() > 0) {
+    String message = sdMessage_;
+    if (message.length() > 34) message = message.substring(0, 34);
+    ui.setTextDatum(MR_DATUM);
+    drawText(304, 48, message, kOrange, 1);
+    ui.setTextDatum(TL_DATUM);
+  }
+  const uint8_t itemCount = sdEntryCount_ + 1;
+  const uint8_t visible = min<uint8_t>(kFileVisibleRows, itemCount - sdOffset_);
+  if (sdEntryCount_ == 0) drawText(20, 85, "Empty folder", kMuted, 1);
+  for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = sdOffset_ + row;
+    const int y = 70 + row * 23;
+    const bool selected = item == sdSelection_;
+    if (selected) ui.fillRoundRect(12, y - 3, 296, 20, 4, kCyan);
+    if (item < sdEntryCount_) {
+      const uint16_t color = selected ? kBg : kCyan;
+      if (sdEntryDirectories_[item]) {
+        ui.drawRect(20, y + 2, 13, 10, color);
+        ui.drawLine(21, y + 2, 26, y - 1, color);
+      } else {
+        ui.drawRect(21, y, 11, 14, color);
+        ui.drawLine(23, y + 4, 30, y + 4, color);
+      }
+      String name = sdEntryNames_[item];
+      if (name.length() > 25) name = name.substring(0, 22) + "...";
+      drawText(40, y + 1, name, selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+      ui.setTextDatum(MR_DATUM);
+      drawText(302, y + 1,
+               sdEntryDirectories_[item] ? "DIR" : formatBytes(sdEntrySizes_[item]),
+               selected ? kBg : kMuted, 1, selected ? kCyan : kPanel);
+      ui.setTextDatum(TL_DATUM);
+    } else {
+      drawText(20, y + 1, "Back", selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+  }
+  drawFooter("Previous", "Open", "Next");
+}
+
+void FireOS::drawPlaceholder() {
+  drawStatusBar("FIRE OS");
+  drawText(20, 68, "This section is ready", kCyan, 2);
+  drawText(20, 105, "for the next OS module.", kText, 1);
+  drawText(20, 135, "The core remains available", kMuted, 1);
+  drawText(20, 153, "without network or SD card.", kMuted, 1);
+  drawFooter("", "", "BACK  C");
+}
+
+void FireOS::drawDebug() {
+  drawStatusBar("Debug");
+  drawText(16, 38, "Runtime diagnostics", kMuted, 1);
+  drawText(16, 58, "LCD", kMuted, 1);
+  drawText(140, 58, "READY", kGreen, 1);
+  drawText(16, 78, "Buttons", kMuted, 1);
+  drawText(140, 78, "3 inputs", kGreen, 1);
+  drawText(16, 98, "IMU", kMuted, 1);
+  drawText(140, 98, M5.Imu.isEnabled() ? "READY" : "N/A",
+           M5.Imu.isEnabled() ? kGreen : kOrange, 1);
+  drawText(16, 118, "Microphone", kMuted, 1);
+  drawText(140, 118, M5.Mic.isEnabled() ? "READY" : "N/A",
+           M5.Mic.isEnabled() ? kGreen : kOrange, 1);
+  drawText(16, 138, "SD card", kMuted, 1);
+  if (!sdReady_ && millis() - sdLastProbe_ > 2000) initSdCard();
+  drawText(140, 138, sdReady_ ? "READY" : "NOT PRESENT",
+           sdReady_ ? kGreen : kMuted, 1);
+  drawText(16, 158, "Wi-Fi", kMuted, 1);
+  drawText(140, 158, wifiEnabled_ ? "ENABLED" : "OFF",
+           wifiEnabled_ ? kCyan : kMuted, 1);
+  drawText(16, 178, "Battery", kMuted, 1);
+  String charge = batteryLevel() >= 0 ? String(batteryLevel()) + "%" : "N/A";
+  charge += batteryCharging() ? "  CHG" : "  BAT";
+  drawText(140, 178, charge, kText, 1);
+  drawFooter("", "", "BACK  C");
+}
+
+void FireOS::drawSystemInfo() {
+  drawStatusBar("System Info");
+  drawText(16, 40, "Hardware", kMuted, 1);
+  drawText(16, 58, "ESP32 / M5Stack FIRE", kText, 1);
+  drawText(16, 78, "CPU", kMuted, 1);
+  drawText(140, 78, String(ESP.getCpuFreqMHz()) + " MHz", kText, 1);
+  drawText(16, 98, "Free heap", kMuted, 1);
+  drawText(140, 98, formatBytes(ESP.getFreeHeap()), kText, 1);
+  drawText(16, 118, "Free PSRAM", kMuted, 1);
+  drawText(140, 118, formatBytes(ESP.getFreePsram()), kText, 1);
+  drawText(16, 138, "Flash", kMuted, 1);
+  drawText(140, 138, formatBytes(ESP.getFlashChipSize()), kText, 1);
+  drawText(16, 158, "Battery", kMuted, 1);
+  String charge = batteryLevel() >= 0 ? String(batteryLevel()) + "%" : "N/A";
+  charge += batteryCharging() ? "  CHG" : "  BAT";
+  drawText(140, 158, charge, kText, 1);
+  drawText(16, 178, "OS", kMuted, 1);
+  drawText(140, 178, "FIRE OS 0.1", kGreen, 1);
+  drawFooter("", "", "BACK  C");
+}
+
+void FireOS::drawPower() {
+  drawStatusBar("Power");
+  drawText(18, 42, "Power options", kMuted, 1);
+  drawRow(0, "Restart", powerIndex_ == 0);
+  drawRow(1, "Power Off", powerIndex_ == 1);
+  drawRow(2, "Shutdown timer", powerIndex_ == 2, durationLabel(sleepOption_),
+          powerEditing_ && powerIndex_ == 2);
+  drawRow(3, "Dim screen after", powerIndex_ == 3, durationLabel(dimOption_),
+          powerEditing_ && powerIndex_ == 3);
+  drawRow(4, "Screen off after", powerIndex_ == 4,
+          durationLabel(screenOffOption_), powerEditing_ && powerIndex_ == 4);
+  drawRow(5, "Back", powerIndex_ == 5);
+  drawFooter("Previous", "Select", "Next");
+}
+
+void FireOS::drawPowerActions() {
+  drawStatusBar("Power");
+  drawText(18, 42, "Choose action", kMuted, 1);
+  drawRow(0, "Power Off", powerActionIndex_ == 0);
+  drawRow(1, "Restart", powerActionIndex_ == 1);
+  drawRow(2, "Sleep", powerActionIndex_ == 2);
+  drawRow(3, "Back", powerActionIndex_ == 3);
+  drawFooter("Previous", "Select", "Next");
+}
+
+int FireOS::batteryLevel() const {
+  return M5.Power.getBatteryLevel();
+}
+
+bool FireOS::batteryCharging() const {
+  return M5.Power.isCharging() == m5::Power_Class::is_charging;
+}
+
+void FireOS::drawWifiIcon(int32_t x, int32_t y, uint8_t state) {
+  uint16_t color = kMuted;
+  if (state == 2) {
+    color = kGreen;
+  } else if (state == 1) {
+    color = (millis() / 250) % 2 == 0 ? kGreen : kMuted;
+  }
+  ui.drawLine(x, y + 3, x + 6, y, color);
+  ui.drawLine(x + 6, y, x + 12, y + 3, color);
+  ui.drawLine(x + 3, y + 7, x + 6, y + 5, color);
+  ui.drawLine(x + 6, y + 5, x + 9, y + 7, color);
+  ui.fillCircle(x + 6, y + 11, 1, color);
+}
+
+void FireOS::drawBluetoothIcon(int32_t x, int32_t y, bool enabled) {
+  const uint16_t color = enabled ? kCyan : kMuted;
+  ui.drawLine(x + 5, y, x + 5, y + 14, color);
+  ui.drawLine(x + 5, y, x + 10, y + 4, color);
+  ui.drawLine(x + 10, y + 4, x + 5, y + 8, color);
+  ui.drawLine(x + 5, y + 8, x + 10, y + 12, color);
+  ui.drawLine(x + 10, y + 12, x + 5, y + 14, color);
+  ui.drawLine(x + 5, y + 7, x, y + 2, color);
+  ui.drawLine(x + 5, y + 7, x, y + 12, color);
+}
+
+void FireOS::drawBatteryIcon(int32_t x, int32_t y, int level, bool charging) {
+  const uint16_t color = charging ? kGreen : kText;
+  ui.drawRect(x, y + 1, 18, 10, color);
+  ui.fillRect(x + 18, y + 4, 2, 4, color);
+  if (level >= 0) {
+    const int width = constrain(level, 0, 100) * 14 / 100;
+    ui.fillRect(x + 2, y + 3, width, 6, color);
+  }
+  if (charging) {
+    ui.drawLine(x + 8, y - 2, x + 5, y + 5, color);
+    ui.drawLine(x + 5, y + 5, x + 9, y + 5, color);
+    ui.drawLine(x + 9, y + 5, x + 7, y + 13, color);
+  }
+}
+
+void FireOS::drawFactoryReset() {
+  drawStatusBar("Factory Reset");
+  drawText(18, 58, "Reset all settings?", kOrange, 2);
+  drawText(18, 92, factoryResetArmed_ ? "Ready - confirm again"
+                                     : "Select to arm reset",
+           TFT_WHITE, 1);
+  drawText(18, 120, "App data is not removed yet.", kMuted, 1);
+  drawText(18, 140, "This will restart the OS.", kMuted, 1);
+  drawFooter("", "B  CONFIRM", "BACK  C");
+}
+
+void FireOS::drawRow(uint8_t row, const String& label, bool selected,
+                     const String& value, bool editing) {
+  const int y = 65 + row * 25;
+  const int height = 21;
+  const uint16_t highlight = editing ? kOrange : kCyan;
+  if (selected) ui.fillRoundRect(10, y - 3, 300, height, 5, highlight);
+  drawText(20, y + 2, label, selected ? kBg : kText, 1,
+           selected ? highlight : kBg);
+  if (value.length() > 0) {
+    ui.setTextDatum(MR_DATUM);
+    drawText(300, y + 2, value, selected ? kBg : kMuted, 1,
+             selected ? highlight : kBg);
+    ui.setTextDatum(TL_DATUM);
+  }
+}
+
+void FireOS::drawLevelRow(uint8_t row, const String& label, uint8_t step,
+                          uint8_t stepCount, bool selected, uint16_t accent,
+                          bool editing) {
+  const int y = 65 + row * 25;
+  const uint16_t highlight = editing ? kOrange : kCyan;
+  if (selected) ui.fillRoundRect(10, y - 3, 300, 21, 5, highlight);
+  drawText(20, y + 2, label, selected ? kBg : kText, 1,
+           selected ? highlight : kBg);
+
+  constexpr int kSegments = 10;
+  constexpr int kSegmentWidth = 11;
+  constexpr int kSegmentGap = 2;
+  const int firstX = 159;
+  const uint8_t filled = stepCount <= 1
+                             ? 0
+                             : static_cast<uint8_t>(step * kSegments /
+                                                    (stepCount - 1));
+  for (int segment = 0; segment < kSegments; ++segment) {
+    const bool on = segment < filled || (step == stepCount - 1 && segment == kSegments - 1);
+    const uint16_t selectedAccent = accent == kCyan ? kGreen : accent;
+    const uint16_t color = on ? (selected ? selectedAccent : accent)
+                              : (selected ? kMuted : kPanel);
+    ui.fillRoundRect(firstX + segment * (kSegmentWidth + kSegmentGap), y + 3,
+                     kSegmentWidth, 9, 2, color);
+  }
+}
+
+void FireOS::drawText(int32_t x, int32_t y, const String& text, uint16_t color,
+                      uint8_t size, uint16_t background) {
+  ui.setTextSize(size);
+  ui.setTextColor(color, background);
+  ui.drawString(text, x, y);
+}
+
