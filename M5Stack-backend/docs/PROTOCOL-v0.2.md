@@ -1,0 +1,183 @@
+# FIRE Developer device protocol 0.2
+
+This is the backend/firmware implementation contract. Firmware remains owned by
+the device agent. Backend implementation follows this document; physical support
+is NOT verified until the complete flow has passed on a real FIRE.
+
+## Transport and authentication
+
+- Control: `ws://PC:8765/ws/device`, UTF-8 JSON, <=8192 bytes/message.
+- HTTP uses the same host/port and `Authorization: Bearer <device token>`.
+- Set `FIRE_DEVICE_TOKENS` on PC to a JSON object mapping device ID to its own
+  >=24-character unique random token. A device token authenticates ONLY that ID.
+- `FIRE_BACKEND_TOKEN` is an independent administrator/PC token; never put the
+  OpenAI key on FIRE. Administrator credentials cannot impersonate physical devices.
+- The local unauthenticated legacy PC mock remains available only when no admin
+  token is set and the server is bound to loopback. LAN requires an admin token.
+- Browser Origin is rejected. No tokens in URLs. TLS is needed outside trusted LAN.
+
+All client events use `type="device_event"`, `protocol_version="0.2"`,
+`device_id`, and a globally unique `event_id`. IDs match `[a-z0-9][a-z0-9_-]{0,63}`.
+After start, include `session_id`. Physical-device events also include `boot_id`
+from the start handshake. A reboot MUST generate a new boot ID. Payloads below
+show the additional fields; the envelope is always required.
+
+## Start, resume and identity
+
+```json
+{"type":"device_event","protocol_version":"0.2","event_id":"evt-001","device_id":"m5stack-fire-01","event":"session_start","target":"device","boot_id":"boot-001","capabilities":{"api_version":"fire-lua-0.1","services":["display","buttons","time"],"max_memory":131072,"max_runtime_ms":10000,"audio_input":true,"audio_output":true,"firmware_version":"your-firmware-version"}}
+```
+
+Capabilities are the actually implemented adapters, not a wish list. Allowed
+service names: display, buttons, rgb, imu, time. Memory range 65536..262144 bytes;
+runtime 16..10000 ms. The first contract deliberately limits an app to ten seconds.
+Mic/speaker used for developer conversation do NOT grant Lua access to audio.
+Only supported `fire-lua-0.1` sessions are accepted. Never advertise Lua support
+before a restricted runtime and the advertised adapters exist on FIRE.
+
+`session_started` returns session_id, project_id, target, mode, state, boot_id,
+protocol_version, proposal_id/package_id/build_id when present. Server messages
+carry monotonically increasing `seq`, `session_id`, protocol_version.
+Add `project_id` to edit a project previously owned by this device.
+
+Reconnect with a NEW start event_id and `resume_session_id`, same target/device,
+project, boot ID and capabilities. Resume window defaults to 600 seconds. The
+server returns `session_started` and `session_snapshot` with last state/progress,
+proposal, package, device record and pending commands. Existing confirmed builds
+continue during transient disconnect. `session_stop` explicitly cancels them.
+Commands are NOT blindly executed again on reconnect.
+
+On a new boot ID, pending commands for the previous boot are invalid. Start a
+fresh session. Device runtime status is unknown until a new correlated command
+and receipt establish it. After backend restart, old run/install authorizations
+are expired; send no unsolicited app_started event to restore running status.
+
+## Input, dialogue, confirmations and UI
+
+| event | Required additional fields | Meaning |
+| --- | --- | --- |
+| text | text (1..4000 chars) | New turn; invalidates prior unconsumed proposal |
+| listen_start | turn_id | Begin local recording; backend invalidates old proposal |
+| listen_stop | turn_id | Finish recording; upload WAV using the same turn ID |
+| cancel_turn | none | Cancel current dialogue/transcription/audio; discard proposal |
+| button | button=A/B/C, action=pressed/released/long_pressed | Notification only; never authorization |
+| build_confirm | proposal_id | Consume exact latest proposal; begin one build |
+| run_confirm | package_id | Explicitly authorize one start of the installed package |
+| app_stop | none | Request stop of the current device run; waits for receipt |
+| ping | none | pong + session snapshot |
+| session_stop | none | End conversation and cancel its build/audio; does not assert a remote app stopped |
+
+Preserve current FIRE controls: short B starts/stops recording, A sends
+build_confirm or run_confirm only when the matching offer is visible, C aborts.
+Long A=home, long B=quick settings, long C=back (650 ms), reserved for OS.
+Do not emit raw button events as a substitute for semantic confirmations.
+
+`assistant_message`: text. `build_proposal`: proposal_id, project_id, summary.
+`ui_event/assistant_state` reports workflow state. `ui_event/assistant_activity`
+reports idle/listening/processing/speaking independently of workflow. Animate
+REST/LISTEN/THINK/TALK locally; TALK follows actual audio playback receipts.
+Natural language, including transcribed "build/run now", never authorizes actions.
+
+## Build and package offer
+
+`build_progress`: build_id, phase, progress (0..100), message, eta_seconds (null
+when unknown). Phases preparing, generating, validating, compiling, testing,
+packaging, ready, failed; repeats at least every ten seconds during long work.
+"compiling" is Lua syntax compilation, never firmware compilation.
+
+`package_ready` contains package_id (=build_id), project_id, manifest,
+archive_sha256 (lowercase hex SHA256), size_bytes, download_url. Device sessions
+also receive `install_request` with install_id, package_id, archive_sha256,
+size_bytes, download_url, boot_id, expires_at (UTC Unix seconds, normally +300).
+Offer/install expiry does not delete the immutable package.
+
+GET download_url with Authorization. ZIP uses ZIP_STORED (no compression), layout:
+`apps/<app_id>/{manifest.json,main.lua,assets/,appdata/}`. Empty assets/appdata in
+this version. Manifest entry is main.lua; checksum is SHA256 of its UTF-8 bytes.
+Outer archive SHA256 is independent and never embedded into itself.
+
+HTTP Range/If-Range and ETag allow resume. If a range returns 200 instead of 206,
+discard the old partial bytes and restart. Check full size/hash before extraction.
+Reject duplicate/unexpected entries, traversal, absolute paths and oversized data.
+Stage in a version-specific temporary folder; preserve existing appdata and old
+working versions. Recover from incomplete SD renames/power loss on next boot.
+NEVER use installExternalApp, OTA partitions, .bin or ESP restart for these apps.
+
+## Device receipts and lifecycle
+
+All receipts require package_id. Operation IDs and boot_id must match an issued,
+unexpired command for this exact device/session/package. Server receipt replay
+with the same event_id returns an acknowledgement, not another state change.
+
+| event | Additional required fields | Effect |
+| --- | --- | --- |
+| device_install_result | install_id, status=ok/failed, archive_sha256 | ok marks package installed only after matching expected archive hash |
+| app_started | run_id | Marks physically running after correct run_request; not a PC test |
+| app_healthy | run_id | Device confirms successful init/first frames and no runtime error; promotes healthy current/previous/backup |
+| app_failed | run_id, error_code | Device has stopped this failed run; backend offers rollback to last healthy/previous version |
+| app_stopped | run_id, stop_id | Confirms backend-issued stop command |
+| rollback_result | rollback_id, status=ok/failed | Confirms restoration of the offered previous package, without automatically running it |
+
+Failed receipts may add message (<=240 chars) and error_code (identifier). If no
+previous version exists, failure stops the app and records the error; no rollback
+command is fabricated. A successful rollback restores selection/installed state
+only; restarting it requires a fresh run_confirm. No metadata-only rollback is
+reported as physical success.
+
+`run_request`: run_id, package_id, archive_sha256, boot_id, expires_at (+30 seconds).
+Persist consumed run_id on FIRE BEFORE starting. Repeated run_request must return
+the original receipt and never start twice. Expired/old-boot commands are rejected.
+`stop_request`: stop_id, run_id, package_id, boot_id, expires_at.
+`rollback_request`: rollback_id, package_id (restore target), failed_package_id,
+boot_id, expires_at, start=false. These commands are distinct from user confirmations.
+
+Device record separates installed_package_id, running_package_id, runtime_status,
+current (last healthy version), previous, backup. On disconnect/restart online=false
+and runtime_status=unknown; retained running_package_id is last observation, not
+proof that the app is still running. Package validation/PC run updates only
+project.last_simulated_package_id, never physical current.
+
+## Audio (optional capability; FIRE_AUDIO_ENABLED=true on PC)
+
+1. listen_start/stop bind recording to turn_id.
+2. POST `/sessions/<session_id>/audio/<turn_id>` with Authorization and
+   Content-Type: audio/wav, raw WAV body (not multipart/base64).
+3. PCM signed 16-bit little-endian, mono, 16000 Hz, 0.1..15 seconds,
+   <=524288 bytes including WAV header. Stream in <=4096-byte chunks on FIRE.
+   Backend reads with a deadline and bounded buffering; all ordinary HTTP bodies
+   retain the 8192-byte limit. One active turn/upload per session.
+4. HTTP 202 means accepted, not transcribed. `transcript` returns turn_id, text;
+   it feeds the normal dialogue. Uploading the same turn and bytes returns the
+   same acceptance, not a second API call. Reusing it with other bytes is rejected.
+5. `audio_ready`: audio_id, turn_id, download_url, format=pcm_s16le,
+   sample_rate=24000, channels=1, size_bytes, sha256, expires_at, synthetic=true.
+   Output <=30 seconds/1440000 bytes. GET URL with Authorization, stream in
+   4096-byte reads; use 8–16 KiB playback buffers, never the whole file in SRAM.
+6. Send audio_playback_started/finished with audio_id and turn_id. Only the latest
+   unexpired clip in that session may change speaking state. Inform the user the
+   voice is AI-generated. Do not record while playing a response.
+
+Malformed/empty/silent audio fails without building. Cancellation/disconnect grace
+expiry closes provider sessions and expires clips; temp data is deleted. Speech
+generation failure preserves the text answer/proposal and sends audio_error.
+Input and output audio expire after at most 300 seconds by default; no audio goes
+into application ZIPs or ordinary logs. No full-duplex requirement in 0.2.
+
+## Idempotency, failure and version compatibility
+
+`event_ack` contains event_id, status=accepted/duplicate/unknown, result (operation
+IDs where relevant). Persist before/after handling. Reusing event_id with altered
+payload or another device is rejected. A crash during handling yields unknown;
+query session_snapshot and pending commands instead of blindly repeating effects.
+Errors: type=error, code, message; no provider secrets or raw request objects.
+Protocol 0.1 remains PC-only; it cannot send device receipts or claim installations.
+
+Workflow: listening -> processing -> clarification_needed OR
+awaiting_build_confirmation -> building/testing -> awaiting_install -> installed
+--run_confirm--> starting --app_started--> running. Failures -> failed or
+rollback_pending; app_healthy establishes current; app_stopped -> installed.
+For PC-only sessions ready_to_run/run_result remain explicit pc_simulation.
+
+The JSON Schema in `contracts/device-event-v0.2.schema.json` defines field shapes;
+this document defines additional event-specific and stateful requirements. The
+backend validates both. Package/Lua contract: `LUA_API.md` and FIRE_DEVICE_CONTEXT.md.

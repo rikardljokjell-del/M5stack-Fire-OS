@@ -1,0 +1,76 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^0\\.1\\.[1-9][0-9]*$",
+      "title": "Version",
+      "type": "string"
+    },
+    "api_version": {
+      "const": "fire-lua-0.1",
+      "default": "fire-lua-0.1",
+      "title": "Api Version",
+      "type": "string"
+    },
+    "entry": {
+      "const": "main.lua",
+      "default": "main.lua",
+      "title": "Entry",
+      "type": "string"
+    },
+    "required_services": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Services",
+      "type": "array"
+    },
+    "max_memory": {
+      "default": 262144,
+      "maximum": 262144,
+      "minimum": 65536,
+      "title": "Max Memory",
+      "type": "integer"
+    },
+    "max_runtime_ms": {
+      "default": 10000,
+      "maximum": 10000,
+      "minimum": 1,
+      "title": "Max Runtime Ms",
+      "type": "integer"
+    },
+    "permissions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Permissions",
+      "type": "array"
+    },
+    "checksum": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Checksum",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "version",
+    "required_services",
+    "permissions",
+    "checksum"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}

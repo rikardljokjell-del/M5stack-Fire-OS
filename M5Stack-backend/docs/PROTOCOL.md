@@ -1,4 +1,12 @@
-# WebSocket-protokoll v0.1
+# FIRE Developer protocol
+
+**Firmware integration contract: [PROTOCOL-v0.2.md](PROTOCOL-v0.2.md).**
+Version 0.2 separates simulation from device installation/running, uses scoped
+device tokens, durable event IDs and correlated receipts. Implement that version
+for physical devices. The old 0.1 PC-client reference follows below; its `current`
+semantics are superseded by 0.2. Backend implementation and verification are in progress.
+
+## Legacy PC protocol v0.1
 
 Endpoint: `ws://PC-IP:8765/ws/device`. Samme forbindelse brukes gjennom dialog,
 bekreftelser og byggestatus. Ved aktivt backend-token brukes Authorization-header.

@@ -1,0 +1,403 @@
+{
+  "$defs": {
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "fire-lua-0.1",
+          "default": "fire-lua-0.1",
+          "title": "Api Version",
+          "type": "string"
+        },
+        "services": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5,
+          "title": "Services",
+          "type": "array"
+        },
+        "max_memory": {
+          "maximum": 262144,
+          "minimum": 65536,
+          "title": "Max Memory",
+          "type": "integer"
+        },
+        "max_runtime_ms": {
+          "maximum": 10000,
+          "minimum": 16,
+          "title": "Max Runtime Ms",
+          "type": "integer"
+        },
+        "audio_input": {
+          "default": false,
+          "title": "Audio Input",
+          "type": "boolean"
+        },
+        "audio_output": {
+          "default": false,
+          "title": "Audio Output",
+          "type": "boolean"
+        },
+        "firmware_version": {
+          "default": "unknown",
+          "maxLength": 64,
+          "title": "Firmware Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "services",
+        "max_memory",
+        "max_runtime_ms"
+      ],
+      "title": "Capabilities",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "device_event",
+      "default": "device_event",
+      "title": "Type",
+      "type": "string"
+    },
+    "device_id": {
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "title": "Device Id",
+      "type": "string"
+    },
+    "event": {
+      "enum": [
+        "session_start",
+        "session_stop",
+        "text",
+        "button",
+        "build_confirm",
+        "run_confirm",
+        "ping",
+        "app_failed",
+        "app_stopped",
+        "device_install_result",
+        "app_started",
+        "app_healthy",
+        "rollback_result",
+        "app_stop",
+        "audio_playback_started",
+        "audio_playback_finished",
+        "cancel_turn",
+        "listen_start",
+        "listen_stop"
+      ],
+      "title": "Event",
+      "type": "string"
+    },
+    "text": {
+      "anyOf": [
+        {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Text"
+    },
+    "button": {
+      "anyOf": [
+        {
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Button"
+    },
+    "action": {
+      "anyOf": [
+        {
+          "enum": [
+            "pressed",
+            "released",
+            "long_pressed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Action"
+    },
+    "proposal_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proposal Id"
+    },
+    "package_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Package Id"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "protocol_version": {
+      "default": "0.1",
+      "enum": [
+        "0.1",
+        "0.2"
+      ],
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "event_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Event Id"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Id"
+    },
+    "boot_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Boot Id"
+    },
+    "target": {
+      "default": "pc_simulation",
+      "enum": [
+        "pc_simulation",
+        "device"
+      ],
+      "title": "Target",
+      "type": "string"
+    },
+    "capabilities": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Capabilities"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "resume_session_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resume Session Id"
+    },
+    "install_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Install Id"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "stop_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stop Id"
+    },
+    "rollback_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rollback Id"
+    },
+    "turn_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Turn Id"
+    },
+    "audio_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audio Id"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "enum": [
+            "ok",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Status"
+    },
+    "archive_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Archive Sha256"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "message": {
+      "anyOf": [
+        {
+          "maxLength": 240,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Message"
+    }
+  },
+  "required": [
+    "device_id",
+    "event"
+  ],
+  "title": "DeviceEvent",
+  "type": "object"
+}
