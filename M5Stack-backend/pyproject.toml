@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fire-ai-backend"
+version = "0.1.0"
+description = "Local FIRE OS AI Developer backend and PC mock device"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1",
+  "pydantic>=2.10,<3", "pydantic-settings>=2.7,<3",
+  "openai>=2,<3", "websockets>=15,<17", "lupa>=2.6,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "httpx>=0.28,<1", "pytest-asyncio>=1,<2"]
+
+[project.scripts]
+fire-backend = "fire_backend.__main__:main"
+fire-mock = "fire_backend.mock_device:main"
+
+[tool.setuptools.packages.find]
+include = ["fire_backend*"]
+
+[tool.setuptools.package-data]
+fire_backend = ["data/*.md", "data/*.lua"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

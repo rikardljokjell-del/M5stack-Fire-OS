@@ -1,0 +1,8 @@
+# Local secrets and generated Python/runtime files, at any level.
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+M5Stack-backend/workspace/
+M5Stack-backend/test-results.xml
