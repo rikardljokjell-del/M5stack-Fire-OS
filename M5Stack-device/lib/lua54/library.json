@@ -1,0 +1,27 @@
+{
+  "name": "lua54-core",
+  "version": "5.4.7",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "src",
+    "srcFilter": [
+      "+<*.c>",
+      "+<ldo.cpp>",
+      "-<lua.c>",
+      "-<luac.c>",
+      "-<linit.c>",
+      "-<lbaselib.c>",
+      "-<lmathlib.c>",
+      "-<ldo.c>",
+      "-<ldblib.c>",
+      "-<liolib.c>",
+      "-<loadlib.c>",
+      "-<loslib.c>",
+      "-<lstrlib.c>",
+      "-<ltablib.c>",
+      "-<lutf8lib.c>",
+      "-<lcorolib.c>"
+    ],
+    "flags": ["-fexceptions"]
+  }
+}

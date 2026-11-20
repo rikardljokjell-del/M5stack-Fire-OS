@@ -3,6 +3,9 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <esp_ota_ops.h>
+#include "fire_lua_runtime.h"
+#include "fire_backend_client.h"
+#include "fire_lua_package_manager.h"
 
 class DateTimeService {
  public:
@@ -47,6 +50,8 @@ class FireOS {
   void saveWifiCredentials(const String& ssid, const String& password);
   void saveMobileSetupFields(const String& ssid, const String& password,
                              const String& apiKey);
+  void saveBackendSetupFields(const String& host, const String& port,
+                              const String& token, const String& deviceId);
   bool wifiSetupTokenValid(const String& token) const;
   bool aiApiSetupActive() const { return aiApiSetupActive_; }
 
@@ -74,6 +79,7 @@ class FireOS {
     FileExplorer,
     AiDeveloper,
     AiApi,
+    LuaApp,
   };
 
   struct ButtonState {
@@ -158,6 +164,7 @@ class FireOS {
   static constexpr uint8_t kMaxFileEntries = 40;
   static constexpr uint8_t kFileVisibleRows = 6;
   static constexpr uint8_t kMaxExternalApps = 16;
+  static constexpr uint8_t kMaxLuaApps = 16;
   bool sdReady_ = false;
   uint32_t sdLastProbe_ = 0;
   String sdPath_ = "/";
@@ -206,6 +213,29 @@ class FireOS {
   bool appManagerActionMenu_ = false;
   uint8_t appManagerActionIndex_ = 0;
   bool appManagerDeleteConfirm_ = false;
+  String luaAppPaths_[kMaxLuaApps];
+  String luaAppNames_[kMaxLuaApps];
+  uint8_t luaAppCount_ = 0;
+
+  FireLuaRuntime luaRuntime_;
+  bool luaRuntimeReady_ = false;
+  bool luaAppActive_ = false;
+  String luaAppPath_;
+  String luaAppName_;
+  String luaAppError_;
+  uint32_t luaLastFrameAt_ = 0;
+  uint8_t luaRgbValues_[10][3] = {};
+  FireBackendClient backendClient_;
+  FireLuaPackageManager packageManager_;
+  String backendStatus_;
+  String aiTurnId_;
+  String aiProposalId_;
+  String aiPackageId_;
+  String aiInstallId_;
+  String luaRunId_;
+  bool luaHealthySent_ = false;
+  String aiAssistantText_;
+  String aiWorkflowText_;
 
   // Date/time editor state. A/C select a field; B enters/leaves editing.
   uint8_t dateField_ = 0;
@@ -237,6 +267,10 @@ class FireOS {
   String wifiSetupPassword_;
   String wifiSetupToken_;
   String aiApiKey_;
+  String backendHost_;
+  uint16_t backendPort_ = 8765;
+  String backendToken_;
+  String backendDeviceId_ = "m5stack-fire-01";
   uint8_t bluetoothIndex_ = 0;
   uint8_t bluetoothMode_ = 0;  // 0=Auto, 1=On, 2=Off
   int bluetoothScanCount_ = -1;
@@ -297,7 +331,9 @@ class FireOS {
   void previewSelectedSdImage();
   void releaseSdImageBuffer();
   void scanExternalApps();
+  void scanLuaApps();
   bool deleteExternalApp(const String& path);
+  bool deleteLuaApp(const String& path);
   bool inspectExternalImage(File& file, uint32_t& imageOffset,
                             uint32_t& imageSize,
                             bool verifyChecksum = true) const;
@@ -361,6 +397,16 @@ class FireOS {
   void handlePowerActionsButton(uint8_t index);
   void handleAiDeveloperButton(uint8_t index);
   void handleAiApiButton(uint8_t index);
+  bool startLuaApp(const String& path, const String& name = String());
+  void stopLuaApp(const String& reason = String());
+  void updateLuaApp();
+  void updateBackend();
+  void handleBackendMessage(const String& message);
+  static void backendMessage(void* context, const String& message);
+  static void backendState(void* context, bool connected, const String& status);
+  static void packageStatus(void* context, const String& status);
+  static void packageResult(void* context, bool ok, const String& packageId,
+                            const String& archiveHash, const String& message);
   void manageDisplayPower();
   void enterLightSleep();
   void wakeDisplay();
@@ -400,6 +446,7 @@ class FireOS {
   void drawFileExplorer();
   void drawAiDeveloper();
   void drawAiApi();
+  void drawLuaApp();
   void drawLevelRow(uint8_t row, const String& label, uint8_t step,
                     uint8_t stepCount, bool selected, uint16_t accent,
                     bool editing = false);
@@ -412,6 +459,21 @@ class FireOS {
                const String& value = String(), bool editing = false);
   void drawText(int32_t x, int32_t y, const String& text, uint16_t color,
                 uint8_t size = 1, uint16_t background = 0x1082);
+
+  static void luaDisplayClear(void* context, int color);
+  static void luaDisplayCircle(void* context, int x, int y, int radius,
+                               int color);
+  static void luaDisplayRect(void* context, int x, int y, int width,
+                             int height, int color);
+  static void luaDisplayLine(void* context, int x1, int y1, int x2, int y2,
+                             int color);
+  static void luaDisplayText(void* context, int x, int y, const char* text,
+                             int color);
+  static bool luaButtonPressed(void* context, const char* button);
+  static void luaRgbSet(void* context, int index, int red, int green,
+                        int blue);
+  static bool luaImuAccel(void* context, float* x, float* y, float* z);
+  static uint32_t luaTimeMillis(void* context);
 };
 
 // Shared OS singleton for future apps and system services.
