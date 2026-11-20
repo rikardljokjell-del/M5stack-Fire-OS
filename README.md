@@ -32,3 +32,7 @@ Se [status](STATUS.md), [arbeidsinstruksjoner](AGENTS.md),
 [deviceveiledning](M5Stack-device/README.md),
 [backendveiledning](M5Stack-backend/README.md) og
 [WebSocket-protokoll](M5Stack-backend/docs/PROTOCOL.md).
+
+Backend 0.2 har en [egen kontrakt for fysisk enhet](M5Stack-backend/docs/PROTOCOL-v0.2.md)
+med lyd, kapabiliteter og installasjons-/kjørekvitteringer. Backend er testet med
+en emulert firmwareklient. Ekte OpenAI og fysisk FIRE er ikke verifisert ennå.

@@ -3,7 +3,7 @@
 ## Scope and ownership
 - All FIRE OS AI Developer backend work belongs in `M5Stack-backend/`.
 - Use `M5Stack-backend/` for all future backend updates. Do not create another backend at the repository root or maintain the old flat layout.
-- `M5Stack-device/` is reserved for the user's device/firmware project. Do not add, edit, move, build, flash, or delete anything there unless the user explicitly authorizes device work. Its initial empty `.gitkeep` only makes the directory visible in Git.
+- `M5Stack-device/` contains the user's device/firmware project. Read it for integration context, but do not add, edit, move, build, flash, or delete anything there unless the user explicitly authorizes device work.
 - Root documentation may be updated to reflect the backend's actual status.
 
 ## Backend constraints
@@ -12,7 +12,8 @@
 - Never put API keys in device messages, source control, packages or logs. `.env`, `.venv` and runtime `workspace/` stay local and ignored.
 - Require explicit `build_confirm` with the current proposal ID and `run_confirm` with the tested package ID. Enforce this in backend code.
 - AI apps use restricted Lua packages, never firmware binaries, OTA or arbitrary flashing.
-- Keep hardware facts separate from unverified OS APIs. Device integration and audio remain pending.
+- Keep inspected hardware/OS facts separate from physical runtime verification. Backend protocol/audio can be implemented without claiming that firmware implements them.
+- Physical integration uses `M5Stack-backend/docs/PROTOCOL-v0.2.md` and `docs/LUA_API.md`. Keep code, schemas and those contracts consistent. PC simulation never establishes physical installation/running/current.
 
 ## Working and checking
 - Run commands from `M5Stack-backend/`, or use the scripts there which select their own working directory.

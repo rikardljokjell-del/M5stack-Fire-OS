@@ -15,7 +15,11 @@ if (-not (Test-Path -LiteralPath $python)) {
 }
 $lockFile = Join-Path $PSScriptRoot 'requirements.lock.txt'
 $stamp = Join-Path $PSScriptRoot '.venv\fire-dependencies.sha256'
-$dependencyHash = (Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash
+$projectFile = Join-Path $PSScriptRoot 'pyproject.toml'
+$fingerprint = (Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash + (Get-FileHash -LiteralPath $projectFile -Algorithm SHA256).Hash
+$hasher = [System.Security.Cryptography.SHA256]::Create()
+try { $dependencyHash = [BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($fingerprint))).Replace('-', '') }
+finally { $hasher.Dispose() }
 $installedHash = if (Test-Path -LiteralPath $stamp) { (Get-Content -LiteralPath $stamp -Raw).Trim() } else { '' }
 if ($installedHash -ne $dependencyHash) {
     & $python -m pip install -r $lockFile -e .

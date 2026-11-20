@@ -1,49 +1,41 @@
-# Status – 20. november 2026
+# Status – FIRE OS AI Developer backend 0.2
 
-## Fast arbeidsområde
+Backend videreutvikles kun i `M5Stack-backend/`. Firmware i `M5Stack-device/`
+eies av den separate firmwareagenten. Backendarbeidet har ikke endret, bygget
+eller flashet enhetskoden. Firmwarekilden er gjennomgått i skrivebeskyttet modus.
 
-Repo: https://github.com/rikardljokjell-del/M5stack-Fire-OS
+## Implementert
 
-All backendkode, tester, dokumentasjon og startskript er samlet i
-`M5Stack-backend/`. Denne mappen skal brukes ved alle videre backendoppdateringer.
-Lokale avhengigheter, testresultater, pakker og logger ligger også under denne
-mappen, men genererte runtime-data og hemmeligheter holdes utenfor Git.
+- Protokoll 0.2 og JSON-skjemaer publisert tidlig for firmwareintegrasjon.
+- Direkte OpenAI Realtime/Responses, varig samtalehistorikk og prosjektkode ved endringer.
+- Avgrenset WAV-opplasting, transkripsjon, PCM-talesvar, avbrudd og opprydding.
+- Egne enhetstokener, eierskapskontroll og varige operasjons-/hendelses-ID-er.
+- Testet pakke, installert pakke og faktisk rapportert appstart skilles.
+- Korrelert installasjon/start/healthy/stopp/rollback og historikk per enhet/prosjekt.
+- Lua-kapabiliteter, minnegrenser, ZIP-kontroller og tidligere fungerende versjoner beholdes.
+- Mock-/PC-klient og enhetsemulator; én lokal backendprosess uten database/Docker.
 
-`M5Stack-device/` inneholder nå FIRE OS-firmwareprosjektet som er migrert fra
-det eksisterende PlatformIO-prosjektet. Bygget er kontrollert med PlatformIO i
-den nye repo-plasseringen. Genererte `.pio/`-filer og lokale avhengighetsmapper
-er ikke lagt i Git.
+## Verifisert
 
-## Implementert backend
+- **71 tester bestått**, samt `pip check` uten feil.
+- **4/4 PC-smoke-flyter** mot faktisk lokal server.
+- **5/5 enhetsemulerte flyter**, inkludert syntetisk lydtransport og kvitteringer.
+- Firmwaremappen skal være identisk med GitHub-basen ved backendpublisering.
 
-- Lokal Python/FastAPI/Uvicorn-backend, én prosess, filbasert lagring.
-- HTTP-API og én WebSocket-forbindelse per mock-enhet.
-- OpenAI Realtime-tekstdialog og Responses API for strukturert Lua-kodegenerering.
-- Kompakt hardwarekontekst, automatisk inkludert i kodeforespørsler.
-- Backend-håndhevede bygge- og kjørebekreftelser.
-- Begrenset Lua 5.4-validering/PC-simulering, timeout og diskgrenser.
-- Byggestatus, logger, kontrollsummer, reproduserbar ZIP og versjonshistorikk/rollback.
-- Interaktiv PC-klient og offline-eksempler for sirkel, Snake, RGB og IMU.
+## Gjenstår før ferdig fysisk løsning
 
-## Verifisering
+1. Sette OpenAI-nøkkel på PC og verifisere faktisk modell-/kontotilgang, norsk tale og kodegenerering. Nøkkelen er fortsatt ikke satt; live-kontroll rapporterer not_run.
+2. Firmwareagenten implementerer protokollklient, Lua-runtime, OS-adaptere og trygg SD-installasjon, samt backend-adresse/enhetstoken i stedet for OpenAI-nøkkel på FIRE.
+3. Teste hele flyten på en fysisk M5Stack FIRE, inkludert lyd, minne, avbrudd, appstart og rollback.
 
-- 35 automatiske tester bestått også fra `M5Stack-backend/` etter flyttingen; `pip check` fant ingen avhengighetsfeil.
-- Fire komplette mock-flyter har bestått mot faktisk lokal server.
-- Interaktiv klient med `/build`, `/run` og `/quit` er verifisert.
-- Gjenskaping av sirkelpakken ga identisk SHA256.
-- Backendens oppstartsskript og sperre mot to samtidige prosesser er verifisert.
+Mock-transkripsjon/testtone og enhetsemulering er ikke ekte OpenAI eller fysisk
+integrasjon. Dagens gjennomgåtte firmware har fortsatt lokal AI-demo og .bin-
+appsystem; AI-genererte Lua-apper bruker en separat kontrakt og aldri OTA/flashing.
 
-Ekte OpenAI-kall er ikke testet: API-nøkkel er ikke satt. SDK-kontraktene er testet
-med simulerte svar. Mock-resultater er ikke live AI-generering.
+Start fra repo-roten: `.\M5Stack-backend\start.ps1 -Mock`.
+Ingen brannmur- eller automatisk oppstartsendring er aktivert.
 
-## Gjenstår
-
-1. Sette OpenAI-nøkkel lokalt og kontrollere faktisk modell-/kontotilgang.
-2. Verifisere siste firmwareendringer på fysisk M5Stack fra `M5Stack-device/`.
-3. Implementere og teste device-runtime, begrensede hardwareadaptere og trygg SD-overføring etter egen autorisasjon.
-4. Verifisere kjøring og rollback på fysisk M5Stack.
-5. Implementere lyd først etter fungerende tekst-/device-flyt.
-
-Ingen automatisk Windows-oppstart eller brannmuråpning er aktivert.
-
-Detaljer: [leveranserapport](M5Stack-backend/docs/DELIVERY.md).
+Se [protokoll](M5Stack-backend/docs/PROTOCOL-v0.2.md),
+[Lua-API](M5Stack-backend/docs/LUA_API.md),
+[leveranserapport](M5Stack-backend/docs/DELIVERY.md) og
+[drift](M5Stack-backend/docs/OPERATIONS.md).

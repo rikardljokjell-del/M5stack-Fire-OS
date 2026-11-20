@@ -1,227 +1,202 @@
-# FIRE OS AI Developer backend
+# FIRE OS AI Developer backend 0.2
 
-Fast plassering i repoet: `M5Stack-backend/`. All videre backendutvikling skjer
-her. `M5Stack-device/` er reservert for brukerens device-prosjekt og skal stå urørt.
-Se også `../AGENTS.md` og `../STATUS.md`.
+Lokal Python/FastAPI-backend for Windows, én backendprosess, filbasert lagring og
+direkte OpenAI API. Ingen Docker, database eller avhengighet av desktopappen ved
+kjøring. All backendutvikling skjer i denne mappen. `M5Stack-device/` leses for
+integrasjon, men endres/bygges/flashes ikke av backendarbeidet.
 
-Separat, lokal backend for Windows med Python 3.11+, FastAPI, Uvicorn,
-WebSocket, Pydantic og OpenAI Python SDK. Ingen Docker, database, firmwarebygging
-eller avhengighet av ChatGPT-/Codex-appen ved kjøring. Én backendprosess og
-kortlivede Lua-testprosesser. Python 3.13 er installert separat på denne PC-en.
-
-FIRE OS-koden er ikke endret. Første leveranse er en **PC-prototype**.
-Lua-kontrakten er foreslått; den finnes ennå ikke på M5Stack.
+Backendstøtten for fysisk enhet og lyd er implementert og testet med en emulert
+firmwareklient. **Fysisk M5Stack og ekte OpenAI er ennå ikke verifisert.**
+Se [leveranserapport](docs/DELIVERY.md), [enhetskontrakt](docs/PROTOCOL-v0.2.md),
+[Lua-kontrakt](docs/LUA_API.md) og [drift](docs/OPERATIONS.md).
 
 ## Start med én kommando
 
-I denne mappen, i PowerShell:
+Fra denne mappen:
 
 ```powershell
 .\start.ps1 -Mock
 ```
 
-Dette starter på `http://127.0.0.1:8765` uten API-kall eller nøkkel. Første
-oppstart oppretter `.venv` og installerer versjonene i `requirements.lock.txt`.
-Hvis lokal PowerShell-policy blokkerer skript:
+Serveren bruker `http://127.0.0.1:8765`. Første oppstart lager `.venv` og
+installerer `requirements.lock.txt`. Endret avhengighetsfil eller pyproject
+utløser ny installasjon. Python 3.11+ kreves; separat Python 3.13 er installert
+på denne PC-en. Hvis lokal skriptpolicy blokkerer oppstart:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1 -Mock
 ```
 
-Åpne en annen terminal i samme mappe:
+Fra repo-roten kan du bruke `.\M5Stack-backend\start.ps1 -Mock`.
+Kontroller [health](http://127.0.0.1:8765/health). Stopp med Ctrl+C.
+
+I en annen terminal:
 
 ```powershell
 .\mock.ps1 -Demo
 ```
 
-Klienten sender «Lag en animasjon med en sirkel som beveger seg.» og viser
-serverens JSON-events. Skriv **`/build`** etter byggeforslaget, deretter
-**`/run`** etter `package_ready`. `/run` bekrefter kun PC-simulering.
-`/quit` avslutter. `/ping` viser gjeldende state.
-Knapp B eller tekst som «bygg nå» gir ikke byggeautorisasjon.
+Skriv `/build` etter forslaget, `/run` etter ferdig pakke, `/quit` for å avslutte.
+Denne eldre klienten bruker protokoll 0.1 og **kun PC-simulering**. Den registrerer
+aldri installasjon eller fysisk kjøring. MockProvider bruker faste, tydelig merkede
+eksempler: sirkel, Snake, RGB og IMU. Den gjør ingen OpenAI-kall.
 
-Mock-modus bruker fire faste, tydelig merkede Lua-eksempler og er ikke en AI.
-Prøv også «Lag Snake», «Lag en RGB-effekt» og «Lag en enkel IMU-graf».
+## Ekte API og fysisk enhet
 
-## Aktiver ekte OpenAI-dialog
-
-Stopp mock-serveren med Ctrl+C. Kopier `.env.example` til `.env` og sett nøkkelen
-lokalt. Ikke send den til M5Stack, legg den i klientkode eller sjekk den inn.
+Kopier `.env.example` til `.env`, fyll inn verdier lokalt og start uten `-Mock`.
+Miljøvariabler har forrang over `.env`; fjern eventuell FIRE_AI_MODE=mock i en
+gjenbrukt terminal før produksjonsstart.
 
 ```dotenv
-OPENAI_API_KEY=din_egen_api_nokkel
-OPENAI_REALTIME_MODEL=gpt-realtime-2.1
-OPENAI_CODE_MODEL=gpt-6.2-astra
+OPENAI_API_KEY=din_egen_nokkel_kun_pa_pc
 FIRE_AI_MODE=openai
 FIRE_BACKEND_HOST=127.0.0.1
 FIRE_BACKEND_PORT=8765
+FIRE_BACKEND_TOKEN=et_eget_langt_tilfeldig_admin_token
+FIRE_DEVICE_TOKENS={"m5stack-fire-01":"et_annet_langt_tilfeldig_enhetstoken"}
+FIRE_AUDIO_ENABLED=true
 ```
 
-Start i en ny terminal med ` .\start.ps1 ` uten `-Mock`. Dersom du tidligere
-brukte `FIRE_AI_MODE=mock` som miljøvariabel i samme terminal, fjern den eller
-sett den til `openai`; miljøvariabler har forrang over `.env`.
-`/health` svarer også uten nøkkel, men dialog gir da en tydelig feil og bygger
-ingenting. `openai_configured=true` viser bare at en nøkkel er satt, ikke at
-kontotilgang, kreditt eller modelltilgang er bekreftet.
+Hver fysisk enhet bruker sitt eget token og kan bare opptre som sin egen ID.
+Admin-tokenet gir lesing/administrasjon, men kan ikke starte en fysisk sesjon ved
+å utgi seg for å være enheten. LAN-binding krever admin-token med minst 24 tegn;
+enhetstoken er separat og minst 24 tegn. Autorisasjon sendes i headeren
+`Authorization: Bearer TOKEN`, aldri URL. Ikke bruk OpenAI-nøkkelen som enhetstoken.
 
-Backend bruker direkte:
-
-- `wss://api.openai.com/v1/realtime` for én vedvarende tekstsamtale per sesjon.
-  Taleopptak og lydtransport er bevisst ikke implementert i første leveranse.
-- `POST https://api.openai.com/v1/responses`, SDK `responses.parse`, for strukturert
-  Lua-generering og korrigeringer. `store=false`, ingen shell-/fil-/nettverktøy
-  eller tilkobling til firmwareprosjektet gis til modellen.
-
-Modellnavnene kan endres via miljøvariablene. Implementasjonen følger
-[offisiell Realtime-dokumentasjon](https://developers.openai.com/api/reference/python/resources/realtime/methods/connect)
-og [offisiell Structured Outputs-dokumentasjon](https://developers.openai.com/api/docs/guides/structured-outputs).
+Firmwareagenten må implementere protokoll 0.2 og Lua-runtime før en faktisk FIRE
+kan bruke flyten. Meld bare inn faktisk støttede tjenester/minnegrenser. Nåværende
+firmware på gjennomgått commit 65f8f3e har en lokal demo og en separat .bin/OTA-
+laster; denne lasteren skal aldri brukes for AI-genererte Lua-apper.
 
 ## Miljøvariabler
 
-| Variabel | Standard | Betydning |
+| Variabel | Standard | Bruk |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | tom | Kun på PC; kreves i OpenAI-modus |
-| `OPENAI_REALTIME_MODEL` | `gpt-realtime-2.1` | Tekstdialog nå, tale senere |
-| `OPENAI_CODE_MODEL` | `gpt-6.2-astra` | Strukturert kodegenerering |
-| `FIRE_BACKEND_HOST` | `127.0.0.1` | Lokal binding; bruk PC-ens LAN-IP senere |
-| `FIRE_BACKEND_PORT` | `8765` | HTTP og WebSocket |
-| `FIRE_AI_MODE` | `openai` | `openai` eller eksplisitt `mock` |
-| `FIRE_WORKSPACE` | `workspace` | Filbasert lagring |
-| `FIRE_BACKEND_TOKEN` | tom | Bearer-token; minst 24 tegn ved LAN-binding |
-| `FIRE_BUILD_TIMEOUT_SECONDS` | `180` | Total byggefrist inklusive korrigeringer |
-| `FIRE_AI_TIMEOUT_SECONDS` | `90` | Frist for én dialog-/API-operasjon |
-| `FIRE_MAX_WORKSPACE_MB` | `256` | Total lagringsgrense, med feilreserve |
-| `FIRE_MAX_BUILD_KB` | `512` | Grense for én byggemappe |
-| `FIRE_PROGRESS_INTERVAL_SECONDS` | `10` | Heartbeat under lange byggeoperasjoner |
-| `FIRE_MAX_SESSIONS` | `8` | Maks samtidige sesjoner; ett bygg om gangen |
+| OPENAI_API_KEY | tom | Bare PC; påkrevd for ekte API-kall |
+| OPENAI_REALTIME_MODEL | gpt-realtime-2.1 | Tekstdialog med validert dialog_reply-funksjon |
+| OPENAI_CODE_MODEL | gpt-6.2-astra | Responses med strukturert Lua-output |
+| OPENAI_TRANSCRIBE_MODEL | gpt-transcribe | Opptaksfil til tekst |
+| OPENAI_SPEECH_MODEL | gpt-realtime-2.1-mini | Tekst til PCM gjennom Realtime |
+| OPENAI_SPEECH_VOICE | marin | Talesvar |
+| FIRE_AI_MODE | openai | openai eller eksplisitt mock |
+| FIRE_BACKEND_HOST / PORT | 127.0.0.1 / 8765 | HTTP og WebSocket |
+| FIRE_BACKEND_TOKEN | tom | Admin-/PC-token; kreves på LAN |
+| FIRE_DEVICE_TOKENS | {} | JSON: enhets-ID til unikt token |
+| FIRE_WORKSPACE | workspace | Lokal filbasert lagring |
+| FIRE_BUILD_TIMEOUT_SECONDS | 180 | Hele byggejobben |
+| FIRE_AI_TIMEOUT_SECONDS | 90 | Én dialog-/lydoperasjon |
+| FIRE_MAX_WORKSPACE_MB | 256 | Diskgrense med reserve til feilmetadata |
+| FIRE_MAX_BUILD_KB | 512 | Grense per byggemappe |
+| FIRE_PROGRESS_INTERVAL_SECONDS | 10 | Heartbeat under bygg |
+| FIRE_MAX_SESSIONS | 8 | Maks sesjoner; ett bygg om gangen |
+| FIRE_SESSION_RESUME_SECONDS | 600 | Frist for gjenoppkobling |
+| FIRE_COMMAND_TIMEOUT_SECONDS | 30 | Start/stopp/rollback-kvittering |
+| FIRE_AUDIO_ENABLED | false | Aktiver egne lydruter |
+| FIRE_AUDIO_MAX_INPUT_BYTES | 524288 | WAV inkl. header, maksimalt 15 sekunder |
+| FIRE_AUDIO_MAX_OUTPUT_BYTES | 1440000 | PCM, maksimalt 30 sekunder |
+| FIRE_AUDIO_TTL_SECONDS | 300 | Kort levetid for lydfiler |
 
-For LAN: sett host og et langt tilfeldig backend-token. REST- og WS-klienter
-sender `Authorization: Bearer <FIRE_BACKEND_TOKEN>`. Dette er et eget lokalt
-token, aldri OpenAI-nøkkelen. Token i URL støttes ikke. WebSocket med browser
-Origin avvises; den leverte PC-klienten setter Authorization-header.
-Standardtransporten `ws://` er for eget, betrodd lokalnett; TLS må legges til
-før bruk over andre nett. Ingen brannmur- eller oppstartsendringer er aktivert.
+`/health` bekrefter prosesshelse og konfigurasjon, ikke modelltilgang eller fysisk
+integrasjon. AudioEnabled betyr aktivert backendkode, ikke bekreftet mikrofon.
 
-## Filstruktur
+## API og protokoll
 
-```text
-start.ps1 / mock.ps1       Oppstart og interaktiv PC-klient
-.env.example              Konfigurasjon uten hemmeligheter
-requirements.lock.txt     Testede, låste avhengigheter
-fire_backend/
-  app.py                  REST, WebSocket, inputgrenser og autentisering
-  service.py              Dialog-state, bekreftelser, byggejobber og rollback
-  ai.py                   Direkte OpenAI og eksplisitt offline-provider
-  builds.py               Validering, arbeidermappe, pakking og checksum
-  lua_worker.py           Begrenset Lua 5.4-tolk i egen prosess
-  reproduce.py            Gjenskap eksakt pakke uten nye API-kall
-  storage.py              Filbasert lagring og restart-recovery
-  data/FIRE_DEVICE_CONTEXT.md
-  data/{circle,snake,rgb,imu}.lua
-scripts/smoke_test.py      Test mot en faktisk kjørende backend
-tests/                    Flyt-, SDK-kontrakt- og sikkerhetstester
-docs/PROTOCOL.md           Meldinger og state-maskin
-docs/DELIVERY.md           Testresultater og gjenstående integrasjon
-workspace/                Opprettes automatisk; holdes utenfor Git
-  projects/               Prosjekter; current/previous/backup
-  builds/<build_id>/      Bekreftet bestilling, kodeforsøk, simulering, manifest
-  packages/               Kun vellykkede ZIP-er og pakkemetadata
-  logs/                   stdout/stderr og feil per bygg/sesjon
-  context/                Kopi av den injiserte hardwareprofilen
-  templates/              Reservert for lokale maler
-  sessions/               Statussnapshot; starter ikke automatisk igjen
-```
+| Metode/rute | Formål |
+| --- | --- |
+| GET /health | Prosesshelse, versjon, modus og funksjonsflagg |
+| GET /device/context | Gjennomgått hardware-/OS-kontekst og kontrakt |
+| WS /ws/device | Én forbindelse for kontroll og hendelser |
+| POST /session/start, /session/stop | Opprett/avslutt sesjon |
+| GET /sessions/{id} | Sesjon, fremdrift og enhetsstatus |
+| POST /build/confirm | session_id, proposal_id og event_id for 0.2 |
+| POST /run/confirm | session_id, package_id og event_id for 0.2 |
+| POST /device/events | Samme kontrollerte event-dispatch som WS |
+| GET /devices/{id} | Rapportert status og versjonshistorikk |
+| GET /projects, /projects/{id} | Eierskapsbegrenset prosjektoversikt |
+| DELETE /projects/{id} | Slett uten aktive sesjoner eller beholdte enhetsversjoner |
+| GET /builds/{id}, /builds/{id}/log | Status og redigert logg |
+| GET /packages/{id}, /packages/{id}/download | Manifest/size/SHA256 og ZIP med Range/ETag |
+| POST /sessions/{id}/audio/{turn_id} | Autentisert, begrenset WAV-opplasting |
+| GET /audio/{id} | Kortlivet PCM-svar, avgrenset til riktig enhet |
 
-## API
+Protokoll 0.2 bruker event_id, session_id, boot_id, kapabiliteter og korrelerte
+install_id/run_id/stop_id/rollback_id. Duplikater starter ikke nye operasjoner;
+gjenbruk med endret innhold avvises. Avbrutt hendelsesbehandling gir unknown,
+slik at klienten avstemmer status i stedet for å starte på nytt.
 
-Alle ruter unntatt `/health` krever backend-token når det er konfigurert.
+En testet pakke blir først installert etter device_install_result. run_confirm
+sender run_request og venter på app_started. app_healthy etablerer siste fungerende
+versjon per enhet/prosjekt. PC-testen oppdaterer bare last_simulated_package_id.
+Ved kontaktbrudd er faktisk kjørestatus unknown. En ukjent gammel kjøring må
+stoppes og kvitteres før ny start. Ingen blind automatisk appstart ved reconnect.
 
-| Metode | Rute | Resultat |
-| --- | --- | --- |
-| GET | `/health` | Prosesshelse, modus og om nøkkel er satt |
-| GET | `/device/context` | Kompakt hardware-/OS-/Lua-kontrakt |
-| WS | `/ws/device` | Én forbindelse for alle enhetsevents |
-| POST | `/session/start` | `{device_id, project_id?}` → sesjon |
-| POST | `/session/stop` | `{session_id}` → avbryt og lukk |
-| POST | `/build/confirm` | `{session_id, proposal_id}` → 202 og build-ID |
-| POST | `/run/confirm` | `{session_id, package_id}` → PC-simulering |
-| GET | `/projects` | Prosjektliste |
-| GET/DELETE | `/projects/{id}` | Les/slett; stopp sesjonen før sletting |
-| GET | `/builds/{id}` | Byggestatus og feil |
-| GET | `/builds/{id}/log` | Full begrenset og redigert byggelogg |
-| GET | `/packages/{id}` | Manifest, tester, modus og kontrollsummer |
-| GET | `/packages/{id}/download` | ZIP etter ny integritetskontroll |
+Lyd følger listen_start/listen_stop, WAV-opplasting, transcript, normal dialog og
+audio_ready. Inn: PCM16 mono/16 kHz i WAV. Ut: PCM16 LE mono/24 kHz i blokker.
+Bruk små avspillingsbuffere. Vanlige kontrollruter beholder 8192-byte-grensen.
+Mock-opptak gir fast transkripsjon og en testtone, ikke ekte talegjenkjenning/TTS.
+Alle bygge-/kjøregodkjenninger forblir eksplisitte, også når bestillingen er talt.
 
-REST-start binder ikke en eksisterende WS-forbindelse. Mock-enheten starter
-sesjonen på WS og kan bruke HTTP-bekreftelser med sesjons-ID-en den får der.
+## Filstruktur og pakker
 
-## Pakker, testing og reproduserbarhet
+`fire_backend/` viderefører app.py, service.py, ai.py, builds.py, lua_worker.py,
+models.py, config.py og storage.py. Nye avgrensede moduler: auth.py, protocol.py,
+devices.py og audio.py. `contracts/` inneholder JSON-skjemaer. `scripts/` har
+smoke-/API-kontroller; `tests/` har eksisterende og nye integrasjonstester.
 
-Hvert bygg får egen mappe og midlertidig arbeidsmappe. Bare Lua-tekst genereres.
-Lua-syntaks kompileres i minne med Lua 5.4; PlatformIO brukes ikke.
-API-validering og 180 simulerte frames tester appen før ZIP opprettes:
+`workspace/` inneholder projects, builds, packages, logs, context, templates,
+sessions, devices, commands, events og audio. Det er lokalt og ignorert av Git.
+Historikk, kvitteringer og kommandoer skrives atomisk til JSON. Oppstart feiler
+avbrutte bygg, utløper gamle kommandoer og fjerner gamle lydfiler. Prosesslås
+hindrer to vanlige serverstarter i samme workspace.
 
-```text
-apps/<app_id>/manifest.json
-apps/<app_id>/main.lua
-apps/<app_id>/assets/
-apps/<app_id>/appdata/
-```
-
-Manifestet inneholder alle påkrevde felt. `checksum` er SHA256 av `main.lua`,
-som er eneste payload-fil i v0.1. Arkivets SHA256 ligger i pakkemetadata utenfor
-ZIP-en. ZIP-medlemsliste, manifest, CRC og payload-hash kontrolleres separat.
-Faste filrekkefølger og tidsstempler gir identisk ZIP fra samme manifest/kode.
-Generering fra modellen er ikke deterministisk; gjenskaping bruker lagret kode.
+En app er en deterministisk ZIP_STORED med fire oppføringer under apps/<app_id>/:
+manifest.json, main.lua, assets/ og appdata/. Bare Lua genereres. Manifestets
+checksum er SHA256 av main.lua; ytterarkivets hash ligger i pakkemetadata.
+Samme lagrede kode og manifest kan gjenskapes uten et nytt API-kall:
 
 ```powershell
-.\.venv\Scripts\python.exe -m fire_backend.reproduce build-ID_FRA_SERVEREN
+.\.venv\Scripts\python.exe -m fire_backend.reproduce build-ID
 ```
 
-Dette revaliderer og lager `workspace/builds/<id>/reproduced.zip`, og krever at
-SHA256 er identisk. Behold `requirements.lock.txt` og byggemappen for samme miljø.
-Hardwareprofil og modellnavn fryses i `request.json`; hvert kodeforsøk beholdes.
+Hvert bygg beholder bekreftet bestilling, kontekst, kildekodeforsøk, simulator-
+resultat og byggemanifest. Høyst tre automatiske korrigeringer etter første
+kodeforsøk; alle deler samme timeout. Mislykkede bygg tilbys aldri som pakke.
 
-En første generering kan etterfølges av **maks tre automatiske korrigeringer**,
-altså høyst fire kodeforsøk. Valideringsfeil og forrige kode sendes tilbake til
-kodeagenten. Nett-/konto-/API-feil feiler direkte; de utløser ikke skjulte nye
-API-forsøk. Hele jobben har en felles timeout. Ingen mislykket ZIP tilbys.
+Lua kjører uten OS/Python/loader-/nett-/flash-API-er, med allocator-, instruksjons-
+og kjøretidsgrenser. Simulatoren registrerer tegning/RGB og gir syntetiske knappe-
+og IMU-verdier. Den beviser ikke ESP32-heap eller faktisk maskinvarekompatibilitet.
+Den native Lua-tolken er ikke en full OS-isolasjonsgrense for ubetrodde eksterne
+brukere. Firmware må håndheve hele kontrakten selv.
 
-`current` endres først etter eksplisitt `run_confirm` og vellykket PC-test.
-`previous` og `backup` roteres da. `app_failed` for gjeldende pakke ruller
-registeret tilbake; ingen gammel app startes automatisk. Ved omstart feiles
-avbrutte bygg, gamle bekreftelser forkastes og ingen apper starter av seg selv.
-OS-fillås på arbeidsmappen hindrer to vanlige backendstarter i å skrive samtidig.
-Bruk `start.ps1` eller `python -m fire_backend`, ikke flere Uvicorn-workers.
-
-## Lua-begrensninger og praktiske grenser
-
-Appen får et eget Lua-miljø med bare de deklarerte `fire.*`-tjenestene og et lite
-utvalg rene funksjoner. Ingen Python-objekter eller Python-callbacks eksponeres.
-Arbeideren arver ikke API-nøkkel eller andre kontoopplysninger. Den har 256 KiB
-Lua-allokeringsgrense, 200 000 instruksjoner per callback, 20 000 API-operasjoner
-og åtte sekunders prosessfrist. Apper må ha `init()` og `update(dt_ms)`.
-Rå OS-, IO-, loader-, debug-, GPIO-, nett-, flash-, OTA- og restart-API-er mangler.
-Brudd avvises. Fullt Lua-standardbibliotek er ikke tilgjengelig.
-
-PC-simuleringen registrerer tegne-/RGB-kommandoer og gir syntetiske IMU- og
-knappeverdier. Den er ikke en skjermemulator eller et bevis på faktisk ESP32-heap,
-elektrisk oppførsel eller firmwarekompatibilitet. Prosessfristen og Lua-miljøet
-er praktiske prototypetiltak, **ikke en OS-sikkerhetsgrense mot en ukjent feil i
-den native Lua/Lupa-tolken**. OS-isolasjon kreves før eksponering for ubetrodde
-eksterne brukere. FIRE må selv håndheve alle grenser og tillatelser senere.
-
-## Test
+## Tester
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe scripts\smoke_test.py --all-examples
 ```
 
-Den siste kommandoen krever en kjørende mock-server og sender eksplisitte
-bekreftelser som del av testen. Den verifiserer at `current` og ferdig pakke
-ikke finnes før riktige bekreftelser, laster ned ZIP og kjører PC-simulering.
-Rapport: `workspace/logs/smoke-report.json`. Ekte API-test kan kjøres med
-`--live` etter nøkkel-/modelloppsett; den bruker betalte API-kall.
+For enhetsprotokolltesten, konfigurer fire-01 med eget token i .env og aktiver lyd
+før serverstart. Klienten bruker FIRE_DEVICE_TOKENS, alternativt en lokal
+FIRE_MOCK_DEVICE_TOKEN, uten token som kommandolinjeargument:
 
-Se `docs/DELIVERY.md` for faktisk teststatus og gjenstående M5Stack-arbeid.
+```powershell
+.\.venv\Scripts\python.exe scripts\device_smoke_test.py --device-id fire-01 --all-examples --audio
+```
+
+Dette er **enhetsemulering på PC**, ikke fysisk integrasjon. Den sender eksplisitte
+testbekreftelser, validerer ZIP, simulerer Lua, kvitterer installasjon/start og
+tester lydtransport. Rapporter lagres i workspace/logs.
+
+Etter API-nøkkeloppsett kan ekte leverandørtilgang kontrolleres med betalte kall:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_openai.py --live --speech --wav opptak.wav
+```
+
+Uten nøkkel rapporterer den not_run. Denne sjekken installerer eller kjører ingen
+app på FIRE. Den verifiserer heller ikke alle fysiske akseptansekriterier.
+
+API-implementasjonen følger offisiell dokumentasjon for
+[Realtime](https://developers.openai.com/api/docs/guides/realtime-conversations),
+[transkripsjon](https://developers.openai.com/api/docs/guides/speech-to-text) og
+[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).

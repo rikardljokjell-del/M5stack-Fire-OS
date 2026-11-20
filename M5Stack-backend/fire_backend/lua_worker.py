@@ -68,6 +68,10 @@ local function integer(v, lo, hi)
     error("API argument outside bounds")
   end
 end
+local function whole(v, lo, hi)
+  integer(v,lo,hi)
+  if math.floor(v)~=v then error("API argument must be an integer") end
+end
 local function record(name, ...)
   total = total + 1
   if total > 20000 then error("API operation budget exceeded") end
@@ -77,23 +81,23 @@ local function record(name, ...)
   end
 end
 local function xy(x,y) integer(x,0,319); integer(y,0,239) end
-local function color(c) integer(c,0,65535) end
+local function color(c) whole(c,0,65535) end
 local display = {
   clear = function(c) color(c); record("clear",c) end,
-  circle = function(x,y,r,c) xy(x,y); integer(r,0,160); color(c); record("circle",x,y,r,c) end,
-  rect = function(x,y,w,h,c) xy(x,y); integer(w,0,320); integer(h,0,240); color(c); record("rect",x,y,w,h,c) end,
-  line = function(x,y,a,b,c) xy(x,y); xy(a,b); color(c); record("line",x,y,a,b,c) end,
+  circle = function(x,y,r,c) xy(x,y); integer(r,0,160); color(c); record("circle",math.floor(x),math.floor(y),math.floor(r),c) end,
+  rect = function(x,y,w,h,c) xy(x,y); integer(w,0,320); integer(h,0,240); color(c); record("rect",math.floor(x),math.floor(y),math.floor(w),math.floor(h),c) end,
+  line = function(x,y,a,b,c) xy(x,y); xy(a,b); color(c); record("line",math.floor(x),math.floor(y),math.floor(a),math.floor(b),c) end,
   text = function(x,y,s,c)
     xy(x,y); color(c)
     if type(s) ~= "string" or #s > 80 then error("Text exceeds 80 bytes") end
-    record("text",x,y,s,c)
+    record("text",math.floor(x),math.floor(y),s,c)
   end
 }
 local available = {
   display = display,
   time = {millis=function() return elapsed end},
   rgb = {set=function(i,r,g,b)
-    integer(i,0,9); integer(r,0,255); integer(g,0,255); integer(b,0,255)
+    whole(i,0,9); whole(r,0,255); whole(g,0,255); whole(b,0,255)
     record("rgb",i,r,g,b)
   end},
   imu = {accel=function() return {x=math.sin(elapsed/1000),y=math.cos(elapsed/1000),z=1} end},
@@ -159,7 +163,8 @@ def simulate(request):
         max_memory=min(request.get("max_memory", 262144), 262144),
     )
     lua.compile(source, name="main.lua", mode="t")  # syntax only, never executes here
-    result = lua.execute(HARNESS, source, ",".join(services), min(request.get("max_runtime_ms", 10000), 10000), 180)
+    max_ms = min(request.get("max_runtime_ms", 10000), 10000)
+    result = lua.execute(HARNESS, source, ",".join(services), max_ms, min(180, max_ms // 16))
     trace = []
     for i in range(1, len(result["trace"]) + 1):
         command = result["trace"][i]
@@ -171,7 +176,7 @@ def simulate(request):
 
 if __name__ == "__main__":
     try:
-        request = json.loads(sys.stdin.buffer.read(110000))
+        request = json.loads(sys.stdin.buffer.read(220000))
         response = simulate(request)
     except BaseException as error:
         response = {"ok": False, "error": (type(error).__name__ + ": " + str(error))[:6000]}

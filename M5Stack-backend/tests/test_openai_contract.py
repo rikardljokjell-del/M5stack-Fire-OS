@@ -59,12 +59,12 @@ class FakeRealtime:
     async def item(self, **kwargs):
         self.calls.append(("item", kwargs))
 
-    async def create(self):
-        self.calls.append(("response", {}))
+    async def create(self, **kwargs):
+        self.calls.append(("response", kwargs))
 
     def __aiter__(self):
         async def stream():
-            yield SimpleNamespace(type="response.output_text.delta", delta=json.dumps({
+            yield SimpleNamespace(type="response.function_call_arguments.done", name="dialog_reply", arguments=json.dumps({
                 "message": "Hva skal appen gjøre?", "clarification_needed": True, "build_summary": ""}))
             yield SimpleNamespace(type="response.done", response=SimpleNamespace(status="completed"))
         return stream()
@@ -91,7 +91,9 @@ async def test_realtime_text_contract_and_backend_owned_connection():
     assert result.clarification_needed
     assert connection.calls[0][1]["session"]["output_modalities"] == ["text"]
     assert "GPIO39" in connection.calls[0][1]["session"]["instructions"]
-    assert connection.calls[1][1]["item"]["content"][0]["text"] == "Hei"
+    response = connection.calls[1][1]["response"]
+    assert response["conversation"] == "none"
+    assert json.loads(response["input"][0]["content"][0]["text"])[-1]["content"] == "Hei"
     await manager.__aexit__(None, None, None)
 
 

@@ -1,4 +1,6 @@
 from pathlib import Path
+import json
+import re
 from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
@@ -21,9 +23,34 @@ class Settings(BaseSettings):
     fire_progress_interval_seconds: float = Field(default=10, ge=1, le=30)
     fire_ai_timeout_seconds: int = Field(default=90, ge=2, le=300)
     fire_max_sessions: int = Field(default=8, ge=1, le=32)
+    fire_device_tokens: SecretStr = SecretStr("{}")
+    fire_session_resume_seconds: int = Field(default=600, ge=30, le=3600)
+    fire_command_timeout_seconds: int = Field(default=30, ge=5, le=120)
+    fire_audio_enabled: bool = False
+    fire_audio_max_input_bytes: int = Field(default=524288, ge=32044, le=524288)
+    fire_audio_max_output_bytes: int = Field(default=1440000, ge=48000, le=1440000)
+    fire_audio_ttl_seconds: int = Field(default=300, ge=30, le=3600)
+    openai_transcribe_model: str = "gpt-transcribe"
+    openai_speech_model: str = "gpt-realtime-2.1-mini"
+    openai_speech_voice: str = "marin"
+
+    def device_tokens(self):
+        return json.loads(self.fire_device_tokens.get_secret_value())
 
     @model_validator(mode="after")
     def lan_requires_token(self):
+        try:
+            tokens = self.device_tokens()
+            if not isinstance(tokens, dict) or any(
+                not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", key)
+                or not isinstance(value, str) or len(value) < 24
+                for key, value in tokens.items()
+            ) or len(set(tokens.values())) != len(tokens):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise ValueError("FIRE_DEVICE_TOKENS must map unique device IDs to unique tokens of at least 24 characters") from None
+        if self.fire_backend_token.get_secret_value() in tokens.values():
+            raise ValueError("Admin token and device tokens must differ")
         if self.fire_backend_host not in {"127.0.0.1", "localhost", "::1"}:
             if len(self.fire_backend_token.get_secret_value()) < 24:
                 raise ValueError("LAN binding requires FIRE_BACKEND_TOKEN of at least 24 characters")

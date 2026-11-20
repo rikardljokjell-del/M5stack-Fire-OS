@@ -38,6 +38,9 @@ before a restricted runtime and the advertised adapters exist on FIRE.
 `session_started` returns session_id, project_id, target, mode, state, boot_id,
 protocol_version, proposal_id/package_id/build_id when present. Server messages
 carry monotonically increasing `seq`, `session_id`, protocol_version.
+Snapshots include server_time (UTC Unix seconds). Firmware should calculate
+command expiry from that reference plus monotonic elapsed time if its RTC is not
+configured; do not trust an unset local calendar clock.
 Add `project_id` to edit a project previously owned by this device.
 
 Reconnect with a NEW start event_id and `resume_session_id`, same target/device,
@@ -63,6 +66,7 @@ are expired; send no unsolicited app_started event to restore running status.
 | button | button=A/B/C, action=pressed/released/long_pressed | Notification only; never authorization |
 | build_confirm | proposal_id | Consume exact latest proposal; begin one build |
 | run_confirm | package_id | Explicitly authorize one start of the installed package |
+| install_retry | package_id | Issue a fresh install_id for the same tested package after timeout/SD/delivery failure, without another AI build |
 | app_stop | none | Request stop of the current device run; waits for receipt |
 | ping | none | pong + session snapshot |
 | session_stop | none | End conversation and cancel its build/audio; does not assert a remote app stopped |
@@ -90,6 +94,9 @@ archive_sha256 (lowercase hex SHA256), size_bytes, download_url. Device sessions
 also receive `install_request` with install_id, package_id, archive_sha256,
 size_bytes, download_url, boot_id, expires_at (UTC Unix seconds, normally +300).
 Offer/install expiry does not delete the immutable package.
+Use install_retry with the same package_id if the install command expires or
+delivery fails. It never regenerates code or authorizes a run. A delivery error
+does not change a successfully tested build into a failed build.
 
 GET download_url with Authorization. ZIP uses ZIP_STORED (no compression), layout:
 `apps/<app_id>/{manifest.json,main.lua,assets/,appdata/}`. Empty assets/appdata in
@@ -115,7 +122,7 @@ with the same event_id returns an acknowledgement, not another state change.
 | app_started | run_id | Marks physically running after correct run_request; not a PC test |
 | app_healthy | run_id | Device confirms successful init/first frames and no runtime error; promotes healthy current/previous/backup |
 | app_failed | run_id, error_code | Device has stopped this failed run; backend offers rollback to last healthy/previous version |
-| app_stopped | run_id, stop_id | Confirms backend-issued stop command |
+| app_stopped | run_id, stop_id OR reason | stop_id confirms a stop command; without stop_id reason must be completed/user_exit/runtime_limit for the active started run |
 | rollback_result | rollback_id, status=ok/failed | Confirms restoration of the offered previous package, without automatically running it |
 
 Failed receipts may add message (<=240 chars) and error_code (identifier). If no
@@ -123,6 +130,11 @@ previous version exists, failure stops the app and records the error; no rollbac
 command is fabricated. A successful rollback restores selection/installed state
 only; restarting it requires a fresh run_confirm. No metadata-only rollback is
 reported as physical success.
+For a failed installation, archive_sha256 identifies the offered archive and may
+echo the offer even if downloading failed before a complete checksum was possible.
+For status=ok it MUST have been independently verified against the downloaded
+bytes. Report checksum-mismatch failures with status=failed, the offered hash and
+error_code=checksum_mismatch; never send status=ok for a mismatching file.
 
 `run_request`: run_id, package_id, archive_sha256, boot_id, expires_at (+30 seconds).
 Persist consumed run_id on FIRE BEFORE starting. Repeated run_request must return
@@ -136,6 +148,11 @@ current (last healthy version), previous, backup. On disconnect/restart online=f
 and runtime_status=unknown; retained running_package_id is last observation, not
 proof that the app is still running. Package validation/PC run updates only
 project.last_simulated_package_id, never physical current.
+Healthy version history is per device AND project, in device.projects[project_id].
+The top-level current/previous/backup show the selected project_id, not a history
+mixing different apps. Starting another project never rolls its failure back to
+an unrelated app. Retained installed/healthy versions cannot be deleted through
+the project API.
 
 ## Audio (optional capability; FIRE_AUDIO_ENABLED=true on PC)
 
@@ -169,6 +186,8 @@ into application ZIPs or ordinary logs. No full-duplex requirement in 0.2.
 IDs where relevant). Persist before/after handling. Reusing event_id with altered
 payload or another device is rejected. A crash during handling yields unknown;
 query session_snapshot and pending commands instead of blindly repeating effects.
+Replay acknowledgement applies to active/resumed sessions; events for explicitly
+closed/expired sessions may be rejected, and must never be moved to a new session.
 Errors: type=error, code, message; no provider secrets or raw request objects.
 Protocol 0.1 remains PC-only; it cannot send device receipts or claim installations.
 

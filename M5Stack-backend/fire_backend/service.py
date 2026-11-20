@@ -1,5 +1,7 @@
 import asyncio
 import contextlib
+import json
+import time
 from dataclasses import dataclass, field
 from importlib.resources import files
 
@@ -7,12 +9,24 @@ from .ai import MockProvider, OpenAIProvider
 from .builds import Builder, simulate, verify_archive
 from openai import APIStatusError
 from .models import State
+from .devices import DeviceLifecycle
 from .security import Redactor
 from .storage import Store, new_id
 
 
 class Conflict(ValueError):
     pass
+
+
+def bounded_history(history):
+    kept, size = [], 0
+    for item in reversed(history[-32:]):
+        amount = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+        if size + amount > 24000:
+            break
+        kept.append(item)
+        size += amount
+    return list(reversed(kept))
 
 
 @dataclass
@@ -36,12 +50,23 @@ class Session:
     sequence: int = 0
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     progress: dict = field(default_factory=dict)
+    protocol_version: str = "0.1"
+    target: str = "pc_simulation"
+    boot_id: str | None = None
+    capabilities: dict | None = None
+    last_seen: float = field(default_factory=time.time)
+    disconnected_at: float | None = None
+    activity: str = "idle"
+    turn_id: str | None = None
+    audio_id: str | None = None
+    input_task: asyncio.Task | None = None
+    speech_task: asyncio.Task | None = None
 
 
-class Backend:
+class Backend(DeviceLifecycle):
     def __init__(self, settings, provider=None):
         self.settings = settings
-        self.redactor = Redactor(settings.openai_api_key.get_secret_value(), settings.fire_backend_token.get_secret_value())
+        self.redactor = Redactor(settings.openai_api_key.get_secret_value(), settings.fire_backend_token.get_secret_value(), *settings.device_tokens().values())
         self.store = Store(settings.fire_workspace, self.redactor, settings.fire_max_workspace_mb * 1024 * 1024)
         self.context = files("fire_backend").joinpath("data/FIRE_DEVICE_CONTEXT.md").read_text(encoding="utf-8")
         self.store.reserve(len(self.context.encode("utf-8")))
@@ -52,6 +77,10 @@ class Backend:
         self.build_lock = asyncio.Lock()
         self.active_build_id = None
         self.store.recover()
+        for command in self.store.list("commands"):
+            if command["status"] in {"pending", "started", "healthy"}:
+                self.finish_command(command, "unknown")
+        self.maintenance_task = None
 
     def session(self, session_id):
         session = self.sessions.get(session_id)
@@ -63,15 +92,26 @@ class Backend:
         return {"session_id": session.id, "device_id": session.device_id,
                 "project_id": session.project_id, "state": session.state,
                 "proposal_id": session.proposal_id, "package_id": session.package_id,
-                "build_id": session.build_id, "mode": self.settings.fire_ai_mode}
+                "build_id": session.build_id, "mode": self.settings.fire_ai_mode,
+                "protocol_version": session.protocol_version, "target": session.target,
+                "boot_id": session.boot_id, "capabilities": session.capabilities,
+                "activity": session.activity, "turn_id": session.turn_id, "server_time": int(time.time())}
 
     def persist(self, session):
-        self.store.put("sessions", session.id, self.snapshot(session), critical=session.state in {State.failed, State.idle})
+        session.history = bounded_history(session.history)
+        self.store.put("sessions", session.id, {**self.snapshot(session), "history": session.history[-32:],
+                       "summary": session.summary, "sequence": session.sequence, "stopped": session.stopped,
+                       "last_seen": session.last_seen, "disconnected_at": session.disconnected_at,
+                       "progress": session.progress}, critical=session.state in {State.failed, State.idle})
 
     async def emit(self, session, event):
         async with session.send_lock:
             session.sequence += 1
-            message = self.redactor.value({**event, "session_id": session.id, "seq": session.sequence})
+            self.persist(session)
+            message = self.redactor.value({**event, "session_id": session.id, "seq": session.sequence,
+                                           "protocol_version": session.protocol_version})
+            if len(json.dumps(message, ensure_ascii=False).encode("utf-8")) > 8192:
+                raise ValueError("Outbound control event exceeds 8192 bytes")
             for socket in tuple(session.sockets):
                 try:
                     await asyncio.wait_for(socket.send_json(message), timeout=2)
@@ -83,19 +123,73 @@ class Backend:
         self.persist(session)
         await self.emit(session, {"type": "ui_event", "event": "assistant_state", "state": state})
 
-    async def start(self, request, socket=None):
+    async def activity(self, session, activity):
+        session.activity = activity
+        self.persist(session)
+        await self.emit(session, {"type": "ui_event", "event": "assistant_activity", "activity": activity})
+
+    def context_for(self, session):
+        context = self.context
+        if session.capabilities:
+            context += "\nActual device capabilities (never exceed):\n" + json.dumps(session.capabilities)
+        project = self.store.get("projects", session.project_id)
+        context += "\nProject: " + json.dumps({k: project.get(k) for k in ("id", "name", "latest_package", "last_confirmed_summary")})
+        if project.get("latest_package"):
+            latest = self.store.get("packages", project["latest_package"])
+            context += "\nCurrent app manifest: " + json.dumps(latest["manifest"])
+        return context
+
+    async def start(self, request, socket=None, principal="admin"):
+        if request.target == "device" and principal != request.device_id:
+            raise PermissionError("Physical sessions require the token scoped to this device")
+        if principal != "admin" and (request.device_id != principal or request.target != "device"):
+            raise PermissionError("Device credential scope mismatch")
+        await self.expire_sessions()
+        if request.resume_session_id:
+            return await self.resume(request, socket, principal)
+        for existing in list(self.sessions.values()):
+            if existing.device_id == request.device_id and existing.target == "device" and existing.boot_id != request.boot_id:
+                await self.stop(existing)
+                for command in self.store.list("commands"):
+                    if command["device_id"] == request.device_id and command["status"] in {"pending", "started", "healthy"}:
+                        self.finish_command(command, "unknown")
         if len(self.sessions) >= self.settings.fire_max_sessions:
             raise Conflict("Maximum active sessions reached")
         if any(s.device_id == request.device_id for s in self.sessions.values()):
             raise Conflict("Device already has an active session")
         if request.project_id:
             project = self.store.get("projects", request.project_id)
+            if project.get("owner_device_id") != (request.device_id if request.target == "device" else None):
+                raise PermissionError("Project belongs to another device")
         else:
             project = {"id": new_id("app"), "name": "Ny app", "current": None,
                        "previous": None, "backup": None, "candidate": None,
-                       "latest_package": None, "next_version": 1}
+                       "latest_package": None, "next_version": 1, "schema_version": 2,
+                       "owner_device_id": request.device_id if request.target == "device" else None}
             self.store.put("projects", project["id"], project)
         session = Session(new_id("session"), request.device_id, project["id"])
+        if request.project_id:
+            prior = [saved for saved in self.store.list("sessions") if saved["project_id"] == project["id"]]
+            if prior:
+                session.history = max(prior, key=lambda saved: saved.get("last_seen", 0)).get("history", [])[-32:]
+        session.protocol_version, session.target, session.boot_id = request.protocol_version, request.target, request.boot_id
+        session.capabilities = self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None
+        if session.target == "device":
+            try:
+                device = self.store.get("devices", session.device_id)
+            except FileNotFoundError:
+                device = {"id": session.device_id, "current": None, "previous": None, "backup": None,
+                          "installed_package_id": None, "running_package_id": None}
+            versions = device.setdefault("projects", {})
+            if device.get("project_id") and device["project_id"] not in versions:
+                versions[device["project_id"]] = {key: device.get(key) for key in ("current", "previous", "backup")}
+            selected_versions = versions.get(session.project_id, {})
+            device.update(project_id=session.project_id, **{key: selected_versions.get(key) for key in ("current", "previous", "backup")})
+            if device.get("boot_id") != session.boot_id:
+                device.update(active_run_id=None, pending_run_id=None, running_package_id=None,
+                              installed_package_id=None, runtime_status="unknown")
+            device.update(boot_id=session.boot_id, online=True, capabilities=session.capabilities)
+            self.store.put("devices", device["id"], device)
         if socket:
             session.sockets.add(socket)
         self.sessions[session.id] = session
@@ -103,6 +197,91 @@ class Backend:
         await self.emit(session, {"type": "session_started", **self.snapshot(session)})
         await self.state(session, State.listening)
         return session
+
+    async def resume(self, request, socket, principal):
+        session = self.sessions.get(request.resume_session_id)
+        if session is None:
+            saved = self.store.get("sessions", request.resume_session_id)
+            if saved.get("stopped") or saved.get("protocol_version") != "0.2":
+                raise Conflict("Session cannot be resumed")
+            session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
+            for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
+                         "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id"):
+                if name in saved:
+                    setattr(session, name, saved[name])
+            session.sequence = saved.get("sequence", 0)
+            if session.state in {State.building, State.testing, State.processing, State.starting, State.stopping, State.rollback_pending}:
+                session.state, session.proposal_id = State.failed, None
+        if (session.device_id != request.device_id or session.target != request.target
+                or session.boot_id != request.boot_id or session.capabilities != (self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None)
+                or (request.project_id and request.project_id != session.project_id)
+                or session.protocol_version != request.protocol_version or session.sockets
+                or time.time() - (session.disconnected_at or session.last_seen) > self.settings.fire_session_resume_seconds):
+            raise Conflict("Resume identity, capabilities or expiry mismatch")
+        if len(self.sessions) >= self.settings.fire_max_sessions and session.id not in self.sessions:
+            raise Conflict("Maximum active sessions reached")
+        if any(other.device_id == session.device_id and other.id != session.id for other in self.sessions.values()):
+            raise Conflict("Device already has another active session")
+        device = self.device_record(session) if session.target == "device" else None
+        if device and device["boot_id"] != session.boot_id:
+            raise Conflict("Resume from previous boot rejected")
+        self.sessions[session.id] = session
+        session.disconnected_at = None
+        session.last_seen = time.time()
+        if socket:
+            session.sockets.add(socket)
+        if session.target == "device":
+            device["online"] = True
+            self.store.put("devices", device["id"], device)
+            if session.package_id and session.state == State.idle:
+                session.state = State.installed if device.get("installed_package_id") == session.package_id else State.awaiting_install
+        self.persist(session)
+        await self.emit(session, {"type": "session_started", **self.snapshot(session)})
+        await self.session_snapshot(session)
+        if session.target == "device" and session.package_id and session.state == State.awaiting_install and not self.pending_commands(session):
+            await self.offer_install(session, self.verify_package(session, session.package_id))
+        return session
+
+    async def session_snapshot(self, session):
+        await self.emit(session, {"type": "session_snapshot", **self.snapshot(session), "progress": session.progress,
+                                  "summary": session.summary, "pending_commands": [self.command_message(c) for c in self.pending_commands(session)],
+                                  "device": self.device_view(session) if session.target == "device" else None})
+
+    async def detach(self, session, socket):
+        session.sockets.discard(socket)
+        if session.protocol_version == "0.1":
+            await self.stop(session)
+            return
+        session.disconnected_at = session.last_seen = time.time()
+        await self.close_dialog(session)
+        if session.target == "device":
+            device = self.device_record(session)
+            device.update(online=False, runtime_status="unknown")
+            self.store.put("devices", device["id"], device, critical=True)
+        self.persist(session)
+
+    async def expire_sessions(self):
+        for session in list(self.sessions.values()):
+            if session.disconnected_at and time.time() - session.disconnected_at > self.settings.fire_session_resume_seconds:
+                await self.stop(session)
+
+    async def maintenance(self):
+        while True:
+            await asyncio.sleep(1)
+            await self.expire_sessions()
+            if hasattr(self, "audio"):
+                self.audio.cleanup()
+            for command in self.store.list("commands"):
+                if command["status"] == "pending" and command["expires_at"] <= time.time():
+                    self.finish_command(command, "unknown")
+                    session = self.sessions.get(command["session_id"])
+                    if session and not session.stopped:
+                        if command["kind"] == "run":
+                            device = self.device_record(session)
+                            device["runtime_status"] = "unknown"
+                            self.store.put("devices", device["id"], device, critical=True)
+                        await self.state(session, State.failed)
+                        await self.emit(session, {"type": "error", "code": "command_timeout", "message": "Device command expired; physical result unknown"})
 
     async def close_dialog(self, session):
         if session.dialog_manager:
@@ -114,6 +293,15 @@ class Backend:
     async def stop(self, session):
         # Mark before cancellation so new confirmations cannot race shutdown.
         session.stopped = True
+        if session.input_task and session.input_task is not asyncio.current_task() and not session.input_task.done():
+            session.input_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await session.input_task
+        if hasattr(self, "audio"):
+            self.audio.cancel(session)
+        if session.speech_task and not session.speech_task.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await session.speech_task
         operation = session.operation_task
         if operation and operation is not asyncio.current_task() and not operation.done():
             operation.cancel()
@@ -131,13 +319,26 @@ class Backend:
             self.active_build_id = None
             self.build_lock.release()
         await self.close_dialog(session)
+        if session.target == "device":
+            device = self.device_record(session)
+            device.update(online=False, runtime_status="unknown")
+            self.store.put("devices", device["id"], device, critical=True)
         session.proposal_id = None
         await self.state(session, State.idle)
         self.sessions.pop(session.id, None)
 
     async def close(self):
+        if self.maintenance_task:
+            self.maintenance_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.maintenance_task
         for session in list(self.sessions.values()):
+            preserve = session.protocol_version == "0.2"
             await self.stop(session)
+            if preserve:
+                saved = self.store.get("sessions", session.id)
+                saved.update(stopped=False, disconnected_at=time.time(), last_seen=time.time())
+                self.store.put("sessions", session.id, saved, critical=True)
         await self.provider.close()
 
     async def text(self, session, text):
@@ -161,13 +362,14 @@ class Backend:
             session.summary = ""
             session.package_id = None
             await self.state(session, State.processing)
+            await self.activity(session, "processing")
             session.history.append({"role": "user", "content": self.redactor.text(text)})
             session.history = session.history[-32:]
             try:
                 async with asyncio.timeout(self.settings.fire_ai_timeout_seconds):
                     if session.dialog_connection is None:
-                        session.dialog_manager, session.dialog_connection = await self.provider.connect_dialog(self.context)
-                    reply = await self.provider.dialog(session.history, self.context, session.dialog_connection)
+                        session.dialog_manager, session.dialog_connection = await self.provider.connect_dialog(self.context_for(session))
+                    reply = await self.provider.dialog(session.history, self.context_for(session), session.dialog_connection)
                 reply = type(reply).model_validate(self.redactor.value(reply.model_dump()))
                 session.history.append({"role": "assistant", "content": reply.message})
                 await self.emit(session, {"type": "assistant_message", "text": reply.message})
@@ -179,6 +381,9 @@ class Backend:
                     await self.state(session, State.awaiting_build_confirmation)
                     await self.emit(session, {"type": "build_proposal", "proposal_id": session.proposal_id,
                                               "summary": session.summary, "project_id": session.project_id})
+                await self.activity(session, "idle")
+                if self.settings.fire_audio_enabled and session.turn_id and hasattr(self, "audio"):
+                    session.speech_task = asyncio.create_task(self.audio.speak(session, reply.message))
             except Exception as error:
                 await self.close_dialog(session)
                 await self.failure(session, error)
@@ -190,6 +395,7 @@ class Backend:
         else:
             safe = str(error) if isinstance(error, (ValueError, Conflict)) else type(error).__name__
         safe = self.redactor.text(safe or "Operation timed out")[:6000]
+        safe = safe.encode("utf-8")[:6000].decode("utf-8", errors="ignore")
         self.store.log(session.id, "Operation failed: " + safe, critical=True)
         await self.state(session, State.failed)
         await self.emit(session, {"type": "error", "code": "operation_failed", "message": safe[:240]})
@@ -207,6 +413,8 @@ class Backend:
                  "status": "building", "phase": "preparing", "progress": 0,
                  "summary": session.summary, "confirmed_proposal_id": proposal_id, "attempts": 0}
         try:
+            if hasattr(self, "audio"):
+                self.audio.cancel(session)
             self.store.put("builds", build_id, build)
             session.build_id = build_id
             session.proposal_id = None
@@ -239,29 +447,48 @@ class Backend:
                     await self.emit(session, session.progress)
 
         pulse = asyncio.create_task(heartbeat())
+        build_completed = False
+        project_before = None
         try:
             await self.state(session, State.building)
             await progress("preparing", 1, "Oppretter isolert arbeidsmappe")
             async with asyncio.timeout(self.settings.fire_build_timeout_seconds):
                 project = self.store.get("projects", session.project_id)
-                package = await self.builder.build(build, project, progress)
+                project_before = dict(project)
+                package = await self.builder.build(build, project, progress, capabilities=session.capabilities,
+                                                   context=self.context_for(session))
             project.update(name=package["manifest"]["name"], latest_package=package["id"],
-                           next_version=project["next_version"] + 1)
+                           next_version=project["next_version"] + 1, last_confirmed_summary=build["summary"])
             self.store.put("projects", project["id"], project)
             session.package_id = package["id"]
             build.update(status="ready", package_id=package["id"])
             await progress("ready", 100, "Pakken er testet. Venter på eksplisitt kjørebekreftelse.")
             await self.state(session, State.ready_to_run)
+            build_completed = True
             await self.emit(session, {"type": "package_ready", "package_id": package["id"],
                                       "manifest": package["manifest"], "archive_sha256": package["archive_sha256"],
+                                      "project_id": session.project_id, "size_bytes": package["size_bytes"],
                                       "download_url": f"/packages/{package['id']}/download"})
+            if session.target == "device":
+                await self.offer_install(session, package)
         except BaseException as error:
             if not isinstance(error, (Exception, asyncio.CancelledError)):
                 raise
             message = "Build cancelled" if isinstance(error, asyncio.CancelledError) else await self.failure(session, error)
+            if build_completed:
+                # A delivery/connection failure cannot revoke an already tested,
+                # published immutable package or pretend its compilation failed.
+                build["delivery_error"] = message
+                self.store.put("builds", build["id"], build, critical=True)
+                self.store.log(build["id"], "Delivery failed: " + message, critical=True)
+                return
             # Never leave a usable package record when any final build step failed.
             self.store.path("packages", build["id"]).unlink(missing_ok=True)
             self.store.path("packages", build["id"], ".zip").unlink(missing_ok=True)
+            if project_before:
+                current_project = self.store.get("projects", session.project_id)
+                if current_project.get("latest_package") == build["id"]:
+                    self.store.put("projects", session.project_id, project_before, critical=True)
             session.package_id = None
             build.update(status="failed", error=message)
             self.store.log(build["id"], message, critical=True)
@@ -286,6 +513,10 @@ class Backend:
                 session.operation_task = None
 
     async def _confirm_run(self, session, package_id):
+        if session.target == "device":
+            if session.stopped or session.lock.locked():
+                raise Conflict("Session is busy")
+            return await self.device_run(session, package_id)
         if (session.stopped or session.lock.locked() or session.state != State.ready_to_run
                 or not package_id or package_id != session.package_id):
             raise Conflict("No matching tested package awaiting run confirmation")
@@ -304,8 +535,9 @@ class Backend:
                 await self.state(session, State.running)
                 result = await simulate({"main_lua": source, **package["manifest"]}, self.store, package_id)
                 project = self.store.get("projects", session.project_id)
-                if project["current"] != package_id:
-                    project.update(backup=project["previous"], previous=project["current"], current=package_id)
+                if project.get("last_simulated_package_id") != package_id:
+                    project.update(simulated_backup=project.get("simulated_previous"),
+                                   simulated_previous=project.get("last_simulated_package_id"), last_simulated_package_id=package_id)
                     self.store.put("projects", project["id"], project)
                 await self.emit(session, {"type": "run_result", "package_id": package_id,
                                           "target": "pc_simulation", "status": "completed",
@@ -317,16 +549,4 @@ class Backend:
                 raise Conflict("Package run failed; previous current retained") from None
 
     async def device_failed(self, session, package_id):
-        if session.lock.locked() or session.state in {State.building, State.testing, State.running}:
-            raise Conflict("Session is busy")
-        if not package_id:
-            raise Conflict("A failed package_id is required")
-        project = self.store.get("projects", session.project_id)
-        if project["current"] != package_id:
-            raise Conflict("Failure does not match the current app")
-        project.update(current=project["previous"], previous=project["backup"], backup=None)
-        self.store.put("projects", project["id"], project)
-        session.package_id = None
-        await self.state(session, State.failed)
-        await self.emit(session, {"type": "rollback", "stopped_package_id": package_id, "current": project["current"],
-                                  "message": "Forrige pakke er beholdt; ingen app startes automatisk."})
+        raise Conflict("Physical failures require protocol 0.2 and a correlated run_id receipt")

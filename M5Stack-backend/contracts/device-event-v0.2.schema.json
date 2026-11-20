@@ -88,7 +88,8 @@
         "audio_playback_finished",
         "cancel_turn",
         "listen_start",
-        "listen_stop"
+        "listen_stop",
+        "install_retry"
       ],
       "title": "Event",
       "type": "string"
@@ -180,26 +181,12 @@
       "title": "Project Id"
     },
     "protocol_version": {
-      "default": "0.1",
-      "enum": [
-        "0.1",
-        "0.2"
-      ],
-      "title": "Protocol Version",
-      "type": "string"
+      "type": "string",
+      "const": "0.2"
     },
     "event_id": {
-      "anyOf": [
-        {
-          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Event Id"
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "type": "string"
     },
     "session_id": {
       "anyOf": [
@@ -392,12 +379,504 @@
       ],
       "default": null,
       "title": "Message"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "completed",
+            "user_exit",
+            "runtime_limit",
+            "requested"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
     }
   },
   "required": [
     "device_id",
-    "event"
+    "event",
+    "event_id",
+    "protocol_version",
+    "type"
   ],
   "title": "DeviceEvent",
-  "type": "object"
+  "type": "object",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "text"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "maxLength": 4000,
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "button"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "button",
+          "action"
+        ],
+        "properties": {
+          "button": {
+            "enum": [
+              "A",
+              "B",
+              "C"
+            ],
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "pressed",
+              "released",
+              "long_pressed"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "build_confirm"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "proposal_id"
+        ],
+        "properties": {
+          "proposal_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "run_confirm"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "package_id"
+        ],
+        "properties": {
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "device_install_result"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "install_id",
+          "package_id",
+          "status",
+          "archive_sha256"
+        ],
+        "properties": {
+          "install_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "archive_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "install_retry"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "package_id"
+        ],
+        "properties": {
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_started"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "run_id",
+          "package_id"
+        ],
+        "properties": {
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_healthy"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "run_id",
+          "package_id"
+        ],
+        "properties": {
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "run_id",
+          "package_id",
+          "error_code"
+        ],
+        "properties": {
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "error_code": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_stopped"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "run_id",
+          "package_id"
+        ],
+        "properties": {
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "rollback_result"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "rollback_id",
+          "package_id",
+          "status"
+        ],
+        "properties": {
+          "rollback_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "listen_start"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "turn_id"
+        ],
+        "properties": {
+          "turn_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "listen_stop"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "turn_id"
+        ],
+        "properties": {
+          "turn_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "audio_playback_started"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "audio_id",
+          "turn_id"
+        ],
+        "properties": {
+          "audio_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "turn_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "audio_playback_finished"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "audio_id",
+          "turn_id"
+        ],
+        "properties": {
+          "audio_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "turn_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "not": {
+              "const": "session_start"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "session_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "session_start"
+          },
+          "target": {
+            "const": "device"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "then": {
+        "required": [
+          "boot_id",
+          "capabilities"
+        ],
+        "properties": {
+          "boot_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/$defs/Capabilities"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_stopped"
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "stop_id"
+            ],
+            "properties": {
+              "stop_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "completed",
+                  "user_exit",
+                  "runtime_limit"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
 }

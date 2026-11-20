@@ -1,81 +1,88 @@
-# Leveranse og verifisering – 20. november 2026
+# Backend 0.2 – leveranse og verifisering
 
-Implementert i `C:\Users\Rikard\Documents\ChatGPT\M5stack fire\M5Stack-backend`.
-Repo: https://github.com/rikardljokjell-del/M5stack-Fire-OS.
-All videre backendutvikling skjer i `M5Stack-backend/`; `M5Stack-device/` er reservert og skal stå urørt.
-FIRE OS-prosjektet er ikke tilgjengelig ennå og er ikke endret.
+Arbeidsområde: `M5Stack-backend/` i rikardljokjell-del/M5stack-Fire-OS.
+Eksisterende FastAPI-/WebSocket-/OpenAI-/Lua-/ZIP-arkitektur er videreført.
+`M5Stack-device/` er lest fra Git, men ingen enhetsfiler er endret, bygget eller flashet.
 
-## Levert
+## Endrede områder
 
-- Separat Python-backend, én prosess, uten database/Docker.
-- FastAPI-rutene i bestillingen, pluss trygg ZIP-nedlasting og byggelogg.
-- Én WebSocket med dialog, knappeevents, bekreftelser og status-events.
-- Direkte OpenAI Realtime for tekst og Responses for kode, konfigurerbare modeller.
-- Fast kompakt hardwareprofil i hver kodeforespørsel, inkludert korrigeringer.
-- Serverhåndhevet build_confirm/proposal_id og run_confirm/package_id.
-- Lua 5.4-validering og begrenset PC-simulering i separat prosess uten nøkkelmiljø.
-- Reproduserbar ZIP, payload-/arkivkontrollsummer, versjonshistorikk og rollback.
-- Timeout, diskgrenser, restart-recovery, logging og heartbeat.
-- Interaktiv mock-klient og fire faste offline-prototyper: sirkel, Snake, RGB, IMU.
+- models.py/config.py: protokoll 0.2, kapabiliteter, scoped token, lydgrenser.
+- auth.py/protocol.py: autentisert enhetsidentitet, eierskap, varige event-ID-er og felles dispatch.
+- service.py/storage.py: gjenopptakelse, historikk, restart-recovery og migrering av gammel PC-current.
+- devices.py: installasjons-, start-, stopp- og rollback-kvitteringer; separat fysisk historikk per enhet/prosjekt.
+- ai.py: validert Realtime-funksjon, lokal samtalehistorikk ved reconnect, prosjektkode ved endringer, transkripsjon og talesyntese.
+- audio.py: autentisert WAV-opplasting, validering, deduplisering, avbrudd, kortlivet PCM og opprydding.
+- builds.py/lua_worker.py: faktiske kapabilitets-/minnegrenser, tidligere kildekode som utgangspunkt, atomisk pakkelevering og presiserte Lua-argumenter.
+- FIRE_DEVICE_CONTEXT.md: faktisk gjennomgått firmware, OS-knapper, bibliotekkrav og kjente adapterbegrensninger.
+- start.ps1: ny installasjon ved endret prosjektmetadata, fortsatt én kommando.
+- contracts/, PROTOCOL-v0.2.md, LUA_API.md, OPERATIONS.md, README og rootstatus/instruksjoner.
+- Nye enhets-/lyd-/SDK-/recovery-tester og scripts/device_smoke_test.py, scripts/check_openai.py.
 
-## Observerte testresultater
+## Kontrakt
 
-`python -m pytest -q --junitxml=test-results.xml`: **35 bestått**.
-Én deprecation-advarsel kommer fra Starlettes testklient som bruker httpx;
-den påvirker ikke den kjørende backendprosessen. Testene dekker:
+Tidlig publisert protokollcommit: b9849c24ef507475c28d153db1798eb0d0c4b33e.
+Den oppdaterte autoritative kontrakten er PROTOCOL-v0.2.md med genererte skjemaer
+i contracts/. Lua-kontrakten er LUA_API.md og den injiserte hardwareprofilen.
 
-- health, kontekst, autentisering, LAN-tokenkrav og inputgrenser;
-- full WS-dialog → forslag → bekreftelse → pakke → bekreftet PC-kjøring;
-- ingen bygg uten riktig proposal_id; knapp B er ikke en bekreftelse;
-- ingen kjøring uten riktig package_id; nye meldinger ugyldiggjør forslag;
-- tre korrigeringer, timeout, heartbeat, avbrudd og umiddelbar kansellering;
-- én global byggejobb, workspace-grense og gjenoppretting etter omstart;
-- feil blir lagret også når en byggemappe treffer diskgrensen;
-- ZIP-integritet, manipulert arkiv, current/previous/backup og rollback;
-- bevegelig sirkel, Snake, RGB og IMU med 180 simulerte frames;
-- nektede OS-/Python-/debug-/loader-API-er, uendelig løkke og minnepress;
-- redigering av hemmeligheter fra kode, ZIP, metadata, logger og HTTP-feil;
-- OpenAI-SDK-forespørsel med modell, kontekst, siste feil, JSON-schema og store=false;
-- Realtime-tekstformat og ren feil når OpenAI-nøkkel mangler.
+Backend skiller testet, installert, startet og bekreftet fungerende pakke.
+`current` for fysisk enhet endres først ved korrelert app_healthy etter app_started.
+PC-simulering oppdaterer kun last_simulated_package_id. Gamle prototypeverdier
+for current/previous/backup migreres til uttrykkelig simulert historikk.
 
-Mot en faktisk lokal server bestod i tillegg `scripts/smoke_test.py --all-examples`:
-**4 av 4**. Alle fire fikk kontrollert ZIP-nedlasting og bekreftet PC-simulering.
-IDs, manifester, kontrollsummer og progressfaser ligger i
-`workspace/logs/smoke-report.json`. Kilde og stdout/stderr ligger i de tilhørende
-byggemappene og loggene. `test-results.xml` inneholder den maskinlesbare testrapporten.
+## Faktisk verifisert
 
-Startskriptet `start.ps1 -Mock` er kjørt på denne PC-en. `/health` svarte OK i
-mock-modus. En samtidig ekstra start ble avvist av arbeidsmappens prosesslås.
-Sirkelpakken ble gjenskapt med `fire_backend.reproduce` med identisk SHA256.
-`pip check` fant ingen avhengighetsfeil.
-Den faktiske interaktive `mock.ps1 -Demo`-klienten er også kjørt med `/build`,
-`/run` og `/quit`: sirkelappen fullførte 180 frames og 361 API-operasjoner.
+`pytest -q --junitxml=test-results.xml`: **71 bestått**, inkludert den eksisterende
+testdekningen tilpasset korrigerte current-semantikker. Én advarsel gjelder
+Starlettes overgang fra httpx i testklienten; ingen test feiler.
 
-**Ekte OpenAI-kall er ikke verifisert**, fordi OPENAI_API_KEY ikke var satt.
-SDK-/protokolltestene bruker simulerte OpenAI-svar. Ingen mock-resultater er
-fremstilt som live AI-generering. Nøkkel, kreditt og faktisk modelltilgang må
-bekreftes ved første ekte API-test. Backend har ingen avhengighet av denne chatten.
+Nye kontroller dekker scoped identitet/eierskap, kvitterings-ID-er, feil checksum,
+gamle boot-ID-er, duplikate bekreftelser, endret payload med samme event-ID,
+gjenopptakelse/restart/utløp, ukjent resultat etter avbrutt eventbehandling,
+naturlig appstopp, sene stoppkvitteringer, supersedert installasjon, rollback,
+versjonshistorikk per prosjekt og avvisning av manglende hardwaretjenester.
+Et leveringsavbrudd beholder en allerede validert pakke; install_retry kan gi ny
+installasjonskommando uten en ny AI-generering. Prosjektendringer gjenbruker
+lagret samtale, bekreftet plan, manifest og forrige kode. Skjemaeksport kontrolleres.
 
-## Før M5Stack-integrasjon
+Lydtestene dekker større autentiserte opptak enn den ordinære HTTP-grensen,
+format/sampling/kanaler/lengde/stillhet, strømmede overstore opplastinger,
+gjentatt turn-ID, tekstfallback ved talefeil, avbrudd og sletting av lyddata.
+SDK-kontrakttester bruker faktisk installert OpenAI SDK og simulerte HTTP/Realtime-
+svar, inkludert multipart-transkripsjon, funksjonsresultater og PCM-deltaer.
 
-1. Les det eksisterende FIRE OS-prosjektet når det blir tilgjengelig. Bekreft
-   M5Unified/M5GFX-versjoner, native API-er, knappelogikk, layout og reelt ledig minne.
-2. Avtal Lua-kontrakten mot eksisterende OS. Dagens `fire.*`-API er foreslått og
-   implementert bare i PC-simulatoren, ikke i firmwaren.
-3. Implementer Lua-runtime på FIRE med separat miljø per app, instruksjonshook,
-   minnegrense, korte callbacks, stopprettighet for OS og et reservert exit-signal.
-4. Koble display/buttons/RGB/IMU/time til OS-tjenestene. Mic/speaker/Wi-Fi/BLE/SD
-   er reservert; de skal senere få begrensede OS-adaptere og eksplisitte tillatelser.
-5. Implementer WebSocket-klient, nettverksoppsett og lokalt backend-token på FIRE.
-   OpenAI-nøkkelen skal fortsatt bare finnes på PC.
-6. Implementer trygg pakkeoverføring til SD med checksum, midlertidig mappe,
-   atomisk aktivering og device-bekreftelse. Ingen firmware-.bin, OTA eller flashing.
-7. Koble faktisk app_failed/app_stopped til watchdog og device-rollback. Dagens
-   rollback er backend-metadata og beviser ikke device-rollback.
-8. Test sirkel, Snake, RGB og IMU på fysisk enhet før lyd. Legg til mikrofon-/lyd-
-   transport og Realtime-audio først etter at mock-/tekstflyten og hardware-runtime
-   fungerer. Legg til OS-isolasjon hvis backend senere skal håndtere ubetrodde brukere.
+Mot en faktisk kjørende lokal backend:
 
-Automatisk Windows-oppstart og brannmuråpning er ikke aktivert. Prosessen kan
-kjøres fra startskriptet så lenge PC-en er på. Egen driftstjeneste kan settes opp
-senere med ønsket restart-/innloggingspolicy.
+- **4/4** eldre PC-smoke-flyter bestod: sirkel, Snake, RGB og IMU.
+- **5/5** enhetsemulerte flyter bestod: de samme fire og en syntetisk lydflyt.
+- Emulert klient lastet ned og validerte størrelse/SHA256/ZIP, sendte
+  installasjonskvittering, egen kjørebekreftelse og start/healthy/stopp-kvitteringer.
+- Lua ble simulert også hos testklienten etter run_confirm.
+- Opplastet mock-lyd ga mock-transkripsjon og en testtone; PCM-hash/nedlasting og
+  avspillingskvitteringer ble kontrollert. Dette var ikke ekte talegjenkjenning.
+- Oppstart via start.ps1 oppgraderte lokalt til backend 0.2.0.
+- `pip check`: ingen avhengighetsfeil.
+
+Lokale rapporter: test-results.xml, workspace/logs/smoke-report.json og
+workspace/logs/device-smoke-report.json. Disse runtime-dataene er ikke lagt i Git.
+
+## Ikke verifisert / gjenstående eksterne avhengigheter
+
+**Ekte OpenAI-kall er ikke utført.** OPENAI_API_KEY mangler. Kjøring av
+check_openai.py --live rapporterte not_run, live_verified=false. Modell-/konto-
+tilgang, faktisk norsk transkripsjon og talesyntese må verifiseres når nøkkel er satt.
+
+**Fysisk M5Stack-integrasjon er ikke fullført.** Inspektert firmwarecommit 65f8f3e
+har lokal AI-demo, .bin/OTA-laster og lagring av OpenAI-nøkkel, men mangler klient
+for denne protokollen, begrenset Lua-runtime og trygg SD-installasjon for Lua.
+Firmwareagenten må implementere kontrakten, erstatte nøkkelfeltet med backend-
+adresse/enhetstoken og annonsere bare faktisk implementerte tjenester.
+
+Deretter må ekte opptak/avspilling, maskinvareadaptere, minne, OS-navigasjon,
+SD-avbrudd, fysisk appstart og rollback testes på FIRE. En autentisert emulert
+klients kvitteringer er testdata, ikke bevis på kjøring på maskinvare.
+
+Full-dupleks tale, Lua-tilgang til mic/speaker/nett/SD og vilkårlige assets er ikke
+del av kontrakt 0.2/fire-lua-0.1. Første versjon bruker avgrensede taleopptak og
+Lua-apper med maksimalt ti sekunders faktisk kjøretid per start.
+
+Automatisk Windows-oppstart og brannmuråpning er dokumentert, men ikke aktivert.

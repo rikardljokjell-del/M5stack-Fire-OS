@@ -34,7 +34,8 @@ def test_http_health_context_auth_and_limits(settings):
         headers = {"Authorization": "Bearer " + "x" * 32}
         context = client.get("/device/context", headers=headers).json()
         assert "GPIO39" in context["context"]
-        assert context["source_verified"] is False
+        assert context["source_verified"] is True
+        assert context["firmware_runtime_verified"] is False
         assert client.post("/session/start", json={}, headers=headers).status_code == 200
         assert client.post("/session/start", content="x" * 9000).status_code == 413
         assert client.get("/projects/invalid.id", headers=headers).status_code == 400
@@ -69,7 +70,8 @@ async def test_confirmations_and_package_integrity(settings):
             await service.confirm_run(session, "build-wrong")
         result = await service.confirm_run(session, session.package_id)
         assert result["target"] == "pc_simulation"
-        assert service.store.get("projects", session.project_id)["current"] == session.package_id
+        assert service.store.get("projects", session.project_id)["last_simulated_package_id"] == session.package_id
+        assert service.store.get("projects", session.project_id)["current"] is None
         assert service.store.get("builds", build["id"])["status"] == "ready"
         assert (service.store.path("builds", build["id"], "") / "build-manifest.json").exists()
         archive.write_bytes(archive.read_bytes() + b"tamper")
@@ -134,9 +136,10 @@ async def test_version_rotation_rollback(settings):
             ids.append(session.package_id)
             await service.confirm_run(session, session.package_id)
         project = service.store.get("projects", session.project_id)
-        assert [project[k] for k in ("backup", "previous", "current")] == ids
-        await service.device_failed(session, ids[2])
-        assert service.store.get("projects", session.project_id)["current"] == ids[1]
+        assert [project[k] for k in ("simulated_backup", "simulated_previous", "last_simulated_package_id")] == ids
+        assert [project[k] for k in ("backup", "previous", "current")] == [None, None, None]
+        with pytest.raises(Conflict):
+            await service.device_failed(session, ids[2])
     finally:
         await service.close()
 
@@ -264,5 +267,34 @@ async def test_small_build_quota_still_records_failure(settings):
         assert session.state == "failed"
         assert "disk limit" in service.store.get("builds", session.build_id)["error"]
         assert not service.store.list("packages")
+    finally:
+        await service.close()
+
+
+async def test_project_edits_reuse_saved_history_manifest_and_source(settings):
+    class CaptureProvider(MockProvider):
+        def __init__(self):
+            self.previous = []
+
+        async def generate(self, summary, context, error=None, previous=None):
+            self.previous.append(previous)
+            return await super().generate(summary, context, error, previous)
+
+    provider = CaptureProvider()
+    service = Backend(settings, provider)
+    try:
+        first = await proposed(service)
+        await service.confirm_build(first, first.proposal_id)
+        await first.task
+        first_package = first.package_id
+        await service.stop(first)
+        edited = await service.start(SessionStart(device_id="pc-editor", project_id=first.project_id))
+        assert edited.history and "last_confirmed_summary" in service.context_for(edited)
+        await service.text(edited, "Lag en sirkel")
+        await service.confirm_build(edited, edited.proposal_id)
+        await edited.task
+        assert provider.previous[0] is None and "function update" in provider.previous[1]
+        folder = service.store.path("builds", edited.build_id, "")
+        assert json.loads((folder / "request.json").read_text(encoding="utf-8"))["base_package_id"] == first_package
     finally:
         await service.close()

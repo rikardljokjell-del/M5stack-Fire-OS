@@ -74,25 +74,36 @@ class Builder:
     def __init__(self, settings, store, provider, context):
         self.settings, self.store, self.provider, self.context = settings, store, provider, context
 
-    async def build(self, build, project, progress):
+    async def build(self, build, project, progress, capabilities=None, context=None):
         build_id = build["id"]
         folder = self.store.path("builds", build_id, "")
         folder.mkdir(exist_ok=False)
         # Retained inputs allow revalidation/repackaging without another paid API call.
-        self.store.write(folder / "request.json", {
-            "summary": build["summary"], "context": self.context,
-            "context_sha256": sha256(self.context.encode("utf-8")),
+        context = context or self.context
+        request = {
+            "summary": build["summary"], "context": context, "capabilities": capabilities,
+            "base_package_id": project.get("latest_package"),
+            "context_sha256": sha256(context.encode("utf-8")),
             "model": self.settings.openai_code_model, "mode": self.settings.fire_ai_mode,
             "python": platform.python_version(),
             "dependencies": {n: metadata.version(n) for n in ("openai", "lupa", "pydantic")},
             "max_corrections": 3,
-        })
+        }
+        if len(canonical(request)) > self.settings.fire_max_build_kb * 1024:
+            raise ValueError("Per-build disk limit exceeded")
+        self.store.write(folder / "request.json", request)
         last_error, previous = None, None
+        if project.get("latest_package"):
+            base = self.store.get("packages", project["latest_package"])
+            archive_path = self.store.path("packages", base["id"], ".zip")
+            verify_archive(archive_path, base["manifest"], base["archive_sha256"])
+            with zipfile.ZipFile(archive_path) as archive:
+                previous = archive.read(f"apps/{project['id']}/main.lua").decode("utf-8")
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
             for attempt in range(4):  # initial generation plus at most THREE corrections
                 await progress("generating", 10 + attempt * 3, f"Genererer Lua, forsøk {attempt + 1}")
-                generated = await self.provider.generate(build["summary"], self.context, last_error, previous)
+                generated = await self.provider.generate(build["summary"], context, last_error, previous)
                 # Redact before persisting, validating or packaging any model output.
                 generated = type(generated).model_validate(self.store.redactor.value(generated.model_dump()))
                 payload = generated.main_lua.encode("utf-8")
@@ -110,7 +121,10 @@ class Builder:
                 await progress("compiling", 50, "Kontrollerer Lua 5.4; ingen firmwarekompilering")
                 await progress("testing", 65, "Tester 180 frames i begrenset PC-simulering")
                 try:
-                    result = await simulate(generated.model_dump(), self.store, build_id)
+                    if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
+                        raise ValueError("Generated app requests services absent from actual device capabilities")
+                    budgets = {"max_memory": capabilities["max_memory"], "max_runtime_ms": capabilities["max_runtime_ms"]} if capabilities else {}
+                    result = await simulate({**generated.model_dump(), **budgets}, self.store, build_id)
                     break
                 except (ValueError, asyncio.TimeoutError) as error:
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
@@ -122,6 +136,7 @@ class Builder:
             manifest = Manifest(
                 id=project["id"], name=generated.name, version=f"0.1.{version}",
                 required_services=generated.required_services,
+                **budgets,
                 permissions=[f"fire.{s}" for s in generated.required_services], checksum=sha256(payload),
             ).model_dump()
             archive_path = work / "app.zip"
@@ -139,9 +154,16 @@ class Builder:
             self.store.write(folder / "simulation.json", result)
             (folder / "main.lua").write_bytes(payload)
             self.store.write(folder / "build-manifest.json", package)
+            if sum(p.stat().st_size for p in folder.rglob("*") if p.is_file()) > self.settings.fire_max_build_kb * 1024:
+                raise ValueError("Per-build disk limit exceeded")
             self.store.reserve(package["size_bytes"] + len(canonical(package)))
             destination = self.store.path("packages", build_id, ".zip")
-            shutil.copyfile(archive_path, destination)
+            staged = destination.with_suffix(".zip.tmp")
+            try:
+                shutil.copyfile(archive_path, staged)
+                os.replace(staged, destination)
+            finally:
+                staged.unlink(missing_ok=True)
             self.store.put("packages", build_id, package)
             self.store.log(build_id, f"Package tests passed. SHA256={package['archive_sha256']}")
             return package

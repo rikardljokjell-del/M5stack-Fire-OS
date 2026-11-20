@@ -1,123 +1,44 @@
 # FIRE Developer protocol
 
-**Firmware integration contract: [PROTOCOL-v0.2.md](PROTOCOL-v0.2.md).**
-Version 0.2 separates simulation from device installation/running, uses scoped
-device tokens, durable event IDs and correlated receipts. Implement that version
-for physical devices. The old 0.1 PC-client reference follows below; its `current`
-semantics are superseded by 0.2. Backend implementation and verification are in progress.
+## Physical-device contract: 0.2
 
-## Legacy PC protocol v0.1
+Use **[PROTOCOL-v0.2.md](PROTOCOL-v0.2.md)** for physical firmware integration.
+It specifies scoped authentication, event/session/boot IDs, capabilities, text,
+audio, explicit confirmations, package downloads, installation/start/healthy/stop
+receipts, rollback, deadlines, reconnection and deduplication.
 
-Endpoint: `ws://PC-IP:8765/ws/device`. Samme forbindelse brukes gjennom dialog,
-bekreftelser og byggestatus. Ved aktivt backend-token brukes Authorization-header.
-JSON-meldinger er maksimalt 8192 UTF-8-bytes; tekstfelt maks 4000 tegn.
-Ukjente felter og hendelsestyper avvises. Ingen binær lydtransport i v0.1.
+- [Device JSON Schema](../contracts/device-event-v0.2.schema.json)
+- [Manifest JSON Schema](../contracts/manifest-fire-lua-0.1.schema.json)
+- [Lua API and resource contract](LUA_API.md)
+- [Actual verification status](DELIVERY.md)
 
-## Klient → backend
+Schemas are generated with `python -m fire_backend.contracts`. Pytest checks that
+committed schemas match the implementation. JSON Schema describes field shapes
+and required receipt fields; backend additionally checks identity, state, nonce,
+boot, ownership, checksum and capability relationships.
 
-Start sesjon først:
+Backend implementation is tested with an emulated firmware peer. Physical FIRE
+and live OpenAI remain unverified; neither is implied by a successful mock test.
 
-```json
-{"type":"device_event","device_id":"m5stack-fire-01","event":"session_start"}
-```
+## Legacy PC client: 0.1
 
-`project_id` kan settes ved start for videre arbeid i et eksisterende prosjekt.
-En annen aktiv sesjon med samme `device_id` avvises. Alle senere meldinger må
-bruke samme enhets-ID som sesjonen. ID-er er små bokstaver/tall, `_` eller `-`,
-1–64 tegn, med bokstav/tall først.
-
-```json
-{"type":"device_event","device_id":"m5stack-fire-01","event":"text","text":"Lag en animasjon med en sirkel som beveger seg."}
-```
+The delivered interactive mock client remains compatible. It connects to
+`ws://127.0.0.1:8765/ws/device`, optionally with the administrator Bearer token.
+It omits protocol_version/target, which default to 0.1/pc_simulation.
 
 ```json
-{"type":"device_event","device_id":"m5stack-fire-01","event":"button","button":"B","action":"pressed"}
+{"type":"device_event","device_id":"pc-mock-01","event":"session_start"}
 ```
 
-Knapper A/B/C og pressed/released/long_pressed anerkjennes, men starter aldri
-bygg eller kjøring. Eksplisitte bekreftelser er egne hendelser med serverens ID:
+Then send text, await build_proposal, explicitly send build_confirm with its
+proposal_id, await package_ready, explicitly send run_confirm with package_id.
+Buttons are notifications and never substitute for confirmations.
 
-```json
-{"type":"device_event","device_id":"m5stack-fire-01","event":"build_confirm","proposal_id":"proposal-..."}
-```
+PC run_result has target=pc_simulation. It updates only the project's simulated
+history, not physical current/previous/backup. Physical receipts are rejected for
+PC sessions. Disconnection stops a 0.1 session; durable resume requires 0.2.
 
-```json
-{"type":"device_event","device_id":"m5stack-fire-01","event":"run_confirm","package_id":"build-..."}
-```
-
-`proposal_id` konsumeres ved byggestart. Ny brukertekst gjør tidligere forslag
-ugyldige. Feil ID, duplikatbekreftelse og feil state gir error, ikke et nytt bygg.
-`run_confirm` krever pakke fra den samme sesjonen og prosjektet, en vellykket
-build og nye integritetskontroller. Modellen får ingen metode for bekreftelse.
-
-Andre hendelser:
-
-- `ping` → `pong` med gjeldende sesjonsstatus.
-- `session_stop` → avbryter dialog/bygg/test, lukker Realtime og forkaster forslag.
-- `app_failed` med `package_id` → fremtidig device-feilrapport; validerer at ID
-  samsvarer med prosjektets current og ruller tilbake metadata. Starter ingenting.
-- `app_stopped` er reservert; avvises i PC-prototypen fordi ingen device-runtime
-  er tilkoblet. Bruk session_stop.
-
-## Backend → klient
-
-`session_started`: session_id, device_id, project_id, state, mode og eventuelle
-proposal_id/package_id/build_id. `mode` er alltid eksplisitt `mock` eller `openai`.
-Sesjonsmeldinger har stigende `seq` og `session_id`. Dette gir rekkefølge i én
-forbindelse; det er ikke en vedvarende meldingskø eller replay-garanti.
-
-```json
-{"type":"ui_event","event":"assistant_state","state":"listening","session_id":"session-...","seq":2}
-```
-
-```json
-{"type":"assistant_message","text":"Jeg lager en grønn sirkel som beveger seg. Bekreft bygging.","session_id":"session-...","seq":4}
-```
-
-```json
-{"type":"build_proposal","proposal_id":"proposal-...","project_id":"app-...","summary":"Grønn sirkel på svart bakgrunn","session_id":"session-...","seq":6}
-```
-
-```json
-{"type":"build_progress","build_id":"build-...","phase":"compiling","progress":50,"message":"Kontrollerer Lua 5.4; ingen firmwarekompilering","eta_seconds":null,"session_id":"session-...","seq":10}
-```
-
-`eta_seconds` er null når varigheten er ukjent. Progress er fasebasert, ikke et
-målt compiler-estimat. Heartbeat gjentar siste status hvert tiende sekund under
-lange operasjoner. Faser: preparing, generating, validating, compiling, testing,
-packaging, ready, failed. uploading er reservert og sendes først når faktisk
-enhetstransport er implementert; backend påstår ikke at en pakke er lastet til FIRE.
-
-`package_ready`: package_id, fullstendig manifest, archive_sha256 og relativ
-download_url. HTTP-nedlasting krever samme backend-token.
-
-`run_result`: package_id, target=`pc_simulation`, status=`completed`, antall frames
-og API-operasjoner. Ingen melding om faktisk FIRE-kjøring sendes.
-
-`rollback`: stopped_package_id, current og forklaring.
-
-`error`: code og kort message. Ingen nøkler, rå OpenAI-feilobjekter eller
-forespørselsheadere inkluderes. Full lokal logg er begrenset og hemmeligheter
-redigeres. `session_stopped` avslutter sesjonen.
-
-## State-maskin og gjenoppkobling
-
-```text
-idle -> listening -> processing
-processing -> clarification_needed -> processing
-processing -> awaiting_build_confirmation
-awaiting_build_confirmation --build_confirm--> building
-building <-> testing
-building/testing -> ready_to_run
-ready_to_run --run_confirm--> running -> ready_to_run
-operasjonsfeil -> failed
-failed -> processing (ny bestilling)
-alle aktive tilstander --session_stop/disconnect--> idle
-```
-
-Alle nettverks-/konto-/kodefeil stopper aktuell operasjon. Ingen installasjon eller
-automatisk kjøring følger. Én byggesluse gjelder hele backend, så to prosjekter
-bygger ikke samtidig. Backend fortsetter å ta imot ping og stopp mens OpenAI
-arbeider. Et frakoblet WS stopper sin sesjon, inkludert pågående bygg. Ferdige
-prosjekter/pakker beholdes. Ny tilkobling starter en ny sesjon med ferske ID-er
-og nye bekreftelser; gamle godkjenninger gjenopptas ikke automatisk.
+Control messages are <=8192 UTF-8 bytes. Unknown fields/events are rejected.
+Progress reports phases and repeats during long builds; ETA may be null.
+session_stop explicitly cancels current work. App packages never contain firmware
+binaries, and no route performs flashing or OTA.

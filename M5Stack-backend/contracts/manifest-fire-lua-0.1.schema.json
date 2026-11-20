@@ -31,10 +31,17 @@
     },
     "required_services": {
       "items": {
-        "type": "string"
+        "enum": [
+          "buttons",
+          "display",
+          "imu",
+          "rgb",
+          "time"
+        ]
       },
       "title": "Required Services",
-      "type": "array"
+      "type": "array",
+      "uniqueItems": true
     },
     "max_memory": {
       "default": 262144,
@@ -52,10 +59,17 @@
     },
     "permissions": {
       "items": {
-        "type": "string"
+        "enum": [
+          "fire.buttons",
+          "fire.display",
+          "fire.imu",
+          "fire.rgb",
+          "fire.time"
+        ]
       },
       "title": "Permissions",
-      "type": "array"
+      "type": "array",
+      "uniqueItems": true
     },
     "checksum": {
       "pattern": "^[a-f0-9]{64}$",

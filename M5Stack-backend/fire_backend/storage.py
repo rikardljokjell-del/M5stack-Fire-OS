@@ -26,7 +26,7 @@ class Store:
         self.redactor = redactor
         self.max_bytes = max_bytes
         self.failure_reserve = min(65536, max_bytes // 8)
-        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions"):
+        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio"):
             (self.root / name).mkdir(parents=True, exist_ok=True)
 
     def path(self, group: str, item_id: str, suffix=".json") -> Path:
@@ -46,6 +46,8 @@ class Store:
         temp = path.with_name(path.name + ".tmp")
         try:
             temp.write_bytes(payload)
+            with temp.open("r+b") as handle:
+                os.fsync(handle.fileno())
             os.replace(temp, path)
         finally:
             temp.unlink(missing_ok=True)
@@ -82,10 +84,19 @@ class Store:
         self.path("projects", project_id).unlink()
 
     def recover(self):
+        for project in self.list("projects"):
+            if project.get("schema_version", 1) < 2:
+                project.update(last_simulated_package_id=project.get("current"),
+                               simulated_previous=project.get("previous"), simulated_backup=project.get("backup"),
+                               current=None, previous=None, backup=None, schema_version=2)
+                self.put("projects", project["id"], project, critical=True)
         for session in self.list("sessions"):
-            if session["state"] != "idle":
+            if session.get("protocol_version") != "0.2" and session["state"] != "idle":
                 session.update(state="idle", proposal_id=None, package_id=None)
                 self.put("sessions", session["session_id"], session, critical=True)
+        for device in self.list("devices"):
+            device.update(online=False, runtime_status="unknown")
+            self.put("devices", device["id"], device, critical=True)
         for build in self.list("builds"):
             if build["status"] not in {"ready", "failed"}:
                 build.update(status="failed", phase="failed", error="Backend restarted during build")
@@ -98,3 +109,5 @@ class Store:
         for folder in (self.root / "builds").glob("*/tmp-*"):
             if folder.is_dir():
                 shutil.rmtree(folder)
+        for path in (self.root / "packages").glob("*.zip.tmp"):
+            path.unlink(missing_ok=True)

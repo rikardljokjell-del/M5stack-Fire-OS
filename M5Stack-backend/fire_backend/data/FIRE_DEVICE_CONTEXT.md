@@ -1,18 +1,24 @@
 # FIRE OS AI Developer — fixed device context, contract fire-lua-0.1
 
-## Verified input and pending source inspection
-User-supplied hardware facts below. FIRE OS sources are NOT present on this PC.
-M5Unified/M5GFX versions, native headers, native OS APIs and exact button timing
-are UNKNOWN until the existing project is supplied. Do not invent them.
-The Lua APIs below are a PROPOSED backend prototype contract, NOT existing
-FIRE OS APIs. No Lua runtime or device integration has been installed on FIRE.
+## Inspected source and capability boundary
+Firmware inspected READ ONLY in repository M5Stack-device/, commit
+65f8f3e434047191481e8c0dd4e797d711cb9d4d (src/fire_os.cpp, fire_os.h, main.cpp,
+platformio.ini and poc/partitions_external_loader.csv).
+This firmware has a local timer-based AI Developer UI, not a WebSocket client or
+Lua runtime. The Lua API below is the shared fire-lua-0.1 implementation contract;
+it is implemented in the PC simulator, not yet verified on physical FIRE.
+Always intersect it with actual capabilities supplied by the device handshake.
+Never promise undeclared services. No firmware modification or flashing from AI.
 
 ## Board and memory
 M5Stack FIRE; ESP32 240 MHz dual core; 16 MB flash; 4 MB PSRAM;
 approximately 520 KB internal SRAM; 320x240 ILI9342C LCD.
-Arduino, M5Unified/M5GFX (versions pending); PlatformIO env m5stack-fire-ble;
+Arduino, M5Unified dependency constraint ^0.2.7, transitive M5GFX (exact resolved
+versions NOT present in the committed PlatformIO output); env m5stack-fire-ble;
 NimBLE-Arduino 2.5.2. Never build or flash a firmware image for an AI app.
-Reported board capacities are not free heap measurements. Prototype app budget:
+Reported board capacities are not free heap measurements. OS uses a 320x240
+16-bit M5Canvas (153600 pixel bytes before overhead), audio, Wi-Fi and BLE.
+Actual free memory must be measured on device. Maximum prototype app budget:
 262144 Lua allocator bytes, 10000 ms simulated runtime, 200000 instructions per
 callback, 180 test frames at 16 ms, maximum 20000 API operations.
 FIRE implementation must enforce these independently before accepting packages.
@@ -25,11 +31,16 @@ Grove B GPIO36/26; Grove C GPIO16/17. Never expose arbitrary GPIO operations.
 ## OS services and ownership
 Reuse existing Wi-Fi Manager, Bluetooth/BLE Manager, SD/File Explorer,
 M5Unified display/audio/mic/IMU and shared button/navigation model.
-Only the OS owns these devices. The app/OTA firmware system MUST NOT be used
-for sandbox apps. Native source reference, for later READ ONLY inspection:
-C:\Users\Rikard\Documents\PlatformIO\Projects\M5Fire\src\fire_os.cpp,
-fire_os.h, main.cpp, platformio.ini, poc\partitions_external_loader.csv.
-No current backend operation reads or writes these paths.
+Only the OS owns these devices. The existing .bin/OTA app loader MUST NOT be
+used for sandbox apps. Native public APIs include fireOs.dateTime(),
+requestWifi(bool) and safeMode(); these are NOT Lua exports. Never expose OS
+settings, credential writes or native object pointers to generated code.
+Main loop calls M5.update(), pollButtons(), OS updates and draw(), delay(25).
+Lua adapter must yield to that loop, not replace it. Current BLE RGB helper sets
+all ten pixels to one colour. Per-pixel fire.rgb.set requires a new OS adapter;
+only advertise rgb when that adapter is actually implemented.
+Microphone is initialized but AI Developer has no recording transport in this
+source revision. Do not rely on outdated README claims of an existing recorder.
 
 ## App format
 ZIP entries under apps/<id>/ with manifest.json, main.lua, assets/, appdata/.
@@ -53,9 +64,12 @@ Implemented PC simulation services (declare every used service):
   Draw in 320x240, coordinates x=0..319 y=0..239, text <=80 chars.
   Simulation records bounded drawing commands; does not open a graphics window.
 - fire.buttons.pressed("A"|"B"|"C") -> boolean. Edge callback actions:
-  pressed/released/long_pressed. Prototype mapping A=previous/left,
-  B=select/action, C=next/right. Long A is reserved for OS exit and is NOT
-  delivered to apps. Native button timing/navigation requires later confirmation.
+  pressed/released only. Prototype mapping A=previous/left,
+  B=select/action, C=next/right. Long press threshold 650 ms; double-click window
+  350 ms if configured. Actual OS: long A=home, long B=quick settings,
+  long C=back. Reserve all these long actions for OS, never deliver to Lua apps.
+  Native short clicks are recognized on release (or after double-click window).
+  Firmware adapter provides down-state/edge events without losing OS exits.
 - fire.rgb.set(index,r,g,b), index 0..9, RGB channels 0..255, managed by OS.
 - fire.imu.accel() -> {x=...,y=...,z=...}; synthetic accelerometer in PC tests.
 - fire.time.millis() -> monotonic simulated milliseconds; no blocking sleep.
