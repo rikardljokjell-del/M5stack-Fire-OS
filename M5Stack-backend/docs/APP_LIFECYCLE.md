@@ -5,6 +5,12 @@ Dette er det additive grensesnittet for tidlig valg av ny/eksisterende app.
 Eksisterende session_start/build_confirm/run_confirm beholdes. Gamle klienter
 uten appvalg virker fortsatt; nye klienter velger før første tale/teksttur.
 
+Valget kan også sendes direkte i `session_start`: app_mode=new, eller
+app_mode=update med app_id/project_id og valgfri base_package_id. Send app_mode
+kun ved et bevisst valg; automatisk reconnect bruker resume eller utelater
+app_mode. Ellers kan en tom project_id ikke skilles fra en vanlig reconnect.
+Som overgang godtas også en entydig, eid SD-app-ID i project_id (firmware 6d97989).
+
 Alle hendelser har vanlig device_event/0.2-konvolutt med event_id, device_id,
 boot_id og session_id. Samme token/eierskapskontroll og deduplisering gjelder.
 
@@ -64,3 +70,17 @@ Sletting kan også skje mens backend er frakoblet; neste komplette inventar
 avklarer forskjellen. Historiske healthy-/installasjonskvitteringer beholdes,
 men Windows viser ikke appen som installert/kjørende når den er rapportert borte.
 Gjenoppretting fra PC er et eksplisitt valg og krever fortsatt separat RUN.
+
+## Sletting fra backend
+
+Backend kan slette prosjektet og alle PC-versjoner med eksplisitt administratorhandling,
+men bare etter app_deleted eller en komplett, vellykket SD-skanning som
+bekrefter at appen mangler. Offline/ukjent/ufullstendig inventar gir aldri
+tillatelse. Ingen aktive bygg, installasjoner eller kjøringer må pågå.
+FIRE må være tilkoblet, SD må være klar, og fraværsrapporten må komme fra den
+nåværende oppkoblingen/booten. Etter reconnect eller utilgjengelig SD kreves en
+fersk rapport. Avslutt/velg bort prosjektets samtale før sletting. En pågående
+nedlasting sperrer også sletting. Dette sjekkes på serveren selv om UI er omgått.
+Vanlig DELETE `/projects/<project_id>` håndhever dette på serveren; Windows
+viser en egen sletteknapp bare når samme kontroll tillater det.
+PC-sletting sender aldri en fysisk slettekommando til FIRE.
