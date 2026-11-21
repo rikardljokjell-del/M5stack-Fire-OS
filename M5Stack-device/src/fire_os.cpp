@@ -1985,6 +1985,11 @@ void FireOS::open(Screen screen) {
     scanExternalApps();
   }
   if (screen == Screen::AiDeveloper) {
+    if (wifiMode_ != 2 && backendHost_.length() > 0 &&
+        backendToken_.length() >= 24) {
+      // AI Developer needs the shared Wi-Fi service in Auto mode too.
+      requestWifi(true);
+    }
     aiDeveloperMode_ = 0;
     aiWorkflowState_ = 0;
     aiBuildProgress_ = 0;
@@ -3413,6 +3418,12 @@ void FireOS::saveBackendSetupFields(const String& host, const String& port,
     backendStatus_ = backendClient_->status();
   }
   stopWifiSetup();
+  if (wifiMode_ != 2 && backendHost_.length() > 0 &&
+      backendToken_.length() >= 24) {
+    // Backend configuration is an explicit app dependency. Auto mode may
+    // keep Wi-Fi off at boot, so request it when the backend is configured.
+    requestWifi(true);
+  }
 }
 
 bool FireOS::wifiSetupTokenValid(const String& token) const {

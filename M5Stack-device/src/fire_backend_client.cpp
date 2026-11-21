@@ -238,8 +238,8 @@ void FireBackendClient::service(bool wifiConnected) {
     setState(State::Connecting, "Connecting to backend");
     // A failed backend must never stall the UI for the platform TCP default
     // timeout.  Retry is deliberately throttled by reconnectAt_.
-    client_.setTimeout(250);
-    if (!client_.connect(host_.c_str(), port_, 250)) {
+    client_.setTimeout(1200);
+    if (!client_.connect(host_.c_str(), port_, 1200)) {
       setState(State::Offline, "Backend connection failed");
       return;
     }
