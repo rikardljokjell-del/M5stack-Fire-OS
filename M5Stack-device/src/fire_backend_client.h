@@ -11,6 +11,7 @@ class FireBackendClient {
 
   void configure(const String& host, uint16_t port, const String& token,
                  const String& deviceId, const String& firmwareVersion);
+  void setProjectId(const String& projectId) { projectId_ = projectId; }
   void setCallbacks(void* context, MessageCallback message,
                     StateCallback state);
   void setReverseTransport(FireReverseTransport* transport) {
@@ -23,6 +24,7 @@ class FireBackendClient {
 
   bool configured() const { return host_.length() > 0 && token_.length() >= 24; }
   bool connected() const { return state_ == State::Connected; }
+  bool sessionReady() const { return connected() && sessionId_.length() > 0; }
   bool active() const { return state_ != State::Offline; }
   const String& bootId() const { return bootId_; }
   const String& status() const { return status_; }
@@ -59,6 +61,7 @@ class FireBackendClient {
   uint16_t port_ = 8765;
   String token_;
   String deviceId_ = "m5stack-fire-01";
+  String projectId_;
   String firmwareVersion_ = "fire-os-device";
   String bootId_;
   String sessionId_;

@@ -245,6 +245,11 @@ class FireOS {
   FireReverseTransport reverseTransport_;
   String backendStatus_;
   String aiTurnId_;
+  bool aiProjectPickerActive_ = false;
+  uint8_t aiProjectSelection_ = 0;
+  uint8_t aiProjectOffset_ = 0;
+  String aiProjectId_;
+  String aiProjectName_;
   String aiProposalId_;
   String aiPackageId_;
   String aiInstallId_;

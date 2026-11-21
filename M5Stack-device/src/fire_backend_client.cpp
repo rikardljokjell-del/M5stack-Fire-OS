@@ -341,6 +341,9 @@ void FireBackendClient::handleHandshake() {
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +
                    jsonEscape(deviceId_) + "\",\"event\":\"session_start\"" +
+                   (projectId_.length() > 0
+                        ? ",\"project_id\":\"" + jsonEscape(projectId_) + "\""
+                        : String()) +
                    fields + "}";
   sendFrame(0x1, reinterpret_cast<const uint8_t*>(payload.c_str()),
             payload.length());

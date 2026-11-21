@@ -2086,6 +2086,13 @@ void FireOS::open(Screen screen) {
     appScanPending_ = true;
   }
   if (screen == Screen::AiDeveloper) {
+    aiProjectPickerActive_ = true;
+    aiProjectSelection_ = 0;
+    aiProjectOffset_ = 0;
+    aiProjectId_ = "";
+    aiProjectName_ = "New app";
+    scanLuaApps();
+    if (backendClient_) backendClient_->setProjectId("");
     aiDeveloperMode_ = 0;
     aiWorkflowState_ = 0;
     aiBuildProgress_ = 0;
@@ -2413,9 +2420,48 @@ void FireOS::handleHelpButton(uint8_t index) {
 }
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
+  if (aiProjectPickerActive_) {
+    const uint8_t itemCount = luaAppCount_ + 2;  // New app + apps + Back.
+    if (index == 0) {
+      aiProjectSelection_ =
+          (aiProjectSelection_ + itemCount - 1) % itemCount;
+    } else if (index == 2) {
+      aiProjectSelection_ = (aiProjectSelection_ + 1) % itemCount;
+    } else if (aiProjectSelection_ == itemCount - 1) {
+      back();
+    } else {
+      aiProjectPickerActive_ = false;
+      if (aiProjectSelection_ == 0) {
+        aiProjectId_ = "";
+        aiProjectName_ = "New app";
+      } else {
+        const uint8_t selected = aiProjectSelection_ - 1;
+        const String source = luaAppPaths_[selected];
+        const int slash = source.lastIndexOf('/');
+        const String appFolder = slash > 0 ? source.substring(0, slash) : source;
+        const String appId = sdBaseName(appFolder);
+        aiProjectId_ = preferences.getString(
+            ("lua_project_" + appId).c_str(), appId);
+        aiProjectName_ = luaAppNames_[selected];
+      }
+      if (backendClient_) backendClient_->setProjectId(aiProjectId_);
+      aiWorkflowText_ = aiProjectId_.length() > 0
+                            ? "EDIT " + aiProjectName_
+                            : "NEW APP";
+      aiDeveloperMode_ = 0;
+      aiWorkflowState_ = 0;
+      aiAssistantText_ = "";
+      redrawRequested_ = true;
+    }
+    if (aiProjectSelection_ < aiProjectOffset_)
+      aiProjectOffset_ = aiProjectSelection_;
+    if (aiProjectSelection_ >= aiProjectOffset_ + 5)
+      aiProjectOffset_ = aiProjectSelection_ - 4;
+    return;
+  }
   if (index == 1) {
     if (aiWorkflowState_ == 0) {
-      if (backendClient_ && backendClient_->connected()) {
+      if (backendClient_ && backendClient_->sessionReady()) {
         if (!startAiRecording()) {
           aiWorkflowText_ = aiAudioError_.length() > 0
                                 ? aiAudioError_
@@ -2423,18 +2469,27 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
           aiDeveloperMode_ = 0;
           aiWorkflowState_ = 0;
         }
-      } else {
+      } else if (!backendClient_ || !backendClient_->configured()) {
         aiWorkflowState_ = 1;
         aiDeveloperMode_ = 1;
         aiTurnId_ = "turn-" + String(millis(), HEX);
+      } else {
+        aiWorkflowText_ = backendClient_->connected()
+                              ? "WAITING FOR SESSION"
+                              : "BACKEND OFFLINE";
+        aiDeveloperMode_ = 2;
       }
     } else if (aiWorkflowState_ == 1) {
-      if (backendClient_ && backendClient_->connected()) {
+      if (backendClient_ && backendClient_->sessionReady()) {
         finishAiRecording();
-      } else {
+      } else if (!backendClient_ || !backendClient_->configured()) {
         aiWorkflowState_ = 2;
         aiDeveloperMode_ = 2;
         aiWorkflowStarted_ = millis();
+      } else {
+        aiWorkflowText_ = "BACKEND OFFLINE";
+        aiWorkflowState_ = 0;
+        aiDeveloperMode_ = 0;
       }
     }
   } else if (index == 0 && aiWorkflowState_ == 3) {
@@ -2487,7 +2542,7 @@ bool FireOS::startAiRecording() {
   aiAudioError_ = "Audio capture unavailable in this build";
   return false;
 #else
-  if (!backendClient_ || !backendClient_->connected() ||
+  if (!backendClient_ || !backendClient_->sessionReady() ||
       !M5.Mic.isEnabled() || aiAudioCaptureActive_) {
     aiAudioError_ = aiAudioCaptureActive_ ? "Recording already active"
                                  : "Microphone or backend unavailable";
@@ -2559,6 +2614,7 @@ void FireOS::updateAiAudio() {
         aiAudioWavLength_ = 44 + payloadBytes;
         aiAudioCaptureFinished_ = true;
         if (!aiAudioStopSent_) finishAiRecording();
+        aiWorkflowText_ = "SENDING AUDIO";
         aiAudioUploadOk_ = backendClient_ && backendClient_->uploadAudio(
             aiTurnId_, aiAudioBuffer_, aiAudioWavLength_);
         if (!aiAudioUploadOk_)
@@ -2571,7 +2627,7 @@ void FireOS::updateAiAudio() {
   if (aiAudioUploadFinished_) {
     aiAudioUploadFinished_ = false;
     if (!aiAudioUploadOk_) {
-      aiWorkflowText_ = aiAudioError_.length() > 0 ? aiAudioError_ : "AUDIO UPLOAD FAILED";
+      aiWorkflowText_ = "AUDIO SEND FAILED - TRY AGAIN";
       aiWorkflowState_ = 0;
       aiDeveloperMode_ = 0;
     } else {
@@ -2679,7 +2735,8 @@ void FireOS::updateLuaApp() {
 
 void FireOS::updateBackend() {
   if (!backendClient_) return;
-  const bool backendDemand = screen_ == Screen::AiDeveloper ||
+  const bool backendDemand = (screen_ == Screen::AiDeveloper &&
+                              !aiProjectPickerActive_) ||
                               screen_ == Screen::AiApi ||
                               screen_ == Screen::LuaApp ||
                               (packageManager_ && packageManager_->busy());
@@ -2750,7 +2807,17 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "assistant_message" || type == "transcript") {
     aiAssistantText_ = jsonStringField(message, "text");
-    aiDeveloperMode_ = type == "assistant_message" ? 3 : 2;
+    if (type == "assistant_message") {
+      // A completed answer returns to the conversational idle state so B can
+      // start another turn and add context before the user builds.
+      aiDeveloperMode_ = 3;
+      aiWorkflowState_ = 0;
+      aiWorkflowText_ = "ANSWER - SPEAK AGAIN";
+    } else {
+      aiDeveloperMode_ = 2;
+      aiWorkflowState_ = 2;
+      aiWorkflowText_ = "TRANSCRIBED - WAITING FOR AI";
+    }
     return;
   }
   if (type == "ui_event") {
@@ -2786,6 +2853,12 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "package_ready") {
     aiPackageId_ = jsonStringField(message, "package_id");
+    const String projectId = jsonStringField(message, "project_id");
+    if (projectId.length() > 0 && aiPackageId_.length() > 0) {
+      preferences.putString(("lua_project_" + aiPackageId_).c_str(),
+                            projectId);
+      saveSettings();
+    }
     aiWorkflowText_ = "PACKAGE READY";
     return;
   }
@@ -2794,6 +2867,7 @@ void FireOS::handleBackendMessage(const String& message) {
     aiInstallId_ = jsonStringField(message, "install_id");
     const String url = jsonStringField(message, "download_url");
     const String hash = jsonStringField(message, "archive_sha256");
+    const String projectId = jsonStringField(message, "project_id");
     const uint32_t size = static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
     const String commandBoot = jsonStringField(message, "boot_id");
     if (backendClient_ && commandBoot.length() > 0 &&
@@ -2806,6 +2880,10 @@ void FireOS::handleBackendMessage(const String& message) {
     const bool accepted = packageManager_ && packageManager_->startDownload(
         backendHost_, backendPort_, backendToken_, url, aiPackageId_, aiInstallId_,
         hash, size);
+    if (projectId.length() > 0 && aiPackageId_.length() > 0) {
+      preferences.putString(("lua_project_" + aiPackageId_).c_str(), projectId);
+      saveSettings();
+    }
     aiWorkflowText_ = accepted ? "DOWNLOADING" : "DOWNLOAD REJECTED";
     return;
   }
@@ -5109,6 +5187,32 @@ void FireOS::drawShortcuts() {
 void FireOS::drawAiDeveloper() {
   // AI Developer is intentionally immersive: no system status bar or panel.
   ui.fillSprite(TFT_BLACK);
+  if (aiProjectPickerActive_) {
+    ui.fillRoundRect(12, 28, 296, 188, 12, kPanel);
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 45, "AI DEVELOPER", TFT_WHITE, 2, kPanel);
+    const uint8_t itemCount = luaAppCount_ + 2;
+    const uint8_t visible = min<uint8_t>(6, itemCount - aiProjectOffset_);
+    for (uint8_t row = 0; row < visible; ++row) {
+      const uint8_t item = aiProjectOffset_ + row;
+      const bool selected = item == aiProjectSelection_;
+      const int y = 72 + row * 22;
+      if (selected) ui.fillRoundRect(20, y - 4, 280, 19, 4, kCyan);
+      String label = item == 0
+                         ? "New app"
+                         : item == itemCount - 1
+                             ? "Back"
+                             : luaAppNames_[item - 1];
+      if (label.length() > 28) label = label.substring(0, 25) + "...";
+      drawText(160, y, label, selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+    drawText(48, 232, "PREV", kMuted, 1, TFT_BLACK);
+    drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
+    drawText(272, 232, "NEXT", kMuted, 1, TFT_BLACK);
+    ui.setTextDatum(TL_DATUM);
+    return;
+  }
   static const char* const states[] = {"REST", "LISTEN", "THINK", "TALK"};
   const uint32_t now = millis();
   static uint32_t nextBlinkAt = 0;
@@ -5260,17 +5364,38 @@ void FireOS::drawAiDeveloper() {
     if (assistant.length() > 34) assistant = assistant.substring(0, 31) + "...";
     drawText(cx, 174, assistant, 0xBDF7, 1, TFT_BLACK);
   }
-  if (aiWorkflowState_ == 3) {
-    drawText(160, 226, "A BUILD    C ABORT", 0x7BEF, 1, TFT_BLACK);
-  } else if (aiWorkflowState_ == 5) {
-    drawText(160, 226, "A RUN      C ABORT", 0x7BEF, 1, TFT_BLACK);
-  }
   if (aiWorkflowState_ == 4) {
-    ui.drawRoundRect(45, 218, 230, 7, 3, 0x5AEB);
-    ui.fillRoundRect(47, 220,
+    ui.drawRoundRect(45, 214, 230, 6, 3, 0x5AEB);
+    ui.fillRoundRect(47, 216,
                      static_cast<int32_t>(226 * aiBuildProgress_ / 100), 3,
                      1, 0x5AEB);
   }
+  const char* leftHint = "HOLD HOME";
+  const char* centerHint = "SPEAK";
+  const char* rightHint = "HOLD BACK";
+  if (aiWorkflowState_ == 1) {
+    centerHint = "FINISH";
+  } else if (aiWorkflowState_ == 2) {
+    centerHint = "WAIT";
+  } else if (aiWorkflowState_ == 3) {
+    leftHint = "BUILD";
+    centerHint = "QUICK";
+    rightHint = "CANCEL";
+  } else if (aiWorkflowState_ == 4) {
+    leftHint = "WAIT";
+    centerHint = "QUICK";
+    rightHint = "CANCEL";
+  } else if (aiWorkflowState_ == 5) {
+    leftHint = "RUN";
+    centerHint = "QUICK";
+    rightHint = "CANCEL";
+  } else if (aiWorkflowState_ == 6) {
+    centerHint = "QUICK";
+  }
+  ui.setTextDatum(MC_DATUM);
+  drawText(46, 232, leftHint, kMuted, 1, TFT_BLACK);
+  drawText(160, 232, centerHint, kMuted, 1, TFT_BLACK);
+  drawText(274, 232, rightHint, kMuted, 1, TFT_BLACK);
   ui.setTextDatum(TL_DATUM);
 
 #ifdef FIRE_OS_BLE

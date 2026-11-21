@@ -114,6 +114,42 @@ Device status bruker `Backend connected (Reverse TCP)` eller
 reverse-forbindelse er ikke verifisert før Windows-broen faktisk har koblet
 til en M5Stack FIRE.
 
+## AI Developer: nytt prosjekt eller eksisterende app
+
+AI Developer må starte med et eksplisitt prosjektvalg før første taleomgang:
+
+- `New app`: FIRE sender `session_start` uten `project_id`; backend oppretter
+  et nytt prosjekt.
+- `Continue app`: FIRE viser installerte Lua-apper fra SD-kortet. Valgt app-ID
+  sendes som `project_id` i `session_start`, slik at backend gjenbruker riktig
+  samtale, prosjekt og tidligere kode.
+
+Backend må aldri velge prosjekt basert på appnavn alene. Den skal validere
+`project_id`, beholde historikk per prosjekt og sørge for at build/run alltid
+bruker valgt prosjekt.
+
+## Lokal sletting og versjoner
+
+Brukeren kan slette en Lua-app fra FIRE OS App Manager. Sletting på enheten må
+ikke slette backendens immutable build, prosjektlogg eller versjonshistorikk.
+Ved neste `session_start`/snapshot må backend behandle appen som ikke installert
+på denne enheten inntil ny `device_install_result` er mottatt. Backend skal ikke
+automatisk installere appen på nytt.
+
+Device bevarer tidligere validerte Lua-versjoner på SD-kortet når en app
+oppdateres, og rollback skal bare godkjenne en versjon som faktisk finnes lokalt.
+Backend må skille mellom:
+
+- prosjektets immutable builds og historikk,
+- installert versjon på denne enheten,
+- faktisk kjørende/healthy versjon,
+- lokal sletting eller manglende SD-kort.
+
+En fremtidig eksplisitt `app_deleted`-event må først legges til i den versjonerte
+protokollkontrakten før den sendes fra firmware. Inntil da skal backend bruke
+ny session-status og manglende fysisk installasjonskvittering uten å anta at
+appen fortsatt finnes.
+
 ## Backend-agentens neste arbeid
 
 1. Oppdater `fire_backend/data/FIRE_DEVICE_CONTEXT.md` til nåværende firmware-
