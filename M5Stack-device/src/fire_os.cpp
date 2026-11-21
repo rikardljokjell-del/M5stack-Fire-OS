@@ -2580,7 +2580,13 @@ bool FireOS::startAiRecording() {
 void FireOS::finishAiRecording() {
   if (aiAudioStopSent_) return;
   aiAudioStopSent_ = true;
-  if (backendClient_) backendClient_->listenStop(aiTurnId_);
+  if (!backendClient_ || !backendClient_->listenStop(aiTurnId_)) {
+    aiAudioError_ = "Backend session not ready";
+    aiWorkflowText_ = "SESSION LOST - TRY AGAIN";
+    aiWorkflowState_ = 0;
+    aiDeveloperMode_ = 0;
+    return;
+  }
   aiWorkflowState_ = 2;
   aiDeveloperMode_ = 2;
   aiWorkflowText_ = "PROCESSING AUDIO";

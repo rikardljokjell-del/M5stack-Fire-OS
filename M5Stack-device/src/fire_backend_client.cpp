@@ -180,7 +180,10 @@ bool FireBackendClient::sendFrame(uint8_t opcode, const uint8_t* data,
 }
 
 bool FireBackendClient::sendEvent(const String& event, const String& fields) {
-  if (!connected()) return false;
+  // Protocol 0.2 requires session_id on every event after session_start.
+  // Do not emit a malformed listen/build event while the server's
+  // session_started message is still in flight.
+  if (!sessionReady()) return false;
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +
                    jsonEscape(deviceId_) + "\",\"event\":\"" + event +
@@ -323,8 +326,10 @@ void FireBackendClient::service(bool wifiConnected) {
 void FireBackendClient::handleHandshake() {
   WiFiClient* client = activeClient();
   if (!client) return;
-  while (client->available() && handshakeBuffer_.length() < 4096)
+  while (client->available() && handshakeBuffer_.length() < 4096) {
     handshakeBuffer_ += static_cast<char>(client->read());
+    if (handshakeBuffer_.endsWith("\r\n\r\n")) break;
+  }
   if (handshakeBuffer_.indexOf("\r\n\r\n") < 0) return;
   if (!handshakeBuffer_.startsWith("HTTP/1.1 101")) {
     disconnect();
