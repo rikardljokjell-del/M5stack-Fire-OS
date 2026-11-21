@@ -117,6 +117,7 @@ class FireOS {
   uint8_t carouselToIndex_ = 0;
   int8_t carouselDirection_ = 0;
   int16_t carouselOffset_ = 0;
+  uint32_t carouselLastStepAt_ = 0;
   bool carouselAnimating_ = false;
   uint8_t appsIndex_ = 0;
   uint8_t settingsIndex_ = 0;

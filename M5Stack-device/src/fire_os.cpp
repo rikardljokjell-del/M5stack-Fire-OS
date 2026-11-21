@@ -746,7 +746,13 @@ void FireOS::update() {
   updateTimeSync();
   manageDisplayPower();
   if (carouselAnimating_) {
-    carouselOffset_ += 48;
+    const uint32_t now = millis();
+    const uint32_t elapsed = now - carouselLastStepAt_;
+    // Keep the same visual speed when the input loop runs faster than before.
+    // 48 px per 25 ms was the previous animation rate.
+    const int16_t step = static_cast<int16_t>(max<uint32_t>(1, elapsed * 48 / 25));
+    if (elapsed > 0) carouselLastStepAt_ = now;
+    carouselOffset_ += step;
     if (carouselOffset_ >= kCarouselDistance) {
       carouselOffset_ = kCarouselDistance;
       carouselAnimating_ = false;
@@ -759,7 +765,8 @@ void FireOS::update() {
                                     ? 33
                                     : animatedScreen ? 25 : 50;
   if (millis() - lastDrawAt_ >= drawInterval) draw();
-  delay(25);
+  // Keep button sampling responsive while still yielding to Wi-Fi/BLE tasks.
+  delay(5);
 }
 
 void FireOS::updateBootFeedback() {
@@ -2061,6 +2068,7 @@ void FireOS::startMainSlide(uint8_t nextIndex, int8_t direction) {
   carouselToIndex_ = nextIndex;
   carouselDirection_ = direction;
   carouselOffset_ = 0;
+  carouselLastStepAt_ = millis();
   carouselAnimating_ = true;
   mainIndex_ = nextIndex;
 }
@@ -2085,6 +2093,7 @@ void FireOS::goToBootApp() {
   mainIndex_ = mainItemAtPosition(0);
   carouselAnimating_ = false;
   carouselOffset_ = 0;
+  carouselLastStepAt_ = 0;
 }
 
 void FireOS::openQuickSettings() {
