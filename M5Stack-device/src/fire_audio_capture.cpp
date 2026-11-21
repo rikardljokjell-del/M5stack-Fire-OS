@@ -42,7 +42,10 @@ bool fireRecordMic(int16_t* samples, size_t sampleCount, uint32_t sampleRate) {
       const int32_t average = static_cast<int32_t>(sum / chunk);
       for (size_t index = 0; index < chunk; ++index) {
         const int32_t centered = static_cast<int32_t>(raw[index]) - average;
-        samples[captured + index] = static_cast<int16_t>(centered << 4);
+        const int32_t amplified = centered * 32;
+        samples[captured + index] = static_cast<int16_t>(constrain(
+            amplified, static_cast<int32_t>(INT16_MIN),
+            static_cast<int32_t>(INT16_MAX)));
       }
       captured += chunk;
     }

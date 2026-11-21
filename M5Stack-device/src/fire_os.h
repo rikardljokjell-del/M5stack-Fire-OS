@@ -258,7 +258,7 @@ class FireOS {
   String aiAssistantText_;
   String aiWorkflowText_;
   static constexpr uint32_t kAiAudioSampleRate = 16000;
-  static constexpr uint32_t kAiAudioSeconds = 5;
+  static constexpr uint32_t kAiAudioSeconds = 15;
   static constexpr size_t kAiAudioSamples =
       kAiAudioSampleRate * kAiAudioSeconds;
   static constexpr size_t kAiAudioWavBytes = 44 + kAiAudioSamples * 2;

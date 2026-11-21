@@ -2584,7 +2584,7 @@ bool FireOS::startAiRecording() {
   }
   aiWorkflowState_ = 1;
   aiDeveloperMode_ = 1;
-  aiWorkflowText_ = "LISTENING (5 SEC MAX)";
+  aiWorkflowText_ = "LISTENING (15 SEC MAX)";
   aiWorkflowStarted_ = millis();
   return true;
 #endif
@@ -2632,6 +2632,16 @@ void FireOS::updateAiAudio() {
         aiAudioCaptureActive_ = false;
         const uint32_t payloadBytes =
             aiAudioCapturedSamples_ * sizeof(int16_t);
+        int32_t peak = 0;
+        const auto* pcm = reinterpret_cast<const int16_t*>(aiAudioBuffer_ + 44);
+        for (size_t index = 0; index < aiAudioCapturedSamples_; ++index) {
+          const int32_t value = pcm[index];
+          peak = max<int32_t>(peak, value < 0 ? -value : value);
+        }
+        Serial.printf("FIRE audio capture: samples=%u peak=%ld wav=%u\\n",
+                      static_cast<unsigned>(aiAudioCapturedSamples_),
+                      static_cast<long>(peak),
+                      static_cast<unsigned>(44 + payloadBytes));
         writeWavHeader(aiAudioBuffer_, payloadBytes, kAiAudioSampleRate);
         aiAudioWavLength_ = 44 + payloadBytes;
         aiAudioCaptureFinished_ = true;
