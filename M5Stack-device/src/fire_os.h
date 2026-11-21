@@ -84,11 +84,13 @@ class FireOS {
 
   struct ButtonState {
     bool down = false;
+    bool rawPressed = false;
     bool longTriggered = false;
     bool wakeOnly = false;
     bool clickPending = false;
     uint32_t started = 0;
     uint32_t lastClickAt = 0;
+    uint32_t rawChangedAt = 0;
   };
 
   static constexpr uint8_t kButtonCount = 3;
@@ -105,6 +107,7 @@ class FireOS {
   static constexpr int16_t kCarouselDistance = 112;
   static constexpr uint32_t kLongPressMs = 650;
   static constexpr uint32_t kDoubleClickWindowMs = 350;
+  static constexpr uint32_t kButtonDebounceMs = 18;
 
   Screen screen_ = Screen::Main;
   Screen previousScreen_ = Screen::Main;
@@ -141,14 +144,16 @@ class FireOS {
   bool timeSyncConfigured_ = false;
   uint32_t timeSyncStarted_ = 0;
   uint32_t timeSyncLastConnectAttempt_ = 0;
+  uint32_t timeSyncLastPollAt_ = 0;
   String timeSyncStatus_;
   String timeSyncLast_;
   bool bluetoothEnabled_ = false;
   bool bluetoothBootInitPending_ = false;
+  bool bluetoothScanInProgress_ = false;
   bool bootFeedbackActive_ = false;
   uint32_t bootFeedbackStarted_ = 0;
   uint32_t bootFeedbackLastFrame_ = 0;
-  uint8_t bootFeedbackNote_ = 0;
+  bool bootMelodyStarted_ = false;
   uint8_t brightness_ = 180;
   uint8_t volume_ = 90;
   uint8_t brightnessStep_ = 6;
@@ -163,6 +168,9 @@ class FireOS {
   uint32_t lastActivity_ = 0;
   uint32_t lastDrawAt_ = 0;
   bool redrawRequested_ = true;
+  mutable int batteryLevelCached_ = -1;
+  mutable bool batteryChargingCached_ = false;
+  mutable uint32_t batteryStatusAt_ = 0;
   uint8_t displayPowerState_ = 0;
 
   static constexpr uint8_t kMaxFileEntries = 40;
@@ -207,6 +215,7 @@ class FireOS {
   uint32_t externalAppOffsets_[kMaxExternalApps] = {};
   bool externalAppCompatible_[kMaxExternalApps] = {};
   uint8_t externalAppCount_ = 0;
+  bool appScanPending_ = false;
   uint8_t externalAppSelection_ = 0;
   uint8_t externalAppOffset_ = 0;
   String selectedBootAppPath_;
@@ -220,6 +229,7 @@ class FireOS {
   String luaAppPaths_[kMaxLuaApps];
   String luaAppNames_[kMaxLuaApps];
   uint8_t luaAppCount_ = 0;
+  bool fileExplorerScanPending_ = false;
 
   FireLuaRuntime* luaRuntime_ = nullptr;
   bool luaRuntimeReady_ = false;
@@ -403,6 +413,7 @@ class FireOS {
   void startAiApiSetup();
   void stopWifiSetup();
   void scanBluetoothDevices();
+  void updateBluetoothScan();
   bool initBluetooth();
   bool connectBluetoothDevice(uint8_t index);
   void disconnectBluetoothDevice();
@@ -476,6 +487,7 @@ class FireOS {
   void drawBatteryIcon(int32_t x, int32_t y, int level, bool charging);
   int batteryLevel() const;
   bool batteryCharging() const;
+  void refreshBatteryStatus() const;
   void drawRow(uint8_t row, const String& label, bool selected,
                const String& value = String(), bool editing = false);
   void drawText(int32_t x, int32_t y, const String& text, uint16_t color,

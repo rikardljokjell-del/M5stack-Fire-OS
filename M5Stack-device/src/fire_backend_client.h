@@ -19,6 +19,7 @@ class FireBackendClient {
 
   bool configured() const { return host_.length() > 0 && token_.length() >= 24; }
   bool connected() const { return state_ == State::Connected; }
+  bool active() const { return state_ != State::Offline; }
   const String& status() const { return status_; }
 
   bool listenStart(const String& turnId);

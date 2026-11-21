@@ -17,6 +17,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <esp_sntp.h>
+#include <math.h>
 #ifdef FIRE_OS_BLE
 #include <NimBLEDevice.h>
 #endif
@@ -43,6 +44,41 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
+constexpr uint32_t kBootMelodySampleRate = 8000;
+constexpr size_t kBootMelodySampleCount = 3160;  // 395 ms at 8 kHz
+int8_t kBootMelodyPcm[kBootMelodySampleCount] = {};
+bool kBootMelodyPcmReady = false;
+
+void prepareBootMelody() {
+  if (kBootMelodyPcmReady) return;
+  struct Note {
+    float frequency;
+    uint16_t startMs;
+    uint16_t durationMs;
+  };
+  constexpr Note notes[] = {{523.251f, 0, 105},
+                            {659.255f, 130, 105},
+                            {783.991f, 260, 135}};
+  constexpr float kTwoPi = 6.28318530718f;
+  for (const Note& note : notes) {
+    const size_t start = note.startMs * kBootMelodySampleRate / 1000;
+    const size_t count = note.durationMs * kBootMelodySampleRate / 1000;
+    for (size_t sample = 0; sample < count; ++sample) {
+      const size_t position = start + sample;
+      if (position >= kBootMelodySampleCount) break;
+      float envelope = 1.0f;
+      const size_t edge = kBootMelodySampleRate / 100;  // 10 ms
+      if (sample < edge) envelope = static_cast<float>(sample) / edge;
+      if (count - sample <= edge)
+        envelope = min(envelope, static_cast<float>(count - sample) / edge);
+      const float phase = kTwoPi * note.frequency * sample /
+                          kBootMelodySampleRate;
+      kBootMelodyPcm[position] = static_cast<int8_t>(
+          sinf(phase) * 108.0f * envelope);
+    }
+  }
+  kBootMelodyPcmReady = true;
+}
 
 struct TimezoneInfo {
   const char* label;
@@ -699,7 +735,7 @@ void FireOS::begin() {
   bootFeedbackActive_ = bootRgbPulse_ || bootMelody_;
   bootFeedbackStarted_ = millis();
   bootFeedbackLastFrame_ = 0;
-  bootFeedbackNote_ = 0;
+  bootMelodyStarted_ = false;
 
   if (safeMode_) {
     Serial.println("FIRE OS safe mode: all three buttons held at boot");
@@ -738,8 +774,26 @@ void FireOS::update() {
   }
 #endif
   pollButtons();
+  // Render the result of a button event before optional background work.
+  if (redrawRequested_) draw();
+  if (appScanPending_) {
+    appScanPending_ = false;
+    if (screen_ == Screen::Apps || screen_ == Screen::AppsSettings) {
+      scanExternalApps();
+      redrawRequested_ = true;
+    }
+  }
+  if (fileExplorerScanPending_) {
+    fileExplorerScanPending_ = false;
+    if (screen_ == Screen::FileExplorer) {
+      initSdCard();
+      refreshSdDirectory();
+      redrawRequested_ = true;
+    }
+  }
   if (wifiSetupActive_) wifiSetupServer.handleClient();
   updateWifiState();
+  updateBluetoothScan();
   updateBackend();
   updateAiAudio();
   if (packageManager_) packageManager_->service(WiFi.status() == WL_CONNECTED);
@@ -771,6 +825,15 @@ void FireOS::update() {
                                     ? 33
                                     : animatedScreen ? 25 : 50;
   if (redrawRequested_ || millis() - lastDrawAt_ >= drawInterval) draw();
+  // Initialize BLE after the first Bluetooth settings frame is visible. BLE
+  // setup can take a noticeable amount of time and must not delay the menu
+  // transition itself.
+  if (bluetoothBootInitPending_ && screen_ == Screen::Bluetooth) {
+    bluetoothBootInitPending_ = false;
+    bluetoothEnabled_ = initBluetooth();
+    setBluetoothVisibility(bluetoothEnabled_);
+    redrawRequested_ = true;
+  }
   // Keep button sampling responsive while still yielding to Wi-Fi/BLE tasks.
   delay(5);
 }
@@ -794,16 +857,11 @@ void FireOS::updateBootFeedback() {
   }
 
   if (bootMelody_ && M5.Speaker.isEnabled()) {
-    // Use one fixed channel and start each note immediately.  Queueing the
-    // notes could make the final note start late when the speaker task was
-    // briefly busy during LCD/RGB startup.
-    static const uint32_t noteAt[] = {0, 130, 260};
-    static const float notes[] = {523.251f, 659.255f, 783.991f};
-    static const uint32_t durations[] = {105, 105, 135};
-    while (bootFeedbackNote_ < 3 && elapsed >= noteAt[bootFeedbackNote_]) {
-      M5.Speaker.tone(notes[bootFeedbackNote_],
-                      durations[bootFeedbackNote_], 0, true);
-      ++bootFeedbackNote_;
+    if (!bootMelodyStarted_) {
+      prepareBootMelody();
+      bootMelodyStarted_ = M5.Speaker.playRaw(
+          kBootMelodyPcm, kBootMelodySampleCount, kBootMelodySampleRate,
+          false, 1, 0, true);
     }
   }
 
@@ -1681,40 +1739,48 @@ void FireOS::pollButtons() {
       onButton(index, false);
     }
     const bool pressed = digitalRead(kButtonPins[index]) == LOW;
-    if (pressed && !buttons_[index].down) {
-      buttons_[index].down = true;
-      buttons_[index].longTriggered = false;
-      buttons_[index].started = now;
-      buttons_[index].wakeOnly = displayPowerState_ != 0;
-      if (displayPowerState_ != 0) {
-        wakeDisplay();
+    if (pressed != buttons_[index].rawPressed) {
+      buttons_[index].rawPressed = pressed;
+      buttons_[index].rawChangedAt = now;
+    }
+    if (buttons_[index].rawPressed != buttons_[index].down &&
+        now - buttons_[index].rawChangedAt >= kButtonDebounceMs) {
+      buttons_[index].down = buttons_[index].rawPressed;
+      if (buttons_[index].down) {
+        buttons_[index].longTriggered = false;
+        buttons_[index].started = now;
+        buttons_[index].wakeOnly = displayPowerState_ != 0;
+        if (displayPowerState_ != 0) {
+          wakeDisplay();
+        } else {
+          lastActivity_ = now;
+        }
       } else {
-        lastActivity_ = now;
+        const bool shortPress = !buttons_[index].longTriggered &&
+                                !buttons_[index].wakeOnly;
+        buttons_[index].wakeOnly = false;
+        if (shortPress) {
+          if (doubleClickAction_[index] == 0) {
+            onButton(index, false);
+          } else if (buttons_[index].clickPending &&
+                     now - buttons_[index].lastClickAt <=
+                         kDoubleClickWindowMs) {
+            buttons_[index].clickPending = false;
+            onDoubleClick(index);
+          } else {
+            buttons_[index].clickPending = true;
+            buttons_[index].lastClickAt = now;
+          }
+        }
       }
-    } else if (pressed && buttons_[index].down &&
-               !buttons_[index].wakeOnly && !buttons_[index].longTriggered &&
-               now - buttons_[index].started >= kLongPressMs) {
+    }
+    if (buttons_[index].down &&
+        !buttons_[index].wakeOnly && !buttons_[index].longTriggered &&
+        now - buttons_[index].started >= kLongPressMs) {
       buttons_[index].longTriggered = true;
       buttons_[index].clickPending = false;
       lastActivity_ = now;
       onButton(index, true);
-    } else if (!pressed && buttons_[index].down) {
-      const bool shortPress = !buttons_[index].longTriggered &&
-                              !buttons_[index].wakeOnly;
-      buttons_[index].down = false;
-      buttons_[index].wakeOnly = false;
-      if (shortPress) {
-        if (doubleClickAction_[index] == 0) {
-          onButton(index, false);
-        } else if (buttons_[index].clickPending &&
-                   now - buttons_[index].lastClickAt <= kDoubleClickWindowMs) {
-          buttons_[index].clickPending = false;
-          onDoubleClick(index);
-        } else {
-          buttons_[index].clickPending = true;
-          buttons_[index].lastClickAt = now;
-        }
-      }
     }
   }
 }
@@ -1730,6 +1796,10 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       return;
     }
     if (screen_ == Screen::Bluetooth && bluetoothScanDialog_) {
+#ifdef FIRE_OS_BLE
+      if (bluetoothScanInProgress_ && bluetoothScan) bluetoothScan->stop();
+#endif
+      bluetoothScanInProgress_ = false;
       bluetoothScanDialog_ = false;
       bluetoothUnknownDialog_ = false;
       return;
@@ -1979,15 +2049,19 @@ void FireOS::open(Screen screen) {
       bluetoothEnabled_ = false;
       bluetoothStatus_ = "Bluetooth Off";
     } else {
-      bluetoothEnabled_ = initBluetooth();
-      setBluetoothVisibility(bluetoothEnabled_);
+      bluetoothEnabled_ = bluetoothRadioReady;
+      bluetoothBootInitPending_ = !bluetoothRadioReady;
+      bluetoothStatus_ = bluetoothRadioReady ? "BLE ready" : "Starting BLE...";
     }
   }
   if (screen == Screen::Apps) {
     externalAppSelection_ = 0;
     externalAppOffset_ = 0;
     externalAppMessage_ = "";
-    scanExternalApps();
+    externalAppCount_ = 0;
+    luaAppCount_ = 0;
+    externalAppMessage_ = "Scanning apps...";
+    appScanPending_ = true;
   }
   if (screen == Screen::AppsSettings) {
     externalAppSelection_ = 0;
@@ -1996,14 +2070,12 @@ void FireOS::open(Screen screen) {
     appManagerActionMenu_ = false;
     appManagerActionIndex_ = 0;
     appManagerDeleteConfirm_ = false;
-    scanExternalApps();
+    externalAppCount_ = 0;
+    luaAppCount_ = 0;
+    externalAppMessage_ = "Scanning apps...";
+    appScanPending_ = true;
   }
   if (screen == Screen::AiDeveloper) {
-    if (wifiMode_ != 2 && backendHost_.length() > 0 &&
-        backendToken_.length() >= 24) {
-      // AI Developer needs the shared Wi-Fi service in Auto mode too.
-      requestWifi(true);
-    }
     aiDeveloperMode_ = 0;
     aiWorkflowState_ = 0;
     aiBuildProgress_ = 0;
@@ -2033,8 +2105,9 @@ void FireOS::open(Screen screen) {
     sdImageRendered_ = false;
     releaseSdImageBuffer();
     sdMessage_.clear();
-    initSdCard();
-    refreshSdDirectory();
+    sdEntryCount_ = 0;
+    sdMessage_ = "Opening SD...";
+    fileExplorerScanPending_ = true;
   }
 }
 
@@ -2595,13 +2668,30 @@ void FireOS::updateLuaApp() {
 }
 
 void FireOS::updateBackend() {
-  if (backendClient_) backendClient_->service(WiFi.status() == WL_CONNECTED);
+  if (!backendClient_) return;
+  const bool backendDemand = screen_ == Screen::AiDeveloper ||
+                              screen_ == Screen::AiApi ||
+                              screen_ == Screen::LuaApp ||
+                              (packageManager_ && packageManager_->busy());
+  if (!backendDemand) {
+    // Do not let a failed PC connection stall normal FIRE OS navigation.
+    if (backendClient_->active()) backendClient_->disconnect();
+    return;
+  }
+  if (backendClient_->configured() && wifiMode_ != 2 &&
+      WiFi.status() != WL_CONNECTED && !wifiConnectActive_ &&
+      wifiSsid_.length() > 0) {
+    // Start Auto-mode Wi-Fi only after the new screen has already been drawn.
+    requestWifi(true);
+  }
+  backendClient_->service(WiFi.status() == WL_CONNECTED);
 }
 
 void FireOS::backendState(void* context, bool connected, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   os->backendStatus_ = status;
+  os->redrawRequested_ = true;
   if (!connected && os->screen_ == Screen::AiDeveloper &&
       os->aiWorkflowState_ > 0) {
     os->aiWorkflowText_ = "BACKEND OFFLINE";
@@ -2641,6 +2731,7 @@ void FireOS::backendMessage(void* context, const String& message) {
 }
 
 void FireOS::handleBackendMessage(const String& message) {
+  redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
   if (type == "session_started") {
     aiWorkflowText_ = "CONNECTED";
@@ -3272,6 +3363,7 @@ void FireOS::startTimeSync() {
   timeSyncConfigured_ = false;
   timeSyncStarted_ = millis();
   timeSyncLastConnectAttempt_ = 0;
+  timeSyncLastPollAt_ = 0;
   timeSyncStatus_ = "Waiting for Wi-Fi...";
   if (WiFi.status() != WL_CONNECTED) requestWifi(true);
 }
@@ -3320,8 +3412,10 @@ void FireOS::updateTimeSync() {
       timeSyncStatus_ = "Synchronizing time...";
     }
     tm local{};
+    if (millis() - timeSyncLastPollAt_ < 250) return;
+    timeSyncLastPollAt_ = millis();
     if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED &&
-        getLocalTime(&local, 100) && local.tm_year + 1900 >= 2020) {
+        getLocalTime(&local, 25) && local.tm_year + 1900 >= 2020) {
       if (dateTime_.setSystemLocalDateTime(local)) {
         timeSyncLast_ = dateTime_.localDateTime();
         preferences.putString("wifi_time_last", timeSyncLast_);
@@ -3539,6 +3633,7 @@ void FireOS::scanBluetoothDevices() {
   bluetoothScanOffset_ = 0;
   bluetoothStatus_ = "Scanning BLE...";
   bluetoothScanCount_ = 0;
+  bluetoothScanInProgress_ = false;
   for (uint8_t index = 0; index < kMaxBluetoothDevices; ++index) {
     bluetoothNames_[index] = "";
     bluetoothAddresses_[index] = "";
@@ -3546,10 +3641,26 @@ void FireOS::scanBluetoothDevices() {
     bluetoothAddressTypes_[index] = 0;
   }
   bluetoothScan->clearResults();
-  // Active scan requests scan responses, where many devices publish their
-  // human-readable name. The longer window improves name coverage without
-  // keeping the radio scanning continuously.
-  NimBLEScanResults results = bluetoothScan->getResults(3000, false);
+  // Start asynchronously. A synchronous getResults(3000) blocks the entire
+  // FIRE UI loop and makes every button appear dead during the scan.
+  if (!bluetoothScan->start(3000, false, true)) {
+    bluetoothStatus_ = "BLE scan could not start";
+    bluetoothScanDialog_ = false;
+    return;
+  }
+  bluetoothScanInProgress_ = true;
+#else
+  bluetoothStatus_ = "BLE support not compiled";
+  bluetoothScanCount_ = 0;
+#endif
+}
+
+void FireOS::updateBluetoothScan() {
+#ifdef FIRE_OS_BLE
+  if (!bluetoothScanInProgress_ || !bluetoothScan) return;
+  if (bluetoothScan->isScanning()) return;
+  bluetoothScanInProgress_ = false;
+  NimBLEScanResults results = bluetoothScan->getResults();
   const int count = results.getCount();
   bluetoothScanCount_ = min(count, static_cast<int>(kMaxBluetoothDevices));
   for (int index = 0; index < bluetoothScanCount_; ++index) {
@@ -3566,9 +3677,7 @@ void FireOS::scanBluetoothDevices() {
                                String(count) + " devices"
                          : "Found " + String(count) + " BLE device(s)";
   bluetoothScan->clearResults();
-#else
-  bluetoothStatus_ = "BLE support not compiled";
-  bluetoothScanCount_ = 0;
+  redrawRequested_ = true;
 #endif
 }
 
@@ -3650,6 +3759,10 @@ void FireOS::handleBluetoothScanDialogButton(uint8_t index) {
         bluetoothScanSelection_ = 0;
         bluetoothScanOffset_ = 0;
       } else {
+#ifdef FIRE_OS_BLE
+        if (bluetoothScanInProgress_ && bluetoothScan) bluetoothScan->stop();
+#endif
+        bluetoothScanInProgress_ = false;
         bluetoothScanDialog_ = false;
       }
       return;
@@ -3846,6 +3959,11 @@ void FireOS::setBluetoothVisibility(bool visible) {
 }
 
 void FireOS::closeBluetoothSettings() {
+#ifdef FIRE_OS_BLE
+  if (bluetoothScanInProgress_ && bluetoothScan) bluetoothScan->stop();
+#endif
+  bluetoothScanInProgress_ = false;
+  bluetoothBootInitPending_ = false;
   bluetoothScanDialog_ = false;
   bluetoothUnknownDialog_ = false;
   setBluetoothVisibility(false);
@@ -5497,11 +5615,21 @@ void FireOS::drawPowerActions() {
 }
 
 int FireOS::batteryLevel() const {
-  return M5.Power.getBatteryLevel();
+  refreshBatteryStatus();
+  return batteryLevelCached_;
 }
 
 bool FireOS::batteryCharging() const {
-  return M5.Power.isCharging() == m5::Power_Class::is_charging;
+  refreshBatteryStatus();
+  return batteryChargingCached_;
+}
+
+void FireOS::refreshBatteryStatus() const {
+  if (batteryStatusAt_ != 0 && millis() - batteryStatusAt_ < 1000) return;
+  batteryStatusAt_ = millis();
+  batteryLevelCached_ = M5.Power.getBatteryLevel();
+  batteryChargingCached_ =
+      M5.Power.isCharging() == m5::Power_Class::is_charging;
 }
 
 void FireOS::drawWifiIcon(int32_t x, int32_t y, uint8_t state) {
