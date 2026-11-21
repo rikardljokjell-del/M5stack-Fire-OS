@@ -206,6 +206,8 @@ class DeviceLifecycle:
         else:
             raise ValueError("Unknown device receipt")
         self.store.put("devices", device["id"], device, critical=True)
+        session.last_error = (device.get("last_install_message", "Installasjonen feilet.") if event.event == "device_install_result" and event.status == "failed" else
+                              event.message or event.error_code or "Appen feilet på FIRE." if event.event == "app_failed" else "")
         await self.state(session, state)
         await self.emit(session, {"type": "device_status", "device": self.device_view(session)})
         return {"status": "recorded", "package_id": package_id}

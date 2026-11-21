@@ -260,9 +260,17 @@ async def test_reverse_websocket_package_run_receipts_and_large_wav_upload(tmp_p
                 request = (f"GET {offer['download_url']} HTTP/1.1\r\nHost: pc\r\nAuthorization: Bearer {TOKEN}\r\nConnection: close\r\n\r\n").encode()
                 head, body = await raw_http(fire, request)
                 assert head.startswith(b"HTTP/1.1 200") and len(body) == offer["size_bytes"]
+                # Current FIRE searches for this exact case on the wire.
+                assert b"\r\nContent-Length: " + str(len(body)).encode() in head
+                assert (ready["manifest"]["id"] + "-v" + ready["manifest"]["version"] + ".zip").encode() in head
                 assert hashlib.sha256(body).hexdigest() == offer["archive_sha256"]
                 archive = tmp_path / "received.zip"; archive.write_bytes(body)
                 verify_archive(archive, ready["manifest"], offer["archive_sha256"])
+                partial = (f"GET {offer['download_url']} HTTP/1.1\r\nHost: pc\r\nAuthorization: Bearer {TOKEN}\r\n"
+                           "Range: bytes=0-99\r\nConnection: close\r\n\r\n").encode()
+                range_head, range_body = await raw_http(fire, partial)
+                assert range_head.startswith(b"HTTP/1.1 206") and range_body == body[:100]
+                assert b"\r\nContent-Length: 100" in range_head
                 await device.until("event_ack", await device.send("device_install_result", package_id=offer["package_id"],
                     install_id=offer["install_id"], archive_sha256=offer["archive_sha256"], status="ok"))
                 (await http.post("/run/confirm", json={"session_id": device.sid, "package_id": offer["package_id"],

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .models import Manifest
 from .storage import canonical
+from .app_names import app_id_for
 
 
 def sha256(data):
@@ -132,7 +133,7 @@ class Builder:
             archive_path = self.store.path("packages", base["id"], ".zip")
             verify_archive(archive_path, base["manifest"], base["archive_sha256"])
             with zipfile.ZipFile(archive_path) as archive:
-                previous = archive.read(f"apps/{project['id']}/main.lua").decode("utf-8")
+                previous = archive.read(f"apps/{base['manifest']['id']}/main.lua").decode("utf-8")
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
             for attempt in range(4):  # initial generation plus at most THREE corrections
@@ -168,7 +169,7 @@ class Builder:
             await progress("packaging", 85, "Pakker validert app med SHA256")
             version = project.get("next_version", 1)
             manifest = Manifest(
-                id=project["id"], name=generated.name, version=f"0.1.{version}",
+                id=app_id_for(generated.name, project, self.store), name=generated.name, version=f"0.1.{version}",
                 required_services=generated.required_services,
                 **budgets,
                 permissions=[f"fire.{s}" for s in generated.required_services], checksum=sha256(payload),

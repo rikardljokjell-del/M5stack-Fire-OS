@@ -5,8 +5,10 @@ direkte OpenAI API. Ingen Docker, database eller avhengighet av desktopappen ved
 kjøring. All backendutvikling skjer i denne mappen. `M5Stack-device/` leses for
 integrasjon, men endres/bygges/flashes ikke av backendarbeidet.
 
-Backendstøtten for fysisk enhet og lyd er implementert og testet med en emulert
-firmwareklient. **Fysisk M5Stack og ekte OpenAI er ennå ikke verifisert.**
+Ekte OpenAI-dialog og kodegenerering er nå testet frem til Lua-validert ZIP.
+Fysisk reverse TCP/WebSocket er observert. **Full tale → installert/kjørende
+app på FIRE er fortsatt ikke verifisert.** Se [oppdatert ende-til-ende-status](docs/E2E_STATUS.md)
+og [gjenstående device-arbeid](docs/DEVICE_E2E_ACTIONS.md).
 Se [leveranserapport](docs/DELIVERY.md), [enhetskontrakt](docs/PROTOCOL-v0.2.md),
 [Lua-kontrakt](docs/LUA_API.md) og [drift](docs/OPERATIONS.md).
 

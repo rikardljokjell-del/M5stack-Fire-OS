@@ -19,6 +19,7 @@ from .storage import new_id
 from .security import SecretFilter
 from .service import Backend, Conflict
 from .reverse_tcp import ReverseTCP
+from .device_http import DeviceFileResponse
 
 
 def create_app(settings=None, provider=None):
@@ -142,7 +143,8 @@ def create_app(settings=None, provider=None):
                      "history": s.history[-12:], "progress": s.progress} for s in service.sessions.values() if not s.stopped]
         builds = service.store.list("builds")
         return {"sessions": sessions, "devices": service.store.list("devices"),
-                "builds": builds[-20:], "physical_verified": False, "transport": service.reverse_tcp.status()}
+                "builds": builds[-20:], "apps": service.app_library(),
+                "physical_verified": False, "transport": service.reverse_tcp.status()}
 
     @app.post("/desktop/sessions/{session_id}/text", dependencies=[Depends(desktop_auth)])
     async def desktop_text(session_id: str, request: Request, service: Backend = Depends(backend)):
@@ -156,6 +158,13 @@ def create_app(settings=None, provider=None):
                             event="text", event_id=new_id("desktop"), session_id=session.id,
                             boot_id=session.boot_id, text=data["text"])
         return await dispatch(service, session, event)
+
+    @app.post("/desktop/sessions/{session_id}/install", dependencies=[Depends(desktop_auth)])
+    async def desktop_install(session_id: str, request: Request, service: Backend = Depends(backend)):
+        data = await request.json()
+        if not isinstance(data, dict) or set(data) != {"package_id"} or not isinstance(data["package_id"], str):
+            raise HTTPException(422, "Expected package_id")
+        return await service.install_saved(service.session(session_id), data["package_id"])
 
     @app.post("/session/start")
     async def start(body: SessionStart, identity=Depends(auth), service: Backend = Depends(backend)):
@@ -275,7 +284,9 @@ def create_app(settings=None, provider=None):
         from .builds import verify_archive
         path = service.store.path("packages", item_id, ".zip")
         verify_archive(path, package["manifest"], package["archive_sha256"])
-        return FileResponse(path, media_type="application/zip", filename=f"{item_id}.zip", headers={"Cache-Control": "private, no-cache"})
+        manifest = package["manifest"]
+        return DeviceFileResponse(path, media_type="application/zip", filename=f"{manifest['id']}-v{manifest['version']}.zip",
+                                  headers={"Cache-Control": "private, no-cache"})
 
     @app.websocket("/ws/device")
     async def device(socket: WebSocket):

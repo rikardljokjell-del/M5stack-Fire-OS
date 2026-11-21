@@ -1,5 +1,12 @@
 # Oppfølging av BACKEND_HANDOFF.md
 
+Nyeste status 22. november: [E2E_STATUS.md](E2E_STATUS.md), og
+[konkret videre arbeid for device-agenten](DEVICE_E2E_ACTIONS.md).
+Ekte AI-pakke er kvittert installert på FIRE og startet manuelt av brukeren.
+AI Developer RUN feiler foreløpig med not_installed; NVS-nøkler er neste
+konkrete kontrollpunkt. Historiske kildefunn nedenfor må leses mot disse
+oppdateringene; ZIP/CRC, Lua-stack og flere ressursgrenser er rettet i 011e8f6.
+
 Backendgjennomgang 2026-11-21 av GitHub main på
 `069ea09e5ea88ddc5fab65c81fa73611ea94a111`. Lest: handoff, platformio.ini,
 README, fire_backend_client.*, fire_lua_runtime.*, fire_lua_package_manager.*

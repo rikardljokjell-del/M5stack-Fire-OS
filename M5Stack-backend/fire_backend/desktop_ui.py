@@ -95,7 +95,7 @@ class DesktopUI:
         tk.Label(nav, text="FIRE", bg=NAV, fg="#ff8456", font=("Segoe UI Black", 28)).pack(anchor="w", padx=25, pady=(27, 0))
         tk.Label(nav, text="BACKEND", bg=NAV, fg="white", font=("Segoe UI", 12)).pack(anchor="w", padx=27, pady=(0, 32))
         self.nav_buttons = {}
-        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Aktivitet", "Innstillinger"):
+        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Aktivitet", "Apper", "Innstillinger"):
             button = tk.Button(nav, text=name, command=lambda n=name: self.show(n), anchor="w", relief="flat",
                                bg=NAV, fg="#c1ccd9", activebackground="#293b51", activeforeground="white",
                                font=("Segoe UI", 12), padx=25, pady=12, bd=0, cursor="hand2")
@@ -125,6 +125,7 @@ class DesktopUI:
         self.transport_page(self.pages["Tilkobling"])
         self.openai_page(self.pages["OpenAI"])
         self.activity_page(self.pages["Aktivitet"])
+        self.apps_page(self.pages["Apper"])
         self.settings_page(self.pages["Innstillinger"])
         self.label(content, textvariable=self.notice, foreground=MUTED, wraplength=830).pack(anchor="w", pady=(14, 0))
         self.show("Oversikt")
@@ -252,7 +253,7 @@ class DesktopUI:
                    "ikke at hele tale-/byggeflyten virker. Bruk av OpenAI kan koste penger.", "Muted.TLabel").pack(anchor="w", pady=12)
 
     def activity_page(self, page):
-        self.label(page, "Send tekst til en tilkoblet FIRE mens mikrofonflyten mangler.", "Muted.TLabel").pack(anchor="w")
+        self.label(page, "Beskriv appen her, eller bruk B på FIRE for taleopptak.", "Muted.TLabel").pack(anchor="w")
         row = ttk.Frame(page)
         row.pack(fill="x", pady=9)
         self.session_box = ttk.Combobox(row, textvariable=self.selected_session, state="readonly", width=48)
@@ -260,6 +261,8 @@ class DesktopUI:
         ttk.Button(row, text="Oppdater", command=self.refresh_now).pack(side="left", padx=(8, 0))
         self.session_detail = self.label(page, "Ingen FIRE tilkoblet ennå.", wraplength=810)
         self.session_detail.pack(anchor="w", pady=(0, 7))
+        self.pipeline_detail = self.label(page, "", wraplength=810, foreground=MUTED)
+        self.pipeline_detail.pack(anchor="w", pady=(0, 7))
         self.history = tk.Text(page, height=9, wrap="word", font=("Segoe UI", 10), bd=0, padx=12, pady=9,
                                bg="white", fg=INK, state="disabled")
         self.history.pack(fill="both", expand=True)
@@ -279,6 +282,45 @@ class DesktopUI:
         self.label(page, "Bygging og kjøring krever hver sin bekreftelse. De starter aldri fra teksten alene.", "Muted.TLabel").pack(anchor="w")
         self.logs = tk.Text(page, height=5, wrap="word", font=("Consolas", 9), bd=0, bg="#e8edf4", fg=MUTED, state="disabled")
         self.logs.pack(fill="x", pady=(12, 0))
+
+    def apps_page(self, page):
+        self.label(page, "App-pakker og mottatte installasjonskvitteringer", "Heading.TLabel").pack(anchor="w", pady=(0, 12))
+        self.label(page, "FIRE lagrer appen på SD-kortet i /apps/<app-ID>/.\n"
+                   "Tabellen viser backendens pakker og enhetens siste kvitteringer, ikke en direktelesing av SD-kortet.",
+                   "Muted.TLabel", wraplength=800).pack(anchor="w", pady=(0, 12))
+        frame = ttk.Frame(page)
+        frame.pack(fill="both", expand=True)
+        self.apps_table = ttk.Treeview(frame, columns=("name", "version", "device", "status"), show="headings", height=10)
+        for name, title, width in (("name", "App", 180), ("version", "Versjon", 75), ("device", "Enhet", 145), ("status", "Siste status", 210)):
+            self.apps_table.heading(name, text=title)
+            self.apps_table.column(name, width=width, minwidth=60)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.apps_table.yview)
+        self.apps_table.configure(yscrollcommand=scrollbar.set)
+        self.apps_table.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.apps_table.bind("<<TreeviewSelect>>", lambda _: self.render_app_detail())
+        self.apps_detail = self.label(page, "Ingen app-pakker ennå. Beskriv appen under Aktivitet eller på FIRE.", wraplength=800)
+        self.apps_detail.pack(anchor="w", pady=16)
+        self.install_button = ttk.Button(page, text="Installer valgt app på FIRE", command=self.install_saved, style="Accent.TButton")
+        self.install_button.pack(anchor="w", pady=(0, 10))
+        self.label(page, "Bruker lagret, testet pakke uten ny AI-generering. Appstart krever fortsatt A RUN / Bekreft kjøring.",
+                   "Muted.TLabel", wraplength=800).pack(anchor="w")
+        self.apps_rows = {}
+
+    def render_app_detail(self):
+        selected = self.apps_table.selection()
+        app = self.apps_rows.get(selected[0]) if selected else None
+        if app:
+            self.apps_detail.configure(text=f"{app['name']} · {app['version']} · {app['mode']}\n"
+                f"SD-mappe: {app['sd_path']}\nPakke: {app['package_id']}\n"
+                "Start lagret app fra FIREs filutforsker. Endringer i appen krever et nytt bekreftet bygg.")
+
+    def install_saved(self):
+        selected = self.apps_table.selection()
+        session = self.session()
+        if selected and session:
+            self.work(lambda: self.runtime.install_saved(session["session_id"], selected[0]),
+                      message="Sender valgt app til FIRE for installasjon …")
 
     def settings_page(self, page):
         grid = ttk.Frame(page)
@@ -596,11 +638,39 @@ class DesktopUI:
         self.readiness.configure(text=(f"Backend lytter på port {self.store.config.port}. " + connection_hint
              if ready else self.runtime.failure or "Backend er stoppet. Innstillinger kan fortsatt redigeres."))
         session = self.session() if ready else None
+        apps = self.snapshot.get("apps", [])
+        rows = {app["package_id"]: app for app in apps}
+        if rows != self.apps_rows:
+            selected = self.apps_table.selection()
+            self.apps_table.delete(*self.apps_table.get_children())
+            self.apps_rows = rows
+            for app in apps:
+                status = ("Kjører (kvittert)" if app["running"] else "Sist fungerende (kvittert)" if app["current_healthy"] else
+                          "Installert (kvittert)" if app["installed_receipt"] else "Testet på PC; ikke installert")
+                self.apps_table.insert("", "end", iid=app["package_id"], values=(app["name"], app["version"], app.get("device_id") or "PC-simulering", status))
+            if selected and selected[0] in rows:
+                self.apps_table.selection_set(selected[0])
+            elif apps:
+                self.apps_table.selection_set(apps[-1]["package_id"])
+            self.render_app_detail()
         idle_for_text = session and session["state"] not in {"building", "testing", "running", "starting", "stopping", "rollback_pending"}
+        selected = self.apps_table.selection()
+        app = self.apps_rows.get(selected[0]) if selected else None
+        can_install = idle_for_text and session["state"] != "processing" and app and app.get("device_id") == session["device_id"]
+        self.install_button.configure(state="normal" if can_install and not self.busy else "disabled")
         self.send_button.configure(state="normal" if idle_for_text and not self.busy else "disabled")
         self.build_button.configure(state="normal" if session and session["state"] == "awaiting_build_confirmation" and session.get("proposal_id") and not self.busy else "disabled")
         self.run_button.configure(state="normal" if session and session["state"] == "installed" and session.get("package_id") and not self.busy else "disabled")
         if session:
+            workflow = {"listening": "Klar for opptak eller tekst", "processing": "Tolker bestillingen …",
+                        "clarification_needed": "Svar på spørsmålet med et nytt opptak eller tekst",
+                        "awaiting_build_confirmation": "Forslag klart – trykk A BUILD på FIRE eller Bekreft bygging",
+                        "awaiting_install": "FIRE laster ned og installerer appen på SD-kortet …",
+                        "installed": "Installert – trykk A RUN på FIRE eller Bekreft kjøring",
+                        "starting": "Venter på appstart fra FIRE …", "running": "Appen kjører på FIRE (kvittert)",
+                        "failed": "Handlingen feilet; se feilen under"}.get(session["state"], session["state"])
+            detail = session.get("last_error") or session.get("progress", {}).get("message", "")
+            self.pipeline_detail.configure(text=workflow + ("\n" + detail if detail else ""))
             device = next((d for d in self.snapshot["devices"] if d["id"] == session["device_id"]), {})
             self.session_detail.configure(text=f"Status: {session['state']}  ·  Installert: {device.get('installed_package_id') or '–'}\n"
                                                 f"Kjører: {device.get('running_package_id') or '–'}  ·  Fysisk test: ikke bekreftet")
@@ -609,6 +679,7 @@ class DesktopUI:
             self.progress["value"] = progress.get("progress", 0)
             self.set_text(self.history, history or "Skriv hva appen skal gjøre. Backend gir et forslag før bygging.")
         else:
+            self.pipeline_detail.configure(text="")
             self.session_detail.configure(text="Ingen FIRE tilkoblet ennå. Åpne AI Developer på enheten etter konfigurering.")
             self.set_text(self.history, "Venter på enheten. Tilkoblingsverdiene finner du under M5Stack.")
             self.progress["value"] = 0

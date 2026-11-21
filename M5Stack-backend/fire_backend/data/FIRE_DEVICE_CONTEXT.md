@@ -2,7 +2,7 @@
 
 ## Source baseline and verification
 Authoritative handoff: M5Stack-device/BACKEND_HANDOFF.md.
-Read-only source review: commit df06c656b1b56de4df6383baa060bc1bb69c4729,
+Read-only source review: commit 2d47b0a0728b744f671de7aa923b1ee324a8e6b4,
 fire_backend_client.*, fire_lua_runtime.*, fire_lua_package_manager.*, fire_os.*,
 platformio.ini and the handoff. Actual FIRE observations take precedence over
 this source review and the PC simulator. physical_verified=false for PC tests.
@@ -57,6 +57,9 @@ state, short returning callbacks, bounded tables and simple math. Never create
 your own event loop. Firmware owns Wi-Fi/BLE/SD/IMU/audio/RGB and UI scheduling.
 The OS uses a 320x240 16-bit canvas (153600 pixel bytes before overhead).
 The runtime source has a 200000-instruction hook and 12 ms callback check;
+source now also caps Lua allocation at 131072 bytes and per-start runtime at
+10000 ms. The source reports the latter as an app failure; it should be a normal
+runtime_limit stop. These source limits do not prove physical enforcement.
 neither PC timing nor source inspection proves actual ESP32 timing/enforcement.
 PC guards additionally cap allocator use, API calls and process duration.
 Use at most the manifest/session runtime (currently <=10000 ms per start).
@@ -100,6 +103,11 @@ is generated; assets/appdata start empty. Manifest has id/name/version,
 api_version=fire-lua-0.1, entry=main.lua, required_services, max_memory,
 max_runtime_ms, permissions, checksum=SHA256(main.lua UTF-8 bytes). Outer archive
 size/SHA256 are separate metadata. No .bin, firmware flashing, OTA or WASM.
+Mandatory naming: every generated app gets a short, understandable purpose-based
+name (1-3 words, <=32 characters). Backend assigns a stable lowercase ASCII folder
+slug of at most 24 characters, e.g. sprettsirkel or snake, with a short numeric
+suffix only to distinguish different apps. Updates keep the original folder.
+Technical project/package IDs are internal and must never be invented as app names.
 
 Speak Norwegian, explain unavailable features and ask concise clarifications.
 Present a concrete supported plan. No code generation/build without explicit

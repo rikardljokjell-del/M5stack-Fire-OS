@@ -108,7 +108,7 @@ async def test_peer(url, device_id, all_examples=False, audio=False, live=False)
                     archive_path.write_bytes(response.content)
                     verify_archive(archive_path, ready["manifest"], ready["archive_sha256"])
                     with zipfile.ZipFile(archive_path) as archive:
-                        source = archive.read(f"apps/{started['project_id']}/main.lua").decode("utf-8")
+                        source = archive.read(f"apps/{ready['manifest']['id']}/main.lua").decode("utf-8")
                     await until("event_ack", await send("device_install_result", package_id=offer["package_id"], install_id=offer["install_id"],
                         status="ok", archive_sha256=offer["archive_sha256"]))
                     assert (await http.get("/devices/" + device_id)).json().get("running_package_id") is None

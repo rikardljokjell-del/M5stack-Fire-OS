@@ -133,6 +133,16 @@ GET download_url with Authorization. ZIP uses ZIP_STORED (no compression), layou
 this version. Manifest entry is main.lua; checksum is SHA256 of its UTF-8 bytes.
 Outer archive SHA256 is independent and never embedded into itself.
 
+New apps have a stable, purpose-based folder ID (lowercase ASCII slug, <=24
+characters, for example `sprettsirkel` or `snake`). App names are short and
+understandable (<=32 characters). Separate apps may get a short numeric suffix.
+Updates retain the original folder ID. `manifest.id` is the filesystem app ID;
+`project_id` and `package_id` remain independent internal authorization IDs.
+Never assume they are equal. Legacy deployed folders are preserved. Downloads
+use a readable filename such as `sprettsirkel-v0.1.1.zip`; download URLs retain
+the immutable package ID. The four required filenames inside the app remain
+unchanged, including `main.lua`.
+
 HTTP Range/If-Range and ETag allow resume. If a range returns 200 instead of 206,
 discard the old partial bytes and restart. Check full size/hash before extraction.
 Reject duplicate/unexpected entries, traversal, absolute paths and oversized data.

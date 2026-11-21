@@ -39,7 +39,7 @@ for current/previous/backup migreres til uttrykkelig simulert historikk.
 
 ## Faktisk verifisert
 
-`pytest -q`: **126 bestått**, inkludert den eksisterende
+`pytest -q`: **142 bestått**, inkludert den eksisterende
 testdekningen tilpasset korrigerte current-semantikker. Én advarsel gjelder
 Starlettes overgang fra httpx i testklienten; ingen test feiler.
 
@@ -48,6 +48,19 @@ autentiserte PC → FIRE-strømmer. 16 nye tester dekker validering, pool/reconn
 binærdata/half-close og faktisk lokal HTTP/WS med ZIP-nedlasting, kvitteringer og
 WAV-opplasting. Ingen ekte OpenAI-kall eller fysisk FIRE-test inngår. Kontrakt:
 [REVERSE_TCP-v1.md](REVERSE_TCP-v1.md). Telefon og ruter er ikke endret.
+
+Oppdatert samlet status: [E2E_STATUS.md](E2E_STATUS.md). Ekte OpenAI er testet
+gjennom dialog, faktisk kodegenerering, Lua-simulering og validert ZIP.
+Fem nye kontroller dekker lyd som aldri kommer frem, kryssende HTTP/WS,
+avbrutt/ugyldig WAV og kvitteringsbasert appbibliotek. Wire-testen kontrollerer
+Content-Length-skrivemåte og Range/206 gjennom reverse TCP. Full fysisk
+mikrofon/installasjon/Lua-kjøring er ikke verifisert.
+
+Senere fysisk kontroll bekreftet installasjonskvittering for ekte AI-generert
+pakke. RUN feilet med not_installed; brukeren kunne starte appen manuelt fra
+Apps. Se E2E_STATUS og DEVICE_E2E_ACTIONS for nøyaktig avgrensning. Fast regel
+for korte appnavn/mapper og gjeninstallasjon av lagrede pakker er lagt til;
+tidligere SD-stier og rettighets-/kvitterings-ID-er beholdes.
 
 24 nye handoff-kontroller dekker nøyaktig native profil med begge lydflagg false,
 synlig oppstartsstatus, tekst/bygg/install/run, uavhengige lydretninger, avvisning

@@ -88,7 +88,7 @@ class DesktopRuntime:
         self.app = create_app(settings)
         self.base_url = f"http://127.0.0.1:{settings.fire_backend_port}"
         config = uvicorn.Config(self.app, host=settings.fire_backend_host, port=settings.fire_backend_port,
-                                workers=1, access_log=False, ws_max_size=8192, log_config=None, loop="asyncio")
+                                workers=1, access_log=False, ws_max_size=8192, log_config=None, loop="asyncio", http="h11")
         self.server = uvicorn.Server(config)
         server = self.server
 
@@ -143,6 +143,9 @@ class DesktopRuntime:
 
     def send_text(self, session_id, text):
         return self.request("POST", f"/desktop/sessions/{session_id}/text", json={"text": text})
+
+    def install_saved(self, session_id, package_id):
+        return self.request("POST", f"/desktop/sessions/{session_id}/install", json={"package_id": package_id})
 
     def confirm(self, session_id, kind, item_id):
         field = "proposal_id" if kind == "build" else "package_id"

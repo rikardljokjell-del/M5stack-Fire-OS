@@ -67,6 +67,19 @@ Knapper på FIRE kan også brukes. Tekst alene utløser aldri bygg eller kjørin
 Kvitteringene fra enheten avgjør installert/startet/current; PC-simulering og
 enhetsemulering er alltid fysisk uverifisert.
 
+**Aktivitet** viser også neste handling og siste feil. En manglende lydopplasting
+gir en forståelig feil etter 25 sekunder; prøv nytt opptak eller tekst.
+**Apper** viser navn, versjon og `/apps/<appnavn>/` på SD-kortet, sammen med
+installasjons-/kjørekvitteringer. Dette er backendens historikk, ikke en
+direktelesing av SD-kortet. En appstart er begrenset til ti sekunder i nåværende
+kontrakt. Appfilene skal beholdes og kunne startes fra FIREs filutforsker.
+Velg en lagret pakke og **Installer valgt app på FIRE** for ny installasjon
+etter reboot eller ny firmware, uten en ny AI-generering. Bare riktig enhet
+med tilstrekkelige kapabiliteter kan få pakken. Kjøring må bekreftes separat.
+Nye mapper får korte, lesbare navn som `sprettsirkel`; appnavn er høyst 32 tegn,
+mapper høyst 24 ASCII-tegn, og samme app beholder mappen på tvers av versjoner.
+Se [ende-til-ende-status og gjeldende begrensninger](E2E_STATUS.md).
+
 ## Innstillinger og lagring
 
 - Modellnavn og stemme kan redigeres under **OpenAI**. Kontoens modelliste

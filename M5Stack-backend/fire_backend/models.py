@@ -38,9 +38,16 @@ class DialogReply(StrictModel):
 
 
 class GeneratedApp(StrictModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=32)
     main_lua: str = Field(min_length=1, max_length=100_000)
     required_services: list[str] = Field(max_length=10)
+
+    @field_validator("name")
+    @classmethod
+    def short_name(cls, value):
+        if not value.strip() or any(ord(c) < 32 for c in value):
+            raise ValueError("Appnavnet må være kort, lesbart og uten kontrolltegn")
+        return " ".join(value.split())
 
     @field_validator("required_services")
     @classmethod

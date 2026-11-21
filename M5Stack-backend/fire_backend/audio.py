@@ -42,6 +42,7 @@ class AudioManager:
         self.service = service
         self.store, self.settings = service.store, service.settings
         self.uploads = {}
+        self.awaiting = {}
         # No audio survives a backend restart. Metadata is retained briefly only
         # for deduplication, and its previous URLs become immediately unavailable.
         for path in (self.store.root / "audio").iterdir():
@@ -63,6 +64,7 @@ class AudioManager:
                     self.store.path("audio", item["id"]).unlink(missing_ok=True)
 
     def cancel(self, session):
+        self.awaiting.pop(session.id, None)
         if session.speech_task and session.speech_task is not asyncio.current_task() and not session.speech_task.done():
             session.speech_task.cancel()
         upload = self.uploads.get(session.id)
@@ -75,6 +77,18 @@ class AudioManager:
                 for suffix in (".pcm", ".wav", ".part"):
                     self.store.path("audio", item["id"], suffix).unlink(missing_ok=True)
         session.audio_id = None
+
+    def expect_upload(self, session):
+        self.awaiting[session.id] = (session.turn_id, time.monotonic() + 25)
+
+    async def expire_waiting(self):
+        for session_id, (turn_id, deadline) in list(self.awaiting.items()):
+            if time.monotonic() < deadline or session_id in self.uploads:
+                continue
+            self.awaiting.pop(session_id, None)
+            session = self.service.sessions.get(session_id)
+            if session and not session.stopped and session.turn_id == turn_id:
+                await self.service.failure(session, ValueError("Lydopplastingen kom ikke frem. Trykk B og prøv et nytt opptak, eller bruk tekst på PC."))
 
     async def receive(self, session, turn_id, stream):
         identifier(turn_id)
@@ -99,6 +113,13 @@ class AudioManager:
                 if previous["sha256"] != digest:
                     raise ValueError("turn_id reused with different audio")
                 return {"status": previous["status"], "turn_id": turn_id, "duplicate": True}
+            # HTTP and control use different pool sockets. A small bounded wait
+            # tolerates the final WAV bytes overtaking listen_stop on the wire;
+            # it never invents a recording event or admits a different turn.
+            if session.turn_id == turn_id and session.activity == "listening":
+                async with asyncio.timeout(2):
+                    while session.turn_id == turn_id and session.activity == "listening" and not session.stopped:
+                        await asyncio.sleep(0.01)
             if session.stopped or session.turn_id != turn_id or session.activity != "processing":
                 raise ValueError("Upload must follow matching listen_start/listen_stop")
             if session.lock.locked() or (session.input_task and not session.input_task.done()):
@@ -111,8 +132,21 @@ class AudioManager:
             self.store.put("audio", item_id, item)
             path = self.store.path("audio", item_id, ".wav")
             path.write_bytes(data)
+            self.awaiting.pop(session.id, None)
             session.input_task = asyncio.create_task(self.transcribe(session, item, path))
             return {"status": "accepted", "turn_id": turn_id, "duplicate": False}
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            pending = self.awaiting.get(session.id)
+            if pending and pending[0] == turn_id and session.turn_id == turn_id and not session.stopped:
+                self.awaiting.pop(session.id, None)
+                message = (str(error) if isinstance(error, ValueError) else
+                           "Lydopplastingen ble avbrutt eller tok for lang tid. Prøv et nytt opptak.")
+                await self.service.failure(session, ValueError(message))
+            if isinstance(error, (ValueError, TimeoutError)):
+                raise
+            raise ValueError("Lydopplastingen ble avbrutt. Prøv et nytt opptak.") from None
         finally:
             self.uploads.pop(session.id, None)
 

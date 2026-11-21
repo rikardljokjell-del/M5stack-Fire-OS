@@ -3,7 +3,7 @@
 The authoritative signatures/restrictions are also in the injected
 `fire_backend/data/FIRE_DEVICE_CONTEXT.md`. Firmware and PC must use Lua **5.4**,
 text-only source (no bytecode), DOT calls, and an app-private environment.
-Firmware source inspected: df06c65 (see DEVICE_HANDOFF_RESPONSE.md). It now
+Firmware source inspected: 2d47b0a (see DEVICE_E2E_ACTIONS.md). It now
 contains a native runtime and adapters. Source implementation is distinct from
 physical verification. Current handshake: all five services below, 131072 bytes,
 10000 ms, conversation audio_input=true/audio_output=false. The source includes
@@ -31,8 +31,9 @@ these tests do not prove future frames, physical heap or hardware correctness.
 - Only OS-reserved long actions may interrupt/stop without waiting for Lua.
 
 These are the backend validation limits and the required firmware contract.
-Current source does not yet enforce the full allocator/total-runtime contract;
-its callback hook also checks 12 ms. PC timing does not prove ESP32 timing.
+Current source caps allocation at 131072 bytes and total runtime at 10000 ms;
+its callback hook also checks 12 ms. The runtime-limit path currently reports
+failure rather than normal stop; see the device handoff. PC timing does not prove ESP32 timing.
 Native Lua is built with LUA_32BITS=1/LUA_USE_C89=1; desktop Lua uses wider
 numbers. Avoid precision-sensitive math and large integer/bit patterns.
 

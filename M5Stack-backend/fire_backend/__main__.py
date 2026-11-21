@@ -32,7 +32,7 @@ def main():
             raise SystemExit("Another backend already uses this workspace. Stop it first.") from None
         uvicorn.run(create_app(settings), host=settings.fire_backend_host,
                     port=settings.fire_backend_port, workers=1, access_log=False, ws_max_size=8192,
-                    log_level="info")
+                    log_level="info", http="h11")
 
 
 if __name__ == "__main__":

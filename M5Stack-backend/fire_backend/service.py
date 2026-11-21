@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.resources import files
 
 from .ai import MockProvider, OpenAIProvider
@@ -62,6 +62,7 @@ class Session:
     audio_id: str | None = None
     input_task: asyncio.Task | None = None
     speech_task: asyncio.Task | None = None
+    last_error: str = ""
 
 
 class Backend(DeviceLifecycle):
@@ -89,6 +90,66 @@ class Backend(DeviceLifecycle):
             raise KeyError("Session not found")
         return session
 
+    def app_library(self):
+        """Saved packages and correlated device receipts, never a fabricated SD scan."""
+        projects = {p["id"]: p for p in self.store.list("projects")}
+        devices = {d["id"]: d for d in self.store.list("devices")}
+        installed = {(c["device_id"], c["package_id"]) for c in self.store.list("commands")
+                     if c["kind"] == "install" and c["status"] == "completed"}
+        apps = []
+        for package in self.store.list("packages"):
+            project = projects.get(package["project_id"], {})
+            device_id = project.get("owner_device_id")
+            device = devices.get(device_id, {})
+            manifest = package["manifest"]
+            apps.append({"app_id": manifest["id"], "name": manifest["name"], "version": manifest["version"],
+                         "package_id": package["id"], "mode": package["mode"], "device_id": device_id,
+                         "sd_path": f"/apps/{manifest['id']}/", "installed_receipt": (device_id, package["id"]) in installed,
+                         "current_healthy": device.get("projects", {}).get(package["project_id"], {}).get("current") == package["id"],
+                         "running": bool(device.get("online") and device.get("runtime_status") == "running"
+                                         and device.get("running_package_id") == package["id"]),
+                         "physical_verified": False})
+        return apps
+
+    async def install_saved(self, session, package_id):
+        """Explicit local UI selection reuses a tested package after reboot.
+
+        This neither generates code nor authorizes running the app. Validate
+        ownership, archive and current capabilities before changing the project.
+        """
+        if (session.target != "device" or not session.sockets or session.stopped or session.lock.locked()
+                or session.operation_task or (session.input_task and not session.input_task.done())
+                or session.state in {State.building, State.testing, State.processing, State.running,
+                                     State.starting, State.stopping, State.rollback_pending}):
+            raise Conflict("FIRE må være tilkoblet og ledig før installasjon.")
+        device = self.device_record(session)
+        if device.get("active_run_id") or device.get("pending_run_id"):
+            raise Conflict("Stopp forrige app før ny installasjon.")
+        package = self.store.get("packages", package_id)
+        project = self.store.get("projects", package["project_id"])
+        if project.get("owner_device_id") != session.device_id:
+            raise PermissionError("Pakken tilhører en annen enhet.")
+        self.verify_package(replace(session, project_id=project["id"]), package_id)
+        # Reserve before the first await so concurrent confirmations/text cannot
+        # race a project switch. Existing install offers are superseded below.
+        async with session.lock:
+            await self.close_dialog(session)
+            if session.stopped or not session.sockets:
+                raise Conflict("FIRE ble frakoblet før installasjonen.")
+            if hasattr(self, "audio"):
+                self.audio.cancel(session)
+            prior = [s for s in self.store.list("sessions") if s["project_id"] == project["id"]]
+            session.history = bounded_history(max(prior, key=lambda s: s.get("last_seen", 0)).get("history", [])) if prior else []
+            session.project_id, session.package_id, session.build_id = project["id"], package_id, package["build_id"]
+            session.proposal_id, session.turn_id, session.last_error = None, None, ""
+            session.summary = project.get("last_confirmed_summary", "")
+            versions = device.get("projects", {}).get(project["id"], {})
+            device.update(project_id=project["id"], **{key: versions.get(key) for key in ("current", "previous", "backup")})
+            self.store.put("devices", device["id"], device)
+            await self.activity(session, "idle")
+            command = await self.offer_install(session, package)
+            return {"status": "awaiting_device_install", "install_id": command["id"], "package_id": package_id}
+
     def snapshot(self, session):
         return {"session_id": session.id, "device_id": session.device_id,
                 "project_id": session.project_id, "state": session.state,
@@ -97,6 +158,7 @@ class Backend(DeviceLifecycle):
                 "protocol_version": session.protocol_version, "target": session.target,
                 "boot_id": session.boot_id, "capabilities": session.capabilities,
                 "activity": session.activity, "turn_id": session.turn_id, "server_time": int(time.time()),
+                "last_error": session.last_error,
                 "effective_capabilities": policy(self.settings, session.target, session.capabilities),
                 "physical_verified": False}
 
@@ -238,7 +300,7 @@ class Backend(DeviceLifecycle):
                 raise Conflict("Session cannot be resumed")
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
-                         "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id"):
+                         "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error"):
                 if name in saved:
                     setattr(session, name, saved[name])
             session.sequence = saved.get("sequence", 0)
@@ -304,6 +366,7 @@ class Backend(DeviceLifecycle):
             await self.expire_sessions()
             if hasattr(self, "audio"):
                 self.audio.cleanup()
+                await self.audio.expire_waiting()
             for command in self.store.list("commands"):
                 if command["status"] == "pending" and command["expires_at"] <= time.time():
                     self.finish_command(command, "unknown")
@@ -392,6 +455,7 @@ class Backend(DeviceLifecycle):
             raise ValueError("Text is required")
         async with session.lock:
             session.proposal_id = None  # any new text invalidates prior authorization
+            session.last_error = ""
             session.summary = ""
             session.package_id = None
             await self.state(session, State.processing)
@@ -430,6 +494,8 @@ class Backend(DeviceLifecycle):
         safe = self.redactor.text(safe or "Operation timed out")[:6000]
         safe = safe.encode("utf-8")[:6000].decode("utf-8", errors="ignore")
         self.store.log(session.id, "Operation failed: " + safe, critical=True)
+        session.last_error = safe[:240]
+        await self.activity(session, "idle")
         await self.state(session, State.failed)
         await self.emit(session, {"type": "error", "code": "operation_failed", "message": safe[:240]})
         return safe
@@ -490,12 +556,13 @@ class Backend(DeviceLifecycle):
                 project_before = dict(project)
                 package = await self.builder.build(build, project, progress, capabilities=session.capabilities,
                                                    context=self.context_for(session))
-            project.update(name=package["manifest"]["name"], latest_package=package["id"],
+            project.update(name=package["manifest"]["name"], app_id=package["manifest"]["id"], latest_package=package["id"],
                            next_version=project["next_version"] + 1, last_confirmed_summary=build["summary"])
             self.store.put("projects", project["id"], project)
             session.package_id = package["id"]
             build.update(status="ready", package_id=package["id"])
-            await progress("ready", 100, "Pakken er testet. Venter på eksplisitt kjørebekreftelse.")
+            await progress("ready", 100, "Pakken er testet. Sender til FIRE for installasjon." if session.target == "device"
+                           else "Pakken er testet. Venter på eksplisitt kjørebekreftelse.")
             await self.state(session, State.ready_to_run)
             build_completed = True
             await self.emit(session, {"type": "package_ready", "package_id": package["id"],
@@ -564,7 +631,7 @@ class Backend(DeviceLifecycle):
                 verify_archive(path, package["manifest"], package["archive_sha256"])
                 import zipfile
                 with zipfile.ZipFile(path) as archive:
-                    source = archive.read(f"apps/{session.project_id}/main.lua").decode("utf-8")
+                    source = archive.read(f"apps/{package['manifest']['id']}/main.lua").decode("utf-8")
                 await self.state(session, State.running)
                 result = await simulate({"main_lua": source, **package["manifest"]}, self.store, package_id)
                 project = self.store.get("projects", session.project_id)

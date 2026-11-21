@@ -146,6 +146,7 @@ async def handle(service, session, event):
             raise ValueError("turn_id is required")
         if name == "listen_start":
             service.audio.cancel(session)
+            session.last_error = ""
             session.proposal_id, session.summary, session.turn_id = None, "", event.turn_id
             await service.state(session, State.listening)
             await service.activity(session, "listening")
@@ -153,6 +154,7 @@ async def handle(service, session, event):
             if session.turn_id != event.turn_id or session.activity != "listening":
                 raise ValueError("No matching recording")
             await service.activity(session, "processing")
+            service.audio.expect_upload(session)
         return {"turn_id": session.turn_id}
     if name == "build_confirm":
         build = await service.confirm_build(session, event.proposal_id)
