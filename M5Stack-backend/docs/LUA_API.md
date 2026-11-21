@@ -3,14 +3,18 @@
 The authoritative signatures/restrictions are also in the injected
 `fire_backend/data/FIRE_DEVICE_CONTEXT.md`. Firmware and PC must use Lua **5.4**,
 text-only source (no bytecode), DOT calls, and an app-private environment.
-Firmware source inspected: 65f8f3e; it does not implement this runtime yet.
+Firmware source inspected: 069ea09e (see DEVICE_HANDOFF_RESPONSE.md). It now
+contains a native runtime and adapters. Source implementation is distinct from
+physical verification. Current handshake: all five services below, 131072 bytes,
+10000 ms, conversation audio_input=false/audio_output=false.
 
 ## Lifecycle and budgets
 
 Define `init()` and `update(dt_ms)`, optionally `on_button(button, action)`.
 Call top-level initialization, then init, then updates; every callback must
 return. OS owns scheduling, display, audio, input, SD and stop/navigation.
-Use monotonic elapsed milliseconds, not wall-clock or a fixed FPS assumption.
+Accumulate dt_ms or subtract a captured uptime baseline for relative animation;
+do not assume time.millis() starts at zero or a fixed FPS.
 PC tests use 180 frames at 16 ms, limited further by manifest.max_runtime_ms;
 these tests do not prove future frames, physical heap or hardware correctness.
 
@@ -23,6 +27,12 @@ these tests do not prove future frames, physical heap or hardware correctness.
 - max API calls per start: 20000. Stop on bounds/quota errors.
 - Backend worker process deadline: eight seconds (PC-only guard).
 - Only OS-reserved long actions may interrupt/stop without waiting for Lua.
+
+These are the backend validation limits and the required firmware contract.
+Current source does not yet enforce the full allocator/total-runtime contract;
+its callback hook also checks 12 ms. PC timing does not prove ESP32 timing.
+Native Lua is built with LUA_32BITS=1/LUA_USE_C89=1; desktop Lua uses wider
+numbers. Avoid precision-sensitive math and large integer/bit patterns.
 
 ## Allowed environment
 
@@ -41,25 +51,32 @@ Do not expose native FireOS/M5 objects, even if a corresponding OS service exist
 | buttons | pressed(b) | A/B/C boolean down-state |
 | rgb | set(i,r,g,b) | i 0..9; channels 0..255 |
 | imu | accel() | table {x,y,z} in g, finite numbers; synthetic on PC |
-| time | millis() | monotonic ms since app start |
+| time | millis() | native OS uptime in ms, may wrap; PC uses synthetic uptime |
 
-Display circle is filled; rect is filled; clear fills the screen. Lines are one
+Display circle and rect are outlines (native drawCircle/drawRect); clear fills
+the screen. Lines are one
 pixel wide. The OS adapter clips drawing to the 320x240 app surface. Text uses a
 fixed device font; PC simulator records text, it does not guarantee glyph support.
-PC numeric coordinates may be fractional; firmware truncates toward zero before
-drawing (after bounds validation). RGB indices/channels/colours must be integer
-values; text must be a Lua string (no implicit conversion of tables).
+All numeric display arguments and RGB indices/channels must be integer-valued;
+use math.floor/ceil after animation calculations. Native luaL_checkinteger rejects
+fractions; backend now rejects them too. Do not rely on native clamping.
+Text must be a Lua string (no implicit conversion of tables).
 
 Each used service must appear exactly once in required_services. Permissions
 must be exactly `fire.<service>` for those entries, with no extras or duplicates.
-Capabilities are authoritative: rgb requires per-pixel control, not just current
-firmware's all-strip RMT helper. Unavailable adapters must not be advertised.
+Capabilities are authoritative and missing services remain unavailable.
+Current rgb host stores pixels but renders the whole strip on every set call,
+at brightness 180. Use uniform-strip effects; independent pixels/gradients are
+not established. The rgb service name alone does not promise per-pixel rendering.
 Unknown or undeclared methods must fail, including access through aliases.
 
-Buttons: actions pressed/released; names A/B/C. OS long A=home, long B=quick
+Buttons: native callback action is pressed only; names A/B/C. Poll pressed()
+for release transitions. OS long A=home, long B=quick
 settings, long C=back (650 ms) are NEVER passed into Lua. A short action may
 arrive after release because the existing OS reserves double-click handling.
-The simulator exercises A/B/C edges; firmware owns physical debouncing/timing.
+The simulator exercises synthetic A/B/C presses and release polling, without
+inventing released callbacks. Firmware owns physical debouncing/timing.
+IMU values are synthetic on PC; native host falls back to zeros if IMU is absent.
 
 ## Physical receipts
 

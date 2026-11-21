@@ -10,6 +10,7 @@ import time
 import wave
 
 from .models import State
+from .capabilities import policy, require_audio_input
 from .storage import identifier, new_id
 
 
@@ -77,8 +78,7 @@ class AudioManager:
 
     async def receive(self, session, turn_id, stream):
         identifier(turn_id)
-        if not self.settings.fire_audio_enabled or (session.target == "device" and not session.capabilities["audio_input"]):
-            raise ValueError("Audio input is disabled or unsupported")
+        require_audio_input(self.settings, session)
         if session.id in self.uploads:
             raise ValueError("An upload is already active")
         self.uploads[session.id] = asyncio.current_task()
@@ -139,7 +139,7 @@ class AudioManager:
             self.store.put("audio", item["id"], item, critical=True)
 
     async def speak(self, session, text):
-        if session.target == "device" and not session.capabilities["audio_output"]:
+        if not policy(self.settings, session.target, session.capabilities)["conversation_audio"]["output_enabled"]:
             return
         audio_id = new_id("audio")
         turn_id = session.turn_id

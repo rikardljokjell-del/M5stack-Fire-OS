@@ -140,7 +140,7 @@ class DeviceEvent(StrictModel):
     turn_id: str | None = Field(default=None, pattern=ID_PATTERN)
     audio_id: str | None = Field(default=None, pattern=ID_PATTERN)
     status: Literal["ok", "failed"] | None = None
-    archive_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    archive_sha256: str | None = Field(default=None, pattern=r"^(?:[a-f0-9]{64})?$")
     error_code: str | None = Field(default=None, pattern=ID_PATTERN)
     message: str | None = Field(default=None, max_length=240)
     reason: Literal["completed", "user_exit", "runtime_limit", "requested"] | None = None
@@ -154,7 +154,7 @@ class DeviceEvent(StrictModel):
                 raise ValueError("session_id required after session_start")
             required = {
                 "text": ("text",), "button": ("button", "action"), "build_confirm": ("proposal_id",),
-                "run_confirm": ("package_id",), "device_install_result": ("install_id", "package_id", "status", "archive_sha256"),
+                "run_confirm": ("package_id",), "device_install_result": ("install_id", "package_id", "status"),
                 "install_retry": ("package_id",),
                 "app_started": ("run_id", "package_id"), "app_healthy": ("run_id", "package_id"),
                 "app_failed": ("run_id", "package_id", "error_code"), "app_stopped": ("run_id", "package_id"),
@@ -164,6 +164,8 @@ class DeviceEvent(StrictModel):
             }
             if any(not getattr(self, name) for name in required.get(self.event, ())):
                 raise ValueError("Missing event-specific fields")
+            if self.event == "device_install_result" and self.status == "ok" and not self.archive_sha256:
+                raise ValueError("Successful installation requires archive_sha256")
             if self.event == "app_stopped" and not self.stop_id and self.reason not in {"completed", "user_exit", "runtime_limit"}:
                 raise ValueError("Natural stop requires reason")
         return self

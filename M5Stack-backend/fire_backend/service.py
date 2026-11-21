@@ -10,6 +10,7 @@ from .builds import Builder, simulate, verify_archive
 from openai import APIStatusError
 from .models import State
 from .devices import DeviceLifecycle
+from .capabilities import generation_policy, policy, status as capability_status
 from .security import Redactor
 from .storage import Store, new_id
 
@@ -95,7 +96,9 @@ class Backend(DeviceLifecycle):
                 "build_id": session.build_id, "mode": self.settings.fire_ai_mode,
                 "protocol_version": session.protocol_version, "target": session.target,
                 "boot_id": session.boot_id, "capabilities": session.capabilities,
-                "activity": session.activity, "turn_id": session.turn_id, "server_time": int(time.time())}
+                "activity": session.activity, "turn_id": session.turn_id, "server_time": int(time.time()),
+                "effective_capabilities": policy(self.settings, session.target, session.capabilities),
+                "physical_verified": False}
 
     def persist(self, session):
         session.history = bounded_history(session.history)
@@ -137,7 +140,17 @@ class Backend(DeviceLifecycle):
         if project.get("latest_package"):
             latest = self.store.get("packages", project["latest_package"])
             context += "\nCurrent app manifest: " + json.dumps(latest["manifest"])
+        context += generation_policy(self.settings, session)
         return context
+
+    async def report_capabilities(self, session):
+        if session.target == "device":
+            report = capability_status(self.settings, session)
+            await self.emit(session, report)
+            # Current native UI understands assistant_message, but does not yet
+            # render capability_status. This is text only; never synthesize it.
+            if not report["effective_capabilities"]["conversation_audio"]["input_enabled"]:
+                await self.emit(session, {"type": "assistant_message", "text": report["message"], "audio": False})
 
     async def start(self, request, socket=None, principal="admin"):
         if request.target == "device" and principal != request.device_id:
@@ -147,6 +160,22 @@ class Backend(DeviceLifecycle):
         await self.expire_sessions()
         if request.resume_session_id:
             return await self.resume(request, socket, principal)
+        # Current FIRE firmware reconnects with session_start and the same boot
+        # ID, without a resume hint. Reattach only an offline, matching peer;
+        # never take over a live connection or reuse commands across boots.
+        if request.target == "device":
+            candidates = [s for s in self.sessions.values() if s.device_id == request.device_id
+                          and s.boot_id == request.boot_id and not s.sockets and not s.stopped]
+            if not candidates:
+                for saved in self.store.list("sessions"):
+                    if (saved.get("target") == "device" and saved["device_id"] == request.device_id
+                            and saved.get("boot_id") == request.boot_id and not saved.get("stopped")
+                            and time.time() - (saved.get("disconnected_at") or saved.get("last_seen", 0)) <= self.settings.fire_session_resume_seconds):
+                        request = request.model_copy(update={"resume_session_id": saved["session_id"]})
+                        return await self.resume(request, socket, principal)
+            if candidates:
+                request = request.model_copy(update={"resume_session_id": candidates[0].id})
+                return await self.resume(request, socket, principal)
         for existing in list(self.sessions.values()):
             if existing.device_id == request.device_id and existing.target == "device" and existing.boot_id != request.boot_id:
                 await self.stop(existing)
@@ -174,6 +203,8 @@ class Backend(DeviceLifecycle):
                 session.history = max(prior, key=lambda saved: saved.get("last_seen", 0)).get("history", [])[-32:]
         session.protocol_version, session.target, session.boot_id = request.protocol_version, request.target, request.boot_id
         session.capabilities = self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None
+        if session.target == "device" and not policy(self.settings, session.target, session.capabilities)["conversation_audio"]["input_enabled"]:
+            session.state = State.idle
         if session.target == "device":
             try:
                 device = self.store.get("devices", session.device_id)
@@ -188,14 +219,15 @@ class Backend(DeviceLifecycle):
             if device.get("boot_id") != session.boot_id:
                 device.update(active_run_id=None, pending_run_id=None, running_package_id=None,
                               installed_package_id=None, runtime_status="unknown")
-            device.update(boot_id=session.boot_id, online=True, capabilities=session.capabilities)
+            device.update(boot_id=session.boot_id, online=True, capabilities=session.capabilities, physical_verified=False)
             self.store.put("devices", device["id"], device)
         if socket:
             session.sockets.add(socket)
         self.sessions[session.id] = session
         self.persist(session)
         await self.emit(session, {"type": "session_started", **self.snapshot(session)})
-        await self.state(session, State.listening)
+        await self.state(session, session.state)
+        await self.report_capabilities(session)
         return session
 
     async def resume(self, request, socket, principal):
@@ -238,6 +270,7 @@ class Backend(DeviceLifecycle):
         self.persist(session)
         await self.emit(session, {"type": "session_started", **self.snapshot(session)})
         await self.session_snapshot(session)
+        await self.report_capabilities(session)
         if session.target == "device" and session.package_id and session.state == State.awaiting_install and not self.pending_commands(session):
             await self.offer_install(session, self.verify_package(session, session.package_id))
         return session

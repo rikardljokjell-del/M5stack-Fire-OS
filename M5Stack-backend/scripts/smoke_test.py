@@ -56,7 +56,7 @@ async def smoke(url, all_examples=False, live=False):
                 await send("run_confirm", package_id=package_id)
                 run = await until("run_result")
                 assert run["status"] == "completed"
-                reports.append({"command": command, "mode": health["mode"], "build_id": package_id,
+                reports.append({"command": command, "mode": health["mode"], "build_id": package_id, "physical_verified": False,
                                 "project_id": start["project_id"], "run": run,
                                 "manifest": ready["manifest"], "archive_sha256": ready["archive_sha256"],
                                 "progress_phases": [e["phase"] for e in events if e["type"] == "build_progress"]})
@@ -65,7 +65,7 @@ async def smoke(url, all_examples=False, live=False):
     destination = Path(os.getenv("FIRE_WORKSPACE", "workspace")) / "logs" / "smoke-report.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(reports, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"status": "passed", "examples": len(reports), "mode": health["mode"], "report": str(destination.resolve())}))
+    print(json.dumps({"status": "passed", "examples": len(reports), "mode": health["mode"], "physical_verified": False, "report": str(destination.resolve())}))
 
 
 if __name__ == "__main__":

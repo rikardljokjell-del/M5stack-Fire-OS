@@ -344,7 +344,7 @@
     "archive_sha256": {
       "anyOf": [
         {
-          "pattern": "^[a-f0-9]{64}$",
+          "pattern": "^(?:[a-f0-9]{64})?$",
           "type": "string"
         },
         {
@@ -514,8 +514,7 @@
         "required": [
           "install_id",
           "package_id",
-          "status",
-          "archive_sha256"
+          "status"
         ],
         "properties": {
           "install_id": {
@@ -531,10 +530,6 @@
               "ok",
               "failed"
             ],
-            "type": "string"
-          },
-          "archive_sha256": {
-            "pattern": "^[a-f0-9]{64}$",
             "type": "string"
           }
         }
@@ -876,6 +871,29 @@
             }
           }
         ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "device_install_result"
+          },
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "archive_sha256"
+        ],
+        "properties": {
+          "archive_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
       }
     }
   ]

@@ -8,7 +8,7 @@ from .models import DeviceEvent, Manifest, PROTOTYPE_SERVICES
 
 REQUIRED = {
     "text": ["text"], "button": ["button", "action"], "build_confirm": ["proposal_id"],
-    "run_confirm": ["package_id"], "device_install_result": ["install_id", "package_id", "status", "archive_sha256"],
+    "run_confirm": ["package_id"], "device_install_result": ["install_id", "package_id", "status"],
     "install_retry": ["package_id"],
     "app_started": ["run_id", "package_id"], "app_healthy": ["run_id", "package_id"],
     "app_failed": ["run_id", "package_id", "error_code"], "app_stopped": ["run_id", "package_id"],
@@ -41,6 +41,8 @@ def schemas():
     conditions.append({"if": {"properties": {"event": {"const": "app_stopped"}}},
                        "then": {"anyOf": [{"required": ["stop_id"], "properties": {"stop_id": nonnull("stop_id")}},
                                           {"required": ["reason"], "properties": {"reason": {"enum": ["completed", "user_exit", "runtime_limit"]}}}]}})
+    conditions.append({"if": {"properties": {"event": {"const": "device_install_result"}, "status": {"const": "ok"}}},
+                       "then": {"required": ["archive_sha256"], "properties": {"archive_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}})
     event["allOf"] = conditions
     manifest = Manifest.model_json_schema()
     manifest["properties"]["required_services"].update(items={"enum": sorted(PROTOTYPE_SERVICES)}, uniqueItems=True)

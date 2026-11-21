@@ -63,10 +63,13 @@ Admin-tokenet gir lesing/administrasjon, men kan ikke starte en fysisk sesjon ve
 enhetstoken er separat og minst 24 tegn. Autorisasjon sendes i headeren
 `Authorization: Bearer TOKEN`, aldri URL. Ikke bruk OpenAI-nøkkelen som enhetstoken.
 
-Firmwareagenten må implementere protokoll 0.2 og Lua-runtime før en faktisk FIRE
-kan bruke flyten. Meld bare inn faktisk støttede tjenester/minnegrenser. Nåværende
-firmware på gjennomgått commit 65f8f3e har en lokal demo og en separat .bin/OTA-
-laster; denne lasteren skal aldri brukes for AI-genererte Lua-apper.
+Firmwarekilden på gjennomgått commit 069ea09e har nå WebSocket-klient,
+Lua-runtime og SD-pakkehåndtering. Backend følger handoffens faktiske profil:
+display/buttons/rgb/imu/time, 131072 byte, 10000 ms og begge lydflagg false.
+Dette er en gyldig tilkobling; tekst fra PC kan brukes mens lyd mangler. Backend
+viser begrensningen ved oppstart og forsøker ikke opptak eller talesvar.
+Se [oppfølging av handoff](docs/DEVICE_HANDOFF_RESPONSE.md) for kildefunn som må
+avklares i firmware og testes fysisk. AI-genererte Lua-apper bruker aldri .bin/OTA.
 
 ## Miljøvariabler
 

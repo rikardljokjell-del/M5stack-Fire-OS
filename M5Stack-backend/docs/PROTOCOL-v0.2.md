@@ -25,7 +25,7 @@ show the additional fields; the envelope is always required.
 ## Start, resume and identity
 
 ```json
-{"type":"device_event","protocol_version":"0.2","event_id":"evt-001","device_id":"m5stack-fire-01","event":"session_start","target":"device","boot_id":"boot-001","capabilities":{"api_version":"fire-lua-0.1","services":["display","buttons","time"],"max_memory":131072,"max_runtime_ms":10000,"audio_input":true,"audio_output":true,"firmware_version":"your-firmware-version"}}
+{"type":"device_event","protocol_version":"0.2","event_id":"evt-001","device_id":"m5stack-fire-01","event":"session_start","target":"device","boot_id":"boot-001","capabilities":{"api_version":"fire-lua-0.1","services":["display","buttons","rgb","imu","time"],"max_memory":131072,"max_runtime_ms":10000,"audio_input":false,"audio_output":false,"firmware_version":"fire-os-0.2"}}
 ```
 
 Capabilities are the actually implemented adapters, not a wish list. Allowed
@@ -34,6 +34,24 @@ runtime 16..10000 ms. The first contract deliberately limits an app to ten secon
 Mic/speaker used for developer conversation do NOT grant Lua access to audio.
 Only supported `fire-lua-0.1` sessions are accepted. Never advertise Lua support
 before a restricted runtime and the advertised adapters exist on FIRE.
+
+This is the current source profile at 069ea09e. Both audio=false is VALID and
+does not prevent text/build/install/run. Backend FIRE_AUDIO_ENABLED=true cannot
+override either device audio flag. Set each flag true only after physical tests
+of capture/upload or playback. Simulator support does not grant device APIs.
+
+Snapshots include effective_capabilities (lua_services, max_memory,
+max_runtime_ms, conversation_audio announced/enabled directions, backend_enabled)
+and physical_verified=false. These are announced limits and backend policy,
+not proof of hardware enforcement. An authenticated emulator can send receipts;
+backend never labels that as independently verified physical testing.
+Startup/resume sends nonfatal capability_status with effective_capabilities,
+code and message. Without input, code=audio_input_unavailable (or
+backend_audio_disabled when only backend audio is off), initial state=idle.
+A text-only assistant_message repeats the limitation for current native UI.
+Unsupported listen_start/listen_stop return error with the same code/message
+without invalidating the current proposal. WAV upload returns HTTP 409 JSON
+{code,message} before consuming audio. Output is independently gated.
 
 `session_started` returns session_id, project_id, target, mode, state, boot_id,
 protocol_version, proposal_id/package_id/build_id when present. Server messages
@@ -49,6 +67,12 @@ server returns `session_started` and `session_snapshot` with last state/progress
 proposal, package, device record and pending commands. Existing confirmed builds
 continue during transient disconnect. `session_stop` explicitly cancels them.
 Commands are NOT blindly executed again on reconnect.
+
+For the current native client, resume_session_id may be omitted when reconnecting
+within the window with the SAME device/boot/capabilities and an offline session.
+Backend resumes that session/project/history/proposal instead of creating a new
+project. A live socket is never taken over. Capability changes require a fresh
+session/boot; they cannot silently broaden an existing session's permissions.
 
 On a new boot ID, pending commands for the previous boot are invalid. Start a
 fresh session. Device runtime status is unknown until a new correlated command
@@ -71,10 +95,13 @@ are expired; send no unsolicited app_started event to restore running status.
 | ping | none | pong + session snapshot |
 | session_stop | none | End conversation and cancel its build/audio; does not assert a remote app stopped |
 
-Preserve current FIRE controls: short B starts/stops recording, A sends
+Intended FIRE controls: short B starts/stops recording when audio_input is true; A sends
 build_confirm or run_confirm only when the matching offer is visible, C aborts.
 Long A=home, long B=quick settings, long C=back (650 ms), reserved for OS.
 Do not emit raw button events as a substitute for semantic confirmations.
+Current native source sends listen events but has no capture/upload/playback;
+its false audio flags therefore remain authoritative. Text may be sent by a PC
+client authenticated for that device/session. Legacy PC simulation is separate.
 
 `assistant_message`: text. `build_proposal`: proposal_id, project_id, summary.
 `ui_event/assistant_state` reports workflow state. `ui_event/assistant_activity`
@@ -118,7 +145,7 @@ with the same event_id returns an acknowledgement, not another state change.
 
 | event | Additional required fields | Effect |
 | --- | --- | --- |
-| device_install_result | install_id, status=ok/failed, archive_sha256 | ok marks package installed only after matching expected archive hash |
+| device_install_result | install_id, status=ok/failed; archive_sha256 required for ok | ok marks package installed only after matching expected archive hash |
 | app_started | run_id | Marks physically running after correct run_request; not a PC test |
 | app_healthy | run_id | Device confirms successful init/first frames and no runtime error; promotes healthy current/previous/backup |
 | app_failed | run_id, error_code | Device has stopped this failed run; backend offers rollback to last healthy/previous version |
@@ -130,11 +157,12 @@ previous version exists, failure stops the app and records the error; no rollbac
 command is fabricated. A successful rollback restores selection/installed state
 only; restarting it requires a fresh run_confirm. No metadata-only rollback is
 reported as physical success.
-For a failed installation, archive_sha256 identifies the offered archive and may
-echo the offer even if downloading failed before a complete checksum was possible.
-For status=ok it MUST have been independently verified against the downloaded
-bytes. Report checksum-mismatch failures with status=failed, the offered hash and
-error_code=checksum_mismatch; never send status=ok for a mismatching file.
+For a failed installation, archive_sha256 may be absent/empty when download failed
+early, or contain the observed hash (including a mismatch). Backend correlates
+install_id/package_id/device/boot/expiry, records failure and clears the pending
+install; it does not mark the package installed/current. For status=ok the hash
+is mandatory, exactly 64 lowercase hex characters, and MUST match both the offer
+and independently verified downloaded bytes. A mismatch never succeeds.
 
 `run_request`: run_id, package_id, archive_sha256, boot_id, expires_at (+30 seconds).
 Persist consumed run_id on FIRE BEFORE starting. Repeated run_request must return

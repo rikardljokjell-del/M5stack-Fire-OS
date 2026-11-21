@@ -6,12 +6,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from pydantic import ValidationError
 
 from .audio import AudioManager
 from .auth import authorize_project, authorize_session, principal
 from .config import Settings
+from .capabilities import CapabilityError, FIRMWARE_SOURCE_REVISION, HANDOFF_PATH
 from .models import BuildConfirm, DeviceEvent, RunConfirm, SessionAction, SessionStart
 from .protocol import begin_event, dispatch, finish_event
 from .security import SecretFilter
@@ -71,6 +72,10 @@ def create_app(settings=None, provider=None):
     async def value_handler(request, error):
         return PlainTextResponse(request.app.state.backend.redactor.text(str(error))[:1000], status_code=400)
 
+    @app.exception_handler(CapabilityError)
+    async def capability_handler(request, error):
+        return JSONResponse({"code": error.code, "message": str(error)}, status_code=409)
+
     @app.exception_handler(RequestValidationError)
     async def validation_handler(request, error):
         return PlainTextResponse("Invalid request schema", status_code=422)
@@ -116,7 +121,9 @@ def create_app(settings=None, provider=None):
     @app.get("/device/context")
     async def context(identity=Depends(auth), service: Backend = Depends(backend)):
         return {"api_version": "fire-lua-0.1", "context": service.context, "source_verified": True,
-                "firmware_runtime_verified": False}
+                "firmware_source_revision": FIRMWARE_SOURCE_REVISION, "handoff_path": HANDOFF_PATH,
+                "firmware_runtime_implemented_in_source": True,
+                "firmware_runtime_verified": False, "physical_verified": False}
 
     @app.post("/session/start")
     async def start(body: SessionStart, identity=Depends(auth), service: Backend = Depends(backend)):
@@ -171,6 +178,8 @@ def create_app(settings=None, provider=None):
         session = authorize_session(service, session_id, identity)
         try:
             return await service.audio.receive(session, turn_id, request.stream())
+        except CapabilityError:
+            raise
         except asyncio.TimeoutError:
             raise HTTPException(408, "Audio upload timed out") from None
         except ValueError as error:
@@ -290,7 +299,7 @@ def create_app(settings=None, provider=None):
                     await (service.emit(session, error_event) if session else socket.send_json(error_event))
                 except (ValueError, KeyError, PermissionError, FileNotFoundError) as error:
                     message = "Referenced item not found" if isinstance(error, FileNotFoundError) else service.redactor.text(str(error))[:240]
-                    error_event = {"type": "error", "code": "event_rejected", "message": message}
+                    error_event = {"type": "error", "code": error.code if isinstance(error, CapabilityError) else "event_rejected", "message": message}
                     await (service.emit(session, error_event) if session else socket.send_json(error_event))
         except WebSocketDisconnect:
             pass

@@ -80,12 +80,12 @@ local function record(name, ...)
     trace[trace_count] = {name, ...}
   end
 end
-local function xy(x,y) integer(x,0,319); integer(y,0,239) end
+local function xy(x,y) whole(x,0,319); whole(y,0,239) end
 local function color(c) whole(c,0,65535) end
 local display = {
   clear = function(c) color(c); record("clear",c) end,
-  circle = function(x,y,r,c) xy(x,y); integer(r,0,160); color(c); record("circle",math.floor(x),math.floor(y),math.floor(r),c) end,
-  rect = function(x,y,w,h,c) xy(x,y); integer(w,0,320); integer(h,0,240); color(c); record("rect",math.floor(x),math.floor(y),math.floor(w),math.floor(h),c) end,
+  circle = function(x,y,r,c) xy(x,y); whole(r,0,160); color(c); record("circle",x,y,r,c) end,
+  rect = function(x,y,w,h,c) xy(x,y); whole(w,0,320); whole(h,0,240); color(c); record("rect",x,y,w,h,c) end,
   line = function(x,y,a,b,c) xy(x,y); xy(a,b); color(c); record("line",math.floor(x),math.floor(y),math.floor(a),math.floor(b),c) end,
   text = function(x,y,s,c)
     xy(x,y); color(c)
@@ -95,7 +95,7 @@ local display = {
 }
 local available = {
   display = display,
-  time = {millis=function() return elapsed end},
+  time = {millis=function() return 60000+elapsed end},
   rgb = {set=function(i,r,g,b)
     whole(i,0,9); whole(r,0,255); whole(g,0,255); whole(b,0,255)
     record("rgb",i,r,g,b)
@@ -141,7 +141,6 @@ for frame=1,frames do
     button=({"A","B","C"})[(frame//30-1)%3+1]
     if env.on_button then call(env.on_button,button,"pressed") end
   elseif button~="" then
-    if env.on_button then call(env.on_button,button,"released") end
     button=""
   end
   call(env.update,16)

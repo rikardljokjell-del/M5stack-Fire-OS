@@ -124,7 +124,7 @@ class DeviceLifecycle:
                 raise ValueError("Installation offer was superseded")
             if event.status not in {"ok", "failed"}:
                 raise ValueError("Installation status required")
-            if event.archive_sha256 != command["archive_sha256"]:
+            if event.status == "ok" and event.archive_sha256 != command["archive_sha256"]:
                 raise ValueError("Installation archive checksum mismatch")
             if event.status == "ok":
                 self.verify_package(session, package_id)
@@ -134,6 +134,9 @@ class DeviceLifecycle:
                 state = State.installed
             else:
                 self.finish_command(command, "failed")
+                device["pending_install_id"] = None
+                device["last_install_error"] = event.error_code or "install_failed"
+                device["last_install_message"] = event.message or "Enheten rapporterte mislykket installasjon."
                 state = State.failed
         elif event.event in {"app_started", "app_healthy", "app_failed"}:
             command = self.match_command(session, event.run_id, "run", package_id)

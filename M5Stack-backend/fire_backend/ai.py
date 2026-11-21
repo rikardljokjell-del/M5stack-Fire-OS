@@ -81,7 +81,8 @@ class OpenAIProvider:
             model=self.settings.openai_code_model,
             instructions=context + "\nGenerate a complete Lua app for this confirmed plan. "
             "Follow the prototype API exactly. Return name, main_lua, required_services. "
-            "Only display/buttons/rgb/imu/time are implemented. Never include credentials.",
+            "PC supports display/buttons/rgb/imu/time, but the actual session capability policy is authoritative. "
+            "Never call or declare services missing from the device handshake. Never include credentials.",
             input=json.dumps(request, ensure_ascii=False),
             text_format=GeneratedApp, store=False, max_output_tokens=8000,
         )
@@ -145,8 +146,8 @@ class MockProvider:
             return DialogReply(message="Jeg lager Snake med A/C for å svinge. Bekreft bygging.",
                                clarification_needed=False, build_summary="Lag Snake med A/C for å svinge.")
         if "rgb" in text:
-            return DialogReply(message="Jeg lager en RGB-effekt med rødt og blått. Bekreft bygging.",
-                               clarification_needed=False, build_summary="Lag RGB-effekt med rødt og blått.")
+            return DialogReply(message="Jeg lager en rød/blå RGB-effekt med samme farge på hele stripen. Bekreft bygging.",
+                               clarification_needed=False, build_summary="Lag en rød/blå RGB-effekt med samme farge på hele stripen.")
         if "imu" in text:
             return DialogReply(message="Jeg lager en enkel IMU-graf. Bekreft bygging.",
                                clarification_needed=False, build_summary="Lag en enkel IMU-graf.")

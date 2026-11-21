@@ -5,6 +5,7 @@ import hashlib
 import time
 
 from .models import State
+from .capabilities import policy, require_audio_input
 from .storage import canonical, new_id
 
 
@@ -49,7 +50,8 @@ async def cancel_turn(service, session):
             await session.speech_task
     session.proposal_id, session.summary, session.turn_id = None, "", None
     if session.state not in {State.building, State.testing, State.running}:
-        await service.state(session, State.listening)
+        ready = policy(service.settings, session.target, session.capabilities)["conversation_audio"]["input_enabled"]
+        await service.state(session, State.listening if ready else State.idle)
     await service.activity(session, "idle")
 
 
@@ -139,8 +141,7 @@ async def handle(service, session, event):
             service.persist(session)
             session.input_task = asyncio.create_task(text_task(service, session, event.text))
             return {"status": "queued", "turn_id": session.turn_id}
-        if not service.settings.fire_audio_enabled or (session.target == "device" and not session.capabilities["audio_input"]):
-            raise ValueError("Audio input is disabled or unsupported")
+        require_audio_input(service.settings, session)
         if not event.turn_id:
             raise ValueError("turn_id is required")
         if name == "listen_start":

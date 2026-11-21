@@ -17,6 +17,10 @@ Eksisterende FastAPI-/WebSocket-/OpenAI-/Lua-/ZIP-arkitektur er videreført.
 - start.ps1: ny installasjon ved endret prosjektmetadata, fortsatt én kommando.
 - contracts/, PROTOCOL-v0.2.md, LUA_API.md, OPERATIONS.md, README og rootstatus/instruksjoner.
 - Nye enhets-/lyd-/SDK-/recovery-tester og scripts/device_smoke_test.py, scripts/check_openai.py.
+- Handoff 069ea09e: sentral capability-policy, oppstart uten lyd med tekststatus,
+  uavhengige lydporter, faktisk sesjonskontekst og implisitt offline reconnect.
+  Native feilkvittering kan ha tom/observert SHA uten at suksesskrav svekkes.
+  Oppdatert konservativ Lua-simulator og dokumenterte adapterbegrensninger.
 
 ## Kontrakt
 
@@ -31,9 +35,16 @@ for current/previous/backup migreres til uttrykkelig simulert historikk.
 
 ## Faktisk verifisert
 
-`pytest -q --junitxml=test-results.xml`: **71 bestått**, inkludert den eksisterende
+`pytest -q --junitxml=test-results.xml`: **95 bestått**, inkludert den eksisterende
 testdekningen tilpasset korrigerte current-semantikker. Én advarsel gjelder
 Starlettes overgang fra httpx i testklienten; ingen test feiler.
+
+24 nye handoff-kontroller dekker nøyaktig native profil med begge lydflagg false,
+synlig oppstartsstatus, tekst/bygg/install/run, uavhengige lydretninger, avvisning
+før lydstrøm/provider brukes, bevart forslag ved lydforsøk, offline reconnect
+uten resume-hint, restart, blokkert socket-overtakelse, nye boot-ID-er, native
+feilkvitteringer uten hash og uendrede hashkrav for suksess. Heltallsargumenter,
+syntetisk boot-uptime og pressed-callback kontrolleres også. physical_verified=false.
 
 Nye kontroller dekker scoped identitet/eierskap, kvitterings-ID-er, feil checksum,
 gamle boot-ID-er, duplikate bekreftelser, endret payload med samme event-ID,
@@ -71,11 +82,12 @@ workspace/logs/device-smoke-report.json. Disse runtime-dataene er ikke lagt i Gi
 check_openai.py --live rapporterte not_run, live_verified=false. Modell-/konto-
 tilgang, faktisk norsk transkripsjon og talesyntese må verifiseres når nøkkel er satt.
 
-**Fysisk M5Stack-integrasjon er ikke fullført.** Inspektert firmwarecommit 65f8f3e
-har lokal AI-demo, .bin/OTA-laster og lagring av OpenAI-nøkkel, men mangler klient
-for denne protokollen, begrenset Lua-runtime og trygg SD-installasjon for Lua.
-Firmwareagenten må implementere kontrakten, erstatte nøkkelfeltet med backend-
-adresse/enhetstoken og annonsere bare faktisk implementerte tjenester.
+**Fysisk M5Stack-integrasjon er ikke fullført.** Inspektert firmwarecommit 069ea09e
+har nå klient, Lua-runtime og SD-pakkehåndtering. Begge lydflagg er false.
+Backend har fulgt BACKEND_HANDOFF.md og bruker den annonserte profilen som grense.
+Kildelesing avdekket gjenstående avvik i Lua-stakk/budsjetter, ZIP-header,
+HTTP-header, SD-versjonering og stopp/rollback/lyd. Konkrete funn og videre
+enhetsarbeid står i [DEVICE_HANDOFF_RESPONSE.md](DEVICE_HANDOFF_RESPONSE.md).
 
 Deretter må ekte opptak/avspilling, maskinvareadaptere, minne, OS-navigasjon,
 SD-avbrudd, fysisk appstart og rollback testes på FIRE. En autentisert emulert
