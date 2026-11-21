@@ -254,7 +254,7 @@ void FireBackendClient::handleHandshake() {
   setState(State::Connected, "Backend connected");
   const String fields = ",\"target\":\"device\",\"boot_id\":\"" +
                         jsonEscape(bootId_) +
-                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":10000,\"audio_input\":false,\"audio_output\":false,\"firmware_version\":\"" +
+                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":10000,\"audio_input\":true,\"audio_output\":false,\"firmware_version\":\"" +
                         jsonEscape(firmwareVersion_) + "\"}";
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +

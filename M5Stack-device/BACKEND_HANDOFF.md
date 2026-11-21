@@ -84,10 +84,8 @@ opptak, WAV-opplasting, avspilling og kvitteringer er testet på FIRE.
 
 ## Nåværende lydstatus
 
-HTTP/WAV-transporten og UI-state-maskinen er lagt til som firmware-scaffold, men
-mic-capture er foreløpig deaktivert i standardbygget. Direkte bruk av
-`M5.Mic.record()` overskrider dagens NimBLE/M5GFX-IRAM-margin med cirka 116
-bytes. Device annonserer derfor fortsatt `audio_input=false` og
-`audio_output=false`. Neste lydarbeid må redusere IRAM på en verifiserbar måte
-eller bruke en mindre I2S-adapter; ikke aktiver opptak før standardbygget går
-rent og er fysisk testet.
+HTTP/WAV-transporten og UI-state-maskinen er lagt til. Mic-capture bruker nå en
+minimal direkte I2S-adapter med M5Unifieds faktiske FIRE-mic-konfigurasjon;
+standardbygget går rent med BLE/Wi-Fi/Lua aktivt. Device annonserer
+`audio_input=true`, men dette må fortsatt verifiseres fysisk med backend. Audio
+output er fortsatt `false` til playback er implementert og testet.
