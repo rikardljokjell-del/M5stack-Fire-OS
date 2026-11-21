@@ -2722,9 +2722,9 @@ void FireOS::handleAiApiButton(uint8_t index) {
     detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
   } else if (index == 2) {
     detailIndex_ = (detailIndex_ + 1) % kCount;
-  } else if (detailIndex_ == 0 || detailIndex_ == 1) {
+  } else if (detailIndex_ == 0) {
     startAiApiSetup();
-  } else {
+  } else if (detailIndex_ == 2) {
     back();
   }
 }
@@ -4416,7 +4416,7 @@ void FireOS::drawSettings() {
       "Date / Time",       "Display & Sound", "Wi-Fi",       "Bluetooth",
       "File Explorer",     "Boot",             "Menu Layout",  "Shortcuts",
       "App Manager",       "Debug",            "System Info",   "Help",
-      "Factory Reset",     "AI API",           "Power",         "Back",
+      "Factory Reset",     "AI settings",      "Power",         "Back",
   };
   drawStatusBar("Settings");
   drawText(16, 37, "System settings", kMuted, 1);
@@ -4974,10 +4974,10 @@ void FireOS::drawAiDeveloper() {
 }
 
 void FireOS::drawAiApi() {
-  drawStatusBar("AI Backend");
+  drawStatusBar("AI settings");
   if (wifiSetupActive_) {
     ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
-    drawText(24, 41, "Mobile AI setup", TFT_WHITE, 2, kPanel);
+    drawText(24, 41, "Backend config", TFT_WHITE, 2, kPanel);
     const String url = "http://" + WiFi.softAPIP().toString() +
                        "/?token=" + wifiSetupToken_;
     ui.qrcode(url, 190, 60, 112, 4);
@@ -4986,15 +4986,23 @@ void FireOS::drawAiApi() {
     drawText(24, 120, "2. Password", kText, 1, kPanel);
     drawText(24, 138, "fire-connect-2026", kCyan, 1, kPanel);
     drawText(24, 166, "3. Scan QR and enter", kText, 1, kPanel);
-    drawText(24, 184, "Wi-Fi/API fields", kMuted, 1, kPanel);
+    drawText(24, 184, "PC, port, ID and token", kMuted, 1, kPanel);
     drawFooter("", "Close", "");
     return;
   }
-  drawRow(0, "Mobile setup", detailIndex_ == 0);
-  drawRow(1, "Backend", detailIndex_ == 1,
+  drawRow(0, "Backend config", detailIndex_ == 0);
+  drawRow(1, "Connection status", detailIndex_ == 1,
           backendClient_ && backendClient_->configured() ? backendStatus_ : "Not configured");
   drawRow(2, "Back", detailIndex_ == 2);
-  drawText(16, 190, "OpenAI key stays on the PC backend.", kMuted, 1);
+  String host = backendHost_.length() > 0 ? backendHost_ : "not set";
+  if (host.length() > 24) host = host.substring(0, 21) + "...";
+  String device = backendDeviceId_.length() > 0 ? backendDeviceId_ : "not set";
+  if (device.length() > 19) device = device.substring(0, 16) + "...";
+  drawText(16, 174, "PC: " + host, kMuted, 1);
+  drawText(16, 190, "Port: " + String(backendPort_) + "  ID: " + device,
+           kMuted, 1);
+  drawText(16, 206, "Token: " + String(backendToken_.length() >= 24 ? "configured" : "not set"),
+           backendToken_.length() >= 24 ? kGreen : kOrange, 1);
   drawFooter("Previous", "Select", "Next");
 }
 
