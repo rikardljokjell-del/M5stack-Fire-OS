@@ -2638,7 +2638,7 @@ void FireOS::updateAiAudio() {
           const int32_t value = pcm[index];
           peak = max<int32_t>(peak, value < 0 ? -value : value);
         }
-        Serial.printf("FIRE audio capture: samples=%u peak=%ld wav=%u\\n",
+        Serial.printf("FIRE audio capture: samples=%u peak=%ld wav=%u\n",
                       static_cast<unsigned>(aiAudioCapturedSamples_),
                       static_cast<long>(peak),
                       static_cast<unsigned>(44 + payloadBytes));
