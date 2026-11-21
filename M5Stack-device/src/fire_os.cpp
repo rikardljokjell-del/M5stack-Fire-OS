@@ -366,6 +366,61 @@ void handleWifiSetupSave() {
                        "unchanged. You can close this page.</p></body></html>");
 }
 
+void handleWifiBackendProvision() {
+  if (activeFireOs == nullptr) {
+    wifiSetupServer.send(500, "text/plain", "OS unavailable");
+    return;
+  }
+  if (!activeFireOs->aiApiSetupActive()) {
+    wifiSetupServer.send(403, "text/plain",
+                         "Backend provisioning is not active");
+    return;
+  }
+
+  // The provisioning URL is only accepted while the temporary, password-
+  // protected FIRE-Setup network is active.  An optional setup token is
+  // accepted as an additional check when a QR generator includes it, but the
+  // backend token itself is never logged or rendered back in the response.
+  const String setupToken = wifiSetupServer.arg("token");
+  if (setupToken.length() > 0 &&
+      !activeFireOs->wifiSetupTokenValid(setupToken)) {
+    wifiSetupServer.send(403, "text/plain", "Invalid setup token");
+    return;
+  }
+
+  const String host = wifiSetupServer.arg("host");
+  const String port = wifiSetupServer.arg("port");
+  const String deviceId = wifiSetupServer.arg("device").length() > 0
+                              ? wifiSetupServer.arg("device")
+                              : wifiSetupServer.arg("device_id");
+  const String backendToken = wifiSetupServer.arg("backend_token");
+  const long parsedPort = port.toInt();
+
+  if (host.length() == 0 || parsedPort < 1 || parsedPort > 65535 ||
+      deviceId.length() == 0 || backendToken.length() < 24) {
+    wifiSetupServer.send(
+        400, "text/html",
+        "<html><meta name='viewport' content='width=device-width'>"
+        "<body><h2>Invalid backend setup</h2>"
+        "<p>The QR code must contain PC address, port, device ID and a valid "
+        "device token.</p><p>Return to the FIRE OS screen and scan a new "
+        "backend QR code.</p></body></html>");
+    return;
+  }
+
+  // Send the acknowledgement before stopping the temporary AP.  This gives
+  // the phone a useful result page even though saving the settings closes the
+  // setup network immediately afterwards.
+  wifiSetupServer.send(
+      200, "text/html",
+      "<html><meta name='viewport' content='width=device-width'>"
+      "<body><h2>Backend saved</h2>"
+      "<p>FIRE OS saved the PC address, port, device ID and token.</p>"
+      "<p>You can return to FIRE OS. It will connect to the backend when Wi-Fi "
+      "is available.</p></body></html>");
+  activeFireOs->saveBackendSetupFields(host, port, backendToken, deviceId);
+}
+
 void writeWavHeader(uint8_t* data, uint32_t payloadBytes,
                     uint32_t sampleRate) {
   const uint32_t riffSize = 36 + payloadBytes;
@@ -3272,6 +3327,7 @@ void FireOS::startAiApiSetup() {
   WiFi.softAP("FIRE-Setup", wifiSetupPassword_.c_str());
   wifiSetupServer.on("/", HTTP_GET, handleWifiSetupRoot);
   wifiSetupServer.on("/save", HTTP_POST, handleWifiSetupSave);
+  wifiSetupServer.on("/provision", HTTP_GET, handleWifiBackendProvision);
   wifiSetupServer.begin();
   wifiSetupActive_ = true;
 }
@@ -4985,7 +5041,7 @@ void FireOS::drawAiApi() {
     drawText(24, 96, "FIRE-Setup", kCyan, 1, kPanel);
     drawText(24, 120, "2. Password", kText, 1, kPanel);
     drawText(24, 138, "fire-connect-2026", kCyan, 1, kPanel);
-    drawText(24, 166, "3. Scan QR and enter", kText, 1, kPanel);
+    drawText(24, 166, "3. Scan backend QR", kText, 1, kPanel);
     drawText(24, 184, "PC, port, ID and token", kMuted, 1, kPanel);
     drawFooter("", "Close", "");
     return;

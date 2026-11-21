@@ -41,6 +41,33 @@ Første device-handshake skal annonsere kun faktisk tilgjengelige tjenester:
 `audio_input` og `audio_output` skal først settes til `true` etter at fysisk
 opptak, WAV-opplasting, avspilling og kvitteringer er testet på FIRE.
 
+## Backend-konfigurasjon via mobil/QR
+
+FIRE OS tilbyr en midlertidig, passordbeskyttet konfigurasjons-AP fra
+`Settings → AI settings → Backend config`:
+
+- SSID: `FIRE-Setup`
+- Passord: `fire-connect-2026`
+- Enheten viser også en QR-kode for manuell reservekonfigurasjon.
+
+Backendens Windows-app skal generere en vanlig HTTP-QR-kode med følgende URL
+etter at brukeren har koblet mobilen til `FIRE-Setup`:
+
+```text
+http://192.168.4.1/provision?host=<url-encoded-pc-address>&port=<port>&device=<url-encoded-device-id>&backend_token=<url-encoded-device-token>
+```
+
+`/provision` aksepterer bare forespørsler mens AI-backend-oppsettet er aktivt.
+Den validerer PC-adresse, port, enhets-ID og token, lagrer verdiene atomisk via
+FIRE OS sin eksisterende backend-konfigurasjon og avslutter deretter
+oppsett-AP-et. `device_id` kan brukes som alias for `device`. En eventuell
+`token`-parameter kan brukes som ekstra setup-tokenkontroll, men er ikke
+nødvendig når mobilen allerede er koblet til det passordbeskyttede
+`FIRE-Setup`-nettet.
+
+Backend-tokenet skal aldri logges eller legges i firmwarekilde, Git eller
+pakken. QR-koden skal bare vises lokalt i backendens kontrollpanel.
+
 ## Backend-agentens neste arbeid
 
 1. Oppdater `fire_backend/data/FIRE_DEVICE_CONTEXT.md` til nåværende firmware-
