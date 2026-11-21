@@ -7,6 +7,15 @@ constexpr uint32_t kHeaderTimeoutMs = 5000;
 constexpr uint32_t kDataTimeoutMs = 15000;
 constexpr size_t kChunkSize = 4096;
 
+uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t length) {
+  while (length-- > 0) {
+    crc ^= *data++;
+    for (uint8_t bit = 0; bit < 8; ++bit)
+      crc = (crc >> 1) ^ (0xEDB88320UL & (-(crc & 1)));
+  }
+  return crc;
+}
+
 String manifestField(const String& json, const char* key) {
   const String marker = String("\"") + key + "\"";
   const int at = json.indexOf(marker);
@@ -15,6 +24,28 @@ String manifestField(const String& json, const char* key) {
   const int quote = json.indexOf('"', colon + 1);
   const int end = json.indexOf('"', quote + 1);
   return quote >= 0 && end > quote ? json.substring(quote + 1, end) : "";
+}
+
+bool removeTree(const String& path) {
+  File entry = SD.open(path);
+  if (!entry) return true;
+  if (!entry.isDirectory()) {
+    entry.close();
+    return SD.remove(path);
+  }
+  File child = entry.openNextFile();
+  while (child) {
+    String childPath = child.name();
+    if (!childPath.startsWith("/")) childPath = path + "/" + childPath;
+    child.close();
+    if (!removeTree(childPath)) {
+      entry.close();
+      return false;
+    }
+    child = entry.openNextFile();
+  }
+  entry.close();
+  return SD.rmdir(path);
 }
 }
 
@@ -96,8 +127,11 @@ void FireLuaPackageManager::service(bool wifiConnected) {
       fail("Backend rejected package download");
       return;
     }
-    const int lengthAt = headers.indexOf("Content-Length:");
-    if (lengthAt >= 0) contentLength_ = headers.substring(lengthAt + 15).toInt();
+    String lowerHeaders = headers;
+    lowerHeaders.toLowerCase();
+    const int lengthAt = lowerHeaders.indexOf("content-length:");
+    if (lengthAt >= 0)
+      contentLength_ = headers.substring(lengthAt + 15).toInt();
     if (contentLength_ == 0 || contentLength_ > expectedSize_ ||
         (expectedSize_ > 0 && contentLength_ != expectedSize_)) {
       fail("Package size mismatch");
@@ -235,8 +269,10 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
                                              String& reason) {
   const String staging = "/apps/.staging-" + packageId_;
   if (SD.exists(staging)) {
-    reason = "Staging folder already exists";
-    return false;
+    if (!removeTree(staging)) {
+      reason = "Cannot clear stale staging folder";
+      return false;
+    }
   }
   if (!SD.mkdir(staging)) {
     reason = "Cannot create staging folder";
@@ -247,10 +283,11 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
   while (archive.available()) {
     const uint32_t signature = read32(archive);
     if (signature != 0x04034b50) break;
-    archive.seek(archive.position() + 2);
+    archive.seek(archive.position() + 2);  // version needed
     const uint16_t flags = read16(archive);
     const uint16_t method = read16(archive);
-    archive.seek(archive.position() + 4);
+    archive.seek(archive.position() + 4);  // modification time/date
+    const uint32_t storedCrc = read32(archive);
     const uint32_t compressed = read32(archive);
     const uint32_t uncompressed = read32(archive);
     const uint16_t nameLength = read16(archive);
@@ -290,6 +327,7 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
       reason = "Unexpected package entry";
       return false;
     }
+    uint32_t entryCrc = 0xFFFFFFFFUL;
     if (destination.length() > 0) {
       File output = SD.open(destination, FILE_WRITE);
       if (!output) {
@@ -305,11 +343,16 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
           reason = "Cannot extract package";
           return false;
         }
+        entryCrc = crc32Update(entryCrc, buffer, amount);
         remaining -= amount;
       }
       output.close();
     } else {
       archive.seek(archive.position() + compressed);
+    }
+    if ((entryCrc ^ 0xFFFFFFFFUL) != storedCrc) {
+      reason = "ZIP CRC mismatch";
+      return false;
     }
   }
   if (!mainFound || !manifestFound || appId.length() == 0) {
@@ -349,8 +392,38 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
     return false;
   }
   const String finalPath = "/apps/" + appId;
-  if (SD.exists(finalPath)) SD.rmdir(finalPath);
+  const String previousPath = "/apps/.previous-" + appId;
+  bool oldVersionMoved = false;
+  bool oldAppDataMoved = false;
+  if (SD.exists(previousPath) && !removeTree(previousPath)) {
+    reason = "Cannot clear previous app version";
+    return false;
+  }
+  if (SD.exists(finalPath)) {
+    if (!SD.rename(finalPath, previousPath)) {
+      reason = "Cannot preserve previous app version";
+      return false;
+    }
+    oldVersionMoved = true;
+    const String oldAppData = previousPath + "/appdata";
+    const String newAppData = staging + "/appdata";
+    if (SD.exists(oldAppData)) {
+      if (SD.exists(newAppData) && !removeTree(newAppData)) {
+        removeTree(previousPath);
+        reason = "Cannot prepare appdata";
+        return false;
+      }
+      if (!SD.rename(oldAppData, newAppData)) {
+        SD.rename(previousPath, finalPath);
+        reason = "Cannot preserve appdata";
+        return false;
+      }
+      oldAppDataMoved = true;
+    }
+  }
   if (!SD.rename(staging, finalPath)) {
+    if (oldAppDataMoved) SD.rename(staging + "/appdata", previousPath + "/appdata");
+    if (oldVersionMoved) SD.rename(previousPath, finalPath);
     reason = "Cannot activate staged app";
     return false;
   }

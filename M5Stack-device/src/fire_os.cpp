@@ -1504,6 +1504,11 @@ void FireOS::scanLuaApps() {
     if (entry.isDirectory()) {
       String raw = entry.name();
       if (!raw.startsWith("/")) raw = "/apps/" + raw;
+      if (sdBaseName(raw).startsWith(".")) {
+        entry.close();
+        entry = apps.openNextFile();
+        continue;
+      }
       const String manifest = sdJoinPath(raw, "manifest.json");
       const String source = sdJoinPath(raw, "main.lua");
       if (SD.exists(manifest) && SD.exists(source)) {
@@ -2720,6 +2725,7 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
     preferences.putString(("lua_path_" + packageId).c_str(),
                           os->packageManager_ ? os->packageManager_->installedPath()
                                                : String());
+    preferences.putString(("lua_hash_" + packageId).c_str(), archiveHash);
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
         os->aiInstallId_, packageId, true, archiveHash, "installed");
     os->aiWorkflowState_ = 5;
@@ -2789,6 +2795,14 @@ void FireOS::handleBackendMessage(const String& message) {
     const String url = jsonStringField(message, "download_url");
     const String hash = jsonStringField(message, "archive_sha256");
     const uint32_t size = static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
+    const String commandBoot = jsonStringField(message, "boot_id");
+    if (backendClient_ && commandBoot.length() > 0 &&
+        commandBoot != backendClient_->bootId()) {
+      backendClient_->deviceInstallResult(aiInstallId_, aiPackageId_, false,
+                                           hash, "stale boot_id");
+      aiWorkflowText_ = "DOWNLOAD REJECTED";
+      return;
+    }
     const bool accepted = packageManager_ && packageManager_->startDownload(
         backendHost_, backendPort_, backendToken_, url, aiPackageId_, aiInstallId_,
         hash, size);
@@ -2798,16 +2812,55 @@ void FireOS::handleBackendMessage(const String& message) {
   if (type == "run_request") {
     const String runId = jsonStringField(message, "run_id");
     const String packageId = jsonStringField(message, "package_id");
+    const String commandBoot = jsonStringField(message, "boot_id");
+    const String commandHash = jsonStringField(message, "archive_sha256");
+    if (runId.length() == 0 || packageId.length() == 0 ||
+        (backendClient_ && commandBoot.length() > 0 &&
+         commandBoot != backendClient_->bootId())) {
+      if (backendClient_)
+        backendClient_->appFailed(runId, packageId, "invalid_command",
+                                  "Invalid or stale run command");
+      aiWorkflowText_ = "RUN REJECTED";
+      return;
+    }
+    const String consumedKey = "run_consumed_" + runId;
+    const String previousRun = preferences.getString(consumedKey.c_str(), "");
+    if (previousRun.length() > 0) {
+      if (backendClient_ && previousRun != "failed")
+        backendClient_->appStarted(runId, packageId);
+      else if (backendClient_)
+        backendClient_->appFailed(runId, packageId, "previous_failure",
+                                  "Run command was already consumed");
+      return;
+    }
     const String path = preferences.getString(("lua_path_" + packageId).c_str(), "");
+    const String installedHash =
+        preferences.getString(("lua_hash_" + packageId).c_str(), "");
     aiPackageId_ = packageId;
+    if (commandHash.length() > 0 && installedHash.length() > 0 &&
+        !commandHash.equalsIgnoreCase(installedHash)) {
+      preferences.putString(consumedKey.c_str(), "failed");
+      saveSettings();
+      if (backendClient_)
+        backendClient_->appFailed(runId, packageId, "archive_mismatch",
+                                  "Installed package hash does not match command");
+      aiWorkflowText_ = "RUN REJECTED";
+      return;
+    }
+    preferences.putString(consumedKey.c_str(), "starting");
+    saveSettings();
     if (path.length() > 0 && startLuaApp(path, sdBaseName(path))) {
       luaRunId_ = runId;
       luaHealthySent_ = false;
       aiWorkflowState_ = 6;
       aiDeveloperMode_ = 3;
       aiWorkflowText_ = "RUNNING";
+      preferences.putString(consumedKey.c_str(), "started");
+      saveSettings();
       if (backendClient_) backendClient_->appStarted(runId, packageId);
     } else {
+      preferences.putString(consumedKey.c_str(), "failed");
+      saveSettings();
       if (backendClient_) backendClient_->appFailed(runId, packageId, "not_installed",
                                                     "Package is not installed on FIRE");
       aiWorkflowText_ = "APP NOT INSTALLED";

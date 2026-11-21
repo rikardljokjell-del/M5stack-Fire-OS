@@ -25,8 +25,10 @@ class FireLuaRuntime {
   };
 
   static constexpr size_t kMaxSourceBytes = 100000;
+  static constexpr size_t kMaxMemoryBytes = 131072;
   static constexpr uint32_t kMaxInstructionsPerCallback = 200000;
   static constexpr uint32_t kMaxCallbackMs = 12;
+  static constexpr uint32_t kMaxRuntimeMs = 10000;
 
   bool begin(const Host& host);
   bool loadSource(const uint8_t* source, size_t length);
@@ -48,6 +50,7 @@ class FireLuaRuntime {
   String error_;
   uint32_t instructions_ = 0;
   uint32_t frameStarted_ = 0;
+  uint32_t startedAt_ = 0;
   size_t memoryUsed_ = 0;
 
   static void* allocator(void* user, void* pointer, size_t oldSize,

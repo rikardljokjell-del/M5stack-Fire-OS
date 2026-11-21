@@ -31,6 +31,12 @@ void* FireLuaRuntime::allocator(void* user, void* pointer, size_t oldSize,
     return nullptr;
   }
 
+  if (runtime && newSize > oldSize &&
+      runtime->memoryUsed_ + (newSize - oldSize) >
+          FireLuaRuntime::kMaxMemoryBytes) {
+    return nullptr;
+  }
+
   void* result = heap_caps_realloc(pointer, newSize,
                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!result) {
@@ -286,6 +292,8 @@ bool FireLuaRuntime::loadSource(const uint8_t* source, size_t length) {
     return fail("Invalid Lua source");
   }
   clearState();
+  instructions_ = 0;
+  frameStarted_ = millis();
   if (luaL_loadbufferx(lua_, reinterpret_cast<const char*>(source), length,
                        "main.lua", "t") != LUA_OK) {
     return fail(String("Lua syntax: ") + lua_tostring(lua_, -1));
@@ -306,6 +314,7 @@ bool FireLuaRuntime::loadSource(const uint8_t* source, size_t length) {
   lua_pop(lua_, 1);
   if (!hasUpdate) return fail("Lua app requires update(dt_ms)");
   state_ = State::Running;
+  startedAt_ = millis();
   error_ = "";
   return true;
 }
@@ -330,6 +339,7 @@ void FireLuaRuntime::stop() {
   }
   memoryUsed_ = 0;
   instructions_ = 0;
+  startedAt_ = 0;
   error_ = "";
 }
 
@@ -340,6 +350,11 @@ bool FireLuaRuntime::callVoid(const char* function, int argumentCount) {
     lua_pop(lua_, 1);
     return true;
   }
+  // update() pushes its argument before calling this helper. Move the
+  // function below those arguments so lua_pcall sees [function, args...].
+  if (argumentCount > 0) lua_insert(lua_, -argumentCount - 1);
+  instructions_ = 0;
+  frameStarted_ = millis();
   if (lua_pcall(lua_, argumentCount, 0, 0) != LUA_OK) {
     return fail(String("Lua ") + function + ": " + lua_tostring(lua_, -1));
   }
@@ -348,6 +363,8 @@ bool FireLuaRuntime::callVoid(const char* function, int argumentCount) {
 
 bool FireLuaRuntime::update(uint32_t dtMs) {
   if (state_ != State::Running) return state_ != State::Failed;
+  if (millis() - startedAt_ > kMaxRuntimeMs)
+    return fail("Lua app runtime limit exceeded");
   instructions_ = 0;
   frameStarted_ = millis();
   lua_pushinteger(lua_, static_cast<lua_Integer>(dtMs));
@@ -364,6 +381,8 @@ bool FireLuaRuntime::button(const char* name, const char* action) {
   }
   lua_pushstring(lua_, name);
   lua_pushstring(lua_, action);
+  instructions_ = 0;
+  frameStarted_ = millis();
   if (lua_pcall(lua_, 2, 0, 0) != LUA_OK) {
     return fail(String("Lua on_button: ") + lua_tostring(lua_, -1));
   }
