@@ -271,6 +271,11 @@ class FireOS {
   size_t aiAudioCapturedSamples_ = 0;
   size_t aiAudioWavLength_ = 0;
   String aiAudioError_;
+  uint8_t* aiAudioOutputBuffer_ = nullptr;
+  size_t aiAudioOutputLength_ = 0;
+  bool aiAudioOutputActive_ = false;
+  String aiAudioOutputId_;
+  String aiAudioOutputTurnId_;
 
   // Date/time editor state. A/C select a field; B enters/leaves editing.
   uint8_t dateField_ = 0;
@@ -435,6 +440,7 @@ class FireOS {
   bool startAiRecording();
   void finishAiRecording();
   void updateAiAudio();
+  void updateAiAudioOutput();
   void handleAiApiButton(uint8_t index);
   bool startLuaApp(const String& path, const String& name = String());
   void stopLuaApp(const String& reason = String());

@@ -137,6 +137,81 @@ bool FireBackendClient::uploadAudio(const String& turnId,
   return response.startsWith("HTTP/1.1 2") || response.startsWith("HTTP/1.0 2");
 }
 
+bool FireBackendClient::downloadAudio(const String& url, uint8_t* buffer,
+                                      size_t capacity, size_t& length) {
+  length = 0;
+  if (!sessionReady() || url.length() == 0 || !buffer || capacity == 0)
+    return false;
+  WiFiClient* audio = nullptr;
+  if (reverseTransport_) audioTransportClient_ = reverseTransport_->acquire();
+  if (audioTransportClient_) {
+    audio = audioTransportClient_;
+  } else {
+    audioClient_.stop();
+    if (!audioClient_.connect(host_.c_str(), port_)) return false;
+    audio = &audioClient_;
+  }
+  auto closeAudio = [&]() {
+    if (audioTransportClient_ && reverseTransport_) {
+      reverseTransport_->release(audioTransportClient_);
+      audioTransportClient_ = nullptr;
+    } else {
+      audioClient_.stop();
+    }
+  };
+
+  audio->print("GET " + url + " HTTP/1.1\r\nHost: " + host_ + ":" +
+               String(port_) + "\r\nAuthorization: Bearer " + token_ +
+               "\r\nConnection: close\r\n\r\n");
+  String headers;
+  const uint32_t headerDeadline = millis() + 5000;
+  while (millis() < headerDeadline && audio->connected() &&
+         headers.length() < 8192 && headers.indexOf("\r\n\r\n") < 0) {
+    while (audio->available() && headers.length() < 8192) {
+      headers += static_cast<char>(audio->read());
+      if (headers.endsWith("\r\n\r\n")) break;
+    }
+    if (headers.indexOf("\r\n\r\n") < 0) delay(1);
+  }
+  const int headerEnd = headers.indexOf("\r\n\r\n");
+  if (headerEnd < 0 ||
+      (!headers.startsWith("HTTP/1.1 200") &&
+       !headers.startsWith("HTTP/1.0 200"))) {
+    closeAudio();
+    return false;
+  }
+  String lowerHeaders = headers.substring(0, headerEnd);
+  lowerHeaders.toLowerCase();
+  const int lengthAt = lowerHeaders.indexOf("content-length:");
+  if (lengthAt < 0) {
+    closeAudio();
+    return false;
+  }
+  const size_t contentLength =
+      headers.substring(lengthAt + 15, headerEnd).toInt();
+  if (contentLength == 0 || contentLength > capacity ||
+      (contentLength & 1U) != 0) {
+    closeAudio();
+    return false;
+  }
+  const String body = headers.substring(headerEnd + 4);
+  const size_t initial = min(contentLength, body.length());
+  memcpy(buffer, body.c_str(), initial);
+  length = initial;
+  const uint32_t bodyDeadline = millis() + 20000;
+  while (length < contentLength && millis() < bodyDeadline) {
+    if (!audio->available()) {
+      delay(1);
+      continue;
+    }
+    const size_t amount = audio->read(buffer + length, contentLength - length);
+    if (amount == 0) break;
+    length += amount;
+  }
+  closeAudio();
+  return length == contentLength;
+}
+
 String FireBackendClient::eventId(const char* prefix) {
   ++eventCounter_;
   return String(prefix) + "-" + String(millis(), HEX) + "-" +
@@ -269,6 +344,20 @@ bool FireBackendClient::rollbackResult(const String& rollbackId,
                    jsonEscape(message.substring(0, 240)) + "\"");
 }
 
+bool FireBackendClient::audioPlaybackStarted(const String& audioId,
+                                             const String& turnId) {
+  return sendEvent("audio_playback_started", ",\"audio_id\":\"" +
+                   jsonEscape(audioId) + "\",\"turn_id\":\"" +
+                   jsonEscape(turnId) + "\"");
+}
+
+bool FireBackendClient::audioPlaybackFinished(const String& audioId,
+                                              const String& turnId) {
+  return sendEvent("audio_playback_finished", ",\"audio_id\":\"" +
+                   jsonEscape(audioId) + "\",\"turn_id\":\"" +
+                   jsonEscape(turnId) + "\"");
+}
+
 bool FireBackendClient::ping() { return sendEvent("ping"); }
 
 void FireBackendClient::service(bool wifiConnected) {
@@ -341,7 +430,7 @@ void FireBackendClient::handleHandshake() {
                                 : "Backend connected (Direct)");
   const String fields = ",\"target\":\"device\",\"boot_id\":\"" +
                         jsonEscape(bootId_) +
-                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":10000,\"audio_input\":true,\"audio_output\":false,\"firmware_version\":\"" +
+                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":10000,\"audio_input\":true,\"audio_output\":true,\"firmware_version\":\"" +
                         jsonEscape(firmwareVersion_) + "\"}";
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +

@@ -18,6 +18,7 @@
 #include <time.h>
 #include <esp_sntp.h>
 #include <math.h>
+#include <mbedtls/sha256.h>
 #ifdef FIRE_OS_BLE
 #include <NimBLEDevice.h>
 #endif
@@ -225,6 +226,17 @@ String formatBytes(uint32_t bytes) {
     return String(bytes / (1024UL * 1024UL)) + " MB";
   }
   return String(bytes / 1024UL) + " KB";
+}
+
+String compactPreferenceKey(const char* prefix, const String& value) {
+  // ESP32 Preferences/NVS keys are limited to 15 characters. Keep the full
+  // package/run ID in the value and use a stable short FNV-1a key.
+  uint32_t hash = 2166136261UL;
+  for (size_t index = 0; index < value.length(); ++index) {
+    hash ^= static_cast<uint8_t>(value[index]);
+    hash *= 16777619UL;
+  }
+  return String(prefix) + String(hash, HEX);
 }
 
 String jsonStringField(const String& json, const char* key) {
@@ -801,6 +813,7 @@ void FireOS::update() {
                             backendClient_ && backendClient_->configured());
   updateBackend();
   updateAiAudio();
+  updateAiAudioOutput();
   if (packageManager_) packageManager_->service(WiFi.status() == WL_CONNECTED);
   updateTimeSync();
   manageDisplayPower();
@@ -2441,7 +2454,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
         const String appFolder = slash > 0 ? source.substring(0, slash) : source;
         const String appId = sdBaseName(appFolder);
         aiProjectId_ = preferences.getString(
-            ("lua_project_" + appId).c_str(), appId);
+            compactPreferenceKey("pr_", appId).c_str(), appId);
         aiProjectName_ = luaAppNames_[selected];
       }
       if (backendClient_) backendClient_->setProjectId(aiProjectId_);
@@ -2642,6 +2655,23 @@ void FireOS::updateAiAudio() {
   }
 }
 
+void FireOS::updateAiAudioOutput() {
+  if (!aiAudioOutputActive_) return;
+  if (M5.Speaker.isPlaying()) return;
+  if (backendClient_)
+    backendClient_->audioPlaybackFinished(aiAudioOutputId_,
+                                         aiAudioOutputTurnId_);
+  free(aiAudioOutputBuffer_);
+  aiAudioOutputBuffer_ = nullptr;
+  aiAudioOutputLength_ = 0;
+  aiAudioOutputActive_ = false;
+  aiAudioOutputId_ = "";
+  aiAudioOutputTurnId_ = "";
+  aiDeveloperMode_ = 0;
+  aiWorkflowState_ = 0;
+  aiWorkflowText_ = "ANSWER - SPEAK AGAIN";
+}
+
 bool FireOS::startLuaApp(const String& path, const String& name) {
   if (!luaRuntime_) {
     luaAppError_ = "Lua runtime unavailable";
@@ -2785,10 +2815,11 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
   os->aiPackageId_ = packageId;
   os->aiWorkflowText_ = ok ? "INSTALLED" : message;
   if (ok) {
-    preferences.putString(("lua_path_" + packageId).c_str(),
+    preferences.putString(compactPreferenceKey("lp_", packageId).c_str(),
                           os->packageManager_ ? os->packageManager_->installedPath()
                                                : String());
-    preferences.putString(("lua_hash_" + packageId).c_str(), archiveHash);
+    preferences.putString(compactPreferenceKey("lh_", packageId).c_str(),
+                          archiveHash);
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
         os->aiInstallId_, packageId, true, archiveHash, "installed");
     os->aiWorkflowState_ = 5;
@@ -2857,11 +2888,73 @@ void FireOS::handleBackendMessage(const String& message) {
     aiDeveloperMode_ = 2;
     return;
   }
+  if (type == "audio_ready") {
+    const String audioId = jsonStringField(message, "audio_id");
+    const String turnId = jsonStringField(message, "turn_id");
+    const String url = jsonStringField(message, "download_url");
+    const String expectedHash = jsonStringField(message, "sha256");
+    const int sampleRate = jsonIntField(message, "sample_rate");
+    const int channels = jsonIntField(message, "channels");
+    const uint32_t size = static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
+    constexpr uint32_t kMaxPcmBytes = 1440000;
+    if (!backendClient_ || audioId.length() == 0 || turnId.length() == 0 ||
+        url.length() == 0 || sampleRate != 24000 || channels != 1 ||
+        size == 0 || size > kMaxPcmBytes || (size & 1U) != 0) {
+      aiWorkflowText_ = "VOICE RESPONSE INVALID";
+      aiDeveloperMode_ = 2;
+      return;
+    }
+    free(aiAudioOutputBuffer_);
+    aiAudioOutputBuffer_ = static_cast<uint8_t*>(ps_malloc(size));
+    if (!aiAudioOutputBuffer_)
+      aiAudioOutputBuffer_ = static_cast<uint8_t*>(malloc(size));
+    size_t downloaded = 0;
+    bool ok = aiAudioOutputBuffer_ &&
+              backendClient_->downloadAudio(url, aiAudioOutputBuffer_, size,
+                                             downloaded);
+    if (ok && expectedHash.length() == 64) {
+      uint8_t digest[32] = {};
+      mbedtls_sha256_context sha;
+      mbedtls_sha256_init(&sha);
+      mbedtls_sha256_starts_ret(&sha, 0);
+      mbedtls_sha256_update_ret(&sha, aiAudioOutputBuffer_, downloaded);
+      mbedtls_sha256_finish_ret(&sha, digest);
+      mbedtls_sha256_free(&sha);
+      const char* digits = "0123456789abcdef";
+      String actual;
+      actual.reserve(64);
+      for (uint8_t value : digest) {
+        actual += digits[value >> 4];
+        actual += digits[value & 0x0F];
+      }
+      ok = actual.equalsIgnoreCase(expectedHash);
+    }
+    if (!ok || downloaded != size || !M5.Speaker.isEnabled() ||
+        !M5.Speaker.playRaw(reinterpret_cast<const int16_t*>(aiAudioOutputBuffer_),
+                            downloaded / sizeof(int16_t), sampleRate, false, 1,
+                            0, true)) {
+      free(aiAudioOutputBuffer_);
+      aiAudioOutputBuffer_ = nullptr;
+      aiAudioOutputLength_ = 0;
+      aiWorkflowText_ = "VOICE RESPONSE FAILED";
+      aiDeveloperMode_ = 2;
+      return;
+    }
+    aiAudioOutputLength_ = downloaded;
+    aiAudioOutputActive_ = true;
+    aiAudioOutputId_ = audioId;
+    aiAudioOutputTurnId_ = turnId;
+    aiDeveloperMode_ = 3;
+    aiWorkflowState_ = 2;
+    aiWorkflowText_ = "AI SPEAKING";
+    backendClient_->audioPlaybackStarted(audioId, turnId);
+    return;
+  }
   if (type == "package_ready") {
     aiPackageId_ = jsonStringField(message, "package_id");
     const String projectId = jsonStringField(message, "project_id");
     if (projectId.length() > 0 && aiPackageId_.length() > 0) {
-      preferences.putString(("lua_project_" + aiPackageId_).c_str(),
+      preferences.putString(compactPreferenceKey("pr_", aiPackageId_).c_str(),
                             projectId);
       saveSettings();
     }
@@ -2887,7 +2980,8 @@ void FireOS::handleBackendMessage(const String& message) {
         backendHost_, backendPort_, backendToken_, url, aiPackageId_, aiInstallId_,
         hash, size);
     if (projectId.length() > 0 && aiPackageId_.length() > 0) {
-      preferences.putString(("lua_project_" + aiPackageId_).c_str(), projectId);
+      preferences.putString(compactPreferenceKey("pr_", aiPackageId_).c_str(),
+                            projectId);
       saveSettings();
     }
     aiWorkflowText_ = accepted ? "DOWNLOADING" : "DOWNLOAD REJECTED";
@@ -2907,7 +3001,7 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowText_ = "RUN REJECTED";
       return;
     }
-    const String consumedKey = "run_consumed_" + runId;
+    const String consumedKey = compactPreferenceKey("rr_", runId);
     const String previousRun = preferences.getString(consumedKey.c_str(), "");
     if (previousRun.length() > 0) {
       if (backendClient_ && previousRun != "failed")
@@ -2917,9 +3011,10 @@ void FireOS::handleBackendMessage(const String& message) {
                                   "Run command was already consumed");
       return;
     }
-    const String path = preferences.getString(("lua_path_" + packageId).c_str(), "");
-    const String installedHash =
-        preferences.getString(("lua_hash_" + packageId).c_str(), "");
+    const String path = preferences.getString(
+        compactPreferenceKey("lp_", packageId).c_str(), "");
+    const String installedHash = preferences.getString(
+        compactPreferenceKey("lh_", packageId).c_str(), "");
     aiPackageId_ = packageId;
     if (commandHash.length() > 0 && installedHash.length() > 0 &&
         !commandHash.equalsIgnoreCase(installedHash)) {
@@ -2968,8 +3063,8 @@ void FireOS::handleBackendMessage(const String& message) {
     const String rollbackId = jsonStringField(message, "rollback_id");
     const String packageId = jsonStringField(message, "package_id");
     const String commandBoot = jsonStringField(message, "boot_id");
-    const String path =
-        preferences.getString(("lua_path_" + packageId).c_str(), "");
+    const String path = preferences.getString(
+        compactPreferenceKey("lp_", packageId).c_str(), "");
     const bool bootOk = !backendClient_ || commandBoot.length() == 0 ||
                         commandBoot == backendClient_->bootId();
     const bool available = bootOk && path.length() > 0 && SD.exists(path);

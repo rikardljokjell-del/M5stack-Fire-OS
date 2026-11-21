@@ -21,6 +21,8 @@ class FireBackendClient {
   void disconnect();
   bool uploadAudio(const String& turnId, const uint8_t* wavData,
                   size_t wavLength);
+  bool downloadAudio(const String& url, uint8_t* buffer, size_t capacity,
+                     size_t& length);
 
   bool configured() const { return host_.length() > 0 && token_.length() >= 24; }
   bool connected() const { return state_ == State::Connected; }
@@ -46,6 +48,8 @@ class FireBackendClient {
                   const String& stopId, const String& reason);
   bool rollbackResult(const String& rollbackId, const String& packageId,
                       bool ok, const String& message);
+  bool audioPlaybackStarted(const String& audioId, const String& turnId);
+  bool audioPlaybackFinished(const String& audioId, const String& turnId);
   bool ping();
 
  private:
