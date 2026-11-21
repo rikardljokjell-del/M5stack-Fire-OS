@@ -246,6 +246,26 @@ bool FireBackendClient::appFailed(const String& runId, const String& packageId,
                    "\"");
 }
 
+bool FireBackendClient::appStopped(const String& runId,
+                                   const String& packageId,
+                                   const String& stopId,
+                                   const String& reason) {
+  return sendEvent("app_stopped", ",\"run_id\":\"" + jsonEscape(runId) +
+                   "\",\"package_id\":\"" + jsonEscape(packageId) +
+                   "\",\"stop_id\":\"" + jsonEscape(stopId) +
+                   "\",\"reason\":\"" + jsonEscape(reason) + "\"");
+}
+
+bool FireBackendClient::rollbackResult(const String& rollbackId,
+                                       const String& packageId, bool ok,
+                                       const String& message) {
+  return sendEvent("rollback_result", ",\"rollback_id\":\"" +
+                   jsonEscape(rollbackId) + "\",\"package_id\":\"" +
+                   jsonEscape(packageId) + "\",\"status\":\"" +
+                   (ok ? "ok" : "failed") + "\",\"message\":\"" +
+                   jsonEscape(message.substring(0, 240)) + "\"");
+}
+
 bool FireBackendClient::ping() { return sendEvent("ping"); }
 
 void FireBackendClient::service(bool wifiConnected) {

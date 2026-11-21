@@ -2867,6 +2867,38 @@ void FireOS::handleBackendMessage(const String& message) {
     }
     return;
   }
+  if (type == "stop_request") {
+    const String runId = jsonStringField(message, "run_id");
+    const String packageId = jsonStringField(message, "package_id");
+    const String stopId = jsonStringField(message, "stop_id");
+    const bool activeRun = luaAppActive_ && luaRunId_ == runId;
+    if (activeRun) stopLuaApp("remote_stop");
+    if (backendClient_)
+      backendClient_->appStopped(runId, packageId, stopId,
+                                 activeRun ? "stopped" : "already_stopped");
+    aiWorkflowState_ = 5;
+    aiWorkflowText_ = activeRun ? "STOPPED" : "ALREADY STOPPED";
+    return;
+  }
+  if (type == "rollback_request") {
+    const String rollbackId = jsonStringField(message, "rollback_id");
+    const String packageId = jsonStringField(message, "package_id");
+    const String commandBoot = jsonStringField(message, "boot_id");
+    const String path =
+        preferences.getString(("lua_path_" + packageId).c_str(), "");
+    const bool bootOk = !backendClient_ || commandBoot.length() == 0 ||
+                        commandBoot == backendClient_->bootId();
+    const bool available = bootOk && path.length() > 0 && SD.exists(path);
+    if (luaAppActive_) stopLuaApp("rollback");
+    if (backendClient_)
+      backendClient_->rollbackResult(
+          rollbackId, packageId, available,
+          available ? "Validated package selected for rollback"
+                    : "Validated package is not available on SD");
+    aiWorkflowState_ = available ? 5 : 0;
+    aiWorkflowText_ = available ? "ROLLBACK READY" : "ROLLBACK FAILED";
+    return;
+  }
   if (type == "app_started" || type == "app_healthy") {
     aiWorkflowState_ = 6;
     aiDeveloperMode_ = 3;

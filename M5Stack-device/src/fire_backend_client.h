@@ -40,6 +40,10 @@ class FireBackendClient {
   bool appHealthy(const String& runId, const String& packageId);
   bool appFailed(const String& runId, const String& packageId,
                  const String& errorCode, const String& message);
+  bool appStopped(const String& runId, const String& packageId,
+                  const String& stopId, const String& reason);
+  bool rollbackResult(const String& rollbackId, const String& packageId,
+                      bool ok, const String& message);
   bool ping();
 
  private:
