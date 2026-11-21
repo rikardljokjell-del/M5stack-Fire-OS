@@ -6,8 +6,9 @@ import os
 from pathlib import Path
 import secrets
 import uuid
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .config import Settings
 
@@ -22,6 +23,10 @@ class DesktopConfig(BaseModel):
     credential_namespace: str = Field(default_factory=lambda: uuid.uuid4().hex, pattern=r"^[a-f0-9]{32}$")
     mode: str = Field(default="mock", pattern=r"^(mock|openai)$")
     allow_lan: bool = True
+    transport: Literal["direct", "reverse_tcp"] = "direct"
+    reverse_host: str = ""
+    reverse_port: int = Field(default=8766, ge=1024, le=65535)
+    reverse_device_id: str = ""
     port: int = Field(default=8765, ge=1024, le=65535)
     workspace: str = Field(default_factory=lambda: str(data_directory() / "workspace"))
     device_ids: list[str] = Field(default_factory=lambda: ["m5stack-fire-01"], min_length=1, max_length=16)
@@ -32,6 +37,20 @@ class DesktopConfig(BaseModel):
     speech_model: str = "gpt-realtime-2.1-mini"
     speech_voice: str = "marin"
     max_workspace_mb: int = Field(default=512, ge=16, le=16384)
+
+    @field_validator("reverse_host")
+    @classmethod
+    def reverse_address(cls, value):
+        from .reverse_tcp import fire_address
+        return fire_address(value)
+
+    @model_validator(mode="after")
+    def reverse_target(self):
+        if self.transport == "reverse_tcp" and not self.reverse_host:
+            raise ValueError("Oppgi FIREs egen Wi-Fi-adresse for omvendt TCP.")
+        if self.reverse_device_id and self.reverse_device_id not in self.device_ids:
+            raise ValueError("Omvendt TCP krever en lagret enhets-ID.")
+        return self
 
     @field_validator("device_ids")
     @classmethod
@@ -158,6 +177,9 @@ class DesktopStore:
                         fire_backend_host="0.0.0.0" if config.allow_lan else "127.0.0.1", fire_backend_port=config.port,
                         fire_workspace=Path(config.workspace), fire_ai_mode=config.mode, fire_audio_enabled=config.audio_enabled,
                         fire_desktop_enabled=True,
+                        fire_reverse_host=config.reverse_host if config.transport == "reverse_tcp" else "",
+                        fire_reverse_port=config.reverse_port,
+                        fire_reverse_device_id=(config.reverse_device_id or config.device_ids[0]) if config.transport == "reverse_tcp" else "",
                         openai_realtime_model=config.dialog_model, openai_code_model=config.code_model,
                         openai_transcribe_model=config.transcribe_model, openai_speech_model=config.speech_model,
                         openai_speech_voice=config.speech_voice, fire_max_workspace_mb=config.max_workspace_mb)

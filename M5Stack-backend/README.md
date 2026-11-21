@@ -18,6 +18,8 @@ blokkerte siste usignerte exe-pakke. Programmet har start/stopp, API-nøkkel,
 modellinnstillinger, LAN-oppsett, enhetsstatus, fremdrift og tekst til en
 tilkoblet FIRE. Nøkler lagres i Windows legitimasjonsbehandling.
 Se [Windows-veiledningen](docs/WINDOWS_APP.md). `start-ui.ps1` åpner også programmet.
+**USB-nettdeling:** velg PC → FIRE under Tilkobling og oppgi FIREs Wi-Fi-adresse.
+Dette krever firmware med [reverse TCP v1](docs/REVERSE_TCP-v1.md); direkte nett støttes fortsatt.
 Bygg pakken med `build-windows.ps1 -Shortcut`; hele dist/FIREBackend-mappen følger med.
 
 Kommandolinjeutgaven for utvikling:
@@ -96,6 +98,7 @@ avklares i firmware og testes fysisk. AI-genererte Lua-apper bruker aldri .bin/O
 | FIRE_BACKEND_HOST / PORT | 127.0.0.1 / 8765 | HTTP og WebSocket |
 | FIRE_BACKEND_TOKEN | tom | Admin-/PC-token; kreves på LAN |
 | FIRE_DEVICE_TOKENS | {} | JSON: enhets-ID til unikt token |
+| FIRE_REVERSE_HOST / PORT / DEVICE_ID | tom / 8766 / tom | Valgfri PC → FIRE-bro; lokal FIRE-adresse og konfigurert ID |
 | FIRE_WORKSPACE | workspace | Lokal filbasert lagring |
 | FIRE_BUILD_TIMEOUT_SECONDS | 180 | Hele byggejobben |
 | FIRE_AI_TIMEOUT_SECONDS | 90 | Én dialog-/lydoperasjon |

@@ -24,7 +24,12 @@ Python-installasjon. Behold hele FIREBackend-mappen samlet ved distribusjon.
 4. Åpne **M5Stack** og bruk PC-adresse, port, enhets-ID og enhetstoken i enhetens
    backend-oppsett. Standard ID er `m5stack-fire-01`, som i gjennomgått firmware.
    Standard port er 8765. Kopieringsknappene gjør det enklere å overføre verdiene.
-5. PC og FIRE må kunne nå hverandre på samme nettverk. Godkjenn eventuell
+5. Velg tilkoblingsmåte under **Tilkobling**. Ved direkte nett må FIRE kunne nå
+   PC-en. Ved USB-nettdeling kan **Mobilnett / omvendt TCP** brukes: oppgi FIREs
+   egen Wi-Fi-adresse (for eksempel `10.5.1.163`) og port `8766`, og trykk
+   **Lagre og bruk tilkobling**. Dette krever firmware med reverse TCP-mottaker.
+   PC-en må kunne nå FIRE; telefon/ruter trenger ingen endringer. Se
+   [transportkontrakten](REVERSE_TCP-v1.md). Godkjenn eventuell
    Windows-dialog for programtilgang på et betrodd nett. Knappen **Tillat FIRE
    gjennom brannmuren** kan opprette en regel for akkurat programmet/porten og
    lokalt subnett; Windows ber om administratorgodkjenning. Ingen ruterport åpnes.
@@ -33,6 +38,12 @@ Python-installasjon. Behold hele FIREBackend-mappen samlet ved distribusjon.
 
 Å lytte på LAN betyr ikke at enheten er tilkoblet. Feil token/ID, Wi-Fi-isolasjon,
 Windows-brannmur eller kildefeil i firmware må fortsatt avklares ved faktisk test.
+
+**Bro klar** betyr at FIRE har godtatt enhets-ID/token på transporten. Antall
+autentiserte og aktive kanaler vises under Tilkobling. M5Stack vises som
+tilkoblet først ved vanlig godkjent `session_start`. Backend prøver automatisk
+igjen ved avbrudd. Direkte modus er standard for eksisterende installasjoner;
+bytt tilbake når PC-en har en direkte forbindelse til FIRE-nettet.
 
 ## Kopier token med mobilen
 

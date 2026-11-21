@@ -39,9 +39,15 @@ for current/previous/backup migreres til uttrykkelig simulert historikk.
 
 ## Faktisk verifisert
 
-`pytest -q --junitxml=test-results.xml`: **108 bestått**, inkludert den eksisterende
+`pytest -q`: **126 bestått**, inkludert den eksisterende
 testdekningen tilpasset korrigerte current-semantikker. Én advarsel gjelder
 Starlettes overgang fra httpx i testklienten; ingen test feiler.
+
+Reverse TCP v1 er lagt til kun i backend, med eget Windows-panel og fire
+autentiserte PC → FIRE-strømmer. 16 nye tester dekker validering, pool/reconnect,
+binærdata/half-close og faktisk lokal HTTP/WS med ZIP-nedlasting, kvitteringer og
+WAV-opplasting. Ingen ekte OpenAI-kall eller fysisk FIRE-test inngår. Kontrakt:
+[REVERSE_TCP-v1.md](REVERSE_TCP-v1.md). Telefon og ruter er ikke endret.
 
 24 nye handoff-kontroller dekker nøyaktig native profil med begge lydflagg false,
 synlig oppstartsstatus, tekst/bygg/install/run, uavhengige lydretninger, avvisning

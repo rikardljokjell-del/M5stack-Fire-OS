@@ -67,6 +67,9 @@ class DesktopUI:
         c = self.store.config
         self.mode = tk.StringVar(value="Test uten API" if c.mode == "mock" else "OpenAI")
         self.lan = tk.BooleanVar(value=c.allow_lan)
+        self.transport = tk.StringVar(value=c.transport)
+        self.reverse_host = tk.StringVar(value=c.reverse_host)
+        self.reverse_port = tk.StringVar(value=str(c.reverse_port))
         self.port = tk.StringVar(value=str(c.port))
         self.host = tk.StringVar(value=self.addresses[0] if self.addresses else "127.0.0.1")
         self.device_id = tk.StringVar(value=c.device_ids[0])
@@ -92,7 +95,7 @@ class DesktopUI:
         tk.Label(nav, text="FIRE", bg=NAV, fg="#ff8456", font=("Segoe UI Black", 28)).pack(anchor="w", padx=25, pady=(27, 0))
         tk.Label(nav, text="BACKEND", bg=NAV, fg="white", font=("Segoe UI", 12)).pack(anchor="w", padx=27, pady=(0, 32))
         self.nav_buttons = {}
-        for name in ("Oversikt", "M5Stack", "OpenAI", "Aktivitet", "Innstillinger"):
+        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Aktivitet", "Innstillinger"):
             button = tk.Button(nav, text=name, command=lambda n=name: self.show(n), anchor="w", relief="flat",
                                bg=NAV, fg="#c1ccd9", activebackground="#293b51", activeforeground="white",
                                font=("Segoe UI", 12), padx=25, pady=12, bd=0, cursor="hand2")
@@ -119,6 +122,7 @@ class DesktopUI:
             self.pages[name] = page
         self.overview(self.pages["Oversikt"])
         self.connection_page(self.pages["M5Stack"])
+        self.transport_page(self.pages["Tilkobling"])
         self.openai_page(self.pages["OpenAI"])
         self.activity_page(self.pages["Aktivitet"])
         self.settings_page(self.pages["Innstillinger"])
@@ -153,7 +157,7 @@ class DesktopUI:
         card = self.card(page, "Kom i gang")
         card.pack(fill="x", pady=15)
         for text in ("1   Legg inn API-nøkkelen under OpenAI, og velg OpenAI-modus.",
-                     "2   Åpne M5Stack-siden. Bruk samme Wi-Fi/nettverk på PC og FIRE.",
+                     "2   Velg direkte nett eller mobilnett under Tilkobling.",
                      "3   Legg PC-adresse, port, enhets-ID og enhetstoken inn på FIRE.",
                      "4   Åpne AI Developer på FIRE. Tilkoblingen vises her automatisk."):
             self.label(card, text, "Card.TLabel", wraplength=760).pack(anchor="w", pady=5)
@@ -191,6 +195,7 @@ class DesktopUI:
         ttk.Checkbutton(page, text="Tillat M5Stack på lokalt nettverk", variable=self.lan).pack(anchor="w", pady=(10, 5))
         self.label(page, "Lagre etter at du har endret port, ID eller token. Backend starter på nytt.", "Muted.TLabel").pack(anchor="w")
         ttk.Button(page, text="Lagre tilkobling", command=self.save, style="Accent.TButton").pack(anchor="w", pady=13)
+        ttk.Button(page, text="Direkte nett / mobilnett →", command=lambda: self.show("Tilkobling")).pack(anchor="w", pady=(0, 6))
         network_card = self.card(page, "Windows og nettverk")
         network_card.pack(fill="x", pady=(4, 8))
         self.network_label = self.label(network_card, "Kontrollerer …", "Card.TLabel", wraplength=760)
@@ -199,6 +204,27 @@ class DesktopUI:
         self.label(page, "Brannmurknappen ber Windows om administratorgodkjenning. Regelen gjelder\n"
                    "bare dette programmet, valgt port og maskiner på lokalt subnett.\n"
                    "OpenAI-nøkkelen skal aldri legges inn på M5Stack.", "Muted.TLabel", wraplength=800).pack(anchor="w", pady=5)
+
+    def transport_page(self, page):
+        self.label(page, "Velg hvordan PC og FIRE når hverandre", "Heading.TLabel").pack(anchor="w", pady=(0, 15))
+        ttk.Radiobutton(page, text="Direkte nett — FIRE kobler til PC-en", value="direct", variable=self.transport).pack(anchor="w", pady=6)
+        self.label(page, "Brukes når PC og FIRE kan nå hverandre direkte på samme nettverk.", "Muted.TLabel").pack(anchor="w", padx=24, pady=(0, 13))
+        ttk.Radiobutton(page, text="Mobilnett / omvendt TCP — PC-en kobler til FIRE", value="reverse_tcp", variable=self.transport).pack(anchor="w", pady=6)
+        self.label(page, "For USB-nettdeling og andre nett der FIRE ikke når PC-en tilbake.\n"
+                   "Krever ny FIRE-firmware med reverse TCP-mottaker. Ingen telefoninnstillinger.", "Muted.TLabel").pack(anchor="w", padx=24, pady=(0, 16))
+        grid = ttk.Frame(page)
+        grid.pack(fill="x")
+        self.field(grid, 0, "FIREs Wi-Fi-adresse", self.reverse_host)
+        self.field(grid, 1, "Port på FIRE", self.reverse_port)
+        self.label(page, "Dette er enhetens egen adresse fra Wi-Fi-status/UniFi, ikke PC-adressen.\n"
+                   "Enhets-ID og lagret token på M5Stack-siden brukes også for denne forbindelsen.", "Muted.TLabel", wraplength=800).pack(anchor="w", pady=10)
+        ttk.Button(page, text="Lagre og bruk tilkobling", command=self.save, style="Accent.TButton").pack(anchor="w", pady=12)
+        card = self.card(page, "Forbindelsesstatus")
+        card.pack(fill="x", pady=12)
+        self.transport_status = self.label(card, "Backend starter …", "Card.TLabel", wraplength=760)
+        self.transport_status.pack(anchor="w")
+        self.label(page, "Bro klar betyr at transporten er autentisert. FIRE vises som tilkoblet først\n"
+                   "når vanlig session_start er godkjent. Bygging og kjøring krever fortsatt bekreftelse.", "Muted.TLabel", wraplength=800).pack(anchor="w", pady=10)
 
     def openai_page(self, page):
         grid = ttk.Frame(page)
@@ -278,6 +304,8 @@ class DesktopUI:
         if device_id not in ids:
             ids.append(device_id)
         values.update(mode="mock" if self.mode.get() == "Test uten API" else "openai", allow_lan=self.lan.get(),
+                      transport=self.transport.get(), reverse_host=self.reverse_host.get().strip(),
+                      reverse_port=self.reverse_port.get(), reverse_device_id=device_id if self.transport.get() == "reverse_tcp" else "",
                       port=self.port.get(), workspace=self.workspace.get(), device_ids=ids,
                       audio_enabled=self.audio.get(), max_workspace_mb=self.disk.get(),
                       **{name: var.get().strip() for name, var in self.models.items()})
@@ -296,7 +324,7 @@ class DesktopUI:
                 # Pydantic errors include input values; do not show their repr.
                 from pydantic import ValidationError
                 if isinstance(error, ValidationError):
-                    fields = ", ".join(str(item["loc"][0]) for item in error.errors())
+                    fields = ", ".join(".".join(map(str, item["loc"])) or "tilkobling" for item in error.errors())
                     message = "Kontroller innstillingene: " + fields
                 else:
                     message = str(error)[:400]
@@ -319,7 +347,7 @@ class DesktopUI:
             key = self.api_key.get().strip() or None
             tokens = {self.device_id.get().strip(): self.device_token.get().strip()}
         except Exception:
-            messagebox.showerror("Kontroller innstillingene", "Kontroller port, enhets-ID, datamappe og modellnavn.", parent=self.root)
+            messagebox.showerror("Kontroller innstillingene", "Kontroller port, enhets-ID, FIRE-adresse, datamappe og modellnavn.", parent=self.root)
             return
         def apply():
             self.runtime.stop()
@@ -549,9 +577,23 @@ class DesktopUI:
             self.selected_session.set(choices[0] if choices else "")
         self.network_label.configure(text=f"Nettverksprofil: {self.network or 'Ukjent'}.  " +
             ("FIRE-regel er aktivert." if self.firewall else "Ingen bekreftet FIRE-regel i brannmuren. Bruk knappen ved behov."))
+        bridge = self.snapshot.get("transport", {}) if ready else {}
+        if bridge.get("mode") == "reverse_tcp":
+            count = bridge.get("authenticated_channels", 0)
+            state = bridge.get("state")
+            explanation = ("Bro klar. Venter på FIREs sesjon eller data." if state == "ready" else
+                           "FIRE avviste ID/token eller svarte med feil transportversjon." if state == "authentication_failed" else
+                           "Venter på reverse TCP-mottaker på FIRE. Sjekk adresse og ny firmware.")
+            self.transport_status.configure(text=f"PC → {bridge.get('fire_host')}:{bridge.get('fire_port')}\n"
+                f"{count}/{bridge.get('pool_size', 4)} autentiserte kanaler, {bridge.get('active_channels', 0)} i bruk.\n{explanation}")
+        else:
+            self.transport_status.configure(text="Direkte nett: FIRE kobler til PC-ens backendadresse." if ready else "Backend er stoppet.")
         lan = self.host.get()
-        self.readiness.configure(text=(f"Backend lytter på port {self.store.config.port}. " +
-             (f"M5Stack bruker PC-adressen {lan}." if self.store.config.allow_lan else "Kun denne PC-en er tillatt; aktiver lokalt nettverk under M5Stack.")
+        connection_hint = (f"PC → FIRE {bridge.get('fire_host')}:{bridge.get('fire_port')}. Se status under Tilkobling."
+                           if bridge.get("mode") == "reverse_tcp" else
+                           f"M5Stack bruker PC-adressen {lan}." if self.store.config.allow_lan else
+                           "Kun denne PC-en er tillatt; aktiver lokalt nettverk under M5Stack.")
+        self.readiness.configure(text=(f"Backend lytter på port {self.store.config.port}. " + connection_hint
              if ready else self.runtime.failure or "Backend er stoppet. Innstillinger kan fortsatt redigeres."))
         session = self.session() if ready else None
         idle_for_text = session and session["state"] not in {"building", "testing", "running", "starting", "stopping", "rollback_pending"}

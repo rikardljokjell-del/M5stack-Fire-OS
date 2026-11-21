@@ -3,7 +3,7 @@ import json
 import re
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     fire_command_timeout_seconds: int = Field(default=30, ge=5, le=120)
     fire_audio_enabled: bool = False
     fire_desktop_enabled: bool = False
+    fire_reverse_host: str = ""
+    fire_reverse_port: int = Field(default=8766, ge=1024, le=65535)
+    fire_reverse_device_id: str = Field(default="", pattern=r"^(?:[a-z0-9][a-z0-9_-]{0,63})?$")
     fire_audio_max_input_bytes: int = Field(default=524288, ge=32044, le=524288)
     fire_audio_max_output_bytes: int = Field(default=1440000, ge=48000, le=1440000)
     fire_audio_ttl_seconds: int = Field(default=300, ge=30, le=3600)
@@ -37,6 +40,12 @@ class Settings(BaseSettings):
 
     def device_tokens(self):
         return json.loads(self.fire_device_tokens.get_secret_value())
+
+    @field_validator("fire_reverse_host")
+    @classmethod
+    def reverse_address(cls, value):
+        from .reverse_tcp import fire_address
+        return fire_address(value)
 
     @model_validator(mode="after")
     def lan_requires_token(self):
@@ -52,6 +61,8 @@ class Settings(BaseSettings):
             raise ValueError("FIRE_DEVICE_TOKENS must map unique device IDs to unique tokens of at least 24 characters") from None
         if self.fire_backend_token.get_secret_value() in tokens.values():
             raise ValueError("Admin token and device tokens must differ")
+        if self.fire_reverse_host and self.fire_reverse_device_id not in tokens:
+            raise ValueError("Reverse TCP requires a configured device ID/token")
         if self.fire_backend_host not in {"127.0.0.1", "localhost", "::1"}:
             if len(self.fire_backend_token.get_secret_value()) < 24:
                 raise ValueError("LAN binding requires FIRE_BACKEND_TOKEN of at least 24 characters")

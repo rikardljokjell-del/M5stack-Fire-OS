@@ -18,6 +18,7 @@ from .protocol import begin_event, dispatch, finish_event
 from .storage import new_id
 from .security import SecretFilter
 from .service import Backend, Conflict
+from .reverse_tcp import ReverseTCP
 
 
 def create_app(settings=None, provider=None):
@@ -27,6 +28,8 @@ def create_app(settings=None, provider=None):
     async def lifespan(app):
         service = Backend(settings, provider)
         service.audio = AudioManager(service)
+        service.reverse_tcp = ReverseTCP(settings)
+        await service.reverse_tcp.start()
         service.maintenance_task = asyncio.create_task(service.maintenance())
         app.state.backend = service
         filters = []
@@ -40,6 +43,7 @@ def create_app(settings=None, provider=None):
         try:
             yield
         finally:
+            await service.reverse_tcp.close()
             await service.close()
             for handler, filter_ in filters:
                 handler.removeFilter(filter_)
@@ -138,7 +142,7 @@ def create_app(settings=None, provider=None):
                      "history": s.history[-12:], "progress": s.progress} for s in service.sessions.values() if not s.stopped]
         builds = service.store.list("builds")
         return {"sessions": sessions, "devices": service.store.list("devices"),
-                "builds": builds[-20:], "physical_verified": False}
+                "builds": builds[-20:], "physical_verified": False, "transport": service.reverse_tcp.status()}
 
     @app.post("/desktop/sessions/{session_id}/text", dependencies=[Depends(desktop_auth)])
     async def desktop_text(session_id: str, request: Request, service: Backend = Depends(backend)):

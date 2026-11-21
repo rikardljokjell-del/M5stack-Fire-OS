@@ -12,6 +12,12 @@ restricted hardware adapters and a ZIP_STORED SD package manager. This is source
 implementation, NOT proof of physical installation, sound or successful app use.
 Never claim device installation/running/rollback without matching receipts.
 
+Additional read-only transport review: device commit 90028a9 implements a
+four-slot authenticated reverse TCP listener on port 8766. The PC can initiate
+these streams through USB tethering; FIRE remains the HTTP/WebSocket client.
+This does not grant additional capabilities or prove microphone/package/runtime
+operation. Existing protocol-0.2 authorization and receipts remain mandatory.
+
 ## Board, build and pins
 M5Stack FIRE, ESP32-D0WDQ6-V3, dual core 240 MHz, 16 MB flash, PSRAM
 (nominally 4 MB; free memory is not measured here), about 520 KB internal SRAM.
