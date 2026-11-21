@@ -2620,9 +2620,12 @@ void FireOS::updateAiAudio() {
     const bool recorded = false;
 #endif
     if (!recorded) {
-      aiAudioError_ = "Microphone recording failed";
+      aiAudioError_ = "MIC CAPTURE FAILED";
       aiAudioCaptureActive_ = false;
       aiAudioCaptureFinished_ = true;
+      aiWorkflowText_ = aiAudioError_;
+      aiWorkflowState_ = 0;
+      aiDeveloperMode_ = 0;
     } else {
       aiAudioCapturedSamples_ += chunk;
       if (aiAudioStopSent_ || aiAudioCapturedSamples_ >= kAiAudioSamples) {

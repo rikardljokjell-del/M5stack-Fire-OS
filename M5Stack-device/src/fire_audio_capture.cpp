@@ -28,11 +28,23 @@ bool fireRecordMic(int16_t* samples, size_t sampleCount, uint32_t sampleRate) {
     }
     const uint32_t intervalUs = max<uint32_t>(1, 1000000UL / sampleRate);
     uint32_t nextSample = micros();
-    for (size_t index = 0; index < sampleCount; ++index) {
-      while (static_cast<int32_t>(micros() - nextSample) < 0) yield();
-      const int raw = adc1_get_raw(ADC1_CHANNEL_6);
-      samples[index] = static_cast<int16_t>((raw - 2048) << 4);
-      nextSample += intervalUs;
+    size_t captured = 0;
+    while (captured < sampleCount) {
+      const size_t chunk = min<size_t>(256, sampleCount - captured);
+      uint16_t raw[256] = {};
+      uint32_t sum = 0;
+      for (size_t index = 0; index < chunk; ++index) {
+        while (static_cast<int32_t>(micros() - nextSample) < 0) yield();
+        raw[index] = static_cast<uint16_t>(adc1_get_raw(ADC1_CHANNEL_6));
+        sum += raw[index];
+        nextSample += intervalUs;
+      }
+      const int32_t average = static_cast<int32_t>(sum / chunk);
+      for (size_t index = 0; index < chunk; ++index) {
+        const int32_t centered = static_cast<int32_t>(raw[index]) - average;
+        samples[captured + index] = static_cast<int16_t>(centered << 4);
+      }
+      captured += chunk;
     }
     return true;
   }
