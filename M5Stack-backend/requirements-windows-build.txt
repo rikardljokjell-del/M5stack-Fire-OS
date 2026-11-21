@@ -1,0 +1,2 @@
+# Build tool only; runtime is bundled and does not install Python on the user's PC.
+pyinstaller==6.22.3

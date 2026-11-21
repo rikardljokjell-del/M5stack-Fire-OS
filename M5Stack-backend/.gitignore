@@ -5,3 +5,6 @@ __pycache__/
 *.egg-info/
 workspace/
 test-results.xml
+build/
+dist/
+dist-next/

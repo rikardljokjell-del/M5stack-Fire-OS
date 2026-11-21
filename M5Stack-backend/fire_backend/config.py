@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     fire_session_resume_seconds: int = Field(default=600, ge=30, le=3600)
     fire_command_timeout_seconds: int = Field(default=30, ge=5, le=120)
     fire_audio_enabled: bool = False
+    fire_desktop_enabled: bool = False
     fire_audio_max_input_bytes: int = Field(default=524288, ge=32044, le=524288)
     fire_audio_max_output_bytes: int = Field(default=1440000, ge=48000, le=1440000)
     fire_audio_ttl_seconds: int = Field(default=300, ge=30, le=3600)

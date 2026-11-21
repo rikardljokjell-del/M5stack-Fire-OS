@@ -6,6 +6,28 @@ README, fire_backend_client.*, fire_lua_runtime.*, fire_lua_package_manager.*
 og relevante AI Developer-/maskinvareadaptere i fire_os.*.
 Ingen enhetsfiler er endret, bygget eller flashet.
 
+## Tillegg ved Windows-leveransen
+
+Nyeste gjennomgåtte GitHub-kilde er nå
+`df06c656b1b56de4df6383baa060bc1bb69c4729`. Handoffen og diffen i
+fire_backend_client.*, fire_audio_capture.*, fire_os.* og platformio.ini er lest.
+Kilden har nå avgrenset WAV/HTTP-opplasting og direkte I2S-capture. Handshake
+annonserer audio_input=true, audio_output=false. Dette overstyrer den eldre
+lydbeskrivelsen i baselinepunktene nedenfor; fysisk integrasjon er fortsatt ikke
+bekreftet. Backendens uavhengige lydflagg støtter begge profiler uten endret
+protokoll. Windows-programmets lydtransport er aktivert som standard, mens
+sesjonens input/output fortsatt avgjør hva som faktisk forsøkes.
+
+Ny input-only-test dekker listen_start/stop, WAV-opplasting, mock-transkripsjon
+og forslag uten talesvar eller automatisk bygg. Dialog/modell er ikke fysisk testet.
+I2S-adapteren returnerer false ved cfg.use_adc; bekreft at faktisk FIRE-mic-konfig
+passer adapteren under hardwaretesten. Dette er et kontrollpunkt fra kildelesing,
+ikke en konstatert fysisk feil. Kildeimplementasjon alene gir physical_verified=false.
+
+Punktene under gjelder gjennomgangen av 069ea09e; lydpunkt 7 har nå delvis
+kildeimplementasjon som beskrevet over. De øvrige kildefunnene er ikke endret i
+de to nye lydcommittene. Enhetskode er fortsatt urørt av backendarbeidet.
+
 ## Backend følger nå enheten
 
 - Handshake: fire-lua-0.1, display/buttons/rgb/imu/time, 131072 byte,

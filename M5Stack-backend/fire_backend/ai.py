@@ -23,6 +23,7 @@ class OpenAIProvider:
         if self.client is None:
             self.client = AsyncOpenAI(
                 api_key=self.settings.openai_api_key.get_secret_value(),
+                base_url="https://api.openai.com/v1",
                 timeout=self.settings.fire_ai_timeout_seconds, max_retries=0,
             )
         return self.client

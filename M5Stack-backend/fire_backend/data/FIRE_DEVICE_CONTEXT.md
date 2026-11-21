@@ -2,7 +2,7 @@
 
 ## Source baseline and verification
 Authoritative handoff: M5Stack-device/BACKEND_HANDOFF.md.
-Read-only source review: commit 069ea09e5ea88ddc5fab65c81fa73611ea94a111,
+Read-only source review: commit df06c656b1b56de4df6383baa060bc1bb69c4729,
 fire_backend_client.*, fire_lua_runtime.*, fire_lua_package_manager.*, fire_os.*,
 platformio.ini and the handoff. Actual FIRE observations take precedence over
 this source review and the PC simulator. physical_verified=false for PC tests.
@@ -30,7 +30,10 @@ Pins are context only. Lua never receives direct GPIO or bus access.
 ## Authoritative session capabilities
 The current source advertises api_version=fire-lua-0.1,
 services=[display,buttons,rgb,imu,time], max_memory=131072, max_runtime_ms=10000,
-audio_input=false, audio_output=false, firmware_version=fire-os-0.2.
+audio_input=true, audio_output=false, firmware_version=fire-os-0.2. Source now
+contains bounded WAV upload and a direct I2S capture adapter. This announced
+input path is NOT physically verified with this backend. Older firmware with
+both audio flags false remains valid and must receive text fallback.
 Generate and declare ONLY the services actually advertised in this session.
 Never substitute all simulator services for a missing device capability.
 Keep within the advertised memory/runtime budget, even when the source has

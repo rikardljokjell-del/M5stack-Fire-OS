@@ -21,6 +21,10 @@ Eksisterende FastAPI-/WebSocket-/OpenAI-/Lua-/ZIP-arkitektur er videreført.
   uavhengige lydporter, faktisk sesjonskontekst og implisitt offline reconnect.
   Native feilkvittering kan ha tom/observert SHA uten at suksesskrav svekkes.
   Oppdatert konservativ Lua-simulator og dokumenterte adapterbegrensninger.
+- Windows-app: per-bruker innstillinger, Windows Credential Manager, start/stopp,
+  modell-/nøkkeltest, LAN-oppsett, enhetsoverblikk, samtale/bygg/kjøring via GUI,
+  PyInstaller-pakke og skrivebordsikon. Lokal desktop-API krever admin og lokal
+  forbindelse. Vanlig CLI-start beholder desktop-API avslått.
 
 ## Kontrakt
 
@@ -35,7 +39,7 @@ for current/previous/backup migreres til uttrykkelig simulert historikk.
 
 ## Faktisk verifisert
 
-`pytest -q --junitxml=test-results.xml`: **95 bestått**, inkludert den eksisterende
+`pytest -q --junitxml=test-results.xml`: **108 bestått**, inkludert den eksisterende
 testdekningen tilpasset korrigerte current-semantikker. Én advarsel gjelder
 Starlettes overgang fra httpx i testklienten; ingen test feiler.
 
@@ -45,6 +49,11 @@ før lydstrøm/provider brukes, bevart forslag ved lydforsøk, offline reconnect
 uten resume-hint, restart, blokkert socket-overtakelse, nye boot-ID-er, native
 feilkvitteringer uten hash og uendrede hashkrav for suksess. Heltallsargumenter,
 syntetisk boot-uptime og pressed-callback kontrolleres også. physical_verified=false.
+
+12 Windows-kontroller dekker legitimasjons-API-et på Windows, hemmelighetsfri
+konfigurasjon, isolasjon fra .env/miljøvariabler, innstillingsvalidering, prosesslås,
+lokal API-tilgang uten nettleser-Origin, tekst til tilkoblet FIRE, restart, opptatt
+port, manglende API-nøkkel, redigert providerfeil og Lua-workerens filprotokoll.
 
 Nye kontroller dekker scoped identitet/eierskap, kvitterings-ID-er, feil checksum,
 gamle boot-ID-er, duplikate bekreftelser, endret payload med samme event-ID,
@@ -65,6 +74,13 @@ Mot en faktisk kjørende lokal backend:
 
 - **4/4** eldre PC-smoke-flyter bestod: sirkel, Snake, RGB og IMU.
 - **5/5** enhetsemulerte flyter bestod: de samme fire og en syntetisk lydflyt.
+- **4/4** flyter mot faktisk kjørende FIREBackend.exe bestod: sirkel, Snake,
+  uniform RGB og IMU, med native audio=false og desktopens tekst-/bekreftelses-API.
+  Den pakkede exe-en startet egne Lua-workerprosesser og leverte standard ZIP.
+- Siste usignerte exe ble deretter blokkert av Windows Application Control.
+  Skrivebordsikon/start-ui bruker nå eksisterende pythonw.exe uten terminal,
+  med samme UI/backend. **4/4** flyter og input-only WAV-transport bestod også
+  mot denne kjørende Windows-appen. Sikkerhetspolicyen er ikke endret.
 - Emulert klient lastet ned og validerte størrelse/SHA256/ZIP, sendte
   installasjonskvittering, egen kjørebekreftelse og start/healthy/stopp-kvitteringer.
 - Lua ble simulert også hos testklienten etter run_confirm.
@@ -82,8 +98,9 @@ workspace/logs/device-smoke-report.json. Disse runtime-dataene er ikke lagt i Gi
 check_openai.py --live rapporterte not_run, live_verified=false. Modell-/konto-
 tilgang, faktisk norsk transkripsjon og talesyntese må verifiseres når nøkkel er satt.
 
-**Fysisk M5Stack-integrasjon er ikke fullført.** Inspektert firmwarecommit 069ea09e
-har nå klient, Lua-runtime og SD-pakkehåndtering. Begge lydflagg er false.
+**Fysisk M5Stack-integrasjon er ikke fullført.** Inspektert firmwarecommit df06c65
+har nå klient, Lua-runtime, SD-pakkehåndtering og I2S/WAV-opplasting.
+Handshake annonserer audio_input=true/audio_output=false; fysisk mic-test gjenstår.
 Backend har fulgt BACKEND_HANDOFF.md og bruker den annonserte profilen som grense.
 Kildelesing avdekket gjenstående avvik i Lua-stakk/budsjetter, ZIP-header,
 HTTP-header, SD-versjonering og stopp/rollback/lyd. Konkrete funn og videre
@@ -97,4 +114,5 @@ Full-dupleks tale, Lua-tilgang til mic/speaker/nett/SD og vilkårlige assets er 
 del av kontrakt 0.2/fire-lua-0.1. Første versjon bruker avgrensede taleopptak og
 Lua-apper med maksimalt ti sekunders faktisk kjøretid per start.
 
-Automatisk Windows-oppstart og brannmuråpning er dokumentert, men ikke aktivert.
+Automatisk Windows-oppstart er ikke aktivert. Brukeren har godkjent Windows-
+nettverksdialogen for aktiv Python-oppstart; faktisk FIRE-tilkobling gjenstår.

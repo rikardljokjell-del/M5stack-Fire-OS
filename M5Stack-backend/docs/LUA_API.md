@@ -3,10 +3,12 @@
 The authoritative signatures/restrictions are also in the injected
 `fire_backend/data/FIRE_DEVICE_CONTEXT.md`. Firmware and PC must use Lua **5.4**,
 text-only source (no bytecode), DOT calls, and an app-private environment.
-Firmware source inspected: 069ea09e (see DEVICE_HANDOFF_RESPONSE.md). It now
+Firmware source inspected: df06c65 (see DEVICE_HANDOFF_RESPONSE.md). It now
 contains a native runtime and adapters. Source implementation is distinct from
 physical verification. Current handshake: all five services below, 131072 bytes,
-10000 ms, conversation audio_input=false/audio_output=false.
+10000 ms, conversation audio_input=true/audio_output=false. The source includes
+capture/WAV upload; physical input verification is still pending. Older false/false
+profiles remain supported. Neither conversation flag grants Lua audio access.
 
 ## Lifecycle and budgets
 

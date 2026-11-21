@@ -6,6 +6,10 @@ eller flashet enhetskoden. Firmwarekilden er gjennomgått i skrivebeskyttet modu
 
 ## Implementert
 
+- Windows-program med skrivebordsikon, start/stopp, sikker nøkkellagring,
+  API-test, modeller, nettverksoppsett, enhetsstatus og tekst til tilkoblet FIRE.
+  Se [Windows-veiledning](M5Stack-backend/docs/WINDOWS_APP.md).
+
 - Protokoll 0.2 og JSON-skjemaer publisert tidlig for firmwareintegrasjon.
 - Direkte OpenAI Realtime/Responses, varig samtalehistorikk og prosjektkode ved endringer.
 - Avgrenset WAV-opplasting, transkripsjon, PCM-talesvar, avbrudd og opprydding.
@@ -22,9 +26,19 @@ eller flashet enhetskoden. Firmwarekilden er gjennomgått i skrivebeskyttet modu
 
 ## Verifisert
 
-- **95 tester bestått**, inkludert 24 nye handoff-kontroller; `pip check` uten feil.
+- **108 tester bestått**, inkludert handoff, Windows-konfigurasjon, sikker
+  nøkkellagring, lokal tilgangskontroll, oppstart/stopp/restart og portkonflikt.
+  `pip check` uten feil.
 - **4/4 PC-smoke-flyter** mot faktisk lokal server.
 - **5/5 enhetsemulerte flyter**, inkludert syntetisk lydtransport og kvitteringer.
+- **4/4 flyter mot den pakkede Windows-exe-en**, med native lydflagg false,
+  tekst fra desktop, pakket Lua-worker og korrelerte kvitteringer. Ingen ekte FIRE.
+- Windows-program og skrivebordsikon er opprettet lokalt. OpenAI-nøkkel kan
+  legges inn i programmet. Windows kan be om nettverkstilgang/administrator-
+  godkjenning; denne dialogen håndteres av brukeren.
+- Windows Application Control blokkerte siste usignerte exe-pakke. Aktivt
+  skrivebordsikon bruker installert pythonw.exe og samme GUI uten terminal.
+  Ingen sikkerhetsinnstillinger er endret for å kjøre usignert program.
 - Firmwaremappen skal være identisk med GitHub-basen ved backendpublisering.
 
 ## Gjenstår før ferdig fysisk løsning
@@ -34,12 +48,14 @@ eller flashet enhetskoden. Firmwarekilden er gjennomgått i skrivebeskyttet modu
 3. Teste hele flyten på en fysisk M5Stack FIRE, inkludert lyd, minne, avbrudd, appstart og rollback.
 
 Mock-transkripsjon/testtone og enhetsemulering er ikke ekte OpenAI eller fysisk
-integrasjon. Gjennomgått kilde annonserer begge lydflagg false. Opptak/opplasting/
-avspilling og full stopp-/rollbackflyt må ferdigstilles og testes på fysisk FIRE.
+integrasjon. Nyeste gjennomgåtte kilde df06c65 har I2S/WAV-opplasting og annonserer
+audio_input=true/audio_output=false. Mikrofonflyten må testes fysisk; avspilling
+og full stopp-/rollbackflyt må ferdigstilles og testes på fysisk FIRE.
 AI-genererte Lua-apper bruker en separat kontrakt og aldri OTA/flashing.
 
 Start fra repo-roten: `.\M5Stack-backend\start.ps1 -Mock`.
-Ingen brannmur- eller automatisk oppstartsendring er aktivert.
+Ingen automatisk Windows-oppstart er installert. Nettverkstilgang styres av
+Windows-dialogen og programmets brannmurknapp med administratorgodkjenning.
 
 Se [protokoll](M5Stack-backend/docs/PROTOCOL-v0.2.md),
 [Lua-API](M5Stack-backend/docs/LUA_API.md),

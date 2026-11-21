@@ -1,0 +1,164 @@
+"""Per-user desktop configuration. Secrets live only in Windows Credential Manager."""
+import ctypes
+from ctypes import wintypes
+import json
+import os
+from pathlib import Path
+import secrets
+import uuid
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .config import Settings
+
+
+def data_directory():
+    return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "FIRE Backend"
+
+
+class DesktopConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: int = 1
+    credential_namespace: str = Field(default_factory=lambda: uuid.uuid4().hex, pattern=r"^[a-f0-9]{32}$")
+    mode: str = Field(default="mock", pattern=r"^(mock|openai)$")
+    allow_lan: bool = True
+    port: int = Field(default=8765, ge=1024, le=65535)
+    workspace: str = Field(default_factory=lambda: str(data_directory() / "workspace"))
+    device_ids: list[str] = Field(default_factory=lambda: ["m5stack-fire-01"], min_length=1, max_length=16)
+    audio_enabled: bool = True
+    dialog_model: str = "gpt-realtime-2.1"
+    code_model: str = "gpt-6.2-astra"
+    transcribe_model: str = "gpt-transcribe"
+    speech_model: str = "gpt-realtime-2.1-mini"
+    speech_voice: str = "marin"
+    max_workspace_mb: int = Field(default=512, ge=16, le=16384)
+
+    @field_validator("device_ids")
+    @classmethod
+    def valid_ids(cls, values):
+        import re
+        if len(set(values)) != len(values) or any(not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", value) for value in values):
+            raise ValueError("Bruk unik enhets-ID med små bokstaver, tall og bindestrek.")
+        return values
+
+    @field_validator("dialog_model", "code_model", "transcribe_model", "speech_model", "speech_voice")
+    @classmethod
+    def valid_model(cls, value):
+        if not value.strip() or len(value) > 120 or any(c.isspace() for c in value):
+            raise ValueError("Modellnavn kan ikke være tomt eller inneholde mellomrom.")
+        return value
+
+    @field_validator("workspace")
+    @classmethod
+    def absolute_workspace(cls, value):
+        if not Path(value).is_absolute():
+            raise ValueError("Velg en absolutt sti for datamappen.")
+        return str(Path(value).resolve())
+
+
+class Credential(ctypes.Structure):
+    _fields_ = [("Flags", wintypes.DWORD), ("Type", wintypes.DWORD), ("TargetName", wintypes.LPWSTR),
+                ("Comment", wintypes.LPWSTR), ("LastWritten", wintypes.FILETIME),
+                ("CredentialBlobSize", wintypes.DWORD), ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+                ("Persist", wintypes.DWORD), ("AttributeCount", wintypes.DWORD),
+                ("Attributes", ctypes.c_void_p), ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR)]
+
+
+class WindowsVault:
+    def __init__(self):
+        if os.name != "nt":
+            raise RuntimeError("Windows legitimasjonsbehandling krever Windows.")
+        self.api = ctypes.WinDLL("Advapi32.dll", use_last_error=True)
+        self.api.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.POINTER(Credential))]
+        self.api.CredReadW.restype = wintypes.BOOL
+        self.api.CredWriteW.argtypes = [ctypes.POINTER(Credential), wintypes.DWORD]
+        self.api.CredWriteW.restype = wintypes.BOOL
+        self.api.CredFree.argtypes = [ctypes.c_void_p]
+        self.api.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+        self.api.CredDeleteW.restype = wintypes.BOOL
+
+    def get(self, target):
+        pointer = ctypes.POINTER(Credential)()
+        if not self.api.CredReadW(target, 1, 0, ctypes.byref(pointer)):
+            if ctypes.get_last_error() == 1168:
+                return ""
+            raise OSError("Kan ikke lese Windows legitimasjonsbehandling.")
+        try:
+            value = pointer.contents
+            return ctypes.string_at(value.CredentialBlob, value.CredentialBlobSize).decode("utf-16-le")
+        finally:
+            self.api.CredFree(pointer)
+
+    def put(self, target, value):
+        if not value:
+            if not self.api.CredDeleteW(target, 1, 0) and ctypes.get_last_error() != 1168:
+                raise OSError("Kan ikke fjerne nøkkelen fra Windows.")
+            return
+        encoded = value.encode("utf-16-le")
+        if len(encoded) > 2560:
+            raise ValueError("Nøkkelen er for lang for Windows legitimasjonsbehandling.")
+        blob = (ctypes.c_ubyte * len(encoded)).from_buffer_copy(encoded)
+        credential = Credential(Type=1, TargetName=target, Comment="FIRE Backend – lokal konfigurasjon",
+                                CredentialBlobSize=len(encoded), CredentialBlob=blob, Persist=2, UserName="FIRE Backend")
+        if not self.api.CredWriteW(ctypes.byref(credential), 0):
+            raise OSError("Kan ikke lagre nøkkelen i Windows legitimasjonsbehandling.")
+
+
+class DesktopStore:
+    def __init__(self, root=None, vault=None):
+        self.root = Path(root) if root else data_directory()
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.path = self.root / "settings.json"
+        self.vault = vault if vault is not None else WindowsVault()
+        if self.path.exists():
+            self.config = DesktopConfig.model_validate_json(self.path.read_text(encoding="utf-8"))
+        else:
+            self.config = DesktopConfig(workspace=str((self.root / "workspace").resolve()))
+            self.save(self.config)
+
+    def target(self, name):
+        return f"FIREBackend/{self.config.credential_namespace}/{name}"
+
+    def secret(self, name):
+        return self.vault.get(self.target(name))
+
+    def save(self, config, api_key=None, device_tokens=None):
+        config = DesktopConfig.model_validate(config.model_dump())
+        if config.credential_namespace != self.config.credential_namespace:
+            raise ValueError("Konfigurasjonsprofilen kan ikke byttes.")
+        if api_key is not None and (api_key and (len(api_key) < 8 or any(c.isspace() for c in api_key))):
+            raise ValueError("API-nøkkelen er ugyldig. Lim inn hele nøkkelen uten mellomrom.")
+        tokens = {device_id: (device_tokens or {}).get(device_id) or self.secret("device/" + device_id) or secrets.token_urlsafe(32)
+                  for device_id in config.device_ids}
+        admin = self.secret("admin") or secrets.token_urlsafe(48)
+        if any(len(token) < 24 or any(c.isspace() for c in token) for token in tokens.values()):
+            raise ValueError("Enhetstoken må ha minst 24 tegn uten mellomrom.")
+        if len(set(tokens.values())) != len(tokens) or admin in tokens.values():
+            raise ValueError("Hver enhet må ha sitt eget token.")
+        if api_key is not None:
+            self.vault.put(self.target("openai"), api_key)
+        self.vault.put(self.target("admin"), admin)
+        for device_id, token in tokens.items():
+            self.vault.put(self.target("device/" + device_id), token)
+        temporary = self.path.with_suffix(".tmp")
+        try:
+            temporary.write_text(config.model_dump_json(indent=2), encoding="utf-8")
+            os.replace(temporary, self.path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        self.config = config
+
+    def settings(self):
+        config = self.config
+        # Explicit init values override inherited terminal/.env settings, including
+        # all secrets; desktop settings are its sole source of configuration.
+        defaults = {name: field.default for name, field in Settings.model_fields.items()}
+        defaults.update(openai_api_key=self.secret("openai"), fire_backend_token=self.secret("admin"),
+                        fire_device_tokens=json.dumps({key: self.secret("device/" + key) for key in config.device_ids}),
+                        fire_backend_host="0.0.0.0" if config.allow_lan else "127.0.0.1", fire_backend_port=config.port,
+                        fire_workspace=Path(config.workspace), fire_ai_mode=config.mode, fire_audio_enabled=config.audio_enabled,
+                        fire_desktop_enabled=True,
+                        openai_realtime_model=config.dialog_model, openai_code_model=config.code_model,
+                        openai_transcribe_model=config.transcribe_model, openai_speech_model=config.speech_model,
+                        openai_speech_voice=config.speech_voice, fire_max_workspace_mb=config.max_workspace_mb)
+        return Settings(_env_file=None, **defaults)

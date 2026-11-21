@@ -22,6 +22,8 @@ async def simulate(app, store, build_id):
     # No secrets, inherited credentials, PYTHONPATH or current project code in child env.
     child_env = {key: value for key, value in os.environ.items()
                  if key.upper() in {"SYSTEMROOT", "WINDIR", "TEMP", "TMP"}}
+    if getattr(sys, "frozen", False):
+        return await simulate_bundled(app, store, build_id, child_env)
     worker = Path(__file__).with_name("lua_worker.py").resolve()
     process = await asyncio.create_subprocess_exec(
         sys.executable, "-I", str(worker),
@@ -41,6 +43,38 @@ async def simulate(app, store, build_id):
     if process.returncode != 0 or not result.get("ok"):
         raise ValueError(result.get("error", "Lua worker failed"))
     return result
+
+
+async def simulate_bundled(app, store, build_id, child_env):
+    # Windowed executables have no Python stdin/stdout. Use bounded temporary
+    # files in this workspace for the isolated worker, then always remove them.
+    with tempfile.TemporaryDirectory(prefix="lua-worker-", dir=store.root) as temporary:
+        request = Path(temporary) / "input.json"
+        response = Path(temporary) / "output.json"
+        payload = canonical(app)
+        if len(payload) > 220000:
+            raise ValueError("Lua worker input exceeds limit")
+        store.reserve(len(payload) + 40000)
+        request.write_bytes(payload)
+        child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        flags = {"creationflags": 0x08000000} if os.name == "nt" else {}
+        process = await asyncio.create_subprocess_exec(sys.executable, "--lua-worker", str(request), str(response),
+                    env=child_env, cwd=temporary, stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, **flags)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=8)
+        except BaseException:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            raise
+        if not response.exists() or response.stat().st_size > 40000:
+            raise ValueError("Lua worker did not return a bounded result")
+        result = json.loads(response.read_text(encoding="utf-8"))
+        store.log(build_id, "Bundled Lua worker: " + json.dumps(result, ensure_ascii=True))
+        if process.returncode != 0 or not result.get("ok"):
+            raise ValueError(result.get("error", "Lua worker failed"))
+        return result
 
 
 def verify_archive(path, expected_manifest, archive_hash=None):

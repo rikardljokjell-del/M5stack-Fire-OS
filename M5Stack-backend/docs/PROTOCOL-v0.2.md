@@ -35,7 +35,9 @@ Mic/speaker used for developer conversation do NOT grant Lua access to audio.
 Only supported `fire-lua-0.1` sessions are accepted. Never advertise Lua support
 before a restricted runtime and the advertised adapters exist on FIRE.
 
-This is the current source profile at 069ea09e. Both audio=false is VALID and
+The example is the no-audio source profile at 069ea09e. Newer source df06c65
+announces audio_input=true/audio_output=false and implements I2S capture/WAV
+upload; physical verification is still pending. Both audio=false is VALID and
 does not prevent text/build/install/run. Backend FIRE_AUDIO_ENABLED=true cannot
 override either device audio flag. Set each flag true only after physical tests
 of capture/upload or playback. Simulator support does not grant device APIs.
@@ -99,8 +101,9 @@ Intended FIRE controls: short B starts/stops recording when audio_input is true;
 build_confirm or run_confirm only when the matching offer is visible, C aborts.
 Long A=home, long B=quick settings, long C=back (650 ms), reserved for OS.
 Do not emit raw button events as a substitute for semantic confirmations.
-Current native source sends listen events but has no capture/upload/playback;
-its false audio flags therefore remain authoritative. Text may be sent by a PC
+The earlier source only sent listen events. New source includes capture/upload;
+output remains false until playback exists. Announced flags remain authoritative,
+while backend never promotes them to physical verification. Text may be sent by a PC
 client authenticated for that device/session. Legacy PC simulation is separate.
 
 `assistant_message`: text. `build_proposal`: proposal_id, project_id, summary.

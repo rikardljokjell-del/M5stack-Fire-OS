@@ -12,6 +12,16 @@ Se [leveranserapport](docs/DELIVERY.md), [enhetskontrakt](docs/PROTOCOL-v0.2.md)
 
 ## Start med én kommando
 
+**Enkel Windows-bruk:** åpne **FIRE Backend** fra skrivebordsikonet eller start-ui.ps1.
+Ikonet bruker installert pythonw.exe uten terminal; Windows Application Control
+blokkerte siste usignerte exe-pakke. Programmet har start/stopp, API-nøkkel,
+modellinnstillinger, LAN-oppsett, enhetsstatus, fremdrift og tekst til en
+tilkoblet FIRE. Nøkler lagres i Windows legitimasjonsbehandling.
+Se [Windows-veiledningen](docs/WINDOWS_APP.md). `start-ui.ps1` åpner også programmet.
+Bygg pakken med `build-windows.ps1 -Shortcut`; hele dist/FIREBackend-mappen følger med.
+
+Kommandolinjeutgaven for utvikling:
+
 Fra denne mappen:
 
 ```powershell
@@ -63,11 +73,12 @@ Admin-tokenet gir lesing/administrasjon, men kan ikke starte en fysisk sesjon ve
 enhetstoken er separat og minst 24 tegn. Autorisasjon sendes i headeren
 `Authorization: Bearer TOKEN`, aldri URL. Ikke bruk OpenAI-nøkkelen som enhetstoken.
 
-Firmwarekilden på gjennomgått commit 069ea09e har nå WebSocket-klient,
+Firmwarekilden på gjennomgått commit df06c65 har nå WebSocket-klient,
 Lua-runtime og SD-pakkehåndtering. Backend følger handoffens faktiske profil:
-display/buttons/rgb/imu/time, 131072 byte, 10000 ms og begge lydflagg false.
-Dette er en gyldig tilkobling; tekst fra PC kan brukes mens lyd mangler. Backend
-viser begrensningen ved oppstart og forsøker ikke opptak eller talesvar.
+display/buttons/rgb/imu/time, 131072 byte, 10000 ms, audio_input=true og
+audio_output=false. Nyeste kilde har WAV-opplasting/I2S-capture; fysisk test
+gjenstår. Eldre profil med begge lydflagg false er også gyldig. Backend bruker
+hver lydretning bare når den er annonsert og backendlyd er aktivert. Tekst kan brukes.
 Se [oppfølging av handoff](docs/DEVICE_HANDOFF_RESPONSE.md) for kildefunn som må
 avklares i firmware og testes fysisk. AI-genererte Lua-apper bruker aldri .bin/OTA.
 

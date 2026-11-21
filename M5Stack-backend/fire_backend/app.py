@@ -15,6 +15,7 @@ from .config import Settings
 from .capabilities import CapabilityError, FIRMWARE_SOURCE_REVISION, HANDOFF_PATH
 from .models import BuildConfirm, DeviceEvent, RunConfirm, SessionAction, SessionStart
 from .protocol import begin_event, dispatch, finish_event
+from .storage import new_id
 from .security import SecretFilter
 from .service import Backend, Conflict
 
@@ -124,6 +125,33 @@ def create_app(settings=None, provider=None):
                 "firmware_source_revision": FIRMWARE_SOURCE_REVISION, "handoff_path": HANDOFF_PATH,
                 "firmware_runtime_implemented_in_source": True,
                 "firmware_runtime_verified": False, "physical_verified": False}
+
+    async def desktop_auth(request: Request, identity=Depends(auth)):
+        if (not settings.fire_desktop_enabled or identity != "admin" or not request.client
+                or request.client.host not in {"127.0.0.1", "::1", "testclient"}
+                or request.headers.get("origin")):
+            raise HTTPException(403, "Local desktop only")
+
+    @app.get("/desktop/status", dependencies=[Depends(desktop_auth)])
+    async def desktop_status(service: Backend = Depends(backend)):
+        sessions = [{**service.snapshot(s), "summary": s.summary, "online": bool(s.sockets),
+                     "history": s.history[-12:], "progress": s.progress} for s in service.sessions.values() if not s.stopped]
+        builds = service.store.list("builds")
+        return {"sessions": sessions, "devices": service.store.list("devices"),
+                "builds": builds[-20:], "physical_verified": False}
+
+    @app.post("/desktop/sessions/{session_id}/text", dependencies=[Depends(desktop_auth)])
+    async def desktop_text(session_id: str, request: Request, service: Backend = Depends(backend)):
+        session = service.session(session_id)
+        if session.target != "device" or not session.sockets:
+            raise Conflict("M5Stack må være tilkoblet før du sender tekst.")
+        data = await request.json()
+        if not isinstance(data, dict) or set(data) != {"text"}:
+            raise HTTPException(422, "Expected text")
+        event = DeviceEvent(device_id=session.device_id, protocol_version=session.protocol_version,
+                            event="text", event_id=new_id("desktop"), session_id=session.id,
+                            boot_id=session.boot_id, text=data["text"])
+        return await dispatch(service, session, event)
 
     @app.post("/session/start")
     async def start(body: SessionStart, identity=Depends(auth), service: Backend = Depends(backend)):

@@ -219,6 +219,6 @@ def test_context_endpoint_reports_source_without_physical_claim(tmp_path):
     with TestClient(create_app(configured(tmp_path))) as client:
         response = client.get("/device/context", headers=headers())
         data = response.json()
-        assert data["firmware_source_revision"].startswith("069ea09")
+        assert data["firmware_source_revision"].startswith("df06c65")
         assert data["firmware_runtime_implemented_in_source"] is True
         assert data["firmware_runtime_verified"] is False and data["physical_verified"] is False
