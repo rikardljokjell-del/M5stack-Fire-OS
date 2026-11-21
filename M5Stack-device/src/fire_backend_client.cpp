@@ -53,8 +53,19 @@ void FireBackendClient::setState(State state, const String& status) {
 }
 
 void FireBackendClient::disconnect() {
-  if (client_.connected()) client_.stop();
-  if (audioClient_.connected()) audioClient_.stop();
+  if (transportClient_ && reverseTransport_) {
+    reverseTransport_->release(transportClient_);
+    transportClient_ = nullptr;
+  } else if (client_.connected()) {
+    client_.stop();
+  }
+  usingReverseTransport_ = false;
+  if (audioTransportClient_ && reverseTransport_) {
+    reverseTransport_->release(audioTransportClient_);
+    audioTransportClient_ = nullptr;
+  } else if (audioClient_.connected()) {
+    audioClient_.stop();
+  }
   handshakeBuffer_ = "";
   frameBuffer_ = "";
   resetReceiveFrame();
@@ -83,31 +94,46 @@ bool FireBackendClient::uploadAudio(const String& turnId,
       wavLength > 524288) {
     return false;
   }
-  audioClient_.stop();
-  if (!audioClient_.connect(host_.c_str(), port_)) return false;
+  WiFiClient* audio = nullptr;
+  if (reverseTransport_) audioTransportClient_ = reverseTransport_->acquire();
+  if (audioTransportClient_) {
+    audio = audioTransportClient_;
+  } else {
+    audioClient_.stop();
+    if (!audioClient_.connect(host_.c_str(), port_)) return false;
+    audio = &audioClient_;
+  }
+  auto closeAudio = [&]() {
+    if (audioTransportClient_ && reverseTransport_) {
+      reverseTransport_->release(audioTransportClient_);
+      audioTransportClient_ = nullptr;
+    } else {
+      audioClient_.stop();
+    }
+  };
   const String path = "/sessions/" + sessionId_ + "/audio/" + turnId;
-  audioClient_.print("POST " + path + " HTTP/1.1\r\nHost: " + host_ + ":" +
-                     String(port_) + "\r\nAuthorization: Bearer " + token_ +
-                     "\r\nContent-Type: audio/wav\r\nContent-Length: " +
-                     String(wavLength) + "\r\nConnection: close\r\n\r\n");
+  audio->print("POST " + path + " HTTP/1.1\r\nHost: " + host_ + ":" +
+               String(port_) + "\r\nAuthorization: Bearer " + token_ +
+               "\r\nContent-Type: audio/wav\r\nContent-Length: " +
+               String(wavLength) + "\r\nConnection: close\r\n\r\n");
   size_t offset = 0;
   while (offset < wavLength) {
     const size_t amount = min<size_t>(2048, wavLength - offset);
-    if (audioClient_.write(wavData + offset, amount) != amount) {
-      audioClient_.stop();
+    if (audio->write(wavData + offset, amount) != amount) {
+      closeAudio();
       return false;
     }
     offset += amount;
   }
   const uint32_t deadline = millis() + 5000;
   String response;
-  while (millis() < deadline && audioClient_.connected() &&
+  while (millis() < deadline && audio->connected() &&
          response.indexOf("\r\n\r\n") < 0) {
-    while (audioClient_.available() && response.length() < 512)
-      response += static_cast<char>(audioClient_.read());
+    while (audio->available() && response.length() < 512)
+      response += static_cast<char>(audio->read());
     if (response.indexOf("\r\n\r\n") < 0) delay(1);
   }
-  audioClient_.stop();
+  closeAudio();
   return response.startsWith("HTTP/1.1 2") || response.startsWith("HTTP/1.0 2");
 }
 
@@ -119,7 +145,8 @@ String FireBackendClient::eventId(const char* prefix) {
 
 bool FireBackendClient::sendFrame(uint8_t opcode, const uint8_t* data,
                                   size_t length) {
-  if (!client_.connected() || length > kMaxFrameBytes) return false;
+  WiFiClient* client = activeClient();
+  if (!client || !client->connected() || length > kMaxFrameBytes) return false;
   uint8_t header[10] = {};
   size_t headerLength = 2;
   header[0] = 0x80 | (opcode & 0x0F);
@@ -139,14 +166,14 @@ bool FireBackendClient::sendFrame(uint8_t opcode, const uint8_t* data,
                      static_cast<uint8_t>(esp_random())};
   memcpy(header + headerLength, mask, sizeof(mask));
   headerLength += sizeof(mask);
-  if (client_.write(header, headerLength) != headerLength) return false;
+  if (client->write(header, headerLength) != headerLength) return false;
   uint8_t chunk[256];
   size_t offset = 0;
   while (offset < length) {
     const size_t amount = min(sizeof(chunk), length - offset);
     for (size_t index = 0; index < amount; ++index)
       chunk[index] = data[offset + index] ^ mask[(offset + index) & 3];
-    if (client_.write(chunk, amount) != amount) return false;
+    if (client->write(chunk, amount) != amount) return false;
     offset += amount;
   }
   return true;
@@ -228,25 +255,38 @@ void FireBackendClient::service(bool wifiConnected) {
     return;
   }
   if (!wifiConnected) {
-    if (client_.connected()) client_.stop();
+    if (state_ != State::Offline) disconnect();
     setState(State::Offline, "Waiting for Wi-Fi");
     return;
   }
   if (state_ == State::Offline) {
     if (millis() < reconnectAt_) return;
     reconnectAt_ = millis() + 3000;
-    setState(State::Connecting, "Connecting to backend");
+    WiFiClient* client = nullptr;
+    if (reverseTransport_) transportClient_ = reverseTransport_->acquire();
+    if (transportClient_) {
+      client = transportClient_;
+      usingReverseTransport_ = true;
+    } else {
+      client = &client_;
+    }
+    setState(State::Connecting,
+             usingReverseTransport_ ? "Connecting via Reverse TCP"
+                                     : "Connecting to backend");
     // A failed backend must never stall the UI for the platform TCP default
     // timeout.  Retry is deliberately throttled by reconnectAt_.
-    client_.setTimeout(1200);
-    if (!client_.connect(host_.c_str(), port_, 1200)) {
+    if (!usingReverseTransport_) {
+      client->setTimeout(1200);
+    }
+    if (!usingReverseTransport_ && !client->connect(host_.c_str(), port_, 1200)) {
+      transportClient_ = nullptr;
       setState(State::Offline, "Backend connection failed");
       return;
     }
     uint8_t randomKey[16];
     for (uint8_t& value : randomKey) value = static_cast<uint8_t>(esp_random());
     const String key = base64::encode(randomKey, sizeof(randomKey));
-    client_.print("GET /ws/device HTTP/1.1\r\nHost: " + host_ + ":" +
+    client->print("GET /ws/device HTTP/1.1\r\nHost: " + host_ + ":" +
                   String(port_) + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " +
                   key + "\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer " +
                   token_ + "\r\n\r\n");
@@ -261,15 +301,19 @@ void FireBackendClient::service(bool wifiConnected) {
 }
 
 void FireBackendClient::handleHandshake() {
-  while (client_.available() && handshakeBuffer_.length() < 4096)
-    handshakeBuffer_ += static_cast<char>(client_.read());
+  WiFiClient* client = activeClient();
+  if (!client) return;
+  while (client->available() && handshakeBuffer_.length() < 4096)
+    handshakeBuffer_ += static_cast<char>(client->read());
   if (handshakeBuffer_.indexOf("\r\n\r\n") < 0) return;
   if (!handshakeBuffer_.startsWith("HTTP/1.1 101")) {
-    client_.stop();
+    disconnect();
     setState(State::Offline, "Backend handshake rejected");
     return;
   }
-  setState(State::Connected, "Backend connected");
+  setState(State::Connected, usingReverseTransport_
+                                ? "Backend connected (Reverse TCP)"
+                                : "Backend connected (Direct)");
   const String fields = ",\"target\":\"device\",\"boot_id\":\"" +
                         jsonEscape(bootId_) +
                         "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":10000,\"audio_input\":true,\"audio_output\":false,\"firmware_version\":\"" +
@@ -283,7 +327,9 @@ void FireBackendClient::handleHandshake() {
 }
 
 void FireBackendClient::readFrames() {
-  if (!client_.connected()) {
+  WiFiClient* client = activeClient();
+  if (!client || !client->connected()) {
+    disconnect();
     setState(State::Offline, "Backend disconnected");
     return;
   }
@@ -292,11 +338,11 @@ void FireBackendClient::readFrames() {
   // pause drawing and button handling for up to two seconds.
   constexpr size_t kMaxBytesPerService = 2048;
   size_t processed = 0;
-  while (client_.available() && processed < kMaxBytesPerService) {
+  while (client->available() && processed < kMaxBytesPerService) {
     if (receiveStage_ == ReceiveStage::Header) {
-      while (receiveHeaderBytes_ < 2 && client_.available() &&
+      while (receiveHeaderBytes_ < 2 && client->available() &&
              processed < kMaxBytesPerService) {
-        const int value = client_.read();
+        const int value = client->read();
         if (value < 0) return;
         if (receiveHeaderBytes_ == 0) {
           receiveOpcode_ = static_cast<uint8_t>(value) & 0x0F;
@@ -324,8 +370,8 @@ void FireBackendClient::readFrames() {
 
     if (receiveStage_ == ReceiveStage::ExtendedLength) {
       while (receiveExtendedBytes_ < receiveExtendedNeeded_ &&
-             client_.available() && processed < kMaxBytesPerService) {
-        const int value = client_.read();
+             client->available() && processed < kMaxBytesPerService) {
+        const int value = client->read();
         if (value < 0) return;
         receiveExtended_[receiveExtendedBytes_++] = static_cast<uint8_t>(value);
         ++processed;
@@ -334,7 +380,7 @@ void FireBackendClient::readFrames() {
       for (uint8_t index = 0; index < receiveExtendedNeeded_; ++index)
         receiveLength_ = (receiveLength_ << 8) | receiveExtended_[index];
       if (receiveLength_ > kMaxFrameBytes) {
-        client_.stop();
+        disconnect();
         resetReceiveFrame();
         setState(State::Offline, "Backend frame too large");
         return;
@@ -346,9 +392,9 @@ void FireBackendClient::readFrames() {
     }
 
     if (receiveStage_ == ReceiveStage::Mask) {
-      while (receiveMaskBytes_ < sizeof(receiveMask_) && client_.available() &&
+      while (receiveMaskBytes_ < sizeof(receiveMask_) && client->available() &&
              processed < kMaxBytesPerService) {
-        const int value = client_.read();
+        const int value = client->read();
         if (value < 0) return;
         receiveMask_[receiveMaskBytes_++] = static_cast<uint8_t>(value);
         ++processed;
@@ -358,9 +404,9 @@ void FireBackendClient::readFrames() {
     }
 
     if (receiveStage_ == ReceiveStage::Payload) {
-      while (receivePayloadBytes_ < receiveLength_ && client_.available() &&
+      while (receivePayloadBytes_ < receiveLength_ && client->available() &&
              processed < kMaxBytesPerService) {
-        const int value = client_.read();
+        const int value = client->read();
         if (value < 0) return;
         const uint8_t decoded = static_cast<uint8_t>(value) ^
                                 (receiveMasked_
@@ -382,7 +428,7 @@ void FireBackendClient::readFrames() {
 void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
                                     size_t length) {
   if (opcode == 0x8) {
-    client_.stop();
+    disconnect();
     setState(State::Offline, "Backend closed connection");
   } else if (opcode == 0x9) {
     sendFrame(0xA, data, length);

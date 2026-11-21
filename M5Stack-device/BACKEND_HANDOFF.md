@@ -68,6 +68,52 @@ nødvendig når mobilen allerede er koblet til det passordbeskyttede
 Backend-tokenet skal aldri logges eller legges i firmwarekilde, Git eller
 pakken. QR-koden skal bare vises lokalt i backendens kontrollpanel.
 
+## Reverse TCP fra PC til FIRE
+
+FIRE OS åpner en begrenset mottaker på TCP-port `8766` når lagret backend-
+konfigurasjon finnes og Wi-Fi er tilgjengelig. Dette er en transportvariant;
+WebSocket-, HTTP-, Lua- og bekreftelsesprotokollene er uendret.
+
+PC-broen kobler til FIRE og sender først én newline-avsluttet UTF-8-linje:
+
+```json
+{"type":"reverse_open","version":1,"device_id":"m5stack-fire-01","token":"<device-token>"}
+```
+
+FIRE leser maksimalt 1024 byte, med 4 sekunders autentiseringsfrist, og
+avviser feil ID, feil token, feil versjon eller ugyldig JSON-felt. Tokenet
+skrives aldri til serielloggen. Ved godkjenning svarer FIRE:
+
+```json
+{"type":"reverse_ready","version":1,"device_id":"m5stack-fire-01"}
+```
+
+Alle byte etter newline beholdes i TCP-bufferen. Deretter brukes forbindelsen
+som rå bytekanal. FIRE sender dagens `GET /ws/device` og WebSocket-handshake
+over en reservert forbindelse. WAV-opplasting og Lua-pakkenedlasting reserverer
+hver sin forbindelse ved behov og slipper den etter HTTP-operasjonen.
+
+Første versjon har maksimalt fire samtidige reverse-forbindelser, inkludert
+WebSocket og HTTP-operasjoner. En forbindelse bytter ikke rolle midt i en
+operasjon. Hvis ingen godkjent reverse-forbindelse er ledig, bruker FIRE den
+eksisterende direkte forbindelsen til konfigurert backendadresse.
+
+Backend-broen må derfor:
+
+1. Lytte lokalt på eksisterende backend-port `8765`.
+2. Opprette reverse TCP-forbindelser til FIRE på `8766`.
+3. Sende `reverse_open`, vente på `reverse_ready`, og koble rå bytes videre
+   til den lokale backendforbindelsen.
+4. Holde WebSocket-forbindelsen separat og bruke nye reverse-forbindelser for
+   HTTP-pakkenedlasting og WAV-opplasting.
+5. Begrense poolen til fire forbindelser og opprette ny forbindelse etter
+   brudd.
+
+Device status bruker `Backend connected (Reverse TCP)` eller
+`Backend connected (Direct)` når kontrollforbindelsen er etablert. Fysisk
+reverse-forbindelse er ikke verifisert før Windows-broen faktisk har koblet
+til en M5Stack FIRE.
+
 ## Backend-agentens neste arbeid
 
 1. Oppdater `fire_backend/data/FIRE_DEVICE_CONTEXT.md` til nåværende firmware-

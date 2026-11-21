@@ -4,6 +4,7 @@
 #include <SD.h>
 #include <WiFiClient.h>
 #include <mbedtls/sha256.h>
+#include "fire_reverse_transport.h"
 
 class FireLuaPackageManager {
  public:
@@ -12,6 +13,9 @@ class FireLuaPackageManager {
                                   const String&);
 
   void setCallbacks(void* context, StatusCallback status, ResultCallback result);
+  void setReverseTransport(FireReverseTransport* transport) {
+    reverseTransport_ = transport;
+  }
   bool startDownload(const String& host, uint16_t port, const String& token,
                      const String& url, const String& packageId,
                      const String& installId, const String& expectedHash,
@@ -25,6 +29,8 @@ class FireLuaPackageManager {
   enum class State : uint8_t { Idle, Connecting, Headers, Downloading, Verify };
   State state_ = State::Idle;
   WiFiClient client_;
+  FireReverseTransport* reverseTransport_ = nullptr;
+  WiFiClient* reverseClient_ = nullptr;
   File archive_;
   String host_;
   uint16_t port_ = 8765;
@@ -54,4 +60,7 @@ class FireLuaPackageManager {
   static uint32_t read32(File& file);
   static bool validZipPath(const String& path);
   static String hexDigest(const uint8_t* digest, size_t length);
+  WiFiClient* activeClient() {
+    return reverseClient_ ? reverseClient_ : &client_;
+  }
 };

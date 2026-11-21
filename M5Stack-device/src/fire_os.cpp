@@ -680,11 +680,14 @@ void FireOS::begin() {
   loadSettings();
   Serial.println("FIRE boot: settings OK");
   if (backendClient_) {
+    backendClient_->setReverseTransport(&reverseTransport_);
     backendClient_->setCallbacks(this, backendMessage, backendState);
     backendClient_->configure(backendHost_, backendPort_, backendToken_,
                               backendDeviceId_, "fire-os-0.2");
     backendStatus_ = backendClient_->status();
   }
+  reverseTransport_.configure(backendDeviceId_, backendToken_);
+  packageManager_->setReverseTransport(&reverseTransport_);
   packageManager_->setCallbacks(this, packageStatus, packageResult);
   if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
   const esp_partition_t* runningPartition = esp_ota_get_running_partition();
@@ -794,6 +797,8 @@ void FireOS::update() {
   if (wifiSetupActive_) wifiSetupServer.handleClient();
   updateWifiState();
   updateBluetoothScan();
+  reverseTransport_.service(WiFi.status() == WL_CONNECTED &&
+                            backendClient_ && backendClient_->configured());
   updateBackend();
   updateAiAudio();
   if (packageManager_) packageManager_->service(WiFi.status() == WL_CONNECTED);
@@ -3529,6 +3534,7 @@ void FireOS::saveBackendSetupFields(const String& host, const String& port,
   preferences.remove("openai_key");
   saveSettings();
   if (backendClient_) {
+    reverseTransport_.configure(backendDeviceId_, backendToken_);
     backendClient_->configure(backendHost_, backendPort_, backendToken_,
                               backendDeviceId_, "fire-os-0.2");
     backendStatus_ = backendClient_->status();

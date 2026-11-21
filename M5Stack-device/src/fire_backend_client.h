@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WiFiClient.h>
+#include "fire_reverse_transport.h"
 
 class FireBackendClient {
  public:
@@ -12,6 +13,9 @@ class FireBackendClient {
                  const String& deviceId, const String& firmwareVersion);
   void setCallbacks(void* context, MessageCallback message,
                     StateCallback state);
+  void setReverseTransport(FireReverseTransport* transport) {
+    reverseTransport_ = transport;
+  }
   void service(bool wifiConnected);
   void disconnect();
   bool uploadAudio(const String& turnId, const uint8_t* wavData,
@@ -41,6 +45,10 @@ class FireBackendClient {
   enum class State : uint8_t { Offline, Connecting, Handshake, Connected };
   WiFiClient client_;
   WiFiClient audioClient_;
+  FireReverseTransport* reverseTransport_ = nullptr;
+  WiFiClient* transportClient_ = nullptr;
+  WiFiClient* audioTransportClient_ = nullptr;
+  bool usingReverseTransport_ = false;
   State state_ = State::Offline;
   String host_;
   uint16_t port_ = 8765;
@@ -78,4 +86,7 @@ class FireBackendClient {
   void handleHandshake();
   void readFrames();
   void handleFrame(uint8_t opcode, const uint8_t* data, size_t length);
+  WiFiClient* activeClient() {
+    return transportClient_ ? transportClient_ : &client_;
+  }
 };

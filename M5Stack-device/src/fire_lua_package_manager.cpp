@@ -66,11 +66,15 @@ void FireLuaPackageManager::service(bool wifiConnected) {
     return;
   }
   if (state_ == State::Connecting) {
-    if (!client_.connect(host_.c_str(), port_)) {
-      fail("Backend download connection failed");
-      return;
+    if (reverseTransport_) reverseClient_ = reverseTransport_->acquire();
+    WiFiClient* client = activeClient();
+    if (!reverseClient_) {
+      if (!client_.connect(host_.c_str(), port_)) {
+        fail("Backend download connection failed");
+        return;
+      }
     }
-    client_.print("GET " + url_ + " HTTP/1.1\r\nHost: " + host_ + ":" +
+    client->print("GET " + url_ + " HTTP/1.1\r\nHost: " + host_ + ":" +
                   String(port_) + "\r\nAuthorization: Bearer " + token_ +
                   "\r\nConnection: close\r\n\r\n");
     state_ = State::Headers;
@@ -79,8 +83,9 @@ void FireLuaPackageManager::service(bool wifiConnected) {
     return;
   }
   if (state_ == State::Headers) {
-    while (client_.available() && headerBuffer_.length() < 8192)
-      headerBuffer_ += static_cast<char>(client_.read());
+    WiFiClient* client = activeClient();
+    while (client->available() && headerBuffer_.length() < 8192)
+      headerBuffer_ += static_cast<char>(client->read());
     const int end = headerBuffer_.indexOf("\r\n\r\n");
     if (end < 0) {
       if (millis() - lastDataAt_ > kHeaderTimeoutMs) fail("Download headers timeout");
@@ -118,9 +123,10 @@ void FireLuaPackageManager::service(bool wifiConnected) {
     emitStatus("Downloading " + String(received_) + "/" + String(contentLength_));
   }
   if (state_ == State::Downloading) {
+    WiFiClient* client = activeClient();
     uint8_t buffer[kChunkSize];
-    while (client_.available() && received_ < contentLength_) {
-      const size_t amount = client_.read(buffer, min<size_t>(sizeof(buffer), contentLength_ - received_));
+    while (client->available() && received_ < contentLength_) {
+      const size_t amount = client->read(buffer, min<size_t>(sizeof(buffer), contentLength_ - received_));
       if (amount == 0) break;
       if (archive_.write(buffer, amount) != amount) {
         fail("SD write failed");
@@ -134,7 +140,12 @@ void FireLuaPackageManager::service(bool wifiConnected) {
     if (received_ == contentLength_) {
       archive_.flush();
       archive_.close();
-      client_.stop();
+      if (reverseClient_ && reverseTransport_) {
+        reverseTransport_->release(reverseClient_);
+        reverseClient_ = nullptr;
+      } else {
+        client_.stop();
+      }
       state_ = State::Verify;
       emitStatus("Verifying package");
     } else if (millis() - lastDataAt_ > kDataTimeoutMs) {
@@ -170,7 +181,12 @@ void FireLuaPackageManager::finishDownload() {
 
 void FireLuaPackageManager::fail(const String& reason) {
   if (archive_) archive_.close();
-  client_.stop();
+  if (reverseClient_ && reverseTransport_) {
+    reverseTransport_->release(reverseClient_);
+    reverseClient_ = nullptr;
+  } else {
+    client_.stop();
+  }
   const String path = "/apps/.download-" + packageId_ + ".zip";
   if (SD.exists(path)) SD.remove(path);
   mbedtls_sha256_free(&sha256_);

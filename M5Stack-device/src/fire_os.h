@@ -6,6 +6,7 @@
 #include "fire_lua_runtime.h"
 #include "fire_backend_client.h"
 #include "fire_lua_package_manager.h"
+#include "fire_reverse_transport.h"
 
 class DateTimeService {
  public:
@@ -241,6 +242,7 @@ class FireOS {
   uint8_t luaRgbValues_[10][3] = {};
   FireBackendClient* backendClient_ = nullptr;
   FireLuaPackageManager* packageManager_ = nullptr;
+  FireReverseTransport reverseTransport_;
   String backendStatus_;
   String aiTurnId_;
   String aiProposalId_;
