@@ -34,6 +34,14 @@ Python-installasjon. Behold hele FIREBackend-mappen samlet ved distribusjon.
 Å lytte på LAN betyr ikke at enheten er tilkoblet. Feil token/ID, Wi-Fi-isolasjon,
 Windows-brannmur eller kildefeil i firmware må fortsatt avklares ved faktisk test.
 
+## Kopier token med mobilen
+
+Åpne **M5Stack → QR for token**. Skann QR-en på PC-skjermen med mobilen og
+kopier den gjenkjente teksten til feltet for enhetstoken på FIRE. QR-en inneholder
+bare valgt enhets lagrede token: ingen URL, API-nøkkel, adresse eller admin-token.
+Lagre endringer før du viser QR. Vinduet lukkes etter to minutter; tokenet endres
+ikke. QR-en lagres ikke som fil eller i logger. Adresse, port og ID fylles inn som før.
+
 ## Tekst, bygging og kjøring
 
 **Aktivitet** lar deg velge en tilkoblet FIRE-sesjon og sende tekst til samme

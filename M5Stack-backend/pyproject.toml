@@ -11,6 +11,7 @@ dependencies = [
   "fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1",
   "pydantic>=2.10,<3", "pydantic-settings>=2.7,<3",
   "openai>=2,<3", "websockets>=15,<17", "lupa>=2.6,<3",
+  "qrcode>=8.2,<9",
 ]
 
 [project.optional-dependencies]

@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .desktop_config import DesktopConfig, DesktopStore
 from .desktop_runtime import DesktopRuntime, check_api_key, configure_firewall, firewall_ready, lan_addresses, network_info
+from .token_qr import token_matrix
 
 
 BG, INK, MUTED, ORANGE, NAV = "#f2f4f8", "#182231", "#637083", "#e95725", "#172231"
@@ -27,6 +28,7 @@ class DesktopUI:
         self.network, self.firewall = "Kontrollerer nettverk …", False
         self.addresses = lan_addresses()
         self.events = []
+        self.token_qr_window = None
         self.api_result = "API-nøkkelen er ikke kontrollert."
         self.root.title("FIRE Backend")
         self.root.geometry("1120x810")
@@ -183,6 +185,7 @@ class DesktopUI:
         row.pack(fill="x", pady=8)
         ttk.Button(row, text="Kopier tilkobling", command=self.copy_connection).pack(side="left")
         ttk.Button(row, text="Kopier token", command=self.copy_token).pack(side="left", padx=8)
+        ttk.Button(row, text="QR for token", command=self.show_token_qr).pack(side="left")
         ttk.Button(row, text="Vis / skjul token", command=self.toggle_token).pack(side="left")
         ttk.Button(row, text="Nytt token", command=lambda: self.device_token.set(secrets.token_urlsafe(32))).pack(side="left", padx=8)
         ttk.Checkbutton(page, text="Tillat M5Stack på lokalt nettverk", variable=self.lan).pack(anchor="w", pady=(10, 5))
@@ -304,11 +307,13 @@ class DesktopUI:
         self.work(lambda: self.runtime.start(self.store.settings()), message="Starter backend …")
 
     def stop(self):
+        self.hide_token_qr()
         self.work(self.runtime.stop, message="Stopper backend …")
 
     def save(self):
         if self.busy:
             return
+        self.hide_token_qr()
         try:
             config = self.collect()
             key = self.api_key.get().strip() or None
@@ -375,6 +380,59 @@ class DesktopUI:
 
     def copy_token(self):
         self.clipboard(self.device_token.get())
+
+    def hide_token_qr(self):
+        if self.token_qr_window is not None:
+            self.token_qr_window.destroy()
+            self.token_qr_window = None
+
+    def show_token_qr(self):
+        try:
+            settings = self.runtime.settings if self.runtime.ready else self.store.settings()
+            device_id = self.device_id.get().strip()
+            saved_token = settings.device_tokens().get(device_id)
+            if self.device_token.get() != saved_token:
+                raise ValueError("Lagre tilkoblingen først, slik at QR viser tokenet backend bruker.")
+            matrix = token_matrix(settings, device_id)
+        except ValueError as error:
+            self.notice.set(str(error))
+            return
+        self.hide_token_qr()
+        window = tk.Toplevel(self.root)
+        self.token_qr_window = window
+        window.title("Kopier enhetstoken med mobilen")
+        window.resizable(False, False)
+        window.configure(bg="white")
+        window.transient(self.root)
+        tk.Label(window, text="Skann og kopier token", bg="white", fg=INK,
+                 font=("Segoe UI Semibold", 15)).pack(padx=25, pady=(18, 5))
+        tk.Label(window, text=device_id, bg="white", fg=MUTED, font=("Segoe UI", 10)).pack()
+        scale = max(1, 330 // len(matrix))
+        size = len(matrix) * scale
+        canvas = tk.Canvas(window, width=size, height=size, bg="white", highlightthickness=0)
+        canvas.pack(padx=25, pady=12)
+        for y, row in enumerate(matrix):
+            for x, dark in enumerate(row):
+                if dark:
+                    canvas.create_rectangle(x*scale, y*scale, (x+1)*scale, (y+1)*scale, fill="black", outline="")
+        tk.Label(window, text="Kun enhetstoken – ingen API-nøkkel eller lenke.\n"
+                 "Kopier teksten på mobilen og lim den inn på FIRE.", bg="white", fg=INK,
+                 font=("Segoe UI", 10)).pack(padx=20, pady=5)
+        countdown = tk.Label(window, bg="white", fg=MUTED, font=("Segoe UI", 9))
+        countdown.pack(pady=5)
+        ttk.Button(window, text="Lukk", command=self.hide_token_qr).pack(pady=(4, 16))
+        window.protocol("WM_DELETE_WINDOW", self.hide_token_qr)
+        deadline = time.monotonic() + 120
+        def tick():
+            if self.token_qr_window is not window:
+                return
+            remaining = int(deadline - time.monotonic())
+            if remaining <= 0 or self.device_token.get() != saved_token or self.device_id.get().strip() != device_id:
+                self.hide_token_qr()
+                return
+            countdown.configure(text=f"QR skjules om {remaining} sekunder. Tokenet endres ikke.")
+            window.after(1000, tick)
+        tick()
 
     def inspect_network(self):
         profile, known = network_info()
@@ -517,6 +575,7 @@ class DesktopUI:
     def close(self):
         if self.closing:
             return
+        self.hide_token_qr()
         self.closing = True
         self.notice.set("Avslutter backend og lagrer status …")
         def close_worker():
