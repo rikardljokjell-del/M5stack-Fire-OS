@@ -50,6 +50,18 @@ class FireBackendClient {
   String sessionId_;
   String handshakeBuffer_;
   String frameBuffer_;
+  enum class ReceiveStage : uint8_t { Header, ExtendedLength, Mask, Payload };
+  ReceiveStage receiveStage_ = ReceiveStage::Header;
+  uint8_t receiveHeaderBytes_ = 0;
+  uint8_t receiveOpcode_ = 0;
+  bool receiveMasked_ = false;
+  uint8_t receiveExtended_[8] = {};
+  uint8_t receiveExtendedNeeded_ = 0;
+  uint8_t receiveExtendedBytes_ = 0;
+  uint8_t receiveMask_[4] = {};
+  uint8_t receiveMaskBytes_ = 0;
+  uint64_t receiveLength_ = 0;
+  size_t receivePayloadBytes_ = 0;
   String status_ = "Backend not configured";
   uint32_t reconnectAt_ = 0;
   uint32_t eventCounter_ = 0;
@@ -61,6 +73,7 @@ class FireBackendClient {
   bool sendEvent(const String& event, const String& fields = String());
   bool sendFrame(uint8_t opcode, const uint8_t* data, size_t length);
   void setState(State state, const String& status);
+  void resetReceiveFrame();
   void handleHandshake();
   void readFrames();
   void handleFrame(uint8_t opcode, const uint8_t* data, size_t length);

@@ -46,6 +46,7 @@ void FireBackendClient::setCallbacks(void* context, MessageCallback message,
 }
 
 void FireBackendClient::setState(State state, const String& status) {
+  if (state_ == state && status_ == status) return;
   state_ = state;
   status_ = status;
   if (stateCallback_) stateCallback_(callbackContext_, connected(), status_);
@@ -56,9 +57,23 @@ void FireBackendClient::disconnect() {
   if (audioClient_.connected()) audioClient_.stop();
   handshakeBuffer_ = "";
   frameBuffer_ = "";
+  resetReceiveFrame();
   sessionId_ = "";
   setState(configured() ? State::Offline : State::Offline,
            configured() ? "Backend disconnected" : "Backend not configured");
+}
+
+void FireBackendClient::resetReceiveFrame() {
+  receiveStage_ = ReceiveStage::Header;
+  receiveHeaderBytes_ = 0;
+  receiveOpcode_ = 0;
+  receiveMasked_ = false;
+  receiveExtendedNeeded_ = 0;
+  receiveExtendedBytes_ = 0;
+  receiveMaskBytes_ = 0;
+  receiveLength_ = 0;
+  receivePayloadBytes_ = 0;
+  frameBuffer_ = "";
 }
 
 bool FireBackendClient::uploadAudio(const String& turnId,
@@ -221,7 +236,10 @@ void FireBackendClient::service(bool wifiConnected) {
     if (millis() < reconnectAt_) return;
     reconnectAt_ = millis() + 3000;
     setState(State::Connecting, "Connecting to backend");
-    if (!client_.connect(host_.c_str(), port_)) {
+    // A failed backend must never stall the UI for the platform TCP default
+    // timeout.  Retry is deliberately throttled by reconnectAt_.
+    client_.setTimeout(250);
+    if (!client_.connect(host_.c_str(), port_, 250)) {
       setState(State::Offline, "Backend connection failed");
       return;
     }
@@ -269,38 +287,95 @@ void FireBackendClient::readFrames() {
     setState(State::Offline, "Backend disconnected");
     return;
   }
-  while (client_.available()) {
-    const uint8_t first = static_cast<uint8_t>(client_.read());
-    const uint8_t second = static_cast<uint8_t>(client_.read());
-    const uint8_t opcode = first & 0x0F;
-    uint64_t length = second & 0x7F;
-    if (length == 126) {
-      length = (static_cast<uint16_t>(client_.read()) << 8) |
-               static_cast<uint8_t>(client_.read());
-    } else if (length == 127) {
-      for (uint8_t index = 0; index < 8; ++index) {
-        length = (length << 8) | static_cast<uint8_t>(client_.read());
+  // Process a bounded amount per OS update.  The previous implementation
+  // waited in a tight loop for the rest of a fragmented frame, which could
+  // pause drawing and button handling for up to two seconds.
+  constexpr size_t kMaxBytesPerService = 2048;
+  size_t processed = 0;
+  while (client_.available() && processed < kMaxBytesPerService) {
+    if (receiveStage_ == ReceiveStage::Header) {
+      while (receiveHeaderBytes_ < 2 && client_.available() &&
+             processed < kMaxBytesPerService) {
+        const int value = client_.read();
+        if (value < 0) return;
+        if (receiveHeaderBytes_ == 0) {
+          receiveOpcode_ = static_cast<uint8_t>(value) & 0x0F;
+        } else {
+          receiveMasked_ = (static_cast<uint8_t>(value) & 0x80) != 0;
+          const uint8_t lengthCode = static_cast<uint8_t>(value) & 0x7F;
+          if (lengthCode <= 125) {
+            receiveLength_ = lengthCode;
+            receiveStage_ = receiveMasked_ ? ReceiveStage::Mask
+                                           : ReceiveStage::Payload;
+            frameBuffer_ = "";
+            frameBuffer_.reserve(static_cast<size_t>(receiveLength_));
+          } else {
+            receiveExtendedNeeded_ = lengthCode == 126 ? 2 : 8;
+            receiveExtendedBytes_ = 0;
+            receiveLength_ = 0;
+            receiveStage_ = ReceiveStage::ExtendedLength;
+          }
+        }
+        ++receiveHeaderBytes_;
+        ++processed;
       }
+      if (receiveStage_ == ReceiveStage::Header) return;
     }
-    if (length > kMaxFrameBytes) {
-      client_.stop();
-      setState(State::Offline, "Backend frame too large");
-      return;
+
+    if (receiveStage_ == ReceiveStage::ExtendedLength) {
+      while (receiveExtendedBytes_ < receiveExtendedNeeded_ &&
+             client_.available() && processed < kMaxBytesPerService) {
+        const int value = client_.read();
+        if (value < 0) return;
+        receiveExtended_[receiveExtendedBytes_++] = static_cast<uint8_t>(value);
+        ++processed;
+      }
+      if (receiveExtendedBytes_ < receiveExtendedNeeded_) return;
+      for (uint8_t index = 0; index < receiveExtendedNeeded_; ++index)
+        receiveLength_ = (receiveLength_ << 8) | receiveExtended_[index];
+      if (receiveLength_ > kMaxFrameBytes) {
+        client_.stop();
+        resetReceiveFrame();
+        setState(State::Offline, "Backend frame too large");
+        return;
+      }
+      receiveStage_ = receiveMasked_ ? ReceiveStage::Mask
+                                     : ReceiveStage::Payload;
+      frameBuffer_ = "";
+      frameBuffer_.reserve(static_cast<size_t>(receiveLength_));
     }
-    uint8_t mask[4] = {};
-    if (second & 0x80) client_.read(mask, sizeof(mask));
-    frameBuffer_.reserve(static_cast<size_t>(length));
-    frameBuffer_ = "";
-    const uint32_t deadline = millis() + 2000;
-    while (frameBuffer_.length() < length && millis() < deadline) {
-      if (!client_.available()) continue;
-      const uint8_t value = static_cast<uint8_t>(client_.read());
-      const size_t position = frameBuffer_.length();
-      frameBuffer_ += static_cast<char>(value ^ (second & 0x80 ? mask[position & 3] : 0));
+
+    if (receiveStage_ == ReceiveStage::Mask) {
+      while (receiveMaskBytes_ < sizeof(receiveMask_) && client_.available() &&
+             processed < kMaxBytesPerService) {
+        const int value = client_.read();
+        if (value < 0) return;
+        receiveMask_[receiveMaskBytes_++] = static_cast<uint8_t>(value);
+        ++processed;
+      }
+      if (receiveMaskBytes_ < sizeof(receiveMask_)) return;
+      receiveStage_ = ReceiveStage::Payload;
     }
-    if (frameBuffer_.length() != length) return;
-    handleFrame(opcode, reinterpret_cast<const uint8_t*>(frameBuffer_.c_str()),
-                frameBuffer_.length());
+
+    if (receiveStage_ == ReceiveStage::Payload) {
+      while (receivePayloadBytes_ < receiveLength_ && client_.available() &&
+             processed < kMaxBytesPerService) {
+        const int value = client_.read();
+        if (value < 0) return;
+        const uint8_t decoded = static_cast<uint8_t>(value) ^
+                                (receiveMasked_
+                                     ? receiveMask_[receivePayloadBytes_ & 3]
+                                     : 0);
+        frameBuffer_ += static_cast<char>(decoded);
+        ++receivePayloadBytes_;
+        ++processed;
+      }
+      if (receivePayloadBytes_ < receiveLength_) return;
+      handleFrame(receiveOpcode_,
+                  reinterpret_cast<const uint8_t*>(frameBuffer_.c_str()),
+                  frameBuffer_.length());
+      resetReceiveFrame();
+    }
   }
 }
 
