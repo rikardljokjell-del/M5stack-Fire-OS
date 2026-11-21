@@ -87,6 +87,9 @@ og gjennomført relevante operasjoner gjennom denne broen.
 
 På utviklings-PC-en 21. november 2026 svarte FIRE `10.5.1.163:8766` med gyldig
 `reverse_ready` på alle fire kanaler. Dette bekrefter nettverksvei og
-transportautentisering gjennom gjeldende mobiltilkobling. Ingen `session_start`,
-appnedlasting eller lydopplasting fra fysisk FIRE var observert ved denne kontrollen.
+transportautentisering gjennom gjeldende mobiltilkobling. Deretter ble ekte
+`session_start` godkjent for `m5stack-fire-01`, med boot-ID, firmware `fire-os-0.2`,
+fem baseline-tjenester og audio_input=true/audio_output=false. Desktop viste
+én online enhet i listening-status og én aktiv reverse-kanal. Dette bekrefter
+fysisk TCP/WS-tilkobling, ikke appnedlasting, appkjøring eller mikrofon/OpenAI-lyd.
 Mottakerkontrakten er lest fra device-commit `90028a9` og samsvarer med prefikset over.
