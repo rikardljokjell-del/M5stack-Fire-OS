@@ -118,6 +118,7 @@ class FireOS {
   int8_t carouselDirection_ = 0;
   int16_t carouselOffset_ = 0;
   uint32_t carouselLastStepAt_ = 0;
+  int8_t carouselQueuedDirection_ = 0;
   bool carouselAnimating_ = false;
   uint8_t appsIndex_ = 0;
   uint8_t settingsIndex_ = 0;
@@ -161,6 +162,7 @@ class FireOS {
   uint32_t aiRestPhaseDuration_ = 0;
   uint32_t lastActivity_ = 0;
   uint32_t lastDrawAt_ = 0;
+  bool redrawRequested_ = true;
   uint8_t displayPowerState_ = 0;
 
   static constexpr uint8_t kMaxFileEntries = 40;

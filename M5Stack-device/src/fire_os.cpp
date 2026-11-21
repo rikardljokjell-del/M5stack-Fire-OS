@@ -756,6 +756,12 @@ void FireOS::update() {
     if (carouselOffset_ >= kCarouselDistance) {
       carouselOffset_ = kCarouselDistance;
       carouselAnimating_ = false;
+      if (carouselQueuedDirection_ != 0) {
+        const int8_t queuedDirection = carouselQueuedDirection_;
+        carouselQueuedDirection_ = 0;
+        startMainSlide(nextVisibleMain(mainIndex_, queuedDirection),
+                       queuedDirection);
+      }
     }
   }
   const bool animatedScreen = screen_ == Screen::AiDeveloper ||
@@ -764,7 +770,7 @@ void FireOS::update() {
   const uint32_t drawInterval = screen_ == Screen::AiDeveloper
                                     ? 33
                                     : animatedScreen ? 25 : 50;
-  if (millis() - lastDrawAt_ >= drawInterval) draw();
+  if (redrawRequested_ || millis() - lastDrawAt_ >= drawInterval) draw();
   // Keep button sampling responsive while still yielding to Wi-Fi/BLE tasks.
   delay(5);
 }
@@ -788,16 +794,15 @@ void FireOS::updateBootFeedback() {
   }
 
   if (bootMelody_ && M5.Speaker.isEnabled()) {
-    // Queue the short boot fanfare on one speaker channel.  Using the
-    // automatic channel with stop_current_sound=true could cut the previous
-    // tone at the same time the LCD/RGB startup work was running, which was
-    // heard as a small crackle or dropout on FIRE.
+    // Use one fixed channel and start each note immediately.  Queueing the
+    // notes could make the final note start late when the speaker task was
+    // briefly busy during LCD/RGB startup.
     static const uint32_t noteAt[] = {0, 130, 260};
     static const float notes[] = {523.251f, 659.255f, 783.991f};
     static const uint32_t durations[] = {105, 105, 135};
     while (bootFeedbackNote_ < 3 && elapsed >= noteAt[bootFeedbackNote_]) {
       M5.Speaker.tone(notes[bootFeedbackNote_],
-                      durations[bootFeedbackNote_], 0, false);
+                      durations[bootFeedbackNote_], 0, true);
       ++bootFeedbackNote_;
     }
   }
@@ -1715,6 +1720,7 @@ void FireOS::pollButtons() {
 }
 
 void FireOS::onButton(uint8_t index, bool longPress) {
+  redrawRequested_ = true;
   playButtonSound(index, longPress);
   if (longPress) {
     if (screen_ == Screen::FileExplorer && index == 1 && !sdPreview_ &&
@@ -1917,6 +1923,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
 }
 
 void FireOS::onDoubleClick(uint8_t index) {
+  redrawRequested_ = true;
   playButtonSound(index, false);
   switch (doubleClickAction_[index]) {
     case 1:
@@ -2063,12 +2070,17 @@ uint8_t FireOS::nextVisibleMain(uint8_t current, int8_t direction) const {
 }
 
 void FireOS::startMainSlide(uint8_t nextIndex, int8_t direction) {
-  if (carouselAnimating_ || nextIndex == mainIndex_) return;
+  if (carouselAnimating_) {
+    carouselQueuedDirection_ = direction;
+    return;
+  }
+  if (nextIndex == mainIndex_) return;
   carouselFromIndex_ = mainIndex_;
   carouselToIndex_ = nextIndex;
   carouselDirection_ = direction;
   carouselOffset_ = 0;
   carouselLastStepAt_ = millis();
+  carouselQueuedDirection_ = 0;
   carouselAnimating_ = true;
   mainIndex_ = nextIndex;
 }
@@ -2094,6 +2106,7 @@ void FireOS::goToBootApp() {
   carouselAnimating_ = false;
   carouselOffset_ = 0;
   carouselLastStepAt_ = 0;
+  carouselQueuedDirection_ = 0;
 }
 
 void FireOS::openQuickSettings() {
@@ -4177,6 +4190,7 @@ void FireOS::setWifi(bool enabled) {
 
 void FireOS::draw() {
   lastDrawAt_ = millis();
+  redrawRequested_ = false;
   if (screen_ == Screen::FileExplorer && sdImagePreview_ && sdImageRendered_) {
     return;
   }
