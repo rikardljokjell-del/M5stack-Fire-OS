@@ -781,11 +781,16 @@ void FireOS::updateBootFeedback() {
   }
 
   if (bootMelody_ && M5.Speaker.isEnabled()) {
-    static const uint32_t noteAt[] = {0, 180, 360};
+    // Queue the short boot fanfare on one speaker channel.  Using the
+    // automatic channel with stop_current_sound=true could cut the previous
+    // tone at the same time the LCD/RGB startup work was running, which was
+    // heard as a small crackle or dropout on FIRE.
+    static const uint32_t noteAt[] = {0, 130, 260};
     static const float notes[] = {523.251f, 659.255f, 783.991f};
+    static const uint32_t durations[] = {105, 105, 135};
     while (bootFeedbackNote_ < 3 && elapsed >= noteAt[bootFeedbackNote_]) {
       M5.Speaker.tone(notes[bootFeedbackNote_],
-                      bootFeedbackNote_ == 2 ? 100 : 70);
+                      durations[bootFeedbackNote_], 0, false);
       ++bootFeedbackNote_;
     }
   }
