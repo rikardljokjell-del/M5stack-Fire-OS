@@ -119,6 +119,8 @@ def test_saved_package_can_be_installed_after_reboot_without_ai_or_implicit_run(
             device = Device(socket, boot_id="boot-02")
             fresh = device.start()
             assert first["project_id"] != fresh["project_id"]
+            row = client.get("/desktop/status", headers=headers(ADMIN)).json()["apps"][0]
+            assert row["had_install_receipt"] and not row["installed_receipt"]
             url = f"/desktop/sessions/{device.session_id}/install"
             data = {"package_id": offer["package_id"]}
             assert client.post(url, headers=headers(), json=data).status_code == 403

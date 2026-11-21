@@ -3,6 +3,19 @@
 Gjennomgått device-commit: `6d979894d6e04d7f46e538f6b5ef2a7188017600`.
 Backend-agenten endrer ingen device-filer og bygger/flasher ikke firmware.
 
+**Siste fysiske forsøk, etter DMA-commit 2ac854f:** brukeren får
+«Microphone capture unavailable». Denne strengen kommer fra
+FireOS::startAiRecording når firePrepareMicCapture feiler, før listen_start
+og WAV-opplasting. Logg hvilken ESP-IDF-operasjon som feiler og dens returkode;
+undersøk særlig om M5Unified allerede eier I2S-porten. Dette er en mistanke
+fra kildelesing, ikke en målt driverfeilkode. Backend står klar og prøver ikke
+å omgå capture-feilen ved å fabrikere tale.
+
+DMA-endringen er et steg mot kontinuerlig capture, men updateAiAudio drenerer
+fortsatt bare 256 samples per hovedløkkekall. Etter at driveren starter må også
+forbrukerens throughput/ringbuffer verifiseres mot faktisk opptakstid. Ved
+vedvarende lav dreneringsrate trengs en egen task eller større, løpende drenering.
+
 ## Bekreftet fungerende: talesvar
 
 Backend brukte den lagrede OpenAI-profilen til et norsk svar om en RGB-blinker.

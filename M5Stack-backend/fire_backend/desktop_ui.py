@@ -682,7 +682,8 @@ class DesktopUI:
             for app in apps:
                 status = ("Slettet/borte fra FIRE" if app.get("device_presence") in {"deleted", "missing"} else
                           "Kjører (kvittert)" if app["running"] else "Sist fungerende (kvittert)" if app["current_healthy"] else
-                          "Installert (kvittert)" if app["installed_receipt"] else "Testet på PC; ikke installert")
+                          "Installert (kvittert)" if app["installed_receipt"] else
+                          "Tidligere installert; SD ukjent" if app.get("had_install_receipt") else "Testet på PC; ikke installert")
                 self.apps_table.insert("", "end", iid=app["package_id"], values=(app["name"], app["version"], app.get("device_id") or "PC-simulering", status))
             if selected and selected[0] in rows:
                 self.apps_table.selection_set(selected[0])

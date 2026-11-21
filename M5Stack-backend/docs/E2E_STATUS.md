@@ -6,6 +6,8 @@ WAV fra mikrofonen når nå backend, men måling viser bare ca. 20 % av nødvend
 samplemengde i forhold til opptakstiden. Det gir tom transkripsjon. Se
 [VOICE_HANDOFF.md](VOICE_HANDOFF.md) for tallene og konkret device-arbeid.
 Full fysisk tale → app er fortsatt ikke verifisert.
+Etter den nye DMA-rettingen 2ac854f rapporterte brukeren «Microphone capture
+unavailable», som oppstår i firmware før opplasting. Device-agenten er varslet.
 
 Backend følger `docs/NEXT_STEPS_REVERSE_TCP.md` og
 `M5Stack-device/BACKEND_HANDOFF.md`, med kildegjennomgang til GitHub main `2d47b0a`.

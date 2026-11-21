@@ -117,7 +117,8 @@ class Backend(DeviceLifecycle, AppLifecycle):
                          "project_id": package["project_id"], "package_id": package["id"], "mode": package["mode"], "device_id": device_id,
                          "device_presence": presence.get("state", "unknown"), "can_delete_backend": can_delete,
                          "delete_block_reason": block_reason,
-                         "sd_path": f"/apps/{manifest['id']}/", "installed_receipt": not absent and (device_id, package["id"]) in installed,
+                         "sd_path": f"/apps/{manifest['id']}/", "installed_receipt": bool(not absent and device.get("online")
+                             and device.get("installed_package_id") == package["id"] and (device_id, package["id"]) in installed),
                          "had_install_receipt": (device_id, package["id"]) in installed,
                          "current_healthy": not absent and device.get("projects", {}).get(package["project_id"], {}).get("current") == package["id"],
                          "running": bool(not absent and device.get("online") and device.get("runtime_status") == "running"
