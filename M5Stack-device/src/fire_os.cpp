@@ -1,4 +1,5 @@
 #include "fire_os.h"
+#include "fire_audio_capture.h"
 
 #include <M5Unified.h>
 #ifdef FIRE_OS_BLE
@@ -364,6 +365,29 @@ void handleWifiSetupSave() {
                        "<html><body><h2>Saved</h2><p>FIRE OS kept empty fields "
                        "unchanged. You can close this page.</p></body></html>");
 }
+
+void writeWavHeader(uint8_t* data, uint32_t payloadBytes,
+                    uint32_t sampleRate) {
+  const uint32_t riffSize = 36 + payloadBytes;
+  const uint32_t byteRate = sampleRate * 2;
+  const uint16_t blockAlign = 2;
+  const uint16_t bitsPerSample = 16;
+  memcpy(data, "RIFF", 4);
+  memcpy(data + 4, &riffSize, 4);
+  memcpy(data + 8, "WAVEfmt ", 8);
+  const uint32_t fmtSize = 16;
+  const uint16_t format = 1;
+  const uint16_t channels = 1;
+  memcpy(data + 16, &fmtSize, 4);
+  memcpy(data + 20, &format, 2);
+  memcpy(data + 22, &channels, 2);
+  memcpy(data + 24, &sampleRate, 4);
+  memcpy(data + 28, &byteRate, 4);
+  memcpy(data + 32, &blockAlign, 2);
+  memcpy(data + 34, &bitsPerSample, 2);
+  memcpy(data + 36, "data", 4);
+  memcpy(data + 40, &payloadBytes, 4);
+}
 }  // namespace
 
 void DateTimeService::begin() {
@@ -662,6 +686,7 @@ void FireOS::update() {
   if (wifiSetupActive_) wifiSetupServer.handleClient();
   updateWifiState();
   updateBackend();
+  updateAiAudio();
   if (packageManager_) packageManager_->service(WiFi.status() == WL_CONNECTED);
   updateTimeSync();
   manageDisplayPower();
@@ -2214,15 +2239,27 @@ void FireOS::handleHelpButton(uint8_t index) {
 void FireOS::handleAiDeveloperButton(uint8_t index) {
   if (index == 1) {
     if (aiWorkflowState_ == 0) {
-      aiWorkflowState_ = 1;
-      aiDeveloperMode_ = 1;
-      aiTurnId_ = "turn-" + String(millis(), HEX);
-      if (backendClient_ && backendClient_->connected()) backendClient_->listenStart(aiTurnId_);
+      if (backendClient_ && backendClient_->connected()) {
+        if (!startAiRecording()) {
+          aiWorkflowText_ = aiAudioError_.length() > 0
+                                ? aiAudioError_
+                                : "Microphone unavailable";
+          aiDeveloperMode_ = 0;
+          aiWorkflowState_ = 0;
+        }
+      } else {
+        aiWorkflowState_ = 1;
+        aiDeveloperMode_ = 1;
+        aiTurnId_ = "turn-" + String(millis(), HEX);
+      }
     } else if (aiWorkflowState_ == 1) {
-      aiWorkflowState_ = 2;
-      aiDeveloperMode_ = 2;
-      aiWorkflowStarted_ = millis();
-      if (backendClient_ && backendClient_->connected()) backendClient_->listenStop(aiTurnId_);
+      if (backendClient_ && backendClient_->connected()) {
+        finishAiRecording();
+      } else {
+        aiWorkflowState_ = 2;
+        aiDeveloperMode_ = 2;
+        aiWorkflowStarted_ = millis();
+      }
     }
   } else if (index == 0 && aiWorkflowState_ == 3) {
     if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
@@ -2263,6 +2300,107 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     aiRestPhase_ = 0;
     aiRestPhaseStarted_ = millis();
     aiRestPhaseDuration_ = 30000 + (esp_random() % 30001);
+  }
+}
+
+bool FireOS::startAiRecording() {
+#ifndef FIRE_AUDIO_CAPTURE_ENABLED
+#define FIRE_AUDIO_CAPTURE_ENABLED 0
+#endif
+#if !FIRE_AUDIO_CAPTURE_ENABLED
+  aiAudioError_ = "Audio capture unavailable in this build";
+  return false;
+#else
+  if (!backendClient_ || !backendClient_->connected() ||
+      !M5.Mic.isEnabled() || aiAudioCaptureActive_) {
+    aiAudioError_ = aiAudioCaptureActive_ ? "Recording already active"
+                                 : "Microphone or backend unavailable";
+    return false;
+  }
+  if (!aiAudioBuffer_) {
+    aiAudioBuffer_ = static_cast<uint8_t*>(ps_malloc(kAiAudioWavBytes));
+    if (!aiAudioBuffer_) aiAudioBuffer_ = static_cast<uint8_t*>(malloc(kAiAudioWavBytes));
+  }
+  if (!aiAudioBuffer_) {
+    aiAudioError_ = "Not enough memory for recording";
+    return false;
+  }
+  aiTurnId_ = "turn-" + String(millis(), HEX) + "-" + String(esp_random(), HEX);
+  aiAudioCaptureFinished_ = false;
+  aiAudioStopSent_ = false;
+  aiAudioUploadFinished_ = false;
+  aiAudioUploadOk_ = false;
+  aiAudioCaptureActive_ = true;
+  aiAudioCapturedSamples_ = 0;
+  aiAudioWavLength_ = 0;
+  aiAudioError_ = "";
+  if (!backendClient_->listenStart(aiTurnId_)) {
+    aiAudioError_ = "Could not start backend recording";
+    return false;
+  }
+  aiWorkflowState_ = 1;
+  aiDeveloperMode_ = 1;
+  aiWorkflowText_ = "LISTENING (5 SEC MAX)";
+  aiWorkflowStarted_ = millis();
+  return true;
+#endif
+}
+
+void FireOS::finishAiRecording() {
+  if (aiAudioStopSent_) return;
+  aiAudioStopSent_ = true;
+  if (backendClient_) backendClient_->listenStop(aiTurnId_);
+  aiWorkflowState_ = 2;
+  aiDeveloperMode_ = 2;
+  aiWorkflowText_ = "PROCESSING AUDIO";
+  aiWorkflowStarted_ = millis();
+}
+
+void FireOS::updateAiAudio() {
+  if (aiAudioCaptureActive_) {
+    constexpr size_t kChunkSamples = 256;
+    const size_t remaining = kAiAudioSamples - aiAudioCapturedSamples_;
+    const size_t chunk = min<size_t>(kChunkSamples, remaining);
+#if FIRE_AUDIO_CAPTURE_ENABLED
+    const bool recorded = fireRecordMic(
+        reinterpret_cast<int16_t*>(aiAudioBuffer_ + 44 +
+                                   aiAudioCapturedSamples_ * sizeof(int16_t)),
+        chunk, kAiAudioSampleRate);
+#else
+    const bool recorded = false;
+#endif
+    if (!recorded) {
+      aiAudioError_ = "Microphone recording failed";
+      aiAudioCaptureActive_ = false;
+      aiAudioCaptureFinished_ = true;
+    } else {
+      aiAudioCapturedSamples_ += chunk;
+      if (aiAudioStopSent_ || aiAudioCapturedSamples_ >= kAiAudioSamples) {
+        aiAudioCaptureActive_ = false;
+        const uint32_t payloadBytes =
+            aiAudioCapturedSamples_ * sizeof(int16_t);
+        writeWavHeader(aiAudioBuffer_, payloadBytes, kAiAudioSampleRate);
+        aiAudioWavLength_ = 44 + payloadBytes;
+        aiAudioCaptureFinished_ = true;
+        if (!aiAudioStopSent_) finishAiRecording();
+        aiAudioUploadOk_ = backendClient_ && backendClient_->uploadAudio(
+            aiTurnId_, aiAudioBuffer_, aiAudioWavLength_);
+        if (!aiAudioUploadOk_)
+          aiAudioError_ = "Backend audio upload failed";
+        aiAudioUploadFinished_ = true;
+      }
+    }
+  }
+  if (aiAudioCaptureFinished_ && !aiAudioStopSent_) finishAiRecording();
+  if (aiAudioUploadFinished_) {
+    aiAudioUploadFinished_ = false;
+    if (!aiAudioUploadOk_) {
+      aiWorkflowText_ = aiAudioError_.length() > 0 ? aiAudioError_ : "AUDIO UPLOAD FAILED";
+      aiWorkflowState_ = 0;
+      aiDeveloperMode_ = 0;
+    } else {
+      aiWorkflowText_ = "TRANSCRIBING";
+    }
   }
 }
 

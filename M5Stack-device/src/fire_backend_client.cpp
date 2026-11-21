@@ -53,11 +53,47 @@ void FireBackendClient::setState(State state, const String& status) {
 
 void FireBackendClient::disconnect() {
   if (client_.connected()) client_.stop();
+  if (audioClient_.connected()) audioClient_.stop();
   handshakeBuffer_ = "";
   frameBuffer_ = "";
   sessionId_ = "";
   setState(configured() ? State::Offline : State::Offline,
            configured() ? "Backend disconnected" : "Backend not configured");
+}
+
+bool FireBackendClient::uploadAudio(const String& turnId,
+                                    const uint8_t* wavData,
+                                    size_t wavLength) {
+  if (!connected() || sessionId_.length() == 0 || !wavData || wavLength == 0 ||
+      wavLength > 524288) {
+    return false;
+  }
+  audioClient_.stop();
+  if (!audioClient_.connect(host_.c_str(), port_)) return false;
+  const String path = "/sessions/" + sessionId_ + "/audio/" + turnId;
+  audioClient_.print("POST " + path + " HTTP/1.1\r\nHost: " + host_ + ":" +
+                     String(port_) + "\r\nAuthorization: Bearer " + token_ +
+                     "\r\nContent-Type: audio/wav\r\nContent-Length: " +
+                     String(wavLength) + "\r\nConnection: close\r\n\r\n");
+  size_t offset = 0;
+  while (offset < wavLength) {
+    const size_t amount = min<size_t>(2048, wavLength - offset);
+    if (audioClient_.write(wavData + offset, amount) != amount) {
+      audioClient_.stop();
+      return false;
+    }
+    offset += amount;
+  }
+  const uint32_t deadline = millis() + 5000;
+  String response;
+  while (millis() < deadline && audioClient_.connected() &&
+         response.indexOf("\r\n\r\n") < 0) {
+    while (audioClient_.available() && response.length() < 512)
+      response += static_cast<char>(audioClient_.read());
+    if (response.indexOf("\r\n\r\n") < 0) delay(1);
+  }
+  audioClient_.stop();
+  return response.startsWith("HTTP/1.1 2") || response.startsWith("HTTP/1.0 2");
 }
 
 String FireBackendClient::eventId(const char* prefix) {

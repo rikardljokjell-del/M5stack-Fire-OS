@@ -81,3 +81,13 @@ opptak, WAV-opplasting, avspilling og kvitteringer er testet på FIRE.
   fra generert Lua.
 - Ved uenighet mellom simulator, dokumentasjon og fysisk enhet gjelder fysisk
   device-observasjon; oppdater kontrakten etterpå.
+
+## Nåværende lydstatus
+
+HTTP/WAV-transporten og UI-state-maskinen er lagt til som firmware-scaffold, men
+mic-capture er foreløpig deaktivert i standardbygget. Direkte bruk av
+`M5.Mic.record()` overskrider dagens NimBLE/M5GFX-IRAM-margin med cirka 116
+bytes. Device annonserer derfor fortsatt `audio_input=false` og
+`audio_output=false`. Neste lydarbeid må redusere IRAM på en verifiserbar måte
+eller bruke en mindre I2S-adapter; ikke aktiver opptak før standardbygget går
+rent og er fysisk testet.

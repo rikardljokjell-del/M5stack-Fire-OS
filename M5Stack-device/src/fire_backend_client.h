@@ -14,6 +14,8 @@ class FireBackendClient {
                     StateCallback state);
   void service(bool wifiConnected);
   void disconnect();
+  bool uploadAudio(const String& turnId, const uint8_t* wavData,
+                  size_t wavLength);
 
   bool configured() const { return host_.length() > 0 && token_.length() >= 24; }
   bool connected() const { return state_ == State::Connected; }
@@ -37,6 +39,7 @@ class FireBackendClient {
  private:
   enum class State : uint8_t { Offline, Connecting, Handshake, Connected };
   WiFiClient client_;
+  WiFiClient audioClient_;
   State state_ = State::Offline;
   String host_;
   uint16_t port_ = 8765;
