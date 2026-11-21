@@ -2569,6 +2569,10 @@ bool FireOS::startAiRecording() {
     aiAudioError_ = "Not enough memory for recording";
     return false;
   }
+  if (!firePrepareMicCapture(kAiAudioSampleRate)) {
+    aiAudioError_ = "Microphone capture unavailable";
+    return false;
+  }
   aiTurnId_ = "turn-" + String(millis(), HEX) + "-" + String(esp_random(), HEX);
   aiAudioCaptureFinished_ = false;
   aiAudioStopSent_ = false;
@@ -2579,6 +2583,7 @@ bool FireOS::startAiRecording() {
   aiAudioWavLength_ = 0;
   aiAudioError_ = "";
   if (!backendClient_->listenStart(aiTurnId_)) {
+    fireReleaseMicCapture();
     aiAudioError_ = "Could not start backend recording";
     return false;
   }
@@ -2621,6 +2626,7 @@ void FireOS::updateAiAudio() {
 #endif
     if (!recorded) {
       aiAudioError_ = "MIC CAPTURE FAILED";
+      fireReleaseMicCapture();
       aiAudioCaptureActive_ = false;
       aiAudioCaptureFinished_ = true;
       aiWorkflowText_ = aiAudioError_;
@@ -2630,6 +2636,7 @@ void FireOS::updateAiAudio() {
       aiAudioCapturedSamples_ += chunk;
       if (aiAudioStopSent_ || aiAudioCapturedSamples_ >= kAiAudioSamples) {
         aiAudioCaptureActive_ = false;
+        fireReleaseMicCapture();
         const uint32_t payloadBytes =
             aiAudioCapturedSamples_ * sizeof(int16_t);
         int32_t peak = 0;
