@@ -752,7 +752,13 @@ void FireOS::update() {
       carouselAnimating_ = false;
     }
   }
-  draw();
+  const bool animatedScreen = screen_ == Screen::AiDeveloper ||
+                              screen_ == Screen::LuaApp ||
+                              carouselAnimating_;
+  const uint32_t drawInterval = screen_ == Screen::AiDeveloper
+                                    ? 33
+                                    : animatedScreen ? 25 : 50;
+  if (millis() - lastDrawAt_ >= drawInterval) draw();
   delay(25);
 }
 
@@ -4145,6 +4151,7 @@ void FireOS::setWifi(bool enabled) {
 }
 
 void FireOS::draw() {
+  lastDrawAt_ = millis();
   if (screen_ == Screen::FileExplorer && sdImagePreview_ && sdImageRendered_) {
     return;
   }
