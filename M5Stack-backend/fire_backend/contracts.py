@@ -14,6 +14,7 @@ REQUIRED = {
     "app_failed": ["run_id", "package_id", "error_code"], "app_stopped": ["run_id", "package_id"],
     "rollback_result": ["rollback_id", "package_id", "status"], "listen_start": ["turn_id"], "listen_stop": ["turn_id"],
     "audio_playback_started": ["audio_id", "turn_id"], "audio_playback_finished": ["audio_id", "turn_id"],
+    "app_select": ["app_mode"], "app_deleted": ["app_id"], "app_inventory": ["apps", "storage_ready", "complete"],
 }
 
 
@@ -44,6 +45,14 @@ def schemas():
     conditions.append({"if": {"properties": {"event": {"const": "device_install_result"}, "status": {"const": "ok"}}},
                        "then": {"required": ["archive_sha256"], "properties": {"archive_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}})
     event["allOf"] = conditions
+    for event_name in ("app_versions", "app_select"):
+        condition = {"event": {"const": event_name}}
+        if event_name == "app_select":
+            condition["app_mode"] = {"const": "update"}
+        conditions.append({"if": {"properties": condition}, "then": {"anyOf": [
+            {"required": [name], "properties": {name: nonnull(name)}} for name in ("app_id", "project_id")]}})
+    conditions.append({"if": {"properties": {"event": {"const": "app_select"}, "app_mode": {"const": "new"}}},
+                       "then": {"properties": {name: {"type": "null"} for name in ("app_id", "project_id", "base_package_id")}}})
     manifest = Manifest.model_json_schema()
     manifest["properties"]["required_services"].update(items={"enum": sorted(PROTOTYPE_SERVICES)}, uniqueItems=True)
     manifest["properties"]["permissions"].update(items={"enum": ["fire." + name for name in sorted(PROTOTYPE_SERVICES)]}, uniqueItems=True)

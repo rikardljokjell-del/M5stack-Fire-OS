@@ -7,7 +7,7 @@ from .storage import new_id
 
 class DeviceLifecycle:
     def device_view(self, session):
-        return {key: value for key, value in self.device_record(session).items() if key != "projects"}
+        return {key: value for key, value in self.device_record(session).items() if key not in {"projects", "apps"}}
 
     def device_record(self, session):
         if session.target != "device":
@@ -66,12 +66,16 @@ class DeviceLifecycle:
 
     async def offer_install(self, session, package):
         device = self.device_record(session)
+        presence = self.app_presence(device, package["manifest"]["id"])
+        if (not session.install_permitted or presence.get("last_absent_counter", 0) > session.app_revision):
+            raise ValueError("Appen ble fjernet fra FIRE. Velg appen/pakken på nytt før gjeninstallasjon.")
         if device["boot_id"] != session.boot_id:
             raise ValueError("Device boot changed")
         for pending in self.pending_commands(session):
             if pending["kind"] == "install":
                 self.finish_command(pending, "superseded")
         command = self.issue_command(session, "install", package["id"],
+                                     project_id=package["project_id"], app_id=package["manifest"]["id"],
                                      archive_sha256=package["archive_sha256"], size_bytes=package["size_bytes"],
                                      download_url=f"/packages/{package['id']}/download")
         device["pending_install_id"] = command["id"]
@@ -84,6 +88,10 @@ class DeviceLifecycle:
         if session.state != State.installed or package_id != session.package_id:
             raise ValueError("A matching installed package must await explicit run confirmation")
         device = self.device_record(session)
+        if device.get("storage_ready") is False:
+            raise ValueError("SD-kortet er ikke tilgjengelig på FIRE.")
+        if not session.install_permitted:
+            raise ValueError("Appen er slettet fra FIRE; velg og installer på nytt.")
         if not device["online"] or device["boot_id"] != session.boot_id:
             raise ValueError("Device is offline or boot changed")
         if device.get("active_run_id") or device.get("pending_run_id") or (device.get("running_package_id") and device["runtime_status"] not in {"stopped", "failed"}):
@@ -127,7 +135,10 @@ class DeviceLifecycle:
             if event.status == "ok" and event.archive_sha256 != command["archive_sha256"]:
                 raise ValueError("Installation archive checksum mismatch")
             if event.status == "ok":
-                self.verify_package(session, package_id)
+                package = self.verify_package(session, package_id)
+                device["storage_ready"] = True
+                self.present_app(device, package["manifest"]["id"], package_id=package_id,
+                                 version=package["manifest"]["version"], checksum=package["manifest"]["checksum"])
                 device["installed_package_id"] = package_id
                 device["pending_install_id"] = None
                 self.finish_command(command, "completed")

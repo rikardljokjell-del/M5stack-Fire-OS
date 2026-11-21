@@ -53,6 +53,60 @@
       ],
       "title": "Capabilities",
       "type": "object"
+    },
+    "DeviceApp": {
+      "additionalProperties": false,
+      "properties": {
+        "app_id": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "title": "App Id",
+          "type": "string"
+        },
+        "package_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Package Id"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "checksum": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checksum"
+        }
+      },
+      "required": [
+        "app_id"
+      ],
+      "title": "DeviceApp",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -89,10 +143,96 @@
         "cancel_turn",
         "listen_start",
         "listen_stop",
-        "install_retry"
+        "install_retry",
+        "app_list",
+        "app_versions",
+        "app_select",
+        "app_deleted",
+        "app_inventory"
       ],
       "title": "Event",
       "type": "string"
+    },
+    "app_mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "new",
+            "update"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "App Mode"
+    },
+    "app_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "App Id"
+    },
+    "base_package_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Base Package Id"
+    },
+    "offset": {
+      "default": 0,
+      "maximum": 100000,
+      "minimum": 0,
+      "title": "Offset",
+      "type": "integer"
+    },
+    "apps": {
+      "items": {
+        "$ref": "#/$defs/DeviceApp"
+      },
+      "maxItems": 32,
+      "title": "Apps",
+      "type": "array"
+    },
+    "storage_ready": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Storage Ready"
+    },
+    "complete": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Complete"
     },
     "text": {
       "anyOf": [
@@ -787,6 +927,81 @@
       "if": {
         "properties": {
           "event": {
+            "const": "app_select"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "app_mode"
+        ],
+        "properties": {
+          "app_mode": {
+            "enum": [
+              "new",
+              "update"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_deleted"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "app_id"
+        ],
+        "properties": {
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_inventory"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "apps",
+          "storage_ready",
+          "complete"
+        ],
+        "properties": {
+          "apps": {
+            "items": {
+              "$ref": "#/$defs/DeviceApp"
+            },
+            "maxItems": 32,
+            "title": "Apps",
+            "type": "array"
+          },
+          "storage_ready": {
+            "type": "boolean"
+          },
+          "complete": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
             "not": {
               "const": "session_start"
             }
@@ -892,6 +1107,104 @@
           "archive_sha256": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_versions"
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "app_id"
+            ],
+            "properties": {
+              "app_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "required": [
+              "project_id"
+            ],
+            "properties": {
+              "project_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_select"
+          },
+          "app_mode": {
+            "const": "update"
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "app_id"
+            ],
+            "properties": {
+              "app_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "required": [
+              "project_id"
+            ],
+            "properties": {
+              "project_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_select"
+          },
+          "app_mode": {
+            "const": "new"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "app_id": {
+            "type": "null"
+          },
+          "project_id": {
+            "type": "null"
+          },
+          "base_package_id": {
+            "type": "null"
           }
         }
       }

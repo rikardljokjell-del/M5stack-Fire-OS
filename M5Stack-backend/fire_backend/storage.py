@@ -69,6 +69,14 @@ class Store:
 
     def delete_project(self, project_id):
         self.get("projects", project_id)
+        # Check every recursive target before deleting any metadata. Generated
+        # paths must remain in this workspace, including after symlink resolution.
+        for build in self.list("builds"):
+            if build["project_id"] == project_id:
+                folder = self.path("builds", build["id"], "").resolve()
+                if folder == self.root:
+                    raise ValueError("Unsafe build directory")
+                folder.relative_to(self.root)
         for build in self.list("builds"):
             if build["project_id"] == project_id:
                 build_id = build["id"]

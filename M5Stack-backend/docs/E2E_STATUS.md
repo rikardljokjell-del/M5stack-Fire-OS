@@ -1,5 +1,12 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
+Siste oppdatering: **158 tester består**. Norsk OpenAI-lydsvar ble lastet ned
+og spilt av på ekte FIRE, og brukeren bekreftet at det var forståelig.
+WAV fra mikrofonen når nå backend, men måling viser bare ca. 20 % av nødvendig
+samplemengde i forhold til opptakstiden. Det gir tom transkripsjon. Se
+[VOICE_HANDOFF.md](VOICE_HANDOFF.md) for tallene og konkret device-arbeid.
+Full fysisk tale → app er fortsatt ikke verifisert.
+
 Backend følger `docs/NEXT_STEPS_REVERSE_TCP.md` og
 `M5Stack-device/BACKEND_HANDOFF.md`, med kildegjennomgang til GitHub main `2d47b0a`.
 Device-kilde er bare lest; ingen device-filer er endret, bygget eller flashet.
@@ -8,7 +15,8 @@ Device-kilde er bare lest; ingen device-filer er endret, bygget eller flashet.
 
 1. FIRE er tilkoblet; API-nøkkelen finnes bare i Windows-programmet.
 2. Trykk B på FIRE, beskriv appen og avslutt opptaket. Maksimum er fem
-   sekunder i gjeldende device-kilde, 15 sekunder i backendkontrakten.
+   sekunder i den opprinnelig testede kilden; cd67c07 utvider til 15 sekunder,
+   som også er backendkontraktens grense. Sammenhengende capture må fortsatt rettes.
 3. Backend transkriberer opptaket og AI lager et kort, konkret forslag.
    Tekst under **Aktivitet** kan brukes for å teste resten separat fra mikrofonen.
 4. Trykk **A BUILD** på FIRE eller **Bekreft bygging** i Windows.
@@ -50,7 +58,7 @@ Enheten annonserer audio_input=true og audio_output=false; svar vises som tekst.
   oppdatering. To forskjellige apper får eventuelt -2, -3. Eksisterende gamle
   SD-stier flyttes ikke i en vanlig oppdatering; interne prosjekt-/pakke-ID-er
   brukes fortsatt til autorisasjon og kvitteringer.
-- **142 pytest-tester består**; `pip check` uten feil. Mock- og emulatorflyt
+- **158 pytest-tester består**; `pip check` uten feil. Mock- og emulatorflyt
   beholdes, inkludert ZIP/WAV større enn én nettverksbuffer og binærintegritet.
 
 ## Ekte OpenAI – observert
@@ -87,9 +95,18 @@ Brukeren startet samme app manuelt fra Apps og rapporterte at den kjørte frem t
 men ikke den automatiserte RUN-flyten eller riktig tidsavslutning.
 
 Ny device-kilde `011e8f6` retter ZIP-header/CRC og Lua-stack, og `2d47b0a` legger
-til stop/rollback. Gjenværende konkret hinder for AI Developer-start er for lange
-NVS-nøkler for appstier/run-ID-er. Mikrofonen har fortsatt ikke levert WAV.
+til stop/rollback. NVS-nøklene er forkortet i 6d97989 og kildeimplementasjon for
+ADC-opptak/PCM-playback er lagt til. WAV når nå backend, men opptakets kontinuitet
+er fortsatt blokkeringen. Historiske observasjoner over gjelder de tidligere testene.
 Se [presis handoff til device-agenten](DEVICE_E2E_ACTIONS.md).
 Full fysisk tale → installasjon → fungerende app er derfor **ikke ferdig
 verifisert**. Fysisk markering kan ikke utledes fra emulatorens kvitteringer.
 Ingen kode setter physical_verified=true på grunnlag av disse PC-testene.
+
+Appvalg og kontrollert sletting er implementert etter APP_LIFECYCLE.md, med
+11 nye kontroller for eier, valgt basisversjon, stigende versjonsnummer,
+sletting under bygg, restart/reconnect, fersk SD-rapport, ugyldig inventar og
+bakoverkompatibel event-deduplisering. Fem nye lydkontroller dekker idle før
+opptak, DC/gain, fragmenterte PCM-samples og feil ved manglende capture-samples.
+Device må sende den nye slettings-/inventarkontrakten før Windows kan aktivere
+backend-sletting; manglende støtte eller offline tilstand åpner aldri sperren.

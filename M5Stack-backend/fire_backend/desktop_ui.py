@@ -259,6 +259,8 @@ class DesktopUI:
         self.session_box = ttk.Combobox(row, textvariable=self.selected_session, state="readonly", width=48)
         self.session_box.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="Oppdater", command=self.refresh_now).pack(side="left", padx=(8, 0))
+        self.new_app_button = ttk.Button(row, text="Ny app", command=self.new_app)
+        self.new_app_button.pack(side="left", padx=(8, 0))
         self.session_detail = self.label(page, "Ingen FIRE tilkoblet ennå.", wraplength=810)
         self.session_detail.pack(anchor="w", pady=(0, 7))
         self.pipeline_detail = self.label(page, "", wraplength=810, foreground=MUTED)
@@ -301,10 +303,18 @@ class DesktopUI:
         self.apps_table.bind("<<TreeviewSelect>>", lambda _: self.render_app_detail())
         self.apps_detail = self.label(page, "Ingen app-pakker ennå. Beskriv appen under Aktivitet eller på FIRE.", wraplength=800)
         self.apps_detail.pack(anchor="w", pady=16)
-        self.install_button = ttk.Button(page, text="Installer valgt app på FIRE", command=self.install_saved, style="Accent.TButton")
-        self.install_button.pack(anchor="w", pady=(0, 10))
+        actions = ttk.Frame(page)
+        actions.pack(anchor="w", pady=(0, 10))
+        self.install_button = ttk.Button(actions, text="Installer på FIRE", command=self.install_saved, style="Accent.TButton")
+        self.install_button.pack(side="left")
+        self.edit_app_button = ttk.Button(actions, text="Endre valgt versjon", command=self.edit_saved)
+        self.edit_app_button.pack(side="left", padx=8)
+        self.delete_app_button = ttk.Button(actions, text="Slett fra backend …", command=self.delete_saved)
+        self.delete_app_button.pack(side="left")
         self.label(page, "Bruker lagret, testet pakke uten ny AI-generering. Appstart krever fortsatt A RUN / Bekreft kjøring.",
                    "Muted.TLabel", wraplength=800).pack(anchor="w")
+        self.label(page, "PC-sletting tillates først når tilkoblet FIRE bekrefter at appen er borte.\n"
+                   "Velg Ny app / en annen app først hvis denne appen er aktiv i samtalen.", "Muted.TLabel", wraplength=800).pack(anchor="w", pady=5)
         self.apps_rows = {}
 
     def render_app_detail(self):
@@ -313,7 +323,32 @@ class DesktopUI:
         if app:
             self.apps_detail.configure(text=f"{app['name']} · {app['version']} · {app['mode']}\n"
                 f"SD-mappe: {app['sd_path']}\nPakke: {app['package_id']}\n"
-                "Start lagret app fra FIREs filutforsker. Endringer i appen krever et nytt bekreftet bygg.")
+                + (app.get("delete_block_reason") or "FIRE har bekreftet at appen er borte; PC-historikken kan slettes."))
+
+    def new_app(self):
+        session = self.session()
+        if session:
+            self.work(lambda: self.runtime.select_app(session["session_id"], "new"),
+                      done=lambda _: self.show("Aktivitet"), message="Velger ny app …")
+
+    def edit_saved(self):
+        selected = self.apps_table.selection()
+        session = self.session()
+        app = self.apps_rows.get(selected[0]) if selected else None
+        if app and session:
+            self.work(lambda: self.runtime.select_app(session["session_id"], "update", project_id=app["project_id"],
+                                                      base_package_id=app["package_id"]),
+                      done=lambda _: self.show("Aktivitet"), message="Velger app og basisversjon …")
+
+    def delete_saved(self):
+        selected = self.apps_table.selection()
+        app = self.apps_rows.get(selected[0]) if selected else None
+        if not app or not app.get("can_delete_backend") or self.busy:
+            return
+        count = sum(a["project_id"] == app["project_id"] for a in self.apps_rows.values())
+        if messagebox.askyesno("Slett apphistorikk fra PC", f"Slette «{app['name']}» og alle {count} lagrede versjoner fra PC?\n\n"
+                              "FIRE har bekreftet at appen er borte. PC-slettingen kan ikke angres.", parent=self.root):
+            self.work(lambda: self.runtime.delete_app(app["project_id"]), message="Sletter apphistorikken fra PC …")
 
     def install_saved(self):
         selected = self.apps_table.selection()
@@ -645,7 +680,8 @@ class DesktopUI:
             self.apps_table.delete(*self.apps_table.get_children())
             self.apps_rows = rows
             for app in apps:
-                status = ("Kjører (kvittert)" if app["running"] else "Sist fungerende (kvittert)" if app["current_healthy"] else
+                status = ("Slettet/borte fra FIRE" if app.get("device_presence") in {"deleted", "missing"} else
+                          "Kjører (kvittert)" if app["running"] else "Sist fungerende (kvittert)" if app["current_healthy"] else
                           "Installert (kvittert)" if app["installed_receipt"] else "Testet på PC; ikke installert")
                 self.apps_table.insert("", "end", iid=app["package_id"], values=(app["name"], app["version"], app.get("device_id") or "PC-simulering", status))
             if selected and selected[0] in rows:
@@ -656,13 +692,17 @@ class DesktopUI:
         idle_for_text = session and session["state"] not in {"building", "testing", "running", "starting", "stopping", "rollback_pending"}
         selected = self.apps_table.selection()
         app = self.apps_rows.get(selected[0]) if selected else None
-        can_install = idle_for_text and session["state"] != "processing" and app and app.get("device_id") == session["device_id"]
+        choice_idle = idle_for_text and session["state"] != "processing" and session.get("activity", "idle") == "idle"
+        can_install = choice_idle and app and app.get("device_id") == session["device_id"]
         self.install_button.configure(state="normal" if can_install and not self.busy else "disabled")
-        self.send_button.configure(state="normal" if idle_for_text and not self.busy else "disabled")
-        self.build_button.configure(state="normal" if session and session["state"] == "awaiting_build_confirmation" and session.get("proposal_id") and not self.busy else "disabled")
+        self.edit_app_button.configure(state="normal" if can_install and not self.busy else "disabled")
+        self.new_app_button.configure(state="normal" if choice_idle and not self.busy else "disabled")
+        self.delete_app_button.configure(state="normal" if ready and app and app.get("can_delete_backend") and not self.busy else "disabled")
+        self.send_button.configure(state="normal" if choice_idle and session.get("install_permitted", True) and not self.busy else "disabled")
+        self.build_button.configure(state="normal" if session and session.get("install_permitted", True) and session["state"] == "awaiting_build_confirmation" and session.get("proposal_id") and not self.busy else "disabled")
         self.run_button.configure(state="normal" if session and session["state"] == "installed" and session.get("package_id") and not self.busy else "disabled")
         if session:
-            workflow = {"listening": "Klar for opptak eller tekst", "processing": "Tolker bestillingen …",
+            workflow = {"idle": "Klar for tale eller tekst", "listening": "Tar opp tale på FIRE …", "processing": "Tolker bestillingen …",
                         "clarification_needed": "Svar på spørsmålet med et nytt opptak eller tekst",
                         "awaiting_build_confirmation": "Forslag klart – trykk A BUILD på FIRE eller Bekreft bygging",
                         "awaiting_install": "FIRE laster ned og installerer appen på SD-kortet …",
@@ -670,7 +710,20 @@ class DesktopUI:
                         "starting": "Venter på appstart fra FIRE …", "running": "Appen kjører på FIRE (kvittert)",
                         "failed": "Handlingen feilet; se feilen under"}.get(session["state"], session["state"])
             detail = session.get("last_error") or session.get("progress", {}).get("message", "")
-            self.pipeline_detail.configure(text=workflow + ("\n" + detail if detail else ""))
+            base = self.apps_rows.get(session.get("base_package_id"), {})
+            choice = (f"Endrer {base.get('name', 'valgt app')} fra versjon {base.get('version', 'valgt basis')}" if session.get("app_mode") == "update"
+                      else "Ny app")
+            audio = session.get("audio_status", {})
+            audio_hint = {"recording": "Tar opp tale …", "awaiting_upload": "Venter på lyd fra FIRE …",
+                "transcribing": "Gjenkjenner tale …", "dialog": "AI tolker bestillingen …",
+                "generating_reply": "Lager AI-lydsvar …", "reply_ready": "Lydsvaret er klart for FIRE",
+                "playing": "FIRE spiller av lydsvaret", "played": "FIRE har kvittert for avspilling",
+                "upload_missing": "Lydfilen kom ikke frem", "input_failed": "Opptaket kunne ikke tolkes",
+                "reply_failed": "Lydsvaret feilet; tekstsvaret er beholdt"}.get(audio.get("phase"), "")
+            if audio_hint and audio.get("duration_seconds"):
+                audio_hint += f" · Opptak {audio['duration_seconds']:.1f} s"
+            self.pipeline_detail.configure(text=choice + " · " + workflow + ("\n" + detail if detail else "")
+                                           + ("\n" + audio_hint if audio_hint else ""))
             device = next((d for d in self.snapshot["devices"] if d["id"] == session["device_id"]), {})
             self.session_detail.configure(text=f"Status: {session['state']}  ·  Installert: {device.get('installed_package_id') or '–'}\n"
                                                 f"Kjører: {device.get('running_package_id') or '–'}  ·  Fysisk test: ikke bekreftet")

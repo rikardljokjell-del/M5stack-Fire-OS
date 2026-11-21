@@ -4,15 +4,19 @@ import contextlib
 import hashlib
 import time
 
-from .models import State
-from .capabilities import policy, require_audio_input
+from .models import State, APP_EVENT_DEFAULTS
+from .capabilities import require_audio_input
 from .storage import canonical, new_id
 
 
 def begin_event(service, event):
     if event.protocol_version != "0.2":
         return None, None
-    digest = hashlib.sha256(canonical(event.model_dump())).hexdigest()
+    payload = event.model_dump()
+    for name, default in APP_EVENT_DEFAULTS.items():
+        if payload.get(name) == default:
+            payload.pop(name, None)
+    digest = hashlib.sha256(canonical(payload)).hexdigest()
     try:
         saved = service.store.get("events", event.event_id)
     except FileNotFoundError:
@@ -50,8 +54,7 @@ async def cancel_turn(service, session):
             await session.speech_task
     session.proposal_id, session.summary, session.turn_id = None, "", None
     if session.state not in {State.building, State.testing, State.running}:
-        ready = policy(service.settings, session.target, session.capabilities)["conversation_audio"]["input_enabled"]
-        await service.state(session, State.listening if ready else State.idle)
+        await service.state(session, State.idle if session.target == "device" else State.listening)
     await service.activity(session, "idle")
 
 
@@ -97,6 +100,10 @@ async def dispatch(service, session, event):
 
 async def handle(service, session, event):
     name = event.event
+    if name in {"app_list", "app_versions", "app_select", "app_deleted", "app_inventory"}:
+        if session.target != "device" or session.protocol_version != "0.2":
+            raise ValueError("App lifecycle requires a protocol-0.2 device session")
+        return await service.app_event(session, event)
     if name == "ping":
         await service.emit(session, {"type": "pong", **service.snapshot(session)})
         if session.protocol_version == "0.2":
@@ -146,6 +153,8 @@ async def handle(service, session, event):
             raise ValueError("turn_id is required")
         if name == "listen_start":
             service.audio.cancel(session)
+            session.recording_started_at = time.monotonic()
+            session.audio_status = {"phase": "recording", "turn_id": event.turn_id}
             session.last_error = ""
             session.proposal_id, session.summary, session.turn_id = None, "", event.turn_id
             await service.state(session, State.listening)
@@ -153,6 +162,9 @@ async def handle(service, session, event):
         else:
             if session.turn_id != event.turn_id or session.activity != "listening":
                 raise ValueError("No matching recording")
+            if session.recording_started_at is not None:
+                session.audio_status["recording_wall_seconds"] = round(time.monotonic() - session.recording_started_at, 3)
+                session.recording_started_at = None
             await service.activity(session, "processing")
             service.audio.expect_upload(session)
         return {"turn_id": session.turn_id}

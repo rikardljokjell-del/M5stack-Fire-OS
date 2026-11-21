@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import hashlib
 import io
+import math
 import os
 import sys
 import time
@@ -37,6 +38,35 @@ def validate_wav(data):
         raise ValueError("Invalid PCM WAV recording") from error
 
 
+def prepare_recording(data):
+    """Remove ADC DC bias; retain bounded gain and safe numerical diagnostics.
+
+    Deduplication still hashes original wire bytes. No recorded content is
+    written to ordinary logs, packages or permanent diagnostic files.
+    """
+    count = validate_wav(data)
+    with wave.open(io.BytesIO(data), "rb") as wav:
+        samples = array.array("h", wav.readframes(count))
+    if sys.byteorder != "little":
+        samples.byteswap()
+    dc = sum(samples) / count
+    ac_peak = max(abs(value-dc) for value in samples)
+    rms = math.sqrt(sum((value-dc)**2 for value in samples) / count)
+    if ac_peak < 16:
+        raise ValueError("Opptaket inneholder ikke et brukbart lydsignal. Prøv igjen og snakk nær mikrofonen.")
+    gain = max(1.0, min(8.0, 12000 / ac_peak))
+    corrected = array.array("h", (max(-32768, min(32767, round((value-dc)*gain))) for value in samples))
+    if sys.byteorder != "little":
+        corrected.byteswap()
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(16000)
+        wav.writeframes(corrected.tobytes())
+    return output.getvalue(), {"samples": count, "duration_seconds": round(count/16000, 3),
+        "dc_offset": round(dc), "ac_peak": round(ac_peak), "ac_rms": round(rms, 1), "gain": round(gain, 2),
+        "clipped_fraction": round(sum(abs(x) >= 32760 for x in samples)/count, 4)}
+
+
 class AudioManager:
     def __init__(self, service):
         self.service = service
@@ -65,6 +95,8 @@ class AudioManager:
 
     def cancel(self, session):
         self.awaiting.pop(session.id, None)
+        if session.audio_status.get("phase") in {"recording", "awaiting_upload", "transcribing", "generating_reply", "reply_ready", "playing"}:
+            session.audio_status = {**session.audio_status, "phase": "cancelled"}
         if session.speech_task and session.speech_task is not asyncio.current_task() and not session.speech_task.done():
             session.speech_task.cancel()
         upload = self.uploads.get(session.id)
@@ -80,6 +112,7 @@ class AudioManager:
 
     def expect_upload(self, session):
         self.awaiting[session.id] = (session.turn_id, time.monotonic() + 25)
+        session.audio_status = {**session.audio_status, "phase": "awaiting_upload", "turn_id": session.turn_id}
 
     async def expire_waiting(self):
         for session_id, (turn_id, deadline) in list(self.awaiting.items()):
@@ -88,6 +121,7 @@ class AudioManager:
             self.awaiting.pop(session_id, None)
             session = self.service.sessions.get(session_id)
             if session and not session.stopped and session.turn_id == turn_id:
+                session.audio_status["phase"] = "upload_missing"
                 await self.service.failure(session, ValueError("Lydopplastingen kom ikke frem. Trykk B og prøv et nytt opptak, eller bruk tekst på PC."))
 
     async def receive(self, session, turn_id, stream):
@@ -124,14 +158,20 @@ class AudioManager:
                 raise ValueError("Upload must follow matching listen_start/listen_stop")
             if session.lock.locked() or (session.input_task and not session.input_task.done()):
                 raise ValueError("Session is busy")
-            count = validate_wav(data)
+            prepared, metrics = prepare_recording(data)
+            wall = session.audio_status.get("recording_wall_seconds", 0)
+            if wall:
+                metrics.update(recording_wall_seconds=wall, capture_fraction=round(metrics["duration_seconds"]/max(wall, 0.001), 3),
+                               capture_gap_suspected=wall > 0.5 and metrics["duration_seconds"] < wall * 0.6)
             self.store.reserve(len(data) + 2048)
             item = {"id": item_id, "session_id": session.id, "device_id": session.device_id,
-                    "turn_id": turn_id, "sha256": digest, "status": "processing", "samples": count,
+                    "turn_id": turn_id, "sha256": digest, "status": "processing", **metrics,
                     "expires_at": time.time() + self.settings.fire_audio_ttl_seconds}
             self.store.put("audio", item_id, item)
             path = self.store.path("audio", item_id, ".wav")
-            path.write_bytes(data)
+            path.write_bytes(prepared)
+            session.audio_status = {"phase": "transcribing", "turn_id": turn_id, **metrics}
+            self.store.log(session.id, "Audio input accepted: " + str(metrics))
             self.awaiting.pop(session.id, None)
             session.input_task = asyncio.create_task(self.transcribe(session, item, path))
             return {"status": "accepted", "turn_id": turn_id, "duplicate": False}
@@ -141,6 +181,7 @@ class AudioManager:
             pending = self.awaiting.get(session.id)
             if pending and pending[0] == turn_id and session.turn_id == turn_id and not session.stopped:
                 self.awaiting.pop(session.id, None)
+                session.audio_status["phase"] = "input_failed"
                 message = (str(error) if isinstance(error, ValueError) else
                            "Lydopplastingen ble avbrutt eller tok for lang tid. Prøv et nytt opptak.")
                 await self.service.failure(session, ValueError(message))
@@ -156,8 +197,16 @@ class AudioManager:
             async with asyncio.timeout(self.settings.fire_ai_timeout_seconds):
                 text = await self.service.provider.transcribe(path.read_bytes())
             text = self.store.redactor.text(text).strip()
-            if not text or len(text) > 4000 or session.turn_id != item["turn_id"] or session.stopped:
-                raise ValueError("Empty, oversized or cancelled transcription")
+            if session.turn_id != item["turn_id"] or session.stopped:
+                item["status"] = "cancelled"
+                return
+            if not text:
+                if item.get("capture_gap_suspected"):
+                    raise ValueError(f"Opptaket ser ufullstendig ut: {item['duration_seconds']:.1f} s lyd fra {item['recording_wall_seconds']:.1f} s opptak. Kontroller kontinuerlig mikrofonopptak på FIRE.")
+                raise ValueError(f"Ingen forståelig tale i opptaket ({item.get('duration_seconds', item['samples']/16000):.1f} s). Trykk B, si en hel setning, og trykk B igjen.")
+            if len(text) > 4000:
+                raise ValueError("Taleomgangen er for lang. Prøv et kortere opptak.")
+            session.audio_status["phase"] = "dialog"
             await self.service.emit(session, {"type": "transcript", "turn_id": item["turn_id"], "text": text,
                                               "mode": self.settings.fire_ai_mode})
             await self.service.text(session, text)
@@ -167,6 +216,7 @@ class AudioManager:
             raise
         except Exception as error:
             item["status"] = "failed"
+            session.audio_status["phase"] = "input_failed"
             await self.service.failure(session, error)
         finally:
             path.unlink(missing_ok=True)
@@ -181,19 +231,27 @@ class AudioManager:
         partial = self.store.path("audio", audio_id, ".part")
         size = 0
         digest = hashlib.sha256()
+        pending_sample = b""
+        session.audio_status = {**session.audio_status, "phase": "generating_reply"}
         try:
             self.store.reserve(2048)
             async with asyncio.timeout(self.settings.fire_ai_timeout_seconds):
                 with partial.open("wb") as handle:
                     async for chunk in self.service.provider.speech(text[:400]):
-                        if not isinstance(chunk, bytes) or len(chunk) % 2 or size + len(chunk) > self.settings.fire_audio_max_output_bytes:
+                        if not isinstance(chunk, bytes) or size + len(pending_sample) + len(chunk) > self.settings.fire_audio_max_output_bytes:
                             raise ValueError("Speech output exceeds PCM16 size/alignment limit")
                         if session.stopped or session.turn_id != turn_id:
                             raise ValueError("Speech turn was cancelled")
+                        chunk = pending_sample + chunk
+                        aligned = len(chunk) - len(chunk) % 2
+                        pending_sample = chunk[aligned:]
+                        chunk = chunk[:aligned]
                         self.store.reserve(len(chunk))
                         handle.write(chunk)
                         digest.update(chunk)
                         size += len(chunk)
+            if pending_sample:
+                raise ValueError("Speech output ended with an incomplete PCM16 sample")
             if size == 0:
                 raise ValueError("Empty speech output")
             os.replace(partial, path)
@@ -204,6 +262,7 @@ class AudioManager:
                     "mode": self.settings.fire_ai_mode}
             self.store.put("audio", audio_id, item)
             session.audio_id = audio_id
+            session.audio_status = {**session.audio_status, "phase": "reply_ready", "output_bytes": size}
             self.service.persist(session)
             await self.service.emit(session, {"type": "audio_ready", "audio_id": audio_id,
                                               "download_url": f"/audio/{audio_id}",
@@ -213,6 +272,7 @@ class AudioManager:
             raise
         except Exception as error:
             path.unlink(missing_ok=True)
+            session.audio_status["phase"] = "reply_failed"
             self.store.log(session.id, "Speech failed: " + type(error).__name__, critical=True)
             await self.service.emit(session, {"type": "audio_error", "turn_id": turn_id,
                                               "message": "Talesvar feilet; tekstsvaret og forslaget er beholdt."})
@@ -240,8 +300,20 @@ class AudioManager:
             if session.activity != "idle":
                 raise ValueError("Cannot start playback while recording/processing")
             await self.service.activity(session, "speaking")
+            session.audio_status["phase"] = "playing"
         else:
             if session.activity != "speaking":
                 raise ValueError("Playback was not started")
             await self.service.activity(session, "idle")
+            item["status"] = "played"
+            self.store.put("audio", item["id"], item, critical=True)
+            self.store.path("audio", item["id"], ".pcm").unlink(missing_ok=True)
             self.cancel(session)
+            session.audio_status["phase"] = "played"
+            if session.state == State.awaiting_build_confirmation and session.proposal_id:
+                # FIRE's playback UI returns to idle. Restore the existing
+                # offer after speech, with the SAME proposal ID; no action or
+                # authorization is created by this repeated notification.
+                await self.service.emit(session, {"type": "build_proposal", "proposal_id": session.proposal_id,
+                    "project_id": session.project_id, "summary": session.summary})
+        self.service.persist(session)

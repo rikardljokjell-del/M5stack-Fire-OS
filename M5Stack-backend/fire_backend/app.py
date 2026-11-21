@@ -166,6 +166,16 @@ def create_app(settings=None, provider=None):
             raise HTTPException(422, "Expected package_id")
         return await service.install_saved(service.session(session_id), data["package_id"])
 
+    @app.post("/desktop/sessions/{session_id}/app", dependencies=[Depends(desktop_auth)])
+    async def desktop_app(session_id: str, request: Request, service: Backend = Depends(backend)):
+        data = await request.json()
+        if not isinstance(data, dict) or not data or set(data) - {"app_mode", "project_id", "app_id", "base_package_id"}:
+            raise HTTPException(422, "Expected app selection")
+        session = service.session(session_id)
+        event = DeviceEvent(device_id=session.device_id, protocol_version=session.protocol_version, event="app_select",
+                            event_id=new_id("desktop"), session_id=session.id, boot_id=session.boot_id, **data)
+        return await dispatch(service, session, event)
+
     @app.post("/session/start")
     async def start(body: SessionStart, identity=Depends(auth), service: Backend = Depends(backend)):
         return service.snapshot(await service.start(body, principal=identity))
@@ -214,6 +224,18 @@ def create_app(settings=None, provider=None):
             raise PermissionError("Device mismatch")
         return service.store.get("devices", device_id)
 
+    @app.get("/devices/{device_id}/apps")
+    async def device_apps(device_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
+        if identity not in {"admin", device_id}:
+            raise PermissionError("Device mismatch")
+        return service.app_catalog(device_id)
+
+    @app.get("/projects/{item_id}/versions")
+    async def project_versions(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
+        project = authorize_project(service.store, item_id, identity)
+        return [{"package_id": p["id"], "version": p["manifest"]["version"], "manifest": p["manifest"],
+                 "archive_sha256": p["archive_sha256"]} for p in service.app_versions(project)]
+
     @app.post("/sessions/{session_id}/audio/{turn_id}", status_code=202)
     async def audio_input(session_id: str, turn_id: str, request: Request, identity=Depends(auth), service: Backend = Depends(backend)):
         session = authorize_session(service, session_id, identity)
@@ -229,7 +251,7 @@ def create_app(settings=None, provider=None):
     @app.get("/audio/{audio_id}")
     async def audio_output(audio_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
         item, path = service.audio.clip(audio_id, identity)
-        return FileResponse(path, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Audio-Format": "pcm_s16le", "X-Audio-Sample-Rate": "24000"})
+        return DeviceFileResponse(path, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Audio-Format": "pcm_s16le", "X-Audio-Sample-Rate": "24000"})
 
     @app.get("/projects")
     async def projects(identity=Depends(auth), service: Backend = Depends(backend)):
@@ -241,16 +263,13 @@ def create_app(settings=None, provider=None):
 
     @app.delete("/projects/{item_id}")
     async def delete(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
-        authorize_project(service.store, item_id, identity)
-        if any(s.project_id == item_id for s in service.sessions.values()):
-            raise Conflict("Stop project sessions before deleting")
-        package_ids = {p["id"] for p in service.store.list("packages") if p["project_id"] == item_id}
-        for device in service.store.list("devices"):
-            if any(device.get("projects", {}).get(item_id, {}).values()):
-                raise Conflict("Project has retained device versions; cannot delete")
-            if any(device.get(k) in package_ids for k in ("current", "previous", "backup", "installed_package_id", "running_package_id")):
-                raise Conflict("Project has retained device versions; cannot delete")
-        service.store.delete_project(item_id)
+        project = authorize_project(service.store, item_id, identity)
+        if project.get("owner_device_id") and identity != "admin":
+            raise PermissionError("Backendhistorikk slettes fra PC-programmet.")
+        allowed, reason = service.backend_delete_check(project)
+        if not allowed:
+            raise Conflict(reason)
+        service.delete_app_history(project)
         return {"status": "deleted"}
 
     def scoped_build(service, item_id, identity):
@@ -285,8 +304,14 @@ def create_app(settings=None, provider=None):
         path = service.store.path("packages", item_id, ".zip")
         verify_archive(path, package["manifest"], package["archive_sha256"])
         manifest = package["manifest"]
+        def transfer(delta):
+            count = service.active_downloads.get(item_id, 0) + delta
+            if count:
+                service.active_downloads[item_id] = count
+            else:
+                service.active_downloads.pop(item_id, None)
         return DeviceFileResponse(path, media_type="application/zip", filename=f"{manifest['id']}-v{manifest['version']}.zip",
-                                  headers={"Cache-Control": "private, no-cache"})
+                                  headers={"Cache-Control": "private, no-cache"}, transfer=transfer)
 
     @app.websocket("/ws/device")
     async def device(socket: WebSocket):
@@ -337,8 +362,17 @@ def create_app(settings=None, provider=None):
                         await dispatch(service, session, event)
                         if session.stopped:
                             session = None
-                except ValidationError:
-                    error_event = {"type": "error", "code": "invalid_event", "message": "Invalid event schema"}
+                except ValidationError as error:
+                    # Never include input values or arbitrary extra field names.
+                    known = {"session_id required after session_start": "session_id", "Protocol 0.2 requires event_id": "event_id",
+                             "Missing event-specific fields": "event_fields",
+                             "Device sessions require protocol 0.2, boot_id and capabilities": "boot_id/capabilities"}
+                    fields = sorted({str(e["loc"][0]) if e["loc"] and e["loc"][0] in DeviceEvent.model_fields else
+                                     known.get(str(e.get("ctx", {}).get("error", "")), "event") if not e["loc"] else "extra_fields"
+                                     for e in error.errors()})
+                    safe = "Ugyldig melding fra FIRE: " + ", ".join(fields)
+                    logging.getLogger("uvicorn.error").warning(safe)
+                    error_event = {"type": "error", "code": "invalid_event", "message": safe[:240]}
                     await (service.emit(session, error_event) if session else socket.send_json(error_event))
                 except (ValueError, KeyError, PermissionError, FileNotFoundError) as error:
                     message = "Referenced item not found" if isinstance(error, FileNotFoundError) else service.redactor.text(str(error))[:240]

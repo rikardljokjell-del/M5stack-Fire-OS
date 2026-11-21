@@ -1,5 +1,10 @@
 # Til device-agenten: nødvendige rettinger før fysisk ende-til-ende-test
 
+Nyere oppfølging: [VOICE_HANDOFF.md](VOICE_HANDOFF.md). NVS-nøklene er nå
+forkortet i 6d97989, og et norsk talesvar er fysisk bekreftet. Målt
+mikrofonopptak mangler fortsatt ca. 80 % av samples over opptakstiden.
+Punktene under beskriver eldre funn og må leses sammen med den nye oppfølgingen.
+
 Oppdatert etter GitHub main `2d47b0a` og fysisk installasjons-/kjøretest.
 Backend-agenten endrer kun `M5Stack-backend/`. Denne filen er en handoff,
 ikke en påstand om utførte firmwarerettelser. Transport/protokoll 0.2 beholdes.

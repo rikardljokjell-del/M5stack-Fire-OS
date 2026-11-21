@@ -10,6 +10,7 @@ from .builds import Builder, simulate, verify_archive
 from openai import APIStatusError
 from .models import State
 from .devices import DeviceLifecycle
+from .app_lifecycle import AppLifecycle
 from .capabilities import generation_policy, policy, status as capability_status
 from .security import Redactor
 from .storage import Store, new_id
@@ -63,9 +64,15 @@ class Session:
     input_task: asyncio.Task | None = None
     speech_task: asyncio.Task | None = None
     last_error: str = ""
+    app_mode: str = "new"
+    base_package_id: str | None = None
+    app_revision: int = 0
+    install_permitted: bool = True
+    audio_status: dict = field(default_factory=dict)
+    recording_started_at: float | None = None
 
 
-class Backend(DeviceLifecycle):
+class Backend(DeviceLifecycle, AppLifecycle):
     def __init__(self, settings, provider=None):
         self.settings = settings
         self.redactor = Redactor(settings.openai_api_key.get_secret_value(), settings.fire_backend_token.get_secret_value(), *settings.device_tokens().values())
@@ -78,6 +85,7 @@ class Backend(DeviceLifecycle):
         self.sessions = {}
         self.build_lock = asyncio.Lock()
         self.active_build_id = None
+        self.active_downloads = {}
         self.store.recover()
         for command in self.store.list("commands"):
             if command["status"] in {"pending", "started", "healthy"}:
@@ -102,11 +110,17 @@ class Backend(DeviceLifecycle):
             device_id = project.get("owner_device_id")
             device = devices.get(device_id, {})
             manifest = package["manifest"]
+            presence = self.app_presence(device, manifest["id"])
+            absent = presence.get("state") in {"deleted", "missing"}
+            can_delete, block_reason = self.backend_delete_check(project) if project else (False, "Prosjektet finnes ikke.")
             apps.append({"app_id": manifest["id"], "name": manifest["name"], "version": manifest["version"],
-                         "package_id": package["id"], "mode": package["mode"], "device_id": device_id,
-                         "sd_path": f"/apps/{manifest['id']}/", "installed_receipt": (device_id, package["id"]) in installed,
-                         "current_healthy": device.get("projects", {}).get(package["project_id"], {}).get("current") == package["id"],
-                         "running": bool(device.get("online") and device.get("runtime_status") == "running"
+                         "project_id": package["project_id"], "package_id": package["id"], "mode": package["mode"], "device_id": device_id,
+                         "device_presence": presence.get("state", "unknown"), "can_delete_backend": can_delete,
+                         "delete_block_reason": block_reason,
+                         "sd_path": f"/apps/{manifest['id']}/", "installed_receipt": not absent and (device_id, package["id"]) in installed,
+                         "had_install_receipt": (device_id, package["id"]) in installed,
+                         "current_healthy": not absent and device.get("projects", {}).get(package["project_id"], {}).get("current") == package["id"],
+                         "running": bool(not absent and device.get("online") and device.get("runtime_status") == "running"
                                          and device.get("running_package_id") == package["id"]),
                          "physical_verified": False})
         return apps
@@ -119,6 +133,7 @@ class Backend(DeviceLifecycle):
         """
         if (session.target != "device" or not session.sockets or session.stopped or session.lock.locked()
                 or session.operation_task or (session.input_task and not session.input_task.done())
+                or session.activity in {"listening", "processing", "speaking"}
                 or session.state in {State.building, State.testing, State.processing, State.running,
                                      State.starting, State.stopping, State.rollback_pending}):
             raise Conflict("FIRE må være tilkoblet og ledig før installasjon.")
@@ -141,7 +156,10 @@ class Backend(DeviceLifecycle):
             prior = [s for s in self.store.list("sessions") if s["project_id"] == project["id"]]
             session.history = bounded_history(max(prior, key=lambda s: s.get("last_seen", 0)).get("history", [])) if prior else []
             session.project_id, session.package_id, session.build_id = project["id"], package_id, package["build_id"]
+            session.app_mode, session.base_package_id = "update", package_id
+            session.install_permitted, session.app_revision = True, device.get("app_change_counter", 0)
             session.proposal_id, session.turn_id, session.last_error = None, None, ""
+            session.audio_status, session.recording_started_at = {}, None
             session.summary = project.get("last_confirmed_summary", "")
             versions = device.get("projects", {}).get(project["id"], {})
             device.update(project_id=project["id"], **{key: versions.get(key) for key in ("current", "previous", "backup")})
@@ -159,6 +177,9 @@ class Backend(DeviceLifecycle):
                 "boot_id": session.boot_id, "capabilities": session.capabilities,
                 "activity": session.activity, "turn_id": session.turn_id, "server_time": int(time.time()),
                 "last_error": session.last_error,
+                "app_mode": session.app_mode, "base_package_id": session.base_package_id,
+                "app_revision": session.app_revision, "install_permitted": session.install_permitted,
+                "audio_status": session.audio_status,
                 "effective_capabilities": policy(self.settings, session.target, session.capabilities),
                 "physical_verified": False}
 
@@ -198,9 +219,12 @@ class Backend(DeviceLifecycle):
         if session.capabilities:
             context += "\nActual device capabilities (never exceed):\n" + json.dumps(session.capabilities)
         project = self.store.get("projects", session.project_id)
-        context += "\nProject: " + json.dumps({k: project.get(k) for k in ("id", "name", "latest_package", "last_confirmed_summary")})
-        if project.get("latest_package"):
-            latest = self.store.get("packages", project["latest_package"])
+        selected_base = session.base_package_id or project.get("latest_package")
+        summary = self.store.get("builds", selected_base).get("summary", "") if selected_base else ""
+        context += "\nProject: " + json.dumps({"id": project["id"], "name": project["name"],
+            "app_mode": session.app_mode, "base_package_id": selected_base, "last_confirmed_summary": summary})
+        if selected_base:
+            latest = self.store.get("packages", selected_base)
             context += "\nCurrent app manifest: " + json.dumps(latest["manifest"])
         context += generation_policy(self.settings, session)
         return context
@@ -219,19 +243,26 @@ class Backend(DeviceLifecycle):
             raise PermissionError("Physical sessions require the token scoped to this device")
         if principal != "admin" and (request.device_id != principal or request.target != "device"):
             raise PermissionError("Device credential scope mismatch")
+        if request.target == "device" and (request.project_id or request.app_id):
+            project = self.app_project(request.device_id, request.project_id, request.app_id)
+            request = request.model_copy(update={"project_id": project["id"]})
+            if request.base_package_id and not any(p["id"] == request.base_package_id for p in self.app_versions(project)):
+                raise ValueError("Basisversjonen tilhører ikke den valgte appen.")
         await self.expire_sessions()
         if request.resume_session_id:
             return await self.resume(request, socket, principal)
         # Current FIRE firmware reconnects with session_start and the same boot
         # ID, without a resume hint. Reattach only an offline, matching peer;
         # never take over a live connection or reuse commands across boots.
-        if request.target == "device":
+        if request.target == "device" and request.app_mode is None:
             candidates = [s for s in self.sessions.values() if s.device_id == request.device_id
-                          and s.boot_id == request.boot_id and not s.sockets and not s.stopped]
+                          and s.boot_id == request.boot_id and not s.sockets and not s.stopped
+                          and (not request.project_id or s.project_id == request.project_id)]
             if not candidates:
                 for saved in self.store.list("sessions"):
                     if (saved.get("target") == "device" and saved["device_id"] == request.device_id
                             and saved.get("boot_id") == request.boot_id and not saved.get("stopped")
+                            and (not request.project_id or saved["project_id"] == request.project_id)
                             and time.time() - (saved.get("disconnected_at") or saved.get("last_seen", 0)) <= self.settings.fire_session_resume_seconds):
                         request = request.model_copy(update={"resume_session_id": saved["session_id"]})
                         return await self.resume(request, socket, principal)
@@ -239,7 +270,9 @@ class Backend(DeviceLifecycle):
                 request = request.model_copy(update={"resume_session_id": candidates[0].id})
                 return await self.resume(request, socket, principal)
         for existing in list(self.sessions.values()):
-            if existing.device_id == request.device_id and existing.target == "device" and existing.boot_id != request.boot_id:
+            if (existing.device_id == request.device_id and existing.target == "device"
+                    and (existing.boot_id != request.boot_id or not existing.sockets and
+                         (request.app_mode in {"new", "update"} or request.project_id and request.project_id != existing.project_id))):
                 await self.stop(existing)
                 for command in self.store.list("commands"):
                     if command["device_id"] == request.device_id and command["status"] in {"pending", "started", "healthy"}:
@@ -253,19 +286,19 @@ class Backend(DeviceLifecycle):
             if project.get("owner_device_id") != (request.device_id if request.target == "device" else None):
                 raise PermissionError("Project belongs to another device")
         else:
-            project = {"id": new_id("app"), "name": "Ny app", "current": None,
-                       "previous": None, "backup": None, "candidate": None,
-                       "latest_package": None, "next_version": 1, "schema_version": 2,
-                       "owner_device_id": request.device_id if request.target == "device" else None}
-            self.store.put("projects", project["id"], project)
+            project = self.new_project(request.device_id, request.target)
         session = Session(new_id("session"), request.device_id, project["id"])
+        session.app_mode = "update" if request.project_id else "new"
+        session.base_package_id = request.base_package_id or project.get("latest_package")
         if request.project_id:
             prior = [saved for saved in self.store.list("sessions") if saved["project_id"] == project["id"]]
             if prior:
                 session.history = max(prior, key=lambda saved: saved.get("last_seen", 0)).get("history", [])[-32:]
         session.protocol_version, session.target, session.boot_id = request.protocol_version, request.target, request.boot_id
         session.capabilities = self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None
-        if session.target == "device" and not policy(self.settings, session.target, session.capabilities)["conversation_audio"]["input_enabled"]:
+        if session.target == "device":
+            # Native FIRE interprets listening as an ACTIVE microphone capture.
+            # Readiness is idle; only listen_start can transition to listening.
             session.state = State.idle
         if session.target == "device":
             try:
@@ -273,6 +306,12 @@ class Backend(DeviceLifecycle):
             except FileNotFoundError:
                 device = {"id": session.device_id, "current": None, "previous": None, "backup": None,
                           "installed_package_id": None, "running_package_id": None}
+            if request.project_id and not request.base_package_id and project.get("latest_package"):
+                session.base_package_id = self.update_base(project, device)["id"]
+            if session.base_package_id:
+                self.verify_package(session, session.base_package_id)
+                if session.base_package_id != project.get("latest_package"):
+                    session.history = []
             versions = device.setdefault("projects", {})
             if device.get("project_id") and device["project_id"] not in versions:
                 versions[device["project_id"]] = {key: device.get(key) for key in ("current", "previous", "backup")}
@@ -282,6 +321,8 @@ class Backend(DeviceLifecycle):
                 device.update(active_run_id=None, pending_run_id=None, running_package_id=None,
                               installed_package_id=None, runtime_status="unknown")
             device.update(boot_id=session.boot_id, online=True, capabilities=session.capabilities, physical_verified=False)
+            device["connection_epoch"] = device.get("connection_epoch", 0) + 1
+            session.app_revision = device.get("app_change_counter", 0)
             self.store.put("devices", device["id"], device)
         if socket:
             session.sockets.add(socket)
@@ -300,7 +341,8 @@ class Backend(DeviceLifecycle):
                 raise Conflict("Session cannot be resumed")
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
-                         "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error"):
+                         "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error",
+                         "app_mode", "base_package_id", "app_revision", "install_permitted", "audio_status"):
                 if name in saved:
                     setattr(session, name, saved[name])
             session.sequence = saved.get("sequence", 0)
@@ -309,6 +351,7 @@ class Backend(DeviceLifecycle):
         if (session.device_id != request.device_id or session.target != request.target
                 or session.boot_id != request.boot_id or session.capabilities != (self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None)
                 or (request.project_id and request.project_id != session.project_id)
+                or (request.base_package_id and request.base_package_id != session.base_package_id)
                 or session.protocol_version != request.protocol_version or session.sockets
                 or time.time() - (session.disconnected_at or session.last_seen) > self.settings.fire_session_resume_seconds):
             raise Conflict("Resume identity, capabilities or expiry mismatch")
@@ -326,14 +369,17 @@ class Backend(DeviceLifecycle):
             session.sockets.add(socket)
         if session.target == "device":
             device["online"] = True
+            device["connection_epoch"] = device.get("connection_epoch", 0) + 1
             self.store.put("devices", device["id"], device)
-            if session.package_id and session.state == State.idle:
+            if not session.install_permitted:
+                session.state = State.failed
+            elif session.package_id and session.state == State.idle:
                 session.state = State.installed if device.get("installed_package_id") == session.package_id else State.awaiting_install
         self.persist(session)
         await self.emit(session, {"type": "session_started", **self.snapshot(session)})
         await self.session_snapshot(session)
         await self.report_capabilities(session)
-        if session.target == "device" and session.package_id and session.state == State.awaiting_install and not self.pending_commands(session):
+        if session.target == "device" and session.package_id and session.install_permitted and session.state == State.awaiting_install and not self.pending_commands(session):
             await self.offer_install(session, self.verify_package(session, session.package_id))
         return session
 
@@ -449,6 +495,8 @@ class Backend(DeviceLifecycle):
                 session.operation_task = None
 
     async def _text(self, session, text):
+        if not session.install_permitted:
+            raise Conflict("Appen er borte fra FIRE. Velg Ny app eller Endre app før en ny bestilling.")
         if session.stopped or session.lock.locked() or session.state in {State.building, State.testing, State.running}:
             raise Conflict("Session is busy")
         if not text or not text.strip():
@@ -478,6 +526,8 @@ class Backend(DeviceLifecycle):
                     await self.state(session, State.awaiting_build_confirmation)
                     await self.emit(session, {"type": "build_proposal", "proposal_id": session.proposal_id,
                                               "summary": session.summary, "project_id": session.project_id})
+                if session.turn_id:
+                    session.audio_status = {**session.audio_status, "phase": "text_ready", "turn_id": session.turn_id}
                 await self.activity(session, "idle")
                 if self.settings.fire_audio_enabled and session.turn_id and hasattr(self, "audio"):
                     session.speech_task = asyncio.create_task(self.audio.speak(session, reply.message))
@@ -501,7 +551,7 @@ class Backend(DeviceLifecycle):
         return safe
 
     async def confirm_build(self, session, proposal_id):
-        if (session.stopped or session.lock.locked() or self.build_lock.locked()
+        if (session.stopped or not session.install_permitted or session.lock.locked() or self.build_lock.locked()
                 or session.state != State.awaiting_build_confirmation
                 or not proposal_id or proposal_id != session.proposal_id):
             raise Conflict("No matching build proposal or builder busy")
@@ -511,6 +561,8 @@ class Backend(DeviceLifecycle):
         build = {"id": build_id, "project_id": session.project_id, "session_id": session.id,
                  "status": "building", "phase": "preparing", "progress": 0,
                  "summary": session.summary, "confirmed_proposal_id": proposal_id, "attempts": 0}
+        if session.target == "device":
+            session.app_revision = self.device_record(session).get("app_change_counter", 0)
         try:
             if hasattr(self, "audio"):
                 self.audio.cancel(session)
@@ -554,12 +606,14 @@ class Backend(DeviceLifecycle):
             async with asyncio.timeout(self.settings.fire_build_timeout_seconds):
                 project = self.store.get("projects", session.project_id)
                 project_before = dict(project)
-                package = await self.builder.build(build, project, progress, capabilities=session.capabilities,
+                build_project = {**project, "latest_package": session.base_package_id or project.get("latest_package")}
+                package = await self.builder.build(build, build_project, progress, capabilities=session.capabilities,
                                                    context=self.context_for(session))
             project.update(name=package["manifest"]["name"], app_id=package["manifest"]["id"], latest_package=package["id"],
                            next_version=project["next_version"] + 1, last_confirmed_summary=build["summary"])
             self.store.put("projects", project["id"], project)
             session.package_id = package["id"]
+            session.base_package_id = package["id"]
             build.update(status="ready", package_id=package["id"])
             await progress("ready", 100, "Pakken er testet. Sender til FIRE for installasjon." if session.target == "device"
                            else "Pakken er testet. Venter på eksplisitt kjørebekreftelse.")

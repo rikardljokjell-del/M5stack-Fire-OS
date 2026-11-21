@@ -48,8 +48,10 @@ and physical_verified=false. These are announced limits and backend policy,
 not proof of hardware enforcement. An authenticated emulator can send receipts;
 backend never labels that as independently verified physical testing.
 Startup/resume sends nonfatal capability_status with effective_capabilities,
-code and message. Without input, code=audio_input_unavailable (or
-backend_audio_disabled when only backend audio is off), initial state=idle.
+code and message. Physical sessions initially use state=idle regardless of audio
+flags: listening means a real recording initiated by listen_start, never mere
+readiness. Without input, code=audio_input_unavailable (or
+backend_audio_disabled when only backend audio is off).
 A text-only assistant_message repeats the limitation for current native UI.
 Unsupported listen_start/listen_stop return error with the same code/message
 without invalidating the current proposal. WAV upload returns HTTP 409 JSON
@@ -220,6 +222,25 @@ expiry closes provider sessions and expires clips; temp data is deleted. Speech
 generation failure preserves the text answer/proposal and sends audio_error.
 Input and output audio expire after at most 300 seconds by default; no audio goes
 into application ZIPs or ordinary logs. No full-duplex requirement in 0.2.
+
+Backend removes ADC DC bias with bounded gain and records only numeric signal
+diagnostics (sample count, duration, level, clipping, capture/wall-time ratio).
+Original wire bytes remain the deduplication identity. It does not invent speech
+when transcription is empty or attempt to reconstruct missing capture chunks.
+After audio_playback_finished, an existing unconsumed build_proposal may be
+repeated with the SAME proposal_id to restore the confirmation UI. This never
+builds or grants authorization. Physical conversation audio is tested separately
+from the Lua app's restricted service permissions.
+
+## App selection, versions and deletion
+
+The additive 0.2 app lifecycle contract is [APP_LIFECYCLE.md](APP_LIFECYCLE.md).
+It covers app_list/app_versions/app_select, explicit new/update startup,
+device app_deleted/app_inventory and administrator-only backend deletion.
+No automatic device reinstall follows deletion. Backend purge requires fresh
+absence evidence from a currently connected device and no active operations.
+Unknown/offline/unavailable SD never establishes deletion. Build/run confirmations,
+ownership, immutable package hashes and current/previous/backup semantics remain.
 
 ## Idempotency, failure and version compatibility
 

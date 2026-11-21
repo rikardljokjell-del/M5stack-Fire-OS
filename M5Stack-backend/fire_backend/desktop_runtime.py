@@ -147,6 +147,12 @@ class DesktopRuntime:
     def install_saved(self, session_id, package_id):
         return self.request("POST", f"/desktop/sessions/{session_id}/install", json={"package_id": package_id})
 
+    def select_app(self, session_id, mode, **values):
+        return self.request("POST", f"/desktop/sessions/{session_id}/app", json={"app_mode": mode, **values})
+
+    def delete_app(self, project_id):
+        return self.request("DELETE", f"/projects/{project_id}")
+
     def confirm(self, session_id, kind, item_id):
         field = "proposal_id" if kind == "build" else "package_id"
         return self.request("POST", f"/{kind}/confirm", json={"session_id": session_id, field: item_id,

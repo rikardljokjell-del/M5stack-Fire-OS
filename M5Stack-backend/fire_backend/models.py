@@ -85,11 +85,18 @@ class SessionStart(StrictModel):
     boot_id: str | None = Field(default=None, pattern=ID_PATTERN)
     capabilities: "Capabilities | None" = None
     resume_session_id: str | None = Field(default=None, pattern=ID_PATTERN)
+    app_mode: Literal["new", "update"] | None = None
+    app_id: str | None = Field(default=None, pattern=ID_PATTERN)
+    base_package_id: str | None = Field(default=None, pattern=ID_PATTERN)
 
     @model_validator(mode="after")
     def device_contract(self):
         if self.target == "device" and (self.protocol_version != "0.2" or not self.boot_id or self.capabilities is None):
             raise ValueError("Device sessions require protocol 0.2, boot_id and capabilities")
+        if self.app_mode == "new" and (self.project_id or self.app_id or self.base_package_id or self.resume_session_id):
+            raise ValueError("Explicit new app cannot resume an existing project")
+        if self.app_mode == "update" and not (self.project_id or self.app_id):
+            raise ValueError("Update requires project_id or app_id")
         return self
 
 
@@ -123,10 +130,30 @@ class RunConfirm(SessionAction):
     package_id: str = Field(pattern=ID_PATTERN)
 
 
+class DeviceApp(StrictModel):
+    app_id: str = Field(pattern=ID_PATTERN)
+    package_id: str | None = Field(default=None, pattern=ID_PATTERN)
+    version: str | None = Field(default=None, max_length=32)
+    checksum: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+# Excluding absent extension defaults keeps pre-extension event replay hashes
+# compatible with persisted protocol-0.2 events.
+APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
+                      "offset": 0, "apps": [], "storage_ready": None, "complete": None}
+
+
 class DeviceEvent(StrictModel):
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory"]
+    app_mode: Literal["new", "update"] | None = None
+    app_id: str | None = Field(default=None, pattern=ID_PATTERN)
+    base_package_id: str | None = Field(default=None, pattern=ID_PATTERN)
+    offset: int = Field(default=0, ge=0, le=100000)
+    apps: list[DeviceApp] = Field(default_factory=list, max_length=32)
+    storage_ready: bool | None = Field(default=None, strict=True)
+    complete: bool | None = Field(default=None, strict=True)
     text: str | None = Field(default=None, max_length=4000)
     button: Literal["A", "B", "C"] | None = None
     action: Literal["pressed", "released", "long_pressed"] | None = None
@@ -175,6 +202,22 @@ class DeviceEvent(StrictModel):
                 raise ValueError("Successful installation requires archive_sha256")
             if self.event == "app_stopped" and not self.stop_id and self.reason not in {"completed", "user_exit", "runtime_limit"}:
                 raise ValueError("Natural stop requires reason")
+            if self.event == "app_select":
+                if not self.app_mode:
+                    raise ValueError("app_mode is required")
+                if self.app_mode == "new" and (self.project_id or self.app_id or self.base_package_id):
+                    raise ValueError("New app cannot select an existing project/package")
+                if self.app_mode == "update" and not (self.project_id or self.app_id):
+                    raise ValueError("Update requires project_id or app_id")
+            if self.event == "app_versions" and not (self.project_id or self.app_id):
+                raise ValueError("Versions require project_id or app_id")
+            if self.event == "app_deleted" and not self.app_id:
+                raise ValueError("app_id is required")
+            if self.event == "app_inventory":
+                if self.storage_ready is None or self.complete is None or "apps" not in self.model_fields_set:
+                    raise ValueError("Inventory requires storage_ready, complete and an explicit apps list")
+                if len({app.app_id for app in self.apps}) != len(self.apps):
+                    raise ValueError("Inventory contains duplicate app IDs")
         return self
 
 

@@ -39,7 +39,7 @@ for current/previous/backup migreres til uttrykkelig simulert historikk.
 
 ## Faktisk verifisert
 
-`pytest -q`: **142 bestått**, inkludert den eksisterende
+`pytest -q`: **158 bestått**, inkludert den eksisterende
 testdekningen tilpasset korrigerte current-semantikker. Én advarsel gjelder
 Starlettes overgang fra httpx i testklienten; ingen test feiler.
 

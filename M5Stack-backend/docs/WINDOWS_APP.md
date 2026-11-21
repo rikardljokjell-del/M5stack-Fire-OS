@@ -78,6 +78,23 @@ etter reboot eller ny firmware, uten en ny AI-generering. Bare riktig enhet
 med tilstrekkelige kapabiliteter kan få pakken. Kjøring må bekreftes separat.
 Nye mapper får korte, lesbare navn som `sprettsirkel`; appnavn er høyst 32 tegn,
 mapper høyst 24 ASCII-tegn, og samme app beholder mappen på tvers av versjoner.
+
+**Ny app** under Aktivitet starter et separat prosjekt. **Endre valgt versjon**
+under Apper bruker den valgte versjonen som utgangspunkt, også en eldre versjon;
+det nye bygget får neste versjonsnummer i samme mappe. Ingen AI-kall, bygg eller
+kjøring starter fra valget alene. Tidligere forslag blir ugyldige ved nytt valg.
+
+**Slett fra backend** sletter hele appens PC-historikk og pakker, med en egen
+bekreftelse. Knappen er sperret inntil tilkoblet FIRE har rapportert app_deleted
+eller en komplett, vellykket SD-skanning uten appen. Rapporten må være fersk for
+den nåværende oppkoblingen. Velg en annen/Ny app før du sletter prosjektets
+historikk. Serveren håndhever samme kontroll; ingen fysisk app slettes av knappen.
+Firmware må sende livssyklusmeldingene beskrevet i APP_LIFECYCLE.md.
+
+Aktivitet viser nå også opptak, talegjenkjenning, generering av lydsvar og
+avspillingskvittering. Nyeste firmware annonserer begge lydretninger; eldre
+input-only-profiler støttes. Se [målt lydstatus](VOICE_HANDOFF.md) for fysisk
+speakerbekreftelse og den fortsatt ufullstendige ADC-opptaksflyten.
 Se [ende-til-ende-status og gjeldende begrensninger](E2E_STATUS.md).
 
 ## Innstillinger og lagring
