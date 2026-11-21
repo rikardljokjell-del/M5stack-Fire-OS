@@ -217,7 +217,7 @@ class FireOS {
   String luaAppNames_[kMaxLuaApps];
   uint8_t luaAppCount_ = 0;
 
-  FireLuaRuntime luaRuntime_;
+  FireLuaRuntime* luaRuntime_ = nullptr;
   bool luaRuntimeReady_ = false;
   bool luaAppActive_ = false;
   String luaAppPath_;
@@ -225,8 +225,8 @@ class FireOS {
   String luaAppError_;
   uint32_t luaLastFrameAt_ = 0;
   uint8_t luaRgbValues_[10][3] = {};
-  FireBackendClient backendClient_;
-  FireLuaPackageManager packageManager_;
+  FireBackendClient* backendClient_ = nullptr;
+  FireLuaPackageManager* packageManager_ = nullptr;
   String backendStatus_;
   String aiTurnId_;
   String aiProposalId_;
@@ -477,5 +477,5 @@ class FireOS {
 };
 
 // Shared OS singleton for future apps and system services.
-extern FireOS fireOs;
+extern FireOS* fireOs;
 

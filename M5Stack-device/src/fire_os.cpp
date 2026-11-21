@@ -62,9 +62,12 @@ constexpr TimezoneInfo kTimezones[kTimezoneCount] = {
     {"Asia/Tokyo", "JST-9", "JST-9"},
 };
 
-Preferences preferences;
-M5Canvas ui(&M5.Display);
-WebServer wifiSetupServer(80);
+Preferences* firePreferences = nullptr;
+#define preferences (*firePreferences)
+M5Canvas* uiCanvas = nullptr;
+#define ui (*uiCanvas)
+WebServer* fireWifiSetupServer = nullptr;
+#define wifiSetupServer (*fireWifiSetupServer)
 FireOS* activeFireOs = nullptr;
 bool bluetoothRadioReady = false;
 
@@ -141,7 +144,8 @@ NimBLECharacteristic* bluetoothCharacteristic = nullptr;
 NimBLEScan* bluetoothScan = nullptr;
 NimBLEClient* bluetoothClient = nullptr;
 bool bluetoothPeripheralConnected = false;
-String bluetoothPeripheralAddress;
+String* bluetoothPeripheralAddressPtr = nullptr;
+#define bluetoothPeripheralAddress (*bluetoothPeripheralAddressPtr)
 uint8_t bluetoothPeripheralAddressType = 0;
 
 class FireBluetoothServerCallbacks final : public NimBLEServerCallbacks {
@@ -530,8 +534,24 @@ void FireOS::begin() {
   config.internal_mic = true;
   config.led_brightness = 80;
   M5.begin(config);
+  Serial.println("FIRE boot: M5.begin OK");
+  firePreferences = new Preferences();
+  fireWifiSetupServer = new WebServer(80);
+#ifdef FIRE_OS_BLE
+  bluetoothPeripheralAddressPtr = new String();
+#endif
+  uiCanvas = new M5Canvas(&M5.Display);
+  if (!uiCanvas) {
+    Serial.println("FIRE boot: canvas allocation failed");
+    return;
+  }
+  backendClient_ = new FireBackendClient();
+  luaRuntime_ = new FireLuaRuntime();
+  packageManager_ = new FireLuaPackageManager();
   configureFireRgbStrip();
+  Serial.println("FIRE boot: RGB OK");
   initSdCard();
+  Serial.println("FIRE boot: SD OK");
 
   pinMode(kButtonPins[0], INPUT);
   pinMode(kButtonPins[1], INPUT);
@@ -539,26 +559,37 @@ void FireOS::begin() {
 
   delay(100);
   safeMode_ = allButtonsHeldAtBoot();
+  Serial.println("FIRE boot: buttons OK");
   dateTime_.begin();
+  Serial.println("FIRE boot: DateTime OK");
   loadSettings();
-  backendClient_.setCallbacks(this, backendMessage, backendState);
-  backendClient_.configure(backendHost_, backendPort_, backendToken_,
-                           backendDeviceId_, "fire-os-0.2");
-  backendStatus_ = backendClient_.status();
-  packageManager_.setCallbacks(this, packageStatus, packageResult);
+  Serial.println("FIRE boot: settings OK");
+  if (backendClient_) {
+    backendClient_->setCallbacks(this, backendMessage, backendState);
+    backendClient_->configure(backendHost_, backendPort_, backendToken_,
+                              backendDeviceId_, "fire-os-0.2");
+    backendStatus_ = backendClient_->status();
+  }
+  packageManager_->setCallbacks(this, packageStatus, packageResult);
   if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
   const esp_partition_t* runningPartition = esp_ota_get_running_partition();
   const bool runningFactory = runningPartition &&
                               runningPartition->subtype ==
                                   ESP_PARTITION_SUBTYPE_APP_FACTORY;
-  if (safeMode_ && selectedBootAppPath_.length() > 0) {
-    // Recovery from a compatible external app returns here and clears the
-    // automatic target so FIRE OS remains usable.
+  const bool bootAttemptPending = preferences.getBool("boot_pending", false);
+  if (safeMode_ || bootAttemptPending) {
+    // Safe boot and a failed previous external-app attempt both return to
+    // FIRE OS. The pending marker prevents a crashing .bin from trapping the
+    // device in an endless boot loop.
     selectedBootAppPath_ = "";
+    preferences.putBool("boot_pending", false);
     saveSettings();
   } else if (!safeMode_ && runningFactory &&
              selectedBootAppPath_.length() > 0) {
+    preferences.putBool("boot_pending", true);
+    saveSettings();
     if (launchSelectedBootApp()) return;
+    preferences.putBool("boot_pending", false);
     selectedBootAppPath_ = "";
     saveSettings();
   }
@@ -585,21 +616,6 @@ void FireOS::begin() {
   // Boot feedback is handled after the UI is alive.
   ui.setColorDepth(16);
   ui.createSprite(320, 240);
-  FireLuaRuntime::Host luaHost;
-  luaHost.context = this;
-  luaHost.displayClear = luaDisplayClear;
-  luaHost.displayCircle = luaDisplayCircle;
-  luaHost.displayRect = luaDisplayRect;
-  luaHost.displayLine = luaDisplayLine;
-  luaHost.displayText = luaDisplayText;
-  luaHost.buttonPressed = luaButtonPressed;
-  luaHost.rgbSet = luaRgbSet;
-  luaHost.imuAccel = luaImuAccel;
-  luaHost.timeMillis = luaTimeMillis;
-  luaRuntimeReady_ = luaRuntime_.begin(luaHost);
-  if (!luaRuntimeReady_) {
-    luaAppError_ = luaRuntime_.lastError();
-  }
   lastActivity_ = millis();
   bootFeedbackActive_ = bootRgbPulse_ || bootMelody_;
   bootFeedbackStarted_ = millis();
@@ -617,7 +633,8 @@ void FireOS::begin() {
 void FireOS::update() {
   M5.update();
   updateBootFeedback();
-  if (screen_ == Screen::AiDeveloper && !backendClient_.configured())
+  if (screen_ == Screen::AiDeveloper &&
+      (!backendClient_ || !backendClient_->configured()))
     updateAiDeveloperMock();
 #ifdef FIRE_OS_BLE
   if (bluetoothPeripheralConnected && bluetoothPeripheralAddress.length() > 0) {
@@ -645,7 +662,7 @@ void FireOS::update() {
   if (wifiSetupActive_) wifiSetupServer.handleClient();
   updateWifiState();
   updateBackend();
-  packageManager_.service(WiFi.status() == WL_CONNECTED);
+  if (packageManager_) packageManager_->service(WiFi.status() == WL_CONNECTED);
   updateTimeSync();
   manageDisplayPower();
   if (carouselAnimating_) {
@@ -1653,8 +1670,8 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   }
   if (screen_ == Screen::LuaApp) {
     const char* buttonName = index == 0 ? "A" : index == 1 ? "B" : "C";
-    if (luaAppActive_ && !luaRuntime_.button(buttonName, "pressed")) {
-      stopLuaApp(luaRuntime_.lastError());
+    if (luaAppActive_ && luaRuntime_ && !luaRuntime_->button(buttonName, "pressed")) {
+      stopLuaApp(luaRuntime_->lastError());
     }
     return;
   }
@@ -2200,21 +2217,21 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiWorkflowState_ = 1;
       aiDeveloperMode_ = 1;
       aiTurnId_ = "turn-" + String(millis(), HEX);
-      if (backendClient_.connected()) backendClient_.listenStart(aiTurnId_);
+      if (backendClient_ && backendClient_->connected()) backendClient_->listenStart(aiTurnId_);
     } else if (aiWorkflowState_ == 1) {
       aiWorkflowState_ = 2;
       aiDeveloperMode_ = 2;
       aiWorkflowStarted_ = millis();
-      if (backendClient_.connected()) backendClient_.listenStop(aiTurnId_);
+      if (backendClient_ && backendClient_->connected()) backendClient_->listenStop(aiTurnId_);
     }
   } else if (index == 0 && aiWorkflowState_ == 3) {
-    if (backendClient_.connected() && aiProposalId_.length() > 0) {
-      backendClient_.confirmBuild(aiProposalId_);
+    if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
+      backendClient_->confirmBuild(aiProposalId_);
       aiWorkflowState_ = 4;
       aiDeveloperMode_ = 2;
       aiBuildProgress_ = 0;
       aiWorkflowStarted_ = millis();
-    } else if (!backendClient_.configured()) {
+    } else if (!backendClient_ || !backendClient_->configured()) {
       aiWorkflowState_ = 4;
       aiDeveloperMode_ = 2;
       aiBuildProgress_ = 0;
@@ -2222,18 +2239,18 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     }
   } else if (index == 2 &&
              (aiWorkflowState_ == 3 || aiWorkflowState_ == 5)) {
-    if (backendClient_.connected()) backendClient_.cancelTurn();
+    if (backendClient_ && backendClient_->connected()) backendClient_->cancelTurn();
     aiWorkflowState_ = 0;
     aiDeveloperMode_ = 0;
     aiBuildProgress_ = 0;
     aiWorkflowStarted_ = millis();
   } else if (index == 0 && aiWorkflowState_ == 5) {
-    if (backendClient_.connected() && aiPackageId_.length() > 0) {
-      backendClient_.confirmRun(aiPackageId_);
+    if (backendClient_ && backendClient_->connected() && aiPackageId_.length() > 0) {
+      backendClient_->confirmRun(aiPackageId_);
       aiWorkflowState_ = 6;
       aiDeveloperMode_ = 3;
       aiWorkflowStarted_ = millis();
-    } else if (!backendClient_.configured()) {
+    } else if (!backendClient_ || !backendClient_->configured()) {
       aiWorkflowState_ = 6;
       aiDeveloperMode_ = 3;
       aiWorkflowStarted_ = millis();
@@ -2250,9 +2267,27 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
 }
 
 bool FireOS::startLuaApp(const String& path, const String& name) {
-  if (!luaRuntimeReady_) {
+  if (!luaRuntime_) {
     luaAppError_ = "Lua runtime unavailable";
     return false;
+  }
+  if (!luaRuntimeReady_) {
+    FireLuaRuntime::Host luaHost;
+    luaHost.context = this;
+    luaHost.displayClear = luaDisplayClear;
+    luaHost.displayCircle = luaDisplayCircle;
+    luaHost.displayRect = luaDisplayRect;
+    luaHost.displayLine = luaDisplayLine;
+    luaHost.displayText = luaDisplayText;
+    luaHost.buttonPressed = luaButtonPressed;
+    luaHost.rgbSet = luaRgbSet;
+    luaHost.imuAccel = luaImuAccel;
+    luaHost.timeMillis = luaTimeMillis;
+    luaRuntimeReady_ = luaRuntime_->begin(luaHost);
+    if (!luaRuntimeReady_) {
+      luaAppError_ = luaRuntime_->lastError();
+      return false;
+    }
   }
   if (!sdReady_ && !initSdCard()) {
     luaAppError_ = "SD card unavailable";
@@ -2279,11 +2314,11 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
   }
   const size_t readBytes = sourceFile.read(buffer, length);
   sourceFile.close();
-  const bool loaded = readBytes == length && luaRuntime_.loadSource(buffer, length);
+  const bool loaded = readBytes == length && luaRuntime_->loadSource(buffer, length);
   free(buffer);
   if (!loaded) {
-    luaAppError_ = luaRuntime_.lastError();
-    luaRuntime_.stop();
+    luaAppError_ = luaRuntime_->lastError();
+    luaRuntime_->stop();
     return false;
   }
   luaAppPath_ = path;
@@ -2303,7 +2338,7 @@ void FireOS::stopLuaApp(const String& reason) {
     Serial.printf("Lua app stopped: %s\n", reason.c_str());
   }
   luaAppActive_ = false;
-  luaRuntime_.stop();
+  if (luaRuntime_) luaRuntime_->stop();
   luaRunId_ = "";
   luaHealthySent_ = false;
   if (reason.length() > 0 && reason != "back" && reason != "home") {
@@ -2316,19 +2351,20 @@ void FireOS::updateLuaApp() {
   const uint32_t now = millis();
   const uint32_t elapsed = now - luaLastFrameAt_;
   luaLastFrameAt_ = now;
-  if (!luaRuntime_.update(min<uint32_t>(elapsed, 100))) {
-    if (luaRunId_.length() > 0)
-      backendClient_.appFailed(luaRunId_, aiPackageId_, "runtime_error",
-                               luaRuntime_.lastError());
-    stopLuaApp(luaRuntime_.lastError());
+  if (!luaRuntime_ || !luaRuntime_->update(min<uint32_t>(elapsed, 100))) {
+    if (luaRunId_.length() > 0 && backendClient_)
+      backendClient_->appFailed(luaRunId_, aiPackageId_, "runtime_error",
+                                luaRuntime_ ? luaRuntime_->lastError()
+                                             : String("runtime unavailable"));
+    stopLuaApp(luaRuntime_ ? luaRuntime_->lastError() : String("runtime unavailable"));
   } else if (luaRunId_.length() > 0 && !luaHealthySent_) {
-    backendClient_.appHealthy(luaRunId_, aiPackageId_);
+    if (backendClient_) backendClient_->appHealthy(luaRunId_, aiPackageId_);
     luaHealthySent_ = true;
   }
 }
 
 void FireOS::updateBackend() {
-  backendClient_.service(WiFi.status() == WL_CONNECTED);
+  if (backendClient_) backendClient_->service(WiFi.status() == WL_CONNECTED);
 }
 
 void FireOS::backendState(void* context, bool connected, const String& status) {
@@ -2356,12 +2392,13 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
   os->aiWorkflowText_ = ok ? "INSTALLED" : message;
   if (ok) {
     preferences.putString(("lua_path_" + packageId).c_str(),
-                          os->packageManager_.installedPath());
-    os->backendClient_.deviceInstallResult(
+                          os->packageManager_ ? os->packageManager_->installedPath()
+                                               : String());
+    if (os->backendClient_) os->backendClient_->deviceInstallResult(
         os->aiInstallId_, packageId, true, archiveHash, "installed");
     os->aiWorkflowState_ = 5;
   } else {
-    os->backendClient_.deviceInstallResult(
+    if (os->backendClient_) os->backendClient_->deviceInstallResult(
         os->aiInstallId_, packageId, false, archiveHash, message);
     os->aiWorkflowState_ = 0;
   }
@@ -2425,7 +2462,7 @@ void FireOS::handleBackendMessage(const String& message) {
     const String url = jsonStringField(message, "download_url");
     const String hash = jsonStringField(message, "archive_sha256");
     const uint32_t size = static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
-    const bool accepted = packageManager_.startDownload(
+    const bool accepted = packageManager_ && packageManager_->startDownload(
         backendHost_, backendPort_, backendToken_, url, aiPackageId_, aiInstallId_,
         hash, size);
     aiWorkflowText_ = accepted ? "DOWNLOADING" : "DOWNLOAD REJECTED";
@@ -2442,10 +2479,10 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowState_ = 6;
       aiDeveloperMode_ = 3;
       aiWorkflowText_ = "RUNNING";
-      backendClient_.appStarted(runId, packageId);
+      if (backendClient_) backendClient_->appStarted(runId, packageId);
     } else {
-      backendClient_.appFailed(runId, packageId, "not_installed",
-                               "Package is not installed on FIRE");
+      if (backendClient_) backendClient_->appFailed(runId, packageId, "not_installed",
+                                                    "Package is not installed on FIRE");
       aiWorkflowText_ = "APP NOT INSTALLED";
     }
     return;
@@ -3165,9 +3202,11 @@ void FireOS::saveBackendSetupFields(const String& host, const String& port,
   aiApiKey_ = "";
   preferences.remove("openai_key");
   saveSettings();
-  backendClient_.configure(backendHost_, backendPort_, backendToken_,
-                           backendDeviceId_, "fire-os-0.2");
-  backendStatus_ = backendClient_.status();
+  if (backendClient_) {
+    backendClient_->configure(backendHost_, backendPort_, backendToken_,
+                              backendDeviceId_, "fire-os-0.2");
+    backendStatus_ = backendClient_->status();
+  }
   stopWifiSetup();
 }
 
@@ -4815,7 +4854,7 @@ void FireOS::drawAiApi() {
   }
   drawRow(0, "Mobile setup", detailIndex_ == 0);
   drawRow(1, "Backend", detailIndex_ == 1,
-          backendClient_.configured() ? backendStatus_ : "Not configured");
+          backendClient_ && backendClient_->configured() ? backendStatus_ : "Not configured");
   drawRow(2, "Back", detailIndex_ == 2);
   drawText(16, 190, "OpenAI key stays on the PC backend.", kMuted, 1);
   drawFooter("Previous", "Select", "Next");
