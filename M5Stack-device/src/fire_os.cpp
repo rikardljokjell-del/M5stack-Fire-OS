@@ -658,10 +658,18 @@ void FireOS::begin() {
   config.internal_imu = true;
   config.internal_rtc = true;
   config.internal_spk = true;
-  config.internal_mic = true;
+  // FIRE OS owns the FIRE GPIO34 ADC-DMA path. Leaving M5Unified's automatic
+  // microphone driver enabled would install a competing I2S0 driver.
+  config.internal_mic = false;
   config.led_brightness = 80;
   M5.begin(config);
   Serial.println("FIRE boot: M5.begin OK");
+  auto micConfig = M5.Mic.config();
+  micConfig.pin_data_in = GPIO_NUM_34;
+  micConfig.use_adc = true;
+  micConfig.i2s_port = I2S_NUM_0;
+  micConfig.over_sampling = 1;
+  M5.Mic.config(micConfig);
   firePreferences = new Preferences();
   fireWifiSetupServer = new WebServer(80);
 #ifdef FIRE_OS_BLE
@@ -2637,6 +2645,7 @@ void FireOS::updateAiAudio() {
       if (aiAudioStopSent_ || aiAudioCapturedSamples_ >= kAiAudioSamples) {
         aiAudioCaptureActive_ = false;
         fireReleaseMicCapture();
+        aiAudioCaptureActive_ = false;
         const uint32_t payloadBytes =
             aiAudioCapturedSamples_ * sizeof(int16_t);
         int32_t peak = 0;
