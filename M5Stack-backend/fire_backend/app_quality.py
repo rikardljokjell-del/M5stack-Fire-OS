@@ -42,6 +42,13 @@ timeouts/disconnection, unavailable/busy hardware and resource cleanup. Preserve
 every agreed feature. Do not replace a requested game/tool with a generic demo.
 Never rely on the user to discover bugs or ask for repair. Resolve known risks
 before delivery; backend validation and an independent review follow generation.
+For IMU tools, compute from real accel axes in g and handle zero/invalid gravity,
+vertical orientation and calibration recovery. Backend runs flat, known tilt,
+invalid/vertical, calibration and recovery fixtures and records actual screen/RGB
+output. Do not append unexecuted external test scripts as proof. Predecode bitmap
+glyphs once; do not repeatedly parse their strings while rebuilding live numbers.
+Keep the complete normal measurement scene within the SAME callback budget as
+the error screen; a cheap error-only path is not normal-operation coverage.
 
 Every app must look deliberately designed for a 320x240 handheld screen:
 - Choose a coherent visual direction suited to this app: a restrained background,

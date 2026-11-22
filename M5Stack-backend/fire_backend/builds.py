@@ -26,12 +26,20 @@ def sha256(data):
 RELEASE_PROFILES = ("idle", "cycle", "hold_a", "hold_b", "hold_c", "rapid", "jitter")
 
 
+def worker_timeout(app):
+    # A ten-minute soak evaluates 37,500 complete scenes, ten times the usual
+    # until-exit horizon. Keep the same callback quotas but allow host overhead.
+    return 30 if app.get("profile")=="long_session" and app.get("max_runtime_ms")==0 else 8
+
+
 async def validate_release(app, store, build_id):
     """Fresh isolated VM per input/timing profile; no 180-frame release gate."""
     results = []
     profiles=RELEASE_PROFILES+(("io_error","io_timeout","io_disconnect") if app.get("api_version")==HARDWARE_API and set(app["required_services"])-BASE_SERVICES else ())
     if app.get("experience_policy_version")==UX_POLICY_VERSION:
         profiles+=("os_long_a","os_long_b","os_long_c","os_double","start_b_idle","play_directions","long_session")
+    if 'imu' in app['required_services']:
+        profiles+=("imu_flat","imu_tilt","imu_vertical","imu_zero","imu_calibration","imu_recovery","imu_tolerance")
     for profile in profiles:
         try:
             result = await simulate({**app, "profile": profile,
@@ -83,7 +91,7 @@ async def simulate(app, store, build_id):
         stderr=asyncio.subprocess.PIPE, env=child_env, cwd=worker.parent,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(canonical(app)), timeout=8)
+        stdout, stderr = await asyncio.wait_for(process.communicate(canonical(app)), timeout=worker_timeout(app))
     except BaseException:
         if process.returncode is None:
             process.kill()
@@ -114,7 +122,7 @@ async def simulate_bundled(app, store, build_id, child_env):
                     env=child_env, cwd=temporary, stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, **flags)
         try:
-            await asyncio.wait_for(process.wait(), timeout=8)
+            await asyncio.wait_for(process.wait(), timeout=worker_timeout(app))
         except BaseException:
             if process.returncode is None:
                 process.kill()
@@ -218,7 +226,7 @@ class Builder:
                 self.store.put("builds", build_id, build)
                 await progress("validating", 35, "Validerer syntaks og tillatte API-er")
                 await progress("compiling", 50, "Kontrollerer Lua 5.4; ingen firmwarekompilering")
-                await progress("testing", 65, "Tester hele kjøretiden med sju knapp-/tidsprofiler")
+                await progress("testing", 65, "Tester knapper, kjøretid og relevante maskinvareprofiler")
                 try:
                     generated=generated.model_copy(update={'required_services':service_closure(generated.required_services,api_version)})
                     Quality(self.store).reject_known_failure(project["id"], sha256(payload))
