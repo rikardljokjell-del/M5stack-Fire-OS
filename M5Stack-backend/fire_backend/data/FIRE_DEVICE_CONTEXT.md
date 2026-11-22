@@ -2,7 +2,7 @@
 
 ## Source baseline and verification
 Authoritative handoff: M5Stack-device/BACKEND_HANDOFF.md.
-Read-only source review: commit dae75bf / 74ac26a (and preceding voice/lifecycle changes),
+Read-only source review: commit 9dda9d9 (and preceding voice/lifecycle changes),
 fire_backend_client.*, fire_lua_runtime.*, fire_lua_package_manager.*, fire_os.*,
 platformio.ini and the handoff. Actual FIRE observations take precedence over
 this source review and the PC simulator. physical_verified=false for PC tests.
@@ -36,7 +36,7 @@ GPIO16/17 are connected to PSRAM on FIRE: do not assign them to UART while PSRAM
 ## Version negotiation and authoritative session capabilities
 The injected session policy and exact host registry are authoritative. fire-lua-0.2 is a versioned contract. Latest inspected firmware implements a SUBSET, not all registered services. The actual session handshake remains authoritative. It covers display/buttons/rgb/imu/time/jobs/gpio/adc/dac/pwm/i2c/uart/spi/wifi/bluetooth/mic/speaker/sd/power/rtc. Use its exact signatures, dependencies, advertised resource allowlists and contract fingerprint ONLY when api_version=fire-lua-0.2 and the matching service is announced. Async jobs must be polled without waiting, result errors handled, and handles closed after every outcome. Never replace a requested hardware toolbox with an unrelated demo when firmware support is missing; retain its requirements and explain the adapter prerequisite.
 
-The current source advertises api_version=fire-lua-0.2 with the matching registry hash, services=[display,buttons,rgb,imu,time,jobs,gpio,pwm,i2c,uart], max_memory=131072, max_runtime_ms=0 (until user exit). GPIO read26/35/36, write26, PWM26, I2C0 (writes64), UART2. No Lua speaker/mic/Wi-Fi/Bluetooth/SD yet. Legacy devices can still announce 0.1 and positive lifetime. Conversation flags:
+The current source advertises api_version=fire-lua-0.2 with the matching registry hash, services=[display,buttons,rgb,imu,time,jobs,gpio,pwm,i2c,uart,adc,dac,spi,sd,rtc,speaker], max_memory=131072, max_runtime_ms=0 (until user exit). GPIO read26/35/36, write26, PWM26, I2C0 (writes64), UART2. ADC36, DAC26, SPI2, private SD and RTC are implemented. Lua speaker tone/play/stop is now implemented; Lua mic/Wi-Fi/Bluetooth and power.sleep remain unavailable. Source presence is not physical audio or I/O verification. Legacy devices can still announce 0.1 and positive lifetime. Conversation flags:
 audio_input=true, audio_output=true, firmware_version=fire-os-0.2. Source now
 contains ADC capture on FIRE GPIO34, WAV upload and hashed PCM reply playback.
 Latest timed-ADC captures produced about 4.6 s audio from 4.8 s event intervals,
@@ -131,4 +131,7 @@ hardware checks determine those facts. Never weaken the contract to hide a
 firmware problem; record outstanding source/hardware gaps for the device agent.
 
 ## Mandatory FIRE experience
-A/left=previous/up, B/middle=select/confirm, C/right=next/down in all menus. OS owns long and configured double gestures; no required chords/holds/doubles. Use the whole 320x240 scene with coherent spacing and hierarchy, not a tiny desktop panel. Every game needs a quick New game and available RGB/sound settings menu before play; sound defaults off and requires actual Lua speaker+jobs (currently absent). RGB updates are rate-limited/state-based. Full standards are injected as fire-experience-v1 and enforced by the source-bound review. Settings persist over rounds; long sessions must not auto-close.
+A/left=previous/up, B/middle=select/confirm, C/right=next/down in all menus. OS owns long and configured double gestures; no required chords/holds/doubles. Use the whole 320x240 scene with coherent spacing and hierarchy, not a tiny desktop panel. Every game needs a quick New game and available RGB/sound settings menu before play; sound defaults off and requires actual Lua speaker+jobs (now implemented in inspected source; use only when announced). RGB updates are rate-limited/state-based. Full standards are injected as fire-experience-v2 and enforced by the source-bound review. Settings persist over rounds; long sessions must not auto-close.
+
+## Native game audio follow-up
+Speaker tone/play/stop use asynchronous jobs and a dedicated M5Unified channel. App volume is relative gain under OS master: master zero/mute always silent, live OS volume changes apply, and app stop must not stop AI/system channels. AI capture/playback may return busy; retry safely without blocking or overlapping tones. New generated melodies should sequence short original tones with elapsed-time scheduling and close jobs. There are no automatically supplied WAV music assets: never play an invented file path. Existing private WAV files must be RIFF PCM16 mono 8/16/24kHz, at most 512KiB, streamed by OS. OS backlight is never changed by game audio. Source build passed; melody/mute/master-volume/AI-conflict/start-stop/backlight tests on FIRE are still outstanding.
