@@ -23,7 +23,7 @@ def saved_app(service,name,owner="fire-01",slug="snake"):
     path=service.store.path("packages",package_id,".zip")
     write_archive(path,manifest,source)
     package={"id":package_id,"project_id":project["id"],"build_id":package_id,"manifest":manifest,
-             "archive_sha256":sha256(path.read_bytes()),"validation":{"suite":"release-v1"},"mode":"mock"}
+             "archive_sha256":sha256(path.read_bytes()),"validation":{"suite":"release-v2"},"mode":"mock"}
     service.store.put("builds",package_id,{"id":package_id,"project_id":project["id"],"status":"ready","summary":"Behold dette spillets funksjoner og kontroller."})
     service.store.put("packages",package_id,package)
     project.update(name=name,app_id=slug,latest_package=package_id,next_version=2)

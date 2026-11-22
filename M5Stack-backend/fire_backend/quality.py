@@ -28,7 +28,7 @@ def name_words(text):
 RULES = {
     "bounds": "Clamp display coordinates and RGB values; use finite integers and keep moving objects within screen bounds.",
     "nil": "Initialize state before callbacks. Check table indices, empty lists and missing values, including after reset and collisions.",
-    "budget": "Keep callbacks short and bounded; cap table growth, loops and drawing operations over the entire run.",
+    "budget": "Keep callbacks short and bounded. Every init/update/button callback must stay below24 display operations and120000 display-work units, including initial grid drawing. Spread initialization over updates; cap tables/loops. Compile/top-level timing and a null Lua VM are firmware issues, not fixes achievable by cosmetic app rewrites.",
     "api": "Use only declared fire APIs and the restricted base/math functions. Do not assume standard Lua libraries exist.",
     "text": "Display strings must fit 80 UTF-8 bytes. Format numbers safely without relying on unavailable string APIs.",
     "runtime": "Exercise init, update, reset, each button held and rapid input across the full advertised runtime. Inspect all branches.",
@@ -73,6 +73,18 @@ class Quality:
     def record_validation(self, build, source, message):
         return self.record(project_id=build["project_id"], build_id=build["id"],
             source_hash=hashlib.sha256(source.encode()).hexdigest(), message=message, provenance="release_validator")
+
+    def feedback(self, session, event):
+        if event.event not in {"device_install_result","app_started","app_healthy","app_failed","app_stopped","app_diagnostic"}:
+            return
+        package=self.store.get("packages",event.package_id)
+        report={"id":event.event_id or new_id("feedback"),"device_id":session.device_id,"boot_id":session.boot_id,
+                "project_id":package["project_id"],"package_id":package["id"],"source_sha256":package["manifest"]["checksum"],
+                "event":event.event,"reported_at":time.time(),"error_code":event.error_code,"message":event.message,
+                "diagnostics":event.diagnostics.model_dump(exclude_none=True) if event.diagnostics else {}}
+        self.store.put("feedback",report["id"],report,critical=True)
+        prior=sorted((r for r in self.store.list("feedback") if r["device_id"]==session.device_id),key=lambda r:r["reported_at"],reverse=True)
+        for old in prior[100:]:self.store.path("feedback",old["id"]).unlink(missing_ok=True)
 
     def cases(self, project_id):
         return sorted((x for x in self.store.list("quality") if x["project_id"]==project_id),key=lambda x:x["last_seen"],reverse=True)[:12]
@@ -195,6 +207,15 @@ class Quality:
         evidence=[{k:c.get(k) for k in ("id","category","message","provenance","package_id")} for c in self.cases(session.project_id) if c.get("package_id")==package_id]
         result={"package_id":package_id,"source_sha256":package["manifest"]["checksum"],"reproduced_on_pc":reproduced,
                 "validator_error":error,"cases":evidence[:6],"case_id":report["id"]}
+        native = sorted((c for c in self.store.list("quality") if c.get("project_id")==session.project_id and c.get("package_id")==package_id
+            and c.get("provenance") in {"device_receipt","device_diagnostic"}),key=lambda c:c["last_seen"],reverse=True)
+        device = service.device_record(session) if session.target=="device" else {}
+        failed_this_boot = (device.get("runtime_status")=="failed" or
+            device.get("last_failure_boot_id")==session.boot_id and device.get("last_failure_package_id")==package_id or
+            any(c.get("kind")=="run" and c.get("status")=="failed" and c.get("device_id")==session.device_id
+                and c.get("boot_id")==session.boot_id and c.get("package_id")==package_id for c in self.store.list("commands")))
+        result["blocked_device_runtime"] = bool(native and "invalid lua source" in native[0]["message"].lower()
+            and failed_this_boot and device.get("installed_package_id")==package_id)
         self.store.put("quality",report["id"],{**self.store.get("quality",report["id"]),"diagnosis":result},critical=True)
         return result
 
@@ -214,7 +235,7 @@ class Quality:
 def require_deliverable(package):
     if package.get("quality",{}).get("blocked"):
         raise ValueError("Denne appversjonen er sperret etter en feil. Velg appen og be om reparasjon for en ny testet versjon.")
-    if package.get("validation",{}).get("suite") != "release-v1":
+    if package.get("validation",{}).get("suite") != "release-v2":
         raise ValueError("Denne eldre pakken mangler utvidet kjøretidstest. Velg appen og be om reparasjon/ny bygging før levering.")
 
 

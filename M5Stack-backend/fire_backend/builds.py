@@ -33,7 +33,7 @@ async def validate_release(app, store, build_id):
         results.append({"profile": profile, **{k:v for k,v in result.items() if k != "trace"}})
     if {"display", "rgb"}.intersection(app["required_services"]) and not sum(p["api_operations"] for p in results):
         raise ValueError("Release suite: app declares display/RGB but produces no visible output in any input profile")
-    return {**results[0], "profiles": results, "suite": "release-v1", "physical_verified": False,
+    return {**results[0], "profiles": results, "suite": "release-v2", "physical_verified": False,
             "native_numeric_parity": False}
 
 

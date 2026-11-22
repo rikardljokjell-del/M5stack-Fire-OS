@@ -71,6 +71,8 @@ def generation_policy(settings, session):
         + ". Conversation audio flags NEVER grant fire.mic/fire.speaker or other Lua APIs. "
         "App lifetime: max_runtime_ms=0 means until user exit, NOT a zero-duration app. "
         "Keep callback/instruction/memory protection; never implement an app auto-close timer. "
+        "Keep every init/update/button callback below24 display operations and120000 estimated display-work units. "
+        "Split initial grid/background work across updates. A legacy ten-second lifetime note is not a requested ten-second game round. "
         "Do not propose an unavailable feature; explain the limitation and ask for a supported alternative. "
         "Source presence and advertised budgets are not proof of physical testing or firmware enforcement."
     )

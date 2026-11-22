@@ -148,6 +148,9 @@ class DesktopRuntime:
     def conversation(self, session_id, **values):
         return self.request("POST", f"/desktop/sessions/{session_id}/conversation", json=values)
 
+    def voice(self,session_id,test=False):
+        return self.request("POST",f"/desktop/sessions/{session_id}/voice",json={"test":test})
+
     def install_saved(self, session_id, package_id):
         return self.request("POST", f"/desktop/sessions/{session_id}/install", json={"package_id": package_id})
 

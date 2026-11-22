@@ -180,6 +180,13 @@ def create_app(settings=None, provider=None):
                             **({"conversation_mode": data["conversation_mode"]} if "conversation_mode" in data else {}))
         return await dispatch(service, session, event)
 
+    @app.post("/desktop/sessions/{session_id}/voice", dependencies=[Depends(desktop_auth)])
+    async def desktop_voice(session_id: str, request: Request, service: Backend = Depends(backend)):
+        data=await request.json()
+        if not isinstance(data,dict) or set(data)!={"test"} or type(data["test"]) is not bool:
+            raise HTTPException(422,"Expected test boolean")
+        return await service.audio.replay(service.session(session_id),test=data["test"])
+
     @app.post("/desktop/sessions/{session_id}/app", dependencies=[Depends(desktop_auth)])
     async def desktop_app(session_id: str, request: Request, service: Backend = Depends(backend)):
         data = await request.json()
@@ -265,7 +272,8 @@ def create_app(settings=None, provider=None):
     @app.get("/audio/{audio_id}")
     async def audio_output(audio_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
         item, path = service.audio.clip(audio_id, identity)
-        return DeviceFileResponse(path, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Audio-Format": "pcm_s16le", "X-Audio-Sample-Rate": "24000"})
+        return DeviceFileResponse(path, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Audio-Format": "pcm_s16le", "X-Audio-Sample-Rate": "24000"},
+                                  completed=lambda stats:service.audio.download_result(audio_id,stats))
 
     @app.get("/projects")
     async def projects(identity=Depends(auth), service: Backend = Depends(backend)):
@@ -279,6 +287,11 @@ def create_app(settings=None, provider=None):
     async def project_quality(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
         authorize_project(service.store, item_id, identity)
         return service.quality.cases(item_id)
+
+    @app.get("/projects/{item_id}/feedback")
+    async def project_feedback(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
+        authorize_project(service.store,item_id,identity)
+        return [r for r in service.store.list("feedback") if r["project_id"]==item_id]
 
     @app.delete("/projects/{item_id}")
     async def delete(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):

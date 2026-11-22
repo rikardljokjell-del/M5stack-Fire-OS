@@ -170,6 +170,8 @@ class DeviceLifecycle:
                     raise ValueError("App must start before reporting healthy")
                 self.finish_command(command, "healthy")
                 self.quality.observed_healthy(session.project_id, package_id)
+                if device.get("last_failure_package_id")==package_id:
+                    device.update(last_failure_package_id=None,last_failure_boot_id=None)
                 if device.get("current") != package_id:
                     device.update(backup=device.get("previous"), previous=device.get("current"), current=package_id)
                 device.setdefault("projects", {})[session.project_id] = {key: device.get(key) for key in ("current", "previous", "backup")}
@@ -182,7 +184,7 @@ class DeviceLifecycle:
                     source_hash=failed_package["manifest"]["checksum"],message=(event.error_code+": "+(event.message or "")),provenance="device_receipt")
                 self.finish_command(command, "failed")
                 device.update(running_package_id=None, runtime_status="failed", last_error=event.error_code,
-                              active_run_id=None, pending_run_id=None)
+                              active_run_id=None, pending_run_id=None,last_failure_package_id=package_id,last_failure_boot_id=session.boot_id)
                 restore = device.get("current") if device.get("current") != package_id else device.get("previous")
                 state = State.failed
                 if restore:

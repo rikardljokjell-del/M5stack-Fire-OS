@@ -1,5 +1,11 @@
 # FIRE OS AI Developer backend 0.2
 
+Siste runtime-/lydfunn og liten device-feedback: [URGENT_RUNTIME_VOICE.md](docs/URGENT_RUNTIME_VOICE.md).
+Backend lagrer korte livssyklusrapporter, skiller transport fra avspilling og
+beholder byggeforslaget ved lydfeil. Release-v2 begrenser arbeid per callback.
+Bekreftet firmwarefeil ved nytt Lua-startforsøk er fortsatt en device-oppgave;
+PC-tester alene bekrefter ikke at en app kjører riktig på FIRE.
+
 Ny kvalitetsport og reparasjonsflyt: [APP_REPAIR_HANDOFF.md](docs/APP_REPAIR_HANDOFF.md).
 Feilrapport for valgt app henter kilde/diagnostikk automatisk; sju releaseprofiler
 og et varig feilregister beskytter neste bygging. Windows-appen har Reparer valgt app.

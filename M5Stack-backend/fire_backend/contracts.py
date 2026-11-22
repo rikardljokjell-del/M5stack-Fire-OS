@@ -17,6 +17,7 @@ REQUIRED = {
     "app_select": ["app_mode"], "app_deleted": ["app_id"], "app_inventory": ["apps", "storage_ready", "complete"],
     "mode_select": ["conversation_mode"],
     "app_diagnostic": ["app_id", "package_id", "error_code"],
+    "audio_playback_failed": ["audio_id", "turn_id", "error_code"],
 }
 
 

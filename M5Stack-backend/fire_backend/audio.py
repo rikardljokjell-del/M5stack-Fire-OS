@@ -131,6 +131,60 @@ class AudioManager:
             if session and not session.stopped and session.turn_id == turn_id:
                 session.audio_status["phase"] = "upload_missing"
                 await self.service.input_retry(session, "Lydfilen kom ikke frem. Trykk B for et nytt opptak.", "audio_upload_missing")
+        for item in self.store.list("audio"):
+            if item.get("status") != "ready" or "ready_at" not in item:
+                continue
+            session = self.service.sessions.get(item["session_id"])
+            if not session or session.stopped or session.turn_id != item["turn_id"] or session.audio_id != item["id"]:
+                continue
+            age=time.time()-item["ready_at"]
+            if session.audio_status.get("phase") == "playing":
+                if age>=max(60,item["size_bytes"]/48000+35):
+                    await self.playback_failed(session,item,"playback_finish_missing","FIRE kvitterte ikke for ferdig avspilling. Tekst og forslag er beholdt.")
+                continue
+            if age >= 35:
+                await self.playback_failed(session,item,"playback_timeout","FIRE kvitterte ikke for lydsvaret. Tekst og byggeforslag er beholdt.")
+            elif age >= 12 and item.get("announcements",1)<2 and not item.get("server_transfer",{}).get("finished"):
+                item["announcements"]=2
+                self.store.put("audio",item["id"],item)
+                await self.announce(session,item)
+
+    async def announce(self,session,item):
+        keys=("turn_id","sha256","size_bytes","expires_at","sample_rate","channels","format","synthetic","mode")
+        await self.service.emit(session,{"type":"audio_ready","audio_id":item["id"],"download_url":f"/audio/{item['id']}",
+            **{k:item[k] for k in keys}})
+
+    async def replay(self,session,test=False):
+        if (not session.sockets or not session.turn_id or session.activity!="idle" or session.lock.locked()
+                or (session.input_task and not session.input_task.done()) or session.state not in
+                {State.idle,State.clarification_needed,State.awaiting_build_confirmation,State.failed}):
+            raise ValueError("Vent til FIRE er tilkoblet og taleomgangen er ferdig før lydtesten.")
+        if not policy(self.settings,session.target,session.capabilities)["conversation_audio"]["output_enabled"]:
+            raise ValueError("FIRE annonserer ikke støtte for talesvar.")
+        text="Dette er en test av høyttaleren på FIRE." if test else next((x["content"] for x in reversed(session.history) if x["role"]=="assistant"),"")
+        if not text:raise ValueError("Ingen lagret svartekst å spille av.")
+        old=session.speech_task
+        self.cancel(session)
+        if old and not old.done():
+            with contextlib.suppress(asyncio.CancelledError):await old
+        session.audio_status={"phase":"generating_reply","turn_id":session.turn_id,"test_clip":test}
+        session.speech_task=asyncio.create_task(self.speak(session,text))
+        return {"status":"queued","turn_id":session.turn_id,"test_clip":test}
+
+    async def restore_proposal(self,session):
+        if session.state==State.awaiting_build_confirmation and session.proposal_id:
+            await self.service.emit(session,{"type":"build_proposal","proposal_id":session.proposal_id,
+                "project_id":session.project_id,"summary":session.summary,"turn_id":session.turn_id})
+
+    async def playback_failed(self,session,item,code,message):
+        item.update(status="playback_failed",error_code=code,expires_at=time.time())
+        self.store.put("audio",item["id"],item,critical=True)
+        self.store.path("audio",item["id"],".pcm").unlink(missing_ok=True)
+        session.audio_status.update(phase="playback_failed",audio_id=item["id"],error_code=code)
+        session.audio_id=None
+        await self.service.activity(session,"idle")
+        await self.service.emit(session,{"type":"audio_error","turn_id":item["turn_id"],"message":message})
+        await self.restore_proposal(session)
 
     async def receive(self, session, turn_id, stream):
         identifier(turn_id)
@@ -294,14 +348,12 @@ class AudioManager:
                     "status": "ready", "size_bytes": size, "sha256": digest.hexdigest(),
                     "expires_at": int(time.time()) + self.settings.fire_audio_ttl_seconds,
                     "sample_rate": 24000, "channels": 1, "format": "pcm_s16le", "synthetic": True,
-                    "mode": self.settings.fire_ai_mode}
+                    "mode": self.settings.fire_ai_mode,"ready_at":time.time(),"announcements":1}
             self.store.put("audio", audio_id, item)
             session.audio_id = audio_id
             session.audio_status = {**session.audio_status, "phase": "reply_ready", "output_bytes": size}
             self.service.persist(session)
-            await self.service.emit(session, {"type": "audio_ready", "audio_id": audio_id,
-                                              "download_url": f"/audio/{audio_id}",
-                                              **{k: v for k, v in item.items() if k not in {"id", "session_id", "device_id", "status"}}})
+            await self.announce(session,item)
         except asyncio.CancelledError:
             path.unlink(missing_ok=True)
             raise
@@ -313,6 +365,7 @@ class AudioManager:
             self.store.log(session.id, "Speech failed: " + type(error).__name__, critical=True)
             await self.service.emit(session, {"type": "audio_error", "turn_id": turn_id,
                                               "message": "Talesvar feilet; tekstsvaret og forslaget er beholdt."})
+            await self.restore_proposal(session)
         finally:
             partial.unlink(missing_ok=True)
 
@@ -327,12 +380,35 @@ class AudioManager:
             raise ValueError("Audio integrity check failed")
         return item, path
 
+    def download_result(self,audio_id,stats):
+        with contextlib.suppress(OSError,ValueError,FileNotFoundError):
+            item=self.store.get("audio",audio_id)
+            if item["status"]!="ready":return
+            item.update(server_transfer=stats,server_transfer_at=time.time())
+            self.store.put("audio",audio_id,item)
+            session=self.service.sessions.get(item["session_id"])
+            if session and session.audio_id==audio_id:
+                session.audio_status["server_transfer"]=stats
+                self.service.persist(session)
+
     async def playback(self, session, event):
+        if event.audio_id!=session.audio_id:
+            with contextlib.suppress(FileNotFoundError):
+                old=self.store.get("audio",event.audio_id)
+                if (old["session_id"]==session.id and old["device_id"]==session.device_id and old["turn_id"]==event.turn_id
+                        and old["status"] in {"cancelled","played","playback_failed","expired"}):
+                    return "ignored"
+        if (session.audio_status.get("phase")=="playback_failed" and session.audio_status.get("audio_id")==event.audio_id
+                and session.turn_id==event.turn_id):
+            return "ignored"  # Late ack after timeout cannot resurrect a cancelled clip.
         if event.audio_id != session.audio_id or event.turn_id != session.turn_id:
             raise ValueError("Playback does not match the current turn/clip")
         item, _ = self.clip(event.audio_id, session.device_id if session.target == "device" else "admin")
         if item["session_id"] != session.id:
             raise ValueError("Audio session mismatch")
+        if event.event=="audio_playback_failed":
+            await self.playback_failed(session,item,event.error_code,"FIRE kunne ikke spille av svaret. Tekst og byggeforslag er beholdt.")
+            return
         if event.event == "audio_playback_started":
             if session.activity != "idle":
                 raise ValueError("Cannot start playback while recording/processing")

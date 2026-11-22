@@ -266,6 +266,8 @@ class DesktopUI:
         ttk.Button(row, text="Kun samtale", command=lambda: self.set_conversation("chat")).pack(side="left")
         ttk.Button(row, text="Lag/endre app", command=lambda: self.set_conversation("develop")).pack(side="left", padx=8)
         ttk.Button(row, text="Avbryt AI-svar", command=self.cancel_conversation).pack(side="left")
+        ttk.Button(row,text="Spill svar igjen",command=lambda:self.replay_voice(False)).pack(side="left",padx=8)
+        ttk.Button(row,text="Test lyd",command=lambda:self.replay_voice(True)).pack(side="left")
         self.session_detail = self.label(page, "Ingen FIRE tilkoblet ennå.", wraplength=810)
         self.session_detail.pack(anchor="w", pady=(0, 7))
         self.pipeline_detail = self.label(page, "", wraplength=810, foreground=MUTED)
@@ -328,7 +330,7 @@ class DesktopUI:
         app = self.apps_rows.get(selected[0]) if selected else None
         if app:
             quality_hint = ("Sperret etter feil – bruk Reparer valgt app.\n" if app.get("quality",{}).get("blocked") else
-                            "Trenger utvidet test – bruk Reparer valgt app eller bygg ny versjon.\n" if app.get("validation_suite") != "release-v1" else "")
+                            "Trenger utvidet test – bruk Reparer valgt app eller bygg ny versjon.\n" if app.get("validation_suite") != "release-v2" else "")
             self.apps_detail.configure(text=f"{app['name']} · {app['version']} · {app['mode']}\n"
                 f"SD-mappe: {app['sd_path']}\nPakke: {app['package_id']}\n"
                 + quality_hint
@@ -351,6 +353,10 @@ class DesktopUI:
         if session:
             self.work(lambda: self.runtime.conversation(session["session_id"], action="cancel"),
                       message="Avbryter AI-svaret …")
+
+    def replay_voice(self,test=False):
+        session=self.session()
+        if session:self.work(lambda:self.runtime.voice(session["session_id"],test),message="Tester talesvar …" if test else "Spiller svaret på nytt …")
 
     def edit_saved(self):
         selected = self.apps_table.selection()
@@ -727,7 +733,7 @@ class DesktopUI:
         app = self.apps_rows.get(selected[0]) if selected else None
         choice_idle = idle_for_text and session["state"] != "processing" and session.get("activity", "idle") == "idle"
         can_install = choice_idle and app and app.get("device_id") == session["device_id"]
-        deliverable = app and not app.get("quality",{}).get("blocked") and app.get("validation_suite") == "release-v1"
+        deliverable = app and not app.get("quality",{}).get("blocked") and app.get("validation_suite") == "release-v2"
         self.install_button.configure(state="normal" if can_install and deliverable and not self.busy else "disabled")
         self.edit_app_button.configure(state="normal" if can_install and not self.busy else "disabled")
         self.new_app_button.configure(state="normal" if choice_idle and not self.busy else "disabled")
@@ -755,7 +761,8 @@ class DesktopUI:
                 "generating_reply": "Lager AI-lydsvar …", "reply_ready": "Lydsvaret er klart for FIRE",
                 "playing": "FIRE spiller av lydsvaret", "played": "FIRE har kvittert for avspilling",
                 "upload_missing": "Lydfilen kom ikke frem", "input_failed": "Opptaket kunne ikke tolkes",
-                "reply_failed": "Lydsvaret feilet; tekstsvaret er beholdt"}.get(audio.get("phase"), "")
+                "reply_failed": "Lydsvaret feilet; tekstsvaret er beholdt",
+                "playback_failed": "Avspilling mangler/feilet på FIRE; tekst og forslag er beholdt"}.get(audio.get("phase"), "")
             if audio.get("phase") == "retry":
                 audio_hint = "Klar for nytt opptak · trykk B"
             if audio_hint and audio.get("duration_seconds"):

@@ -89,6 +89,21 @@ Ny avtalt sentinel: capabilities.max_runtime_ms=0 og manifest.max_runtime_ms=0 b
 
 ## Backendverifisering
 
+Siste kontroll: 231 tester bestått. Release-v2 har konservative grenser per
+callback: 24 output-kall, 120000 estimerte tegningsarbeidsenheter og 20000
+Lua-instruksjoner. Sju profiler beholdes. Dette er ingen kalibrering av ESP32s
+veggklokketid. Den fysisk avviste Slangespill-kilden avvises nå også på PC.
+Eldre release-v1-pakker må bygges/testes på nytt før ny levering; eksisterende
+device-filer endres ikke. En isolert ekte OpenAI-reparasjon passerte release-v2;
+ingen brukerapp ble endret eller installert under denne testen.
+
+Små, verifiserte install/start/healthy/stop/error-rapporter lagres under feedback
+med maks 100 rapporter per enhet. GET /projects/{id}/feedback følger prosjektets
+eierskapskontroll. Ingen loggfil eller rapportering per frame er nødvendig.
+Se [hasterapporten](URGENT_RUNTIME_VOICE.md) for diagnostics-kontrakten og den
+bekreftede null-VM-feilen. Den feilen blokkerer gjentatte appomskrivinger for
+samme installerte pakke og boot; ny boot opphever denne runtime-blokkeringen.
+
 221 samlede pytest-tester bestått, inkludert navngitt automatisk reparasjon, enhetsscope og resume etter prosjektbytte. Isolert ekte OpenAI-dialog/kodegenerering har passert sju-profil-porten og ga en validert Sprettsirkel-pakke. Dette var en separat testmappe, ikke brukerens Snake-app og ikke en fysisk installasjon. Ingen API-nøkler eller brukerpakker publiseres i GitHub. Windows-appen har Reparer valgt app, viser leveringssperrer og skjuler installasjon for pakker uten ny releaseport.
 
 ## Akseptansekriterier

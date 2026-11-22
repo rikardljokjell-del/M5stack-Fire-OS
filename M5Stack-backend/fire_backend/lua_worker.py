@@ -61,6 +61,7 @@ HARNESS = r'''
 local source, services, memory_ms, frames, profile, operation_limit = ...
 local compile, hook = load, debug.sethook
 local count, total, elapsed = 0, 0, 0
+local callback_ops, callback_work, peak_ops, peak_work = 0,0,0,0
 local trace, trace_count = {}, 0
 local button = ""
 local function integer(v, lo, hi)
@@ -74,6 +75,20 @@ local function whole(v, lo, hi)
 end
 local function record(name, ...)
   total = total + 1
+  callback_ops=callback_ops+1
+  local a,b,c,d=...
+  local work=0
+  if name=="clear" then work=76800
+  elseif name=="rect" then work=2*(c+d)
+  elseif name=="line" then work=math.max(math.abs(c-a),math.abs(d-b))+1
+  elseif name=="circle" then work=math.ceil(7*c)
+  elseif name=="text" then work=#c*48 end
+  callback_work=callback_work+work
+  peak_ops=math.max(peak_ops,callback_ops)
+  peak_work=math.max(peak_work,callback_work)
+  if profile and (callback_ops>24 or callback_work>120000) then
+    error("Per-callback display work budget exceeded; spread rendering across updates")
+  end
   if total > operation_limit then error("API operation budget exceeded") end
   if trace_count < 240 then
     trace_count = trace_count + 1
@@ -118,10 +133,11 @@ local env = {
 }
 local function quota()
   count=count+1000
-  if count>200000 then error("Instruction budget exceeded") end
+  if count>(profile and 20000 or 200000) then error("Instruction budget exceeded") end
 end
 local function call(fn, ...)
   count=0
+  callback_ops,callback_work=0,0
   hook(quota,"",1000)
   fn(...)
   hook()
@@ -156,7 +172,7 @@ for frame=1,frames do
   call(env.update,dt)
   if profile and elapsed>=memory_ms then break end
 end
-return {frames=frames,elapsed_ms=elapsed,api_operations=total,trace=trace}
+return {frames=frames,elapsed_ms=elapsed,api_operations=total,trace=trace,max_callback_operations=peak_ops,max_callback_display_work=peak_work}
 '''
 
 
@@ -184,7 +200,8 @@ def simulate(request):
         trace.append([command[j] for j in range(1, len(command) + 1)])
     return {"ok": True, "syntax": "passed", "api_validation": "passed",
             "frames": result["frames"], "elapsed_ms": result["elapsed_ms"],
-            "api_operations": result["api_operations"], "trace": trace}
+            "api_operations": result["api_operations"], "trace": trace,
+            "max_callback_operations":result["max_callback_operations"],"max_callback_display_work":result["max_callback_display_work"]}
 
 
 if __name__ == "__main__":

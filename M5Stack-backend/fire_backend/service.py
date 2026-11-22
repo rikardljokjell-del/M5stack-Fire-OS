@@ -370,7 +370,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
             device.update(project_id=session.project_id, **{key: selected_versions.get(key) for key in ("current", "previous", "backup")})
             if device.get("boot_id") != session.boot_id:
                 device.update(active_run_id=None, pending_run_id=None, running_package_id=None,
-                              installed_package_id=None, runtime_status="unknown")
+                              installed_package_id=None, runtime_status="unknown",last_failure_package_id=None,last_failure_boot_id=None)
             device.update(boot_id=session.boot_id, online=True, capabilities=session.capabilities, physical_verified=False)
             device["connection_epoch"] = device.get("connection_epoch", 0) + 1
             session.app_revision = device.get("app_change_counter", 0)
@@ -635,7 +635,10 @@ class Backend(DeviceLifecycle, AppLifecycle):
                             await self.emit(session, {"type":"assistant_message","turn_id":session.turn_id,
                                 "text":"Jeg undersøker «" + target["manifest"]["name"] + "» og feilhistorikken automatisk."})
                             session.repair_context = await self.quality.diagnose(self, session, text)
-                    if session.repair_context:
+                    if session.repair_context and session.repair_context.get("blocked_device_runtime"):
+                        reply = DialogReply(message="FIRE klarer ikke å starte Lua-miljøet etter forrige feil. Dette må rettes i firmware. Appen og feilloggen er bevart; en ny omskriving av appen løser ikke denne oppstartsfeilen.",
+                            clarification_needed=False,build_summary="")
+                    elif session.repair_context:
                         package = self.store.get("packages", session.repair_context["package_id"])
                         original = self.store.get("builds", package["build_id"]).get("summary", "")
                         reply = DialogReply(message="Jeg har analysert «"+package["manifest"]["name"]+"». Jeg retter denne appen med kildekoden og feilhistorikken. Trykk A BUILD.",

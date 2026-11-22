@@ -141,14 +141,26 @@ class DeviceApp(StrictModel):
 # Excluding absent extension defaults keeps pre-extension event replay hashes
 # compatible with persisted protocol-0.2 events.
 APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
-                      "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None}
+                      "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None}
+
+
+class DeviceDiagnostics(StrictModel):
+    phase: Literal["load","init","update","on_button","install","start","stop","audio_download","audio_playback"] | None = None
+    elapsed_ms: int | None = Field(default=None,ge=0,le=4294967295,strict=True)
+    callback_us: int | None = Field(default=None,ge=0,le=60000000,strict=True)
+    free_heap: int | None = Field(default=None,ge=0,le=16777216,strict=True)
+    min_free_heap: int | None = Field(default=None,ge=0,le=16777216,strict=True)
+    lua_bytes: int | None = Field(default=None,ge=0,le=16777216,strict=True)
+    source_bytes: int | None = Field(default=None,ge=0,le=100000,strict=True)
+    frames: int | None = Field(default=None,ge=0,le=4294967295,strict=True)
 
 
 class DeviceEvent(StrictModel):
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed"]
     conversation_mode: Literal["chat", "develop"] | None = None
+    diagnostics: DeviceDiagnostics | None = None
     app_mode: Literal["new", "update"] | None = None
     app_id: str | None = Field(default=None, pattern=ID_PATTERN)
     base_package_id: str | None = Field(default=None, pattern=ID_PATTERN)
@@ -200,6 +212,7 @@ class DeviceEvent(StrictModel):
                 "listen_start": ("turn_id",), "listen_stop": ("turn_id",),
                 "app_diagnostic": ("app_id", "package_id", "error_code"),
                 "audio_playback_started": ("audio_id", "turn_id"), "audio_playback_finished": ("audio_id", "turn_id"),
+                "audio_playback_failed": ("audio_id", "turn_id", "error_code"),
             }
             if any(not getattr(self, name) for name in required.get(self.event, ())):
                 raise ValueError("Missing event-specific fields")

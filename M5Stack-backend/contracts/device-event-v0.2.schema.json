@@ -107,6 +107,134 @@
       ],
       "title": "DeviceApp",
       "type": "object"
+    },
+    "DeviceDiagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "anyOf": [
+            {
+              "enum": [
+                "load",
+                "init",
+                "update",
+                "on_button",
+                "install",
+                "start",
+                "stop",
+                "audio_download",
+                "audio_playback"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Phase"
+        },
+        "elapsed_ms": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Elapsed Ms"
+        },
+        "callback_us": {
+          "anyOf": [
+            {
+              "maximum": 60000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Callback Us"
+        },
+        "free_heap": {
+          "anyOf": [
+            {
+              "maximum": 16777216,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Free Heap"
+        },
+        "min_free_heap": {
+          "anyOf": [
+            {
+              "maximum": 16777216,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Free Heap"
+        },
+        "lua_bytes": {
+          "anyOf": [
+            {
+              "maximum": 16777216,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lua Bytes"
+        },
+        "source_bytes": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Bytes"
+        },
+        "frames": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frames"
+        }
+      },
+      "title": "DeviceDiagnostics",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -150,7 +278,8 @@
         "app_deleted",
         "app_inventory",
         "mode_select",
-        "app_diagnostic"
+        "app_diagnostic",
+        "audio_playback_failed"
       ],
       "title": "Event",
       "type": "string"
@@ -170,6 +299,17 @@
       ],
       "default": null,
       "title": "Conversation Mode"
+    },
+    "diagnostics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeviceDiagnostics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "app_mode": {
       "anyOf": [
@@ -1059,6 +1199,36 @@
             "type": "string"
           },
           "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "error_code": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "audio_playback_failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "audio_id",
+          "turn_id",
+          "error_code"
+        ],
+        "properties": {
+          "audio_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "turn_id": {
             "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
             "type": "string"
           },

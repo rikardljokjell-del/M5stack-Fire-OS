@@ -1,5 +1,22 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
+## Siste måling: runtime og lydkvittering
+
+231 backendtester bestått. Isolert ekte OpenAI-reparasjon passerte release-v2
+med sju profiler; ingen brukerapp ble endret/installert av denne testen.
+Den fysisk avviste Slangespill 0.1.2-kilden avvises nå av per-callback-porten.
+Den native feilen var init callback budget exceeded, fulgt av Invalid Lua source.
+Device-kildens mislykkede start lukker VM uten å nullstille runtime-ready-flagget.
+Dette krever firmwareendring før nytt forsøk kan fungere pålitelig uten reboot.
+
+Backend har nå begrenset livssyklusfeedback, lydtransportmåling, watchdog,
+bevaring av tekst/forslag ved lydfeil og lokale Spill svar igjen/Test lyd-knapper.
+Siste FIRE-session var frakoblet under ferdigkontrollen. Ny fysisk lyd-/appflyt
+etter disse endringene er derfor ikke bekreftet. Se
+[konkret instruks til device-agenten](URGENT_RUNTIME_VOICE.md).
+
+Eldre målinger under er historikk, ikke en påstand om dagens firmwarestatus.
+
 Nyeste reparasjonsleveranse: 206 regresjonstester bestått; [APP_REPAIR_HANDOFF.md](APP_REPAIR_HANDOFF.md).
 Releaseporten bruker sju full-varighetsprofiler, automatisk feilkontekst og
 varige feil-/forholdsregler; gamle eller feilrapporterte pakker sperres for ny
