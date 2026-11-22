@@ -243,7 +243,7 @@ class AudioManager:
             session.audio_status["transcript"] = text[:300]
             await self.service.emit(session, {"type": "transcript", "turn_id": item["turn_id"], "text": text,
                                               "mode": self.settings.fire_ai_mode})
-            await self.service.text(session, text)
+            await self.service.text(session, text, source="voice")
             item["status"] = "completed"
         except asyncio.CancelledError:
             item["status"] = "cancelled"

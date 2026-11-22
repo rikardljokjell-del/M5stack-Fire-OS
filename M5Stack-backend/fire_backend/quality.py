@@ -5,6 +5,7 @@ import re
 import time
 import zipfile
 import unicodedata
+from difflib import SequenceMatcher
 
 from .storage import new_id
 
@@ -85,10 +86,16 @@ class Quality:
         if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id") for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a version reported broken. Make a substantive repair before release.")
 
-    def repair_target(self, service, session, text):
+    def repair_target(self, service, session, text, *, source="text", continuing_repair=False):
         owner = session.device_id if session.target == "device" else None
         projects = [p for p in self.store.list("projects") if p.get("owner_device_id") == owner and service.app_versions(p)]
         words = name_words(text)
+        selected = next((p for p in projects if p["id"] == session.project_id and
+                         any(v["id"] == session.base_package_id for v in service.app_versions(p))), None)
+        explicit_switch = bool(re.search(r"\b(bytt|annen|annet|isteden|instead|switch)\b|i stedet|\b(?:lag|opprett|create)\b", text, re.I))
+        resembles_selected = selected and any(SequenceMatcher(None, heard, known).ratio() >= 0.6
+            for heard in words if len(heard) >= 5 for known in name_words(selected["name"]) if len(known) >= 5)
+        voice_focus = bool(selected and session.app_mode == "update" and source == "voice" and not explicit_switch)
         matches = []
         for project in projects:
             versions = service.app_versions(project)
@@ -97,20 +104,27 @@ class Quality:
             score = max((len(n) for alias in aliases if (n := name_words(alias)) and n <= words), default=0)
             if score:
                 matches.append((score, project))
-        if matches:
+        if voice_focus and resembles_selected:
+            project = selected
+        elif matches:
             best = max(score for score, _ in matches)
             choices = [p for score, p in matches if score == best]
             if len(choices) != 1:
                 raise RepairChoiceNeeded("Hvilken app mener du: " + ", ".join(p["name"]+" ("+str(service.project_app_id(p))+")" for p in choices[:4]) + "?")
             project = choices[0]
         else:
-            # Do not silently repair the selected app when another named target
-            # was requested but not found. Generic 'fiks den/appen' uses context.
+            # ASR names are uncertain. Explicit picker/base identity and an
+            # ongoing repair outrank an unrecognized spoken name, unless the
+            # user clearly switches tasks. A recognized other app still wins.
+            use_focus = bool(selected and session.app_mode == "update" and not explicit_switch and
+                             (source == "voice" or continuing_repair and resembles_selected))
             subject = re.search(r"\b(?:fiks|reparer|fix|repair)\s+([^.!?,]+)", text, re.I)
             generic = {"den", "det", "denne", "dette", "feil", "feilen", "problem", "problemet", "spill", "spillet", "som", "ikke", "funger", "fungerer", "er", "min", "mitt", "meg", "for", "a", "og"}
-            if subject and name_words(subject[1]) - generic:
+            if subject and name_words(subject[1]) - generic and not use_focus:
                 raise RepairChoiceNeeded("Jeg finner ikke appen du nevner. Tilgjengelige apper: " + ", ".join(p["name"] for p in projects[:4]) + ".")
-            project = next((p for p in projects if p["id"] == session.project_id), None)
+            if explicit_switch:
+                raise RepairChoiceNeeded("Hvilken app vil du bytte til: " + ", ".join(p["name"] for p in projects[:4]) + "?")
+            project = selected or next((p for p in projects if p["id"] == session.project_id), None)
             if project is None and session.target == "device":
                 device = service.device_record(session)
                 package_ids = {device.get("running_package_id"), device.get("installed_package_id")}
@@ -129,8 +143,8 @@ class Quality:
             return project, service.update_base(project, service.device_record(session))
         return project, service.app_versions(project)[0]
 
-    async def select_repair_target(self, service, session, text):
-        project, package = self.repair_target(service, session, text)
+    async def select_repair_target(self, service, session, text, *, source="text", continuing_repair=False):
+        project, package = self.repair_target(service, session, text, source=source, continuing_repair=continuing_repair)
         # Source identity is verified in diagnose before it is used. Do not use
         # select_app here: it clears the active audio turn and takes its lock.
         if session.target == "device":

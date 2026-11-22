@@ -590,18 +590,18 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 self.store.put("sessions", session.id, saved, critical=True)
         await self.provider.close()
 
-    async def text(self, session, text):
+    async def text(self, session, text, *, source="text"):
         task = asyncio.current_task()
         if session.operation_task and session.operation_task is not task:
             raise Conflict("Session is busy")
         session.operation_task = task
         try:
-            return await self._text(session, text)
+            return await self._text(session, text, source=source)
         finally:
             if session.operation_task is task:
                 session.operation_task = None
 
-    async def _text(self, session, text):
+    async def _text(self, session, text, *, source="text"):
         turn_id = session.turn_id
         from .quality import repair_requested, RepairChoiceNeeded
         repair_intent = bool(text and session.conversation_mode == "develop" and repair_requested(text))
@@ -622,12 +622,13 @@ class Backend(DeviceLifecycle, AppLifecycle):
             session.history = session.history[-32:]
             try:
                 from .models import DialogReply
+                continuing_repair = bool(session.repair_context and session.repair_context.get("package_id") == session.base_package_id)
                 session.repair_context = None
                 repair_choice = None
                 async with asyncio.timeout(self.settings.fire_ai_timeout_seconds):
                     if repair_intent:
                         try:
-                            target = await self.quality.select_repair_target(self, session, text)
+                            target = await self.quality.select_repair_target(self, session, text, source=source, continuing_repair=continuing_repair)
                         except RepairChoiceNeeded as choice:
                             repair_choice = str(choice)
                         else:
@@ -637,7 +638,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
                     if session.repair_context:
                         package = self.store.get("packages", session.repair_context["package_id"])
                         original = self.store.get("builds", package["build_id"]).get("summary", "")
-                        reply = DialogReply(message="Appen er analysert. Jeg bruker kildekoden og feilhistorikken til en rettet versjon. Trykk A BUILD; du trenger ikke finne feillogger.",
+                        reply = DialogReply(message="Jeg har analysert «"+package["manifest"]["name"]+"». Jeg retter denne appen med kildekoden og feilhistorikken. Trykk A BUILD.",
                             clarification_needed=False, build_summary="Reparer eksisterende app. Behold funksjoner og kontroller, rett rotårsaken og test alle knapp-/tidsprofiler. Opprinnelige krav: " + original[:700])
                     elif repair_intent:
                         reply = DialogReply(message=repair_choice or "Jeg finner ingen lagret app å reparere på denne enheten.",

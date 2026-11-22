@@ -135,3 +135,92 @@ async def test_resume_after_automatic_target_change_keeps_repair_even_with_stale
         assert resumed.id==s.id and resumed.project_id==snake["id"]
         assert resumed.base_package_id==package["id"] and resumed.proposal_id==proposal
     finally: await service.close()
+
+
+async def test_spoken_wrong_name_uses_explicitly_selected_app_and_names_it_in_feedback(tmp_path):
+    service=Backend(configured(tmp_path))
+    try:
+        snake,package=saved_app(service,"Slangespill")
+        s,peer=await session(service)
+        s.project_id,s.base_package_id,s.app_mode=snake["id"],package["id"],"update"
+        await service.text(s,"Fiks sjakkespill.",source="voice")
+        assert s.project_id==snake["id"] and s.repair_context["package_id"]==package["id"]
+        assert s.proposal_id and "Slangespill" in s.history[-1]["content"]
+        assert "Fiks sjakkespill." == s.history[-2]["content"]  # Never rewrite raw ASR as certainty.
+    finally:await service.close()
+
+
+async def test_followup_spelling_error_keeps_active_repair_without_resetting_app(tmp_path):
+    service=Backend(configured(tmp_path))
+    try:
+        snake,package=saved_app(service,"Slangespill")
+        s,_=await session(service)
+        await service.text(s,"Fiks slangespillet.")
+        old=s.proposal_id
+        await service.text(s,"Fiks sjakkespill.")
+        assert s.project_id==snake["id"] and s.base_package_id==package["id"]
+        assert s.proposal_id and s.proposal_id!=old and "Slangespill" in s.history[-1]["content"]
+        assert len(service.store.list("builds"))==1
+    finally:await service.close()
+
+
+async def test_recognized_similar_sounding_voice_name_keeps_selected_game_until_explicit_switch(tmp_path):
+    service=Backend(configured(tmp_path))
+    try:
+        snake,package=saved_app(service,"Slangespill")
+        chess,chess_package=saved_app(service,"Sjakkespill",slug="sjakk")
+        s,_=await session(service)
+        s.project_id,s.base_package_id,s.app_mode=snake["id"],package["id"],"update"
+        await service.text(s,"Fiks sjakkespill",source="voice")
+        assert s.project_id==snake["id"]
+        assert not service.store.get("packages",chess_package["id"]).get("quality")
+        await service.text(s,"Bytt til sjakkespill og reparer det",source="voice")
+        assert s.project_id==chess["id"] and s.base_package_id==chess_package["id"]
+    finally:await service.close()
+
+
+async def test_unknown_explicit_voice_switch_does_not_repair_selected_app(tmp_path):
+    service=Backend(configured(tmp_path))
+    try:
+        snake,package=saved_app(service,"Slangespill")
+        s,_=await session(service)
+        s.project_id,s.base_package_id,s.app_mode=snake["id"],package["id"],"update"
+        await service.text(s,"Bytt til værappen og fiks den",source="voice")
+        assert not s.proposal_id and not service.store.get("packages",package["id"]).get("quality")
+    finally:await service.close()
+
+
+async def test_no_selected_app_does_not_guess_wrong_asr_name(tmp_path):
+    service=Backend(configured(tmp_path))
+    try:
+        _,package=saved_app(service,"Slangespill")
+        s,_=await session(service)
+        await service.text(s,"Fiks sjakkespill",source="voice")
+        assert not s.proposal_id and not service.store.get("packages",package["id"]).get("quality")
+    finally:await service.close()
+
+
+async def test_audio_pipeline_preserves_selected_app_for_misrecognized_name(tmp_path):
+    from fire_backend.ai import MockProvider
+    from fire_backend.audio import AudioManager
+    from fire_backend.models import DeviceEvent
+    from fire_backend.protocol import dispatch
+    from test_audio import wav_data
+    class Misheard(MockProvider):
+        async def transcribe(self,data):return "Fiks sjakkespill."
+    service=Backend(configured(tmp_path,fire_audio_enabled=True),Misheard())
+    service.audio=AudioManager(service)
+    try:
+        snake,package=saved_app(service,"Slangespill")
+        s,_=await session(service)
+        s.project_id,s.base_package_id,s.app_mode=snake["id"],package["id"],"update"
+        for event in ("listen_start","listen_stop"):
+            await dispatch(service,s,DeviceEvent(device_id=s.device_id,event=event,event_id="voice-"+event,
+                protocol_version="0.2",session_id=s.id,boot_id=s.boot_id,turn_id="turn-misheard"))
+        async def body():yield wav_data()
+        await service.audio.receive(s,"turn-misheard",body())
+        await s.input_task
+        if s.speech_task:await s.speech_task
+        assert s.proposal_id and s.repair_context["package_id"]==package["id"]
+        assert s.audio_status["transcript"]=="Fiks sjakkespill." and "Slangespill" in s.history[-1]["content"]
+    finally:await service.close()

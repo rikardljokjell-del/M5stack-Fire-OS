@@ -24,6 +24,16 @@ den eneste lagrede appen. Ukjent navn gir aldri reparasjon av en tilfeldig app.
 Bare ekte flertydighet gir et kort spørsmål med appalternativer. Ingen krav om
 PC-appvelger, linjenummer eller manuell feillogg når appen allerede er identifiserbar.
 
+Valgt app er også samtalekontekst, ikke bare et søkefilter. Når et taleopptak
+inneholder et ukjent eller lignende appnavn (for eksempel sjakkespill etter valg
+av Slangespill), fortsetter backend med den valgte appen og navngir den tydelig
+i svaret. Under en pågående reparasjon tåles også et lignende feilstavet navn
+i tekst. Original transkripsjon beholdes uendret som «Jeg hørte»; backend påstår
+ikke at mikrofonen faktisk gjenkjente riktig ord. Et tydelig «bytt til …»
+respekteres. Et gjenkjent, tydelig forskjellig appnavn kan velge den andre appen;
+et lignende navn fra ASR får lavere vekt enn eksisterende eksplisitt appvalg.
+Uten valgt app eller ved et ukjent eksplisitt bytte gjettes det ikke.
+
 Aktiv session/turn beholdes gjennom automatisk prosjektvalg. BUILD/RUN-bekreftelser
 beholdes. Backend husker begrensede, verifiserte tidligere prosjekt-ID-er for denne
 sesjonen, slik at resume fra gammel firmware ikke mister reparasjonen hvis dens
@@ -79,7 +89,7 @@ Ny avtalt sentinel: capabilities.max_runtime_ms=0 og manifest.max_runtime_ms=0 b
 
 ## Backendverifisering
 
-215 samlede pytest-tester bestått, inkludert navngitt automatisk reparasjon, enhetsscope og resume etter prosjektbytte. Isolert ekte OpenAI-dialog/kodegenerering har passert sju-profil-porten og ga en validert Sprettsirkel-pakke. Dette var en separat testmappe, ikke brukerens Snake-app og ikke en fysisk installasjon. Ingen API-nøkler eller brukerpakker publiseres i GitHub. Windows-appen har Reparer valgt app, viser leveringssperrer og skjuler installasjon for pakker uten ny releaseport.
+221 samlede pytest-tester bestått, inkludert navngitt automatisk reparasjon, enhetsscope og resume etter prosjektbytte. Isolert ekte OpenAI-dialog/kodegenerering har passert sju-profil-porten og ga en validert Sprettsirkel-pakke. Dette var en separat testmappe, ikke brukerens Snake-app og ikke en fysisk installasjon. Ingen API-nøkler eller brukerpakker publiseres i GitHub. Windows-appen har Reparer valgt app, viser leveringssperrer og skjuler installasjon for pakker uten ny releaseport.
 
 ## Akseptansekriterier
 
