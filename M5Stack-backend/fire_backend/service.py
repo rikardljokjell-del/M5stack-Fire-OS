@@ -332,6 +332,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         await self.emit(session, {"type": "session_started", **self.snapshot(session)})
         await self.state(session, session.state)
         await self.report_capabilities(session)
+        await self.request_inventory(session)
         return session
 
     async def resume(self, request, socket, principal):
@@ -380,8 +381,9 @@ class Backend(DeviceLifecycle, AppLifecycle):
         await self.emit(session, {"type": "session_started", **self.snapshot(session)})
         await self.session_snapshot(session)
         await self.report_capabilities(session)
-        if session.target == "device" and session.package_id and session.install_permitted and session.state == State.awaiting_install and not self.pending_commands(session):
-            await self.offer_install(session, self.verify_package(session, session.package_id))
+        await self.request_inventory(session)
+        # A local deletion may have happened while offline. Preserve the tested
+        # package, but do not issue a fresh install command just from reconnect.
         return session
 
     async def session_snapshot(self, session):

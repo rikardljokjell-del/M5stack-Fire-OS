@@ -234,6 +234,7 @@ async def test_restart_expires_commands_and_preserves_resumable_project(tmp_path
         assert resumed.state == "awaiting_install"
         old_commands = [c for c in replacement.store.list("commands") if c["status"] == "unknown"]
         assert old_commands
+        assert not replacement.pending_commands(resumed)
         assert replacement.device_record(resumed)["current"] is None
     finally:
         await replacement.close()

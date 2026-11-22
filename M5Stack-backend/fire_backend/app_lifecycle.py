@@ -6,6 +6,14 @@ from .storage import new_id
 
 
 class AppLifecycle:
+    async def request_inventory(self, session):
+        if session.target != "device":
+            return
+        device = self.device_record(session)
+        device.update(inventory_status="requested", inventory_requested_at=time.time())
+        self.store.put("devices", device["id"], device)
+        await self.emit(session, {"type": "app_inventory_request", "reason": "connection", "boot_id": session.boot_id})
+
     def new_project(self, device_id, target):
         project = {"id": new_id("app"), "name": "Ny app", "current": None, "previous": None,
                    "backup": None, "candidate": None, "latest_package": None, "next_version": 1,
@@ -76,6 +84,8 @@ class AppLifecycle:
                 or presence.get("connection_epoch") != device.get("connection_epoch")
                 or presence.get("reported_at", 0) < device.get("last_storage_failure_at", 0)
                 or presence.get("state") not in {"deleted", "missing"}):
+            if device.get("online") and device.get("inventory_status") == "requested":
+                return False, "FIRE har ikke levert en oppdatert SD-oversikt ennå. Firmware må bekrefte slettingen før PC-historikken kan slettes."
             return False, "FIRE må være tilkoblet og bekrefte at appen er borte fra SD-kortet."
         package_ids = {p["id"] for p in self.app_versions(project)}
         if any(c["package_id"] in package_ids and c["status"] in {"pending", "started", "healthy"}
@@ -232,6 +242,8 @@ class AppLifecycle:
             matched = max(matches, key=lambda p: int(p["manifest"]["version"].split(".")[-1])) if matches and (item.package_id or item.version or item.checksum) else None
             resolved.append((item, matched))
         device["storage_ready"] = event.storage_ready
+        device.update(inventory_status="complete" if event.storage_ready and event.complete else "partial" if event.storage_ready else "unavailable",
+                      inventory_reported_at=time.time())
         if not event.storage_ready:
             device["last_storage_failure_at"] = time.time()
         if event.storage_ready:

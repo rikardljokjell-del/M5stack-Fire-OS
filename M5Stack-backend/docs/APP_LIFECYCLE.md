@@ -41,6 +41,12 @@ Bare egne prosjekter/enheter er tilgjengelige med device-token.
 
 ## Sletting og ny SD-inventarliste
 
+Backend sender `{"type":"app_inventory_request","reason":"connection","boot_id":"..."}`
+etter start/resume. Device svarer med vanlig app_inventory-event for den
+nåværende sesjonen. Nyeste firmware før denne integrasjonen ignorerer
+forespørselen; da forblir backend-sletting sperret. Dette må implementeres i
+device-agentens `handleBackendMessage` og SD-skanner.
+
 - Etter vellykket fysisk sletting: `app_deleted`, `app_id`. Ikke send før
   SD-operasjonen faktisk er ferdig. Backend kvitterer; PC-historikken beholdes.
 - Etter oppkobling eller SD-endring: `app_inventory`, `storage_ready`,
@@ -84,3 +90,9 @@ nedlasting sperrer også sletting. Dette sjekkes på serveren selv om UI er omg�
 Vanlig DELETE `/projects/<project_id>` håndhever dette på serveren; Windows
 viser en egen sletteknapp bare når samme kontroll tillater det.
 PC-sletting sender aldri en fysisk slettekommando til FIRE.
+
+Når sletting skjer fra App Manager uten backendforbindelse, må device sende
+en komplett SD-oversikt ved neste oppkobling eller lagre en liten slettingskø
+og sende app_deleted da. Bare å slette manifest/main.lua lokalt varsler ikke PC-en.
+Backend starter aldri en ny installasjon automatisk ved resume; bruk eksplisitt
+install_retry eller Installer på FIRE for en bevart pakke.

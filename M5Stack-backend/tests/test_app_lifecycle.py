@@ -36,6 +36,8 @@ def test_device_delete_preserves_history_blocks_stale_commands_and_gates_pc_dele
         with client.websocket_connect("/ws/device", headers=headers()) as socket:
             device = Device(socket)
             started = device.start()
+            request = device.until("app_inventory_request")
+            assert request["boot_id"] == device.boot_id
             offer, _ = device.build()
             device.install(offer)
             run, _ = device.run(offer["package_id"])
