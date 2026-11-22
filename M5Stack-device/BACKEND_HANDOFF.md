@@ -204,7 +204,7 @@ standardbygget går rent med BLE/Wi-Fi/Lua aktivt. Device annonserer
 Dette er en device-agent handoff, ikke en pÃ¥stand om at alle fysiske matriser er
 bestÃ¥tt.
 
-- Firmware-SHA for denne leveransen: \`5886b20\` fÃ¸r siste lokale audit-commit.
+- Firmware-SHA for denne leveransen: \`5886b20\` (device source).
 - Backend-SHA lest fra GitHub: \`3bd4f83\`.
 - Standardbygget \`m5stack-fire-ble\`: bestÃ¥tt, 1,4 % RAM og 25,2 % flash.
 - Async lyd-HTTP, session-resume/heartbeat, chat/develop/appvalg, input-retry,
