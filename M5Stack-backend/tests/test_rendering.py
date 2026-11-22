@@ -60,7 +60,7 @@ async def test_bad_rendering_is_corrected_before_any_package_is_delivered(tmp_pa
     try:
         s,package=await pc_package(service)
         assert provider.calls==2 and len(service.store.list("packages"))==1
-        assert package["validation"]["suite"]=="release-v3"
+        assert package["validation"]["suite"]=="release-v4"
         assert any(c["category"]=="rendering" for c in service.quality.cases(s.project_id))
         assert "EVERY update" in service.quality.policy()
     finally:await service.close()

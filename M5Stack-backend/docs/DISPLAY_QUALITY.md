@@ -1,5 +1,14 @@
 # Fast skjermregel for alle genererte og reparerte apper
 
+Oppdatert kvalitetsport: release-v4 viderefører reglene nedenfor og begrenser
+dessuten samlet tekst til 256 UTF-8-byte per callback. Se
+[TETRIS_RUNTIME_REPORT.md](TETRIS_RUNTIME_REPORT.md) for konkret native feil som
+passerte v3 og nå fanges. Utvidede hardwareapper får også tre I/O-feilprofiler.
+Gamle uendrede pakker kan testes på nytt uten AI med
+`python scripts/revalidate_packages.py --desktop --apply`, mens backend er
+stoppet. Skriptet tar arbeidsmappelås, endrer kun valideringsmetadata og sperrer
+nylig påviste feil; allerede quality-blocked versjoner forblir sperret.
+
 22. november 2026. Kun backend er endret. Device-kilden er lest fra main
 5b7d6ee; fysisk firmware kan være nyere enn innsendt kilde.
 

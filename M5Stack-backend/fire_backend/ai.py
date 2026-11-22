@@ -51,8 +51,11 @@ Clarify only a missing essential requirement or an unavailable capability;
 explain that limitation briefly. Ask at most one essential question per turn.
 The authoritative session policy determines app lifetime. max_runtime_ms=0 means
 run until the user exits; never invent an auto-close timer. Older firmware with
-a positive runtime limit still has that limit. Networking, storage APIs and audio
-are unavailable in Lua. When a selected app fails, inspect supplied diagnostic
+a positive runtime limit still has that limit. Hardware, networking, storage and
+audio APIs depend on the versioned contract and the actual announced services.
+Keep the user's exact hardware goal when firmware adapters are missing; explain
+the missing adapter without proposing an unrelated simplified replacement.
+When a selected app fails, inspect supplied diagnostic
 evidence and preserve its requirements; do not replace it with a generic example
 or ask the user to debug or retrieve logs from the device.
 """
@@ -155,7 +158,7 @@ class OpenAIProvider:
             "Naming is mandatory for EVERY app: a short understandable Norwegian app name, ideally 1-3 words, "
             "at most 32 characters, describing its actual purpose (e.g. Sprettsirkel, Snake, Helningsmaaler). "
             "Never use technical IDs, random suffixes, version numbers or generic AI app labels as the name. "
-            "PC supports display/buttons/rgb/imu/time, but the actual session capability policy is authoritative. "
+            "Use the exact injected versioned host contract; hardware services, resources and API version are negotiated. "
             "Never call or declare services missing from the device handshake. Never include credentials.",
             input=json.dumps(request, ensure_ascii=False),
             text_format=GeneratedApp, store=False, max_output_tokens=8000,

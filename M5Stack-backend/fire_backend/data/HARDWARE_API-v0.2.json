@@ -1,0 +1,1492 @@
+{
+  "api_version": "fire-lua-0.2",
+  "base_api": "fire-lua-0.1",
+  "async_contract": "jobs-v1",
+  "services": {
+    "display": {
+      "methods": {
+        "clear": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 65535,
+              "name": "color"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.1"
+        },
+        "circle": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 160,
+              "name": "radius"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 65535,
+              "name": "color"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.1"
+        },
+        "rect": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 320,
+              "name": "width"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 240,
+              "name": "height"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 65535,
+              "name": "color"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.1"
+        },
+        "line": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x1"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y1"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x2"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y2"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 65535,
+              "name": "color"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.1"
+        },
+        "text": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y"
+            },
+            {
+              "type": "string",
+              "max_bytes": 80,
+              "name": "text"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 65535,
+              "name": "color"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.1"
+        },
+        "fill_rect": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 320,
+              "name": "width"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 240,
+              "name": "height"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 65535,
+              "name": "color"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.2"
+        },
+        "fill_circle": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 160,
+              "name": "radius"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 65535,
+              "name": "color"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.2"
+        },
+        "pixel": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 65535,
+              "name": "color"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.2"
+        },
+        "grid": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 319,
+              "name": "x"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 239,
+              "name": "y"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 32,
+              "name": "cell_width"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 32,
+              "name": "cell_height"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 32,
+              "name": "columns"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 32,
+              "name": "rows"
+            },
+            {
+              "type": "indices",
+              "max_items": 384,
+              "name": "cells"
+            },
+            {
+              "type": "colors",
+              "max_items": 16,
+              "name": "palette"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "buttons": {
+      "methods": {
+        "pressed": {
+          "args": [
+            {
+              "type": "enum",
+              "values": [
+                "A",
+                "B",
+                "C"
+              ],
+              "name": "button"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.1"
+        }
+      }
+    },
+    "rgb": {
+      "methods": {
+        "set": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 9,
+              "name": "index"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 255,
+              "name": "red"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 255,
+              "name": "green"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 255,
+              "name": "blue"
+            }
+          ],
+          "returns": "void",
+          "since": "fire-lua-0.1"
+        }
+      }
+    },
+    "imu": {
+      "methods": {
+        "accel": {
+          "args": [],
+          "returns": "vector",
+          "since": "fire-lua-0.1"
+        },
+        "gyro": {
+          "args": [],
+          "returns": "vector",
+          "since": "fire-lua-0.2"
+        },
+        "temperature": {
+          "args": [],
+          "returns": "number",
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "time": {
+      "methods": {
+        "millis": {
+          "args": [],
+          "returns": "integer",
+          "since": "fire-lua-0.1"
+        }
+      }
+    },
+    "jobs": {
+      "methods": {
+        "poll": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 65535,
+              "name": "job_id"
+            }
+          ],
+          "returns": "job_status",
+          "since": "fire-lua-0.2"
+        },
+        "result": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 65535,
+              "name": "job_id"
+            }
+          ],
+          "returns": "job_result",
+          "since": "fire-lua-0.2"
+        },
+        "close": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 65535,
+              "name": "job_id"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        },
+        "cancel": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 65535,
+              "name": "job_id"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "gpio": {
+      "methods": {
+        "mode": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 39,
+              "name": "pin"
+            },
+            {
+              "type": "enum",
+              "values": [
+                "input",
+                "input_pullup",
+                "input_pulldown",
+                "output",
+                "open_drain"
+              ],
+              "name": "mode"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        },
+        "read": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 39,
+              "name": "pin"
+            }
+          ],
+          "returns": "integer",
+          "resource": {
+            "kind": "gpio_read",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        },
+        "write": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 33,
+              "name": "pin"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 1,
+              "name": "value"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "gpio_write",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        },
+        "release": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 39,
+              "name": "pin"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "adc": {
+      "methods": {
+        "read": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 39,
+              "name": "pin"
+            }
+          ],
+          "returns": "integer",
+          "resource": {
+            "kind": "adc",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "dac": {
+      "methods": {
+        "write": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 25,
+              "max": 26,
+              "name": "pin"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 255,
+              "name": "value"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "dac",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        },
+        "stop": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 39,
+              "name": "pin"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "pwm": {
+      "methods": {
+        "configure": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 33,
+              "name": "pin"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 20000,
+              "name": "frequency_hz"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 12,
+              "name": "resolution_bits"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "pwm",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        },
+        "write": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 33,
+              "name": "pin"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 4095,
+              "name": "duty"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "pwm",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        },
+        "stop": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 33,
+              "name": "pin"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "pwm",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "i2c": {
+      "methods": {
+        "scan": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 1,
+              "name": "bus"
+            }
+          ],
+          "returns": "job",
+          "result": "i2c_scan",
+          "resource": {
+            "kind": "i2c",
+            "arg": 1
+          },
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "read": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 1,
+              "name": "bus"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 126,
+              "name": "address"
+            },
+            {
+              "type": "integer",
+              "min": -1,
+              "max": 255,
+              "name": "register"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 128,
+              "name": "count"
+            }
+          ],
+          "returns": "job",
+          "result": "bytes",
+          "resource": {
+            "kind": "i2c",
+            "arg": 1
+          },
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "write": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 1,
+              "name": "bus"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 126,
+              "name": "address"
+            },
+            {
+              "type": "bytes",
+              "max_items": 128,
+              "name": "bytes"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "resource": {
+            "kind": "i2c",
+            "arg": 1
+          },
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "uart": {
+      "methods": {
+        "open": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 2,
+              "name": "port"
+            },
+            {
+              "type": "integer",
+              "min": 300,
+              "max": 1000000,
+              "name": "baud"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 39,
+              "name": "rx_pin"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 33,
+              "name": "tx_pin"
+            },
+            {
+              "type": "enum",
+              "values": [
+                "8N1",
+                "8E1",
+                "8O1",
+                "7E1",
+                "7O1",
+                "8N2"
+              ],
+              "name": "format"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "uart",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        },
+        "read": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 2,
+              "name": "port"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 512,
+              "name": "max_bytes"
+            }
+          ],
+          "returns": "job",
+          "result": "uart",
+          "resource": {
+            "kind": "uart",
+            "arg": 1
+          },
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "write": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 2,
+              "name": "port"
+            },
+            {
+              "type": "string",
+              "max_bytes": 512,
+              "name": "text"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "resource": {
+            "kind": "uart",
+            "arg": 1
+          },
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "close": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 2,
+              "name": "port"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "uart",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "spi": {
+      "methods": {
+        "open": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 2,
+              "name": "bus"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 33,
+              "name": "sclk_pin"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 39,
+              "name": "miso_pin"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 33,
+              "name": "mosi_pin"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 33,
+              "name": "cs_pin"
+            },
+            {
+              "type": "integer",
+              "min": 100000,
+              "max": 10000000,
+              "name": "frequency_hz"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 3,
+              "name": "mode"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "spi",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        },
+        "transfer": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 2,
+              "name": "bus"
+            },
+            {
+              "type": "bytes",
+              "max_items": 512,
+              "name": "bytes"
+            }
+          ],
+          "returns": "job",
+          "result": "bytes",
+          "resource": {
+            "kind": "spi",
+            "arg": 1
+          },
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "close": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 2,
+              "name": "bus"
+            }
+          ],
+          "returns": "boolean",
+          "resource": {
+            "kind": "spi",
+            "arg": 1
+          },
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "wifi": {
+      "methods": {
+        "status": {
+          "args": [],
+          "returns": "wifi_status",
+          "since": "fire-lua-0.2"
+        },
+        "scan": {
+          "args": [],
+          "returns": "job",
+          "result": "wifi_scan",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "connect": {
+          "args": [
+            {
+              "type": "string",
+              "max_bytes": 32,
+              "name": "saved_profile"
+            }
+          ],
+          "returns": "job",
+          "result": "wifi_status",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "disconnect": {
+          "args": [],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        },
+        "request": {
+          "args": [
+            {
+              "type": "enum",
+              "values": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ],
+              "name": "method"
+            },
+            {
+              "type": "url",
+              "max_bytes": 256,
+              "name": "url"
+            },
+            {
+              "type": "string",
+              "max_bytes": 512,
+              "name": "body"
+            }
+          ],
+          "returns": "job",
+          "result": "http",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "bluetooth": {
+      "methods": {
+        "scan": {
+          "args": [
+            {
+              "type": "enum",
+              "values": [
+                "ble",
+                "classic"
+              ],
+              "name": "mode"
+            }
+          ],
+          "returns": "job",
+          "result": "bt_scan",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "connect": {
+          "args": [
+            {
+              "type": "string",
+              "max_bytes": 64,
+              "name": "address"
+            },
+            {
+              "type": "enum",
+              "values": [
+                "ble",
+                "spp"
+              ],
+              "name": "mode"
+            }
+          ],
+          "returns": "job",
+          "result": "handle",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "read": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 65535,
+              "name": "handle"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 512,
+              "name": "max_bytes"
+            }
+          ],
+          "returns": "job",
+          "result": "uart",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "write": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 65535,
+              "name": "handle"
+            },
+            {
+              "type": "string",
+              "max_bytes": 512,
+              "name": "text"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "read_gatt": {
+          "args": [
+            {
+              "type": "string",
+              "max_bytes": 64,
+              "name": "address"
+            },
+            {
+              "type": "string",
+              "max_bytes": 40,
+              "name": "service_uuid"
+            },
+            {
+              "type": "string",
+              "max_bytes": 40,
+              "name": "characteristic_uuid"
+            }
+          ],
+          "returns": "job",
+          "result": "bytes",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "write_gatt": {
+          "args": [
+            {
+              "type": "string",
+              "max_bytes": 64,
+              "name": "address"
+            },
+            {
+              "type": "string",
+              "max_bytes": 40,
+              "name": "service_uuid"
+            },
+            {
+              "type": "string",
+              "max_bytes": 40,
+              "name": "characteristic_uuid"
+            },
+            {
+              "type": "bytes",
+              "max_items": 128,
+              "name": "bytes"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "advertise": {
+          "args": [
+            {
+              "type": "string",
+              "max_bytes": 32,
+              "name": "name"
+            },
+            {
+              "type": "string",
+              "max_bytes": 40,
+              "name": "service_uuid"
+            }
+          ],
+          "returns": "job",
+          "result": "handle",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "close": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 65535,
+              "name": "handle"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "mic": {
+      "methods": {
+        "level": {
+          "args": [],
+          "returns": "number",
+          "since": "fire-lua-0.2"
+        },
+        "record": {
+          "args": [
+            {
+              "type": "path",
+              "max_bytes": 96,
+              "name": "path"
+            },
+            {
+              "type": "integer",
+              "min": 100,
+              "max": 10000,
+              "name": "duration_ms"
+            },
+            {
+              "type": "enum",
+              "values": [
+                8000,
+                16000
+              ],
+              "name": "sample_rate"
+            }
+          ],
+          "returns": "job",
+          "result": "recording",
+          "requires": [
+            "jobs",
+            "sd"
+          ],
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "speaker": {
+      "methods": {
+        "tone": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 20,
+              "max": 20000,
+              "name": "frequency_hz"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 5000,
+              "name": "duration_ms"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 255,
+              "name": "volume"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "play": {
+          "args": [
+            {
+              "type": "path",
+              "max_bytes": 96,
+              "name": "path"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 255,
+              "name": "volume"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "requires": [
+            "jobs",
+            "sd"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "stop": {
+          "args": [],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "sd": {
+      "methods": {
+        "list": {
+          "args": [
+            {
+              "type": "path",
+              "max_bytes": 96,
+              "name": "path"
+            }
+          ],
+          "returns": "job",
+          "result": "files",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "read": {
+          "args": [
+            {
+              "type": "path",
+              "max_bytes": 96,
+              "name": "path"
+            },
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 1048576,
+              "name": "offset"
+            },
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 512,
+              "name": "count"
+            }
+          ],
+          "returns": "job",
+          "result": "bytes",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "write": {
+          "args": [
+            {
+              "type": "path",
+              "max_bytes": 96,
+              "name": "path"
+            },
+            {
+              "type": "string",
+              "max_bytes": 512,
+              "name": "text"
+            },
+            {
+              "type": "boolean",
+              "name": "append"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "remove": {
+          "args": [
+            {
+              "type": "path",
+              "max_bytes": 96,
+              "name": "path"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        },
+        "mkdir": {
+          "args": [
+            {
+              "type": "path",
+              "max_bytes": 96,
+              "name": "path"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "power": {
+      "methods": {
+        "status": {
+          "args": [],
+          "returns": "power_status",
+          "since": "fire-lua-0.2"
+        },
+        "brightness": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 255,
+              "name": "brightness"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        },
+        "sleep": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 1,
+              "max": 3600000,
+              "name": "duration_ms"
+            }
+          ],
+          "returns": "job",
+          "result": "write",
+          "requires": [
+            "jobs"
+          ],
+          "since": "fire-lua-0.2"
+        }
+      }
+    },
+    "rtc": {
+      "methods": {
+        "now": {
+          "args": [],
+          "returns": "clock",
+          "since": "fire-lua-0.2"
+        },
+        "set": {
+          "args": [
+            {
+              "type": "integer",
+              "min": 0,
+              "max": 2147483647,
+              "name": "epoch"
+            }
+          ],
+          "returns": "boolean",
+          "since": "fire-lua-0.2"
+        }
+      }
+    }
+  },
+  "limits": {
+    "jobs": 4,
+    "io_calls_per_callback": 64,
+    "io_bytes_per_callback": 2048,
+    "result_bytes": 512,
+    "text_bytes_per_callback": 256
+  },
+  "semantics": {
+    "errors": "Invalid arguments or unannounced resources reject the app; operational failures return nil,error_code or a failed job.",
+    "jobs": "Maximum 4 outstanding jobs; unique app-scoped IDs 1..65535. poll/result never block. Completion after operation, failure within 3000ms (mic.record duration+3000ms). cancel prevents future effects but cannot undo committed writes; close ALWAYS required even after cancellation. close cancels pending work. Exit cancels work and frees handles. Invalid handles return failed status/result or false.",
+    "storage": "Only app-private relative paths, rooted at /apps/<id>/appdata/.",
+    "real_io_on_pc": false,
+    "i2c": "Bus numbers are logical OS broker handles, not free pin selectors. Write access also requires the advertised i2c_write_addresses allowlist. OS-owned IMU/power addresses must not be offered for writes.",
+    "resources": "All pins/buses must be explicitly announced. The OS broker owns leases, preserves display/SD/PSRAM/conversation transport, and returns nil,busy for conflicts. GPIO mode must be configured before access. GPIO34..39 are input-only without internal pulls.",
+    "network": "WiFi connect uses saved OS profile names, never secrets. Allow only bounded HTTP(S) requests, TLS certificate verification, 3000ms timeout, no token-bearing internal setup endpoints; OS may refuse disconnect/connect/sleep while conversation transport is in use. BLE/SPP coexistence/resource conflicts return busy/unavailable, never block.",
+    "audio": "Mic/speaker access goes through the OS audio broker. Conversation capture/playback has priority. Return busy instead of corrupting active audio. mic.record writes mono PCM16 WAV; speaker.play accepts only bounded validated PCM16 mono WAV, 8/16/24kHz. tone finishes asynchronously. Stop/navigation must interrupt playback/recording.",
+    "display": "OS clears offscreen sprite before every update and presents once. Render complete frame every update. grid uses dense row-major cell indices 0..palette length-1 and RGB565 palette; transparent cells are NOT supported. Batch rendering avoids long ASCII art.",
+    "helpers": "Safe string/table functions are available in fire-lua-0.2 only. No format/rep/gsub/pattern VM, loaders or general libraries. String input/output at most 512 bytes; table helpers at most 128 elements.",
+    "pc_limits": "All observations are deterministic fixtures, not native I/O. Virtual storage consumes bounded simulator memory; PC allocator includes trusted host baseline separately and conservatively charges app plus subsequent adapter allocations. Native allocator and timing still require hardware tests."
+  },
+  "environment": {
+    "string": [
+      "len",
+      "sub",
+      "byte",
+      "char"
+    ],
+    "table": [
+      "concat",
+      "insert",
+      "remove"
+    ],
+    "max_string_bytes": 512,
+    "max_array_items": 128
+  },
+  "result_shapes": {
+    "job_status": "{state=\"pending\"|\"ready\"|\"failed\"|\"cancelled\",done=boolean,error_code=string}",
+    "job_result": "Before ready: {ok=false,error_code=\"not_ready\"}. Failed/cancelled: {ok=false,error_code=string}. Ready: {ok=true,...fields for method result}. Never throw for operational I/O failure.",
+    "i2c_scan": "{ok=true,addresses={integer 1..126,...}}; at most 126 addresses, reads are nondestructive probes; register=-1 means raw read.",
+    "bytes": "{ok=true,bytes={integer 0..255,...},text=string}; bytes is authoritative, text may be empty for binary data. Payload at most 512 bytes.",
+    "write": "{ok=true,written=integer}; written is byte count for writes, 0 for control actions.",
+    "uart": "{ok=true,text=string,bytes={integer 0..255,...}}; at most requested max_bytes. UART write is bounded text; SPI/I2C use byte arrays.",
+    "wifi_status": "{connected=boolean,ssid=string,ip=string,rssi=integer}; successful connect job also has ok=true. No credentials.",
+    "wifi_scan": "{ok=true,networks={{ssid=string,rssi=integer,secure=boolean},...}}; at most 8 entries, truncate UTF-8 SSID to 32 bytes.",
+    "http": "{ok=true,status=integer,body=string}; body at most 512 bytes; overflow is failed job result_too_large, never unbounded buffering.",
+    "bt_scan": "{ok=true,devices={{name=string,address=string,rssi=integer},...}}; at most 8 entries, name at most 32 bytes.",
+    "handle": "{ok=true,handle=integer 1..65535}; app-scoped Bluetooth handle; maximum 4 live handles, close on exit.",
+    "recording": "{ok=true,path=string,size_bytes=integer,sample_rate=integer}; mono PCM16 WAV in app-private storage.",
+    "files": "{ok=true,entries={{name=string,size_bytes=integer,is_directory=boolean},...}}; bounded 32 entries, names at most 96 bytes.",
+    "power_status": "{battery_percent=number,voltage=number,charging=boolean,usb=boolean}; voltage in V, percentage 0..100.",
+    "clock": "{epoch=integer,year=integer,month=integer,day=integer,hour=integer,minute=integer,second=integer}; UTC, epoch seconds; OS software clock permitted if no RTC chip.",
+    "vector": "{x=number,y=number,z=number}; accel in g, gyro in degrees/second; finite values.",
+    "integer": "GPIO 0/1; ADC raw 0..4095 at fixed 12-bit configuration; time OS uptime milliseconds, may wrap.",
+    "number": "mic.level normalized RMS 0..1; imu.temperature degrees Celsius."
+  }
+}

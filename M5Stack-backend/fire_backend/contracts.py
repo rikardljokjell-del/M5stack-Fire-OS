@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .models import DeviceEvent, Manifest, PROTOTYPE_SERVICES
+from .api_registry import REGISTRY,API_CONTRACT,ALL_SERVICES
 
 
 REQUIRED = {
@@ -67,9 +68,17 @@ def schemas():
     conditions.append({"if": {"properties": {"event": {"const": "app_select"}, "app_mode": {"const": "new"}}},
                        "then": {"properties": {name: {"type": "null"} for name in ("app_id", "project_id", "base_package_id")}}})
     manifest = Manifest.model_json_schema()
-    manifest["properties"]["required_services"].update(items={"enum": sorted(PROTOTYPE_SERVICES)}, uniqueItems=True)
-    manifest["properties"]["permissions"].update(items={"enum": ["fire." + name for name in sorted(PROTOTYPE_SERVICES)]}, uniqueItems=True)
-    return {"device-event-v0.2.schema.json": event, "manifest-fire-lua-0.1.schema.json": manifest}
+    legacy=copy.deepcopy(manifest);legacy["properties"]["api_version"]={"const":"fire-lua-0.1","default":"fire-lua-0.1","title":"Api Version","type":"string"}
+    legacy["properties"].pop("api_contract",None)
+    legacy["properties"]["required_services"].update(items={"enum":sorted(PROTOTYPE_SERVICES)},uniqueItems=True)
+    legacy["properties"]["permissions"].update(items={"enum":["fire."+name for name in sorted(PROTOTYPE_SERVICES)]},uniqueItems=True)
+    manifest["properties"]["api_version"]={"const":"fire-lua-0.2","type":"string"}
+    manifest["properties"]["api_contract"]={"type":"string","const":API_CONTRACT}
+    manifest["required"]+= ["api_version","api_contract"]
+    manifest["properties"]["required_services"].update(items={"enum": sorted(ALL_SERVICES)}, uniqueItems=True)
+    manifest["properties"]["permissions"].update(items={"enum": ["fire." + name for name in sorted(ALL_SERVICES)]}, uniqueItems=True)
+    return {"device-event-v0.2.schema.json": event, "manifest-fire-lua-0.1.schema.json": legacy,
+            "manifest-fire-lua-0.2.schema.json":manifest,"HARDWARE_API-v0.2.json":{"api_contract":API_CONTRACT,"registry":REGISTRY}}
 
 
 if __name__ == "__main__":

@@ -138,7 +138,10 @@ def create_app(settings=None, provider=None):
 
     @app.get("/device/context")
     async def context(identity=Depends(auth), service: Backend = Depends(backend)):
+        from .api_registry import API_CONTRACT,REGISTRY
         return {"api_version": "fire-lua-0.1", "context": service.context, "source_verified": True,
+                "hardware_api_version":"fire-lua-0.2","hardware_api_contract":API_CONTRACT,"hardware_api":REGISTRY,
+                "firmware_extended_runtime_implemented_in_inspected_source":False,
                 "firmware_source_revision": FIRMWARE_SOURCE_REVISION, "handoff_path": HANDOFF_PATH,
                 "firmware_runtime_implemented_in_source": True,
                 "firmware_runtime_verified": False, "physical_verified": False}
@@ -182,8 +185,9 @@ def create_app(settings=None, provider=None):
     @app.post("/desktop/conversations", dependencies=[Depends(desktop_auth)])
     async def desktop_conversation(request: Request, service: Backend = Depends(backend)):
         data=await request.json()
-        if (not isinstance(data,dict) or "device_id" not in data or set(data)-{"device_id","project_id","base_package_id"}
-                or any(v is not None and (not isinstance(v,str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}",v)) for v in data.values())):
+        if (not isinstance(data,dict) or "device_id" not in data or set(data)-{"device_id","project_id","base_package_id","hardware_preview"}
+                or ("hardware_preview" in data and type(data["hardware_preview"]) is not bool)
+                or any(v is not None and (not isinstance(v,str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}",v)) for k,v in data.items() if k!="hardware_preview")):
             raise HTTPException(422,"Expected device_id and optional project/base version")
         return service.snapshot(await service.desktop_conversation(**data))
 

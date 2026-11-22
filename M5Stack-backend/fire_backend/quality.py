@@ -30,7 +30,7 @@ RULES = {
     "rendering": VISUAL_POLICY,
     "bounds": "Clamp display coordinates and RGB values; use finite integers and keep moving objects within screen bounds.",
     "nil": "Initialize state before callbacks. Check table indices, empty lists and missing values, including after reset and collisions.",
-    "budget": "Keep callbacks short and bounded: at most 24 output operations and 120000 display-work units per callback. Simplify a complete visible scene instead of splitting its drawing across updates; nonvisual preparation may be spread over updates. Cap tables/loops. Compile/top-level timing and a null Lua VM are firmware issues, not fixes achievable by cosmetic app rewrites.",
+    "budget": "Keep callbacks short and bounded: at most 24 output operations, 256 text bytes and 120000 display-work units per callback. Cache text/rotation/state transformations outside the hot rendering path. Simplify a complete visible scene instead of splitting its drawing across updates. Cap tables/loops. PC budgets are risk proxies, not ESP32 timing guarantees; native callbacks must account for host calls and preemption.",
     "api": "Use only declared fire APIs and the restricted base/math functions. Do not assume standard Lua libraries exist.",
     "text": "Display strings must fit 80 UTF-8 bytes. Format numbers safely without relying on unavailable string APIs.",
     "runtime": "Exercise init, update, reset, each button held and rapid input across the full advertised runtime. Inspect all branches.",
@@ -238,7 +238,7 @@ class Quality:
 def require_deliverable(package):
     if package.get("quality",{}).get("blocked"):
         raise ValueError("Denne appversjonen er sperret etter en feil. Velg appen og be om reparasjon for en ny testet versjon.")
-    if package.get("validation",{}).get("suite") != "release-v3":
+    if package.get("validation",{}).get("suite") != "release-v4":
         raise ValueError("Denne eldre pakken mangler utvidet kjøretidstest. Velg appen og be om reparasjon/ny bygging før levering.")
 
 

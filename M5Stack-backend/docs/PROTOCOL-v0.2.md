@@ -1,5 +1,14 @@
 # FIRE Developer device protocol 0.2
 
+Hardware extension: [HARDWARE_API_HANDOFF.md](HARDWARE_API_HANDOFF.md) adds
+negotiated `fire-lua-0.2`, `capabilities.api_contract`, resource allowlists in
+`capabilities.hardware` and matching manifest hash. This does not change the
+transport version or grant hardware support to legacy firmware. Missing
+adapters produce assistant feedback and additive `capability_required` with
+`missing_services`, `request_saved=true`, `required_api_version`; no build
+proposal is issued until the required services are available. The exact request
+is retained in the project. Unknown additive output types may be ignored.
+
 Addendum: [APP_REPAIR_HANDOFF.md](APP_REPAIR_HANDOFF.md) defines app_diagnostic,
 automatic selected-app diagnosis and max_runtime_ms=0 (until explicit user exit).
 Zero is accepted only for devices advertising this lifetime profile. Legacy

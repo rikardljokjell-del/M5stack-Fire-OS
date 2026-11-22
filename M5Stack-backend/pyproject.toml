@@ -25,7 +25,7 @@ fire-mock = "fire_backend.mock_device:main"
 include = ["fire_backend*"]
 
 [tool.setuptools.package-data]
-fire_backend = ["data/*.md", "data/*.lua"]
+fire_backend = ["data/*.md", "data/*.lua", "data/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
