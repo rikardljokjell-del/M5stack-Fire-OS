@@ -2176,6 +2176,11 @@ bool FireOS::luaI2cAllowed(uint8_t bus, uint8_t address, bool write) const {
 }
 
 void FireOS::releaseLuaHardware() {
+  // Lua currently has no microphone service, but keeping this reset here
+  // makes the exit boundary safe if an audio adapter or an interrupted app
+  // owns the capture path in a future build.
+  fireStopMicCapture();
+  fireReleaseMicCapture();
   if (M5.Speaker.isEnabled()) M5.Speaker.stop(kLuaSpeakerChannel);
   luaSpeakerFile_.close();
   if (luaSpeakerBuffer_ && (!luaSpeakerPlaying_ ||
@@ -4080,6 +4085,11 @@ void FireOS::playButtonSound(uint8_t index, bool longPress) {
 }
 
 void FireOS::open(Screen screen) {
+  // Any OS navigation from a running Lua app is an app exit, including
+  // configurable double-click shortcuts. Home/Back use their own path, but
+  // this guard closes the remaining routes through one cleanup boundary.
+  if (screen_ == Screen::LuaApp && screen != Screen::LuaApp)
+    stopLuaApp("os_navigation");
   if (screen_ == Screen::Bluetooth && screen != Screen::Bluetooth) {
     closeBluetoothSettings();
   }

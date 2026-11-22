@@ -450,3 +450,16 @@ Implemented against `PRIKKJAKT_ANALYSIS.md` and the audio addition in
   AI audio conflict, repeated start/stop and brightness preservation. Boot and
   compile success are not reported as physical speaker verification.
 Final firmware binary SHA-256: `c3612cd607c74691b1d026483dee17f02dfcd27afd0b788400db4b8d4036c1f0`.
+## App-exit safe cleanup
+
+All Lua-app exits now pass through a single cleanup boundary. Home, Back,
+runtime failure, rollback, remote stop and OS navigation via configurable
+double-click shortcuts stop the Lua runtime and release GPIO/PWM/DAC/SPI/UART,
+cancel jobs, stop the Lua speaker channel, close pending audio/SD state and
+release microphone capture resources. Lua RGB output is cleared after exit.
+The OS master speaker channel and display brightness are not reset or changed
+by app cleanup; only app-owned resources are released.
+
+Build/flash verification: `m5stack-fire-ble` passed (RAM 1.4%, flash 28.8%),
+binary SHA-256 `953701aa461986e369c6a8e56414637fb3077bb2965b831cd3d47b66f836c0e4`.
+The image was flashed to COM3 and reached `FIRE OS started` without reset.
