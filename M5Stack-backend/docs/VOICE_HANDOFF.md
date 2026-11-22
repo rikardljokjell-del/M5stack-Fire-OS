@@ -7,9 +7,16 @@ Backend-agenten endrer ingen device-filer og bygger/flasher ikke firmware.
 
 Under feilsøkingen kom også `fad4294`: device-agenten erstatter I2S DMA med
 timerstyrt direkte ADC i egen task. Råskiftet nedenfor gjelder derfor den
-forrige DMA-implementasjonen og er fjernet i nyeste kode. Ny boot er observert,
-men det foreligger ennå ingen lydopplasting fra denne booten. Tidsforhold og
-forståelig tale må bekreftes på nytt; målingene nedenfor er fra før omstarten.
+forrige DMA-implementasjonen og er fjernet i nyeste kode. Etter ny boot mottok
+backend to opptak: 72717 samples / 4,545 s fra 4,806 s eventintervall og
+72940 samples / 4,559 s fra 4,819 s eventintervall. Begge har forhold 0,946,
+AC-RMS 2877,2 / 2628,6 og status completed. Det store 5,4x-avviket er borte i
+disse forsøkene. ASR returnerte tekst, og FIRE kvitterte for avspilt AI-svar.
+En observert transkripsjon var russisk tekst; uten bekreftelse på hva som ble
+sagt er dette ikke bevis for korrekt gjenkjent norsk bestilling. Full fysisk
+mikrofon → korrekt bestilling → app er fortsatt ikke verifisert.
+
+Målingene i resten av dette avsnittet er fra før denne omstarten.
 
 Etter at driverstarten er rettet mottar backend WAV igjen. Fire påfølgende
 fysiske opplastinger har hver 240000 samples (15,000 s ved oppgitt 16000 Hz),
