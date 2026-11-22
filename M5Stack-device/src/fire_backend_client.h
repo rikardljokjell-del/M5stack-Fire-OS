@@ -12,6 +12,8 @@ class FireBackendClient {
   void configure(const String& host, uint16_t port, const String& token,
                  const String& deviceId, const String& firmwareVersion);
   void setProjectId(const String& projectId) { projectId_ = projectId; }
+  void setConversationMode(const String& mode);
+  void setAppMode(const String& mode, const String& basePackageId = String());
   void setCallbacks(void* context, MessageCallback message,
                     StateCallback state);
   void setReverseTransport(FireReverseTransport* transport) {
@@ -25,7 +27,7 @@ class FireBackendClient {
                      size_t& length);
 
   bool configured() const { return host_.length() > 0 && token_.length() >= 24; }
-  bool connected() const { return state_ == State::Connected; }
+  bool connected() const { return state_ == State::Connected && sessionStarted_; }
   bool sessionReady() const { return connected() && sessionId_.length() > 0; }
   bool active() const { return state_ != State::Offline; }
   const String& bootId() const { return bootId_; }
@@ -33,7 +35,7 @@ class FireBackendClient {
 
   bool listenStart(const String& turnId);
   bool listenStop(const String& turnId);
-  bool cancelTurn();
+  bool cancelTurn(const String& turnId = String());
   bool confirmBuild(const String& proposalId);
   bool confirmRun(const String& packageId);
   bool appStop();
@@ -69,6 +71,16 @@ class FireBackendClient {
   String firmwareVersion_ = "fire-os-device";
   String bootId_;
   String sessionId_;
+  String resumeSessionId_;
+  String conversationMode_;
+  String pendingAppMode_;
+  String pendingBasePackageId_;
+  bool sessionStarted_ = false;
+  uint32_t lastServerSeq_ = 0;
+  uint32_t handshakeStartedAt_ = 0;
+  uint32_t lastReceiveAt_ = 0;
+  uint32_t lastPingAt_ = 0;
+  uint32_t lastPongAt_ = 0;
   String handshakeBuffer_;
   String frameBuffer_;
   enum class ReceiveStage : uint8_t { Header, ExtendedLength, Mask, Payload };
