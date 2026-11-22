@@ -176,6 +176,7 @@ class AppLifecycle:
             session.project_id, session.base_package_id = project["id"], base["id"] if base else None
             session.app_mode, session.install_permitted = event.app_mode, True
             session.conversation_mode = "develop"
+            session.resume_project_aliases = []
             session.app_revision = device.get("app_change_counter", 0)
             session.package_id = session.build_id = session.proposal_id = session.turn_id = None
             session.summary, session.last_error, session.progress, session.history = "", "", {}, []

@@ -4,8 +4,25 @@ import json
 import re
 import time
 import zipfile
+import unicodedata
 
 from .storage import new_id
+
+
+class RepairChoiceNeeded(ValueError):
+    """A real ambiguity, never a request for device debugging."""
+
+
+def name_words(text):
+    text = text.casefold().replace("æ", "ae").replace("ø", "o")
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    words = re.findall(r"[a-z0-9]+", text)
+    def stem(word):
+        for suffix in ("ene", "en", "et"):
+            if len(word) - len(suffix) >= 4 and word.endswith(suffix):
+                return word[:-len(suffix)]
+        return word
+    return {stem(w) for w in words if w not in {"app", "appen", "program", "programmet"}}
 
 RULES = {
     "bounds": "Clamp display coordinates and RGB values; use finite integers and keep moving objects within screen bounds.",
@@ -67,6 +84,77 @@ class Quality:
     def reject_known_failure(self, project_id, source_hash):
         if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id") for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a version reported broken. Make a substantive repair before release.")
+
+    def repair_target(self, service, session, text):
+        owner = session.device_id if session.target == "device" else None
+        projects = [p for p in self.store.list("projects") if p.get("owner_device_id") == owner and service.app_versions(p)]
+        words = name_words(text)
+        matches = []
+        for project in projects:
+            versions = service.app_versions(project)
+            aliases = [project.get("name", ""), service.project_app_id(project) or ""]
+            aliases += [p["manifest"]["name"] for p in versions]
+            score = max((len(n) for alias in aliases if (n := name_words(alias)) and n <= words), default=0)
+            if score:
+                matches.append((score, project))
+        if matches:
+            best = max(score for score, _ in matches)
+            choices = [p for score, p in matches if score == best]
+            if len(choices) != 1:
+                raise RepairChoiceNeeded("Hvilken app mener du: " + ", ".join(p["name"]+" ("+str(service.project_app_id(p))+")" for p in choices[:4]) + "?")
+            project = choices[0]
+        else:
+            # Do not silently repair the selected app when another named target
+            # was requested but not found. Generic 'fiks den/appen' uses context.
+            subject = re.search(r"\b(?:fiks|reparer|fix|repair)\s+([^.!?,]+)", text, re.I)
+            generic = {"den", "det", "denne", "dette", "feil", "feilen", "problem", "problemet", "spill", "spillet", "som", "ikke", "funger", "fungerer", "er", "min", "mitt", "meg", "for", "a", "og"}
+            if subject and name_words(subject[1]) - generic:
+                raise RepairChoiceNeeded("Jeg finner ikke appen du nevner. Tilgjengelige apper: " + ", ".join(p["name"] for p in projects[:4]) + ".")
+            project = next((p for p in projects if p["id"] == session.project_id), None)
+            if project is None and session.target == "device":
+                device = service.device_record(session)
+                package_ids = {device.get("running_package_id"), device.get("installed_package_id")}
+                focused = [p for p in projects if any(v["id"] in package_ids for v in service.app_versions(p))]
+                if len(focused) == 1:
+                    project = focused[0]
+            if project is None and len(projects) == 1:
+                project = projects[0]
+            if project is None:
+                raise RepairChoiceNeeded("Hvilken app skal jeg reparere: " + ", ".join(p["name"] for p in projects[:4]) + "?" if projects else "Jeg finner ingen lagret app på denne enheten.")
+        if project["id"] == session.project_id and session.base_package_id:
+            package = next((p for p in service.app_versions(project) if p["id"] == session.base_package_id), None)
+            if package:
+                return project, package
+        if session.target == "device":
+            return project, service.update_base(project, service.device_record(session))
+        return project, service.app_versions(project)[0]
+
+    async def select_repair_target(self, service, session, text):
+        project, package = self.repair_target(service, session, text)
+        # Source identity is verified in diagnose before it is used. Do not use
+        # select_app here: it clears the active audio turn and takes its lock.
+        if session.target == "device":
+            device = service.device_record(session)
+            if device.get("active_run_id") or device.get("pending_run_id") or device.get("pending_rollback_id"):
+                raise ValueError("Venter på at forrige appoperasjon avsluttes før reparasjon.")
+            for pending in service.pending_commands(session):
+                if pending["kind"] == "install":
+                    service.finish_command(pending, "superseded")
+                    if device.get("pending_install_id") == pending["id"]:
+                        device["pending_install_id"] = None
+            device.update(project_id=project["id"], **{k:device.get("projects",{}).get(project["id"],{}).get(k) for k in ("current","previous","backup")})
+            session.app_revision = device.get("app_change_counter", 0)
+            self.store.put("devices", device["id"], device)
+        if session.project_id != project["id"]:
+            await service.close_dialog(session)
+            session.resume_project_aliases = (session.resume_project_aliases + [session.project_id])[-8:]
+            session.history = session.history[-1:]  # Keep this request; no other app's dialogue.
+        session.project_id, session.base_package_id = project["id"], package["id"]
+        session.app_mode, session.install_permitted = "update", True
+        session.package_id = session.build_id = None
+        await service.emit(session, {"type":"app_selected","app_mode":"update","project_id":project["id"],
+            "app_id":package["manifest"]["id"],"base_package_id":package["id"],"name":package["manifest"]["name"]})
+        return package
 
     async def diagnose(self, service, session, text):
         from .builds import validate_release, verify_archive

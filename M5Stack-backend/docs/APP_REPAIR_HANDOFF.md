@@ -10,7 +10,28 @@ Dialogen fikk manifest og krav, men ikke en automatisk sammenstilling av kilde/f
 
 ## Implementert backendflyt
 
-1. Brukeren velger app og sier for eksempel «den fungerer ikke, fiks den» eller «undersøk appen og rett feilen».
+### Navngitt reparasjon uten appvelger
+
+«Fiks slangespillet. Jeg får app error når jeg starter det.» finner nå automatisk
+den entydige Slangespill-appen innenfor den autentiserte enhetens egne prosjekter.
+Navn/SD-ID søkes med store/små bokstaver og norske endelser som slangespill/slangespillet.
+Navnet er et søkekriterium; kildeidentiteten verifiseres fortsatt med eier, prosjekt,
+pakke og arkivhash. Andre enheters apper kommer aldri med i kandidatsøket.
+
+Et navngitt mål overstyrer en annen valgt app uten å blande historikk. Generisk
+«fiks appen» bruker valgt app, en entydig faktisk installert/kjørende app eller
+den eneste lagrede appen. Ukjent navn gir aldri reparasjon av en tilfeldig app.
+Bare ekte flertydighet gir et kort spørsmål med appalternativer. Ingen krav om
+PC-appvelger, linjenummer eller manuell feillogg når appen allerede er identifiserbar.
+
+Aktiv session/turn beholdes gjennom automatisk prosjektvalg. BUILD/RUN-bekreftelser
+beholdes. Backend husker begrensede, verifiserte tidligere prosjekt-ID-er for denne
+sesjonen, slik at resume fra gammel firmware ikke mister reparasjonen hvis dens
+prosjektcache ennå er gammel. Eksplisitt nytt appvalg nuller disse resume-aliasene.
+Device bør håndtere app_selected og oppdatere lokal prosjekt/basecache fra serveren,
+uten å avbryte det aktive opptaket eller slette gjeldende turn_id.
+
+1. Brukeren navngir appen eller bruker allerede valgt app, for eksempel «Fiks slangespillet» eller «den fungerer ikke, fiks den».
 2. Backend identifiserer bare valgt prosjekt/baseversjon, verifiserer arkivet, leser hele kilden og tester den automatisk mot releaseporten. Ingen navnebasert gjetting eller spørsmål om linjenummer/loggutdrag.
 3. Tidligere korrelerte device-feil og resultatet fra gjenskaping på PC samles i en reparasjonskontekst. Feil som ikke gjenskapes rapporteres som ikke gjenskapt; de påstås ikke løst.
 4. Backend lager et målrettet reparasjonsforslag som bevarer opprinnelige funksjoner/kontroller. BUILD bekreftes med den eksisterende knappen; det stilles ikke en ny runde tekniske spørsmål. Ved reparasjon av en kjørende app stopper backend først den korrelerte kjøringen og venter på kvittering uten å blokkere kontrollkanalen.
@@ -58,7 +79,7 @@ Ny avtalt sentinel: capabilities.max_runtime_ms=0 og manifest.max_runtime_ms=0 b
 
 ## Backendverifisering
 
-206 samlede pytest-tester bestått. Isolert ekte OpenAI-dialog/kodegenerering har passert sju-profil-porten og ga en validert Sprettsirkel-pakke. Dette var en separat testmappe, ikke brukerens Snake-app og ikke en fysisk installasjon. Ingen API-nøkler eller brukerpakker publiseres i GitHub. Windows-appen har Reparer valgt app, viser leveringssperrer og skjuler installasjon for pakker uten ny releaseport.
+215 samlede pytest-tester bestått, inkludert navngitt automatisk reparasjon, enhetsscope og resume etter prosjektbytte. Isolert ekte OpenAI-dialog/kodegenerering har passert sju-profil-porten og ga en validert Sprettsirkel-pakke. Dette var en separat testmappe, ikke brukerens Snake-app og ikke en fysisk installasjon. Ingen API-nøkler eller brukerpakker publiseres i GitHub. Windows-appen har Reparer valgt app, viser leveringssperrer og skjuler installasjon for pakker uten ny releaseport.
 
 ## Akseptansekriterier
 

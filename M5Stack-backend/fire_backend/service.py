@@ -74,6 +74,7 @@ class Session:
     conversation_mode: str = "develop"
     retired_turns: list = field(default_factory=list)
     repair_context: dict | None = None
+    resume_project_aliases: list = field(default_factory=list)
 
 
 class Backend(DeviceLifecycle, AppLifecycle):
@@ -201,7 +202,8 @@ class Backend(DeviceLifecycle, AppLifecycle):
         self.store.put("sessions", session.id, {**self.snapshot(session), "history": session.history[-32:],
                        "summary": session.summary, "sequence": session.sequence, "stopped": session.stopped,
                        "last_seen": session.last_seen, "disconnected_at": session.disconnected_at,
-                       "progress": session.progress, "repair_context": session.repair_context}, critical=session.state in {State.failed, State.idle})
+                       "progress": session.progress, "repair_context": session.repair_context,
+                       "resume_project_aliases": session.resume_project_aliases}, critical=session.state in {State.failed, State.idle})
 
     async def emit(self, session, event):
         async with session.send_lock:
@@ -392,7 +394,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
                          "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error",
-                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context"):
+                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases"):
                 if name in saved:
                     setattr(session, name, saved[name])
             session.sequence = saved.get("sequence", 0)
@@ -400,7 +402,8 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 session.state, session.proposal_id = State.failed, None
         if (session.stopped or session.device_id != request.device_id or session.target != request.target
                 or session.boot_id != request.boot_id or session.capabilities != (self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None)
-                or (request.project_id and request.project_id != session.project_id)
+                or (request.project_id and request.project_id != session.project_id and not
+                    (request.app_mode is None and request.resume_session_id == session.id and request.project_id in session.resume_project_aliases))
                 or (request.base_package_id and request.base_package_id != session.base_package_id)
                 or session.protocol_version != request.protocol_version or (session.sockets and socket is None)
                 or (request.conversation_mode and request.conversation_mode != session.conversation_mode)
@@ -600,7 +603,9 @@ class Backend(DeviceLifecycle, AppLifecycle):
 
     async def _text(self, session, text):
         turn_id = session.turn_id
-        if not session.install_permitted and session.conversation_mode != "chat":
+        from .quality import repair_requested, RepairChoiceNeeded
+        repair_intent = bool(text and session.conversation_mode == "develop" and repair_requested(text))
+        if not session.install_permitted and session.conversation_mode != "chat" and not repair_intent:
             raise Conflict("Appen er borte fra FIRE. Velg Ny app eller Endre app før en ny bestilling.")
         if session.stopped or session.lock.locked() or session.state in {State.building, State.testing, State.running}:
             raise Conflict("Session is busy")
@@ -616,21 +621,26 @@ class Backend(DeviceLifecycle, AppLifecycle):
             session.history.append({"role": "user", "content": self.redactor.text(text)})
             session.history = session.history[-32:]
             try:
-                from .quality import repair_requested
                 from .models import DialogReply
                 session.repair_context = None
+                repair_choice = None
                 async with asyncio.timeout(self.settings.fire_ai_timeout_seconds):
-                    if session.conversation_mode == "develop" and repair_requested(text):
-                        await self.emit(session, {"type":"assistant_message","turn_id":session.turn_id,
-                            "text":"Jeg undersøker den valgte appen og feilhistorikken automatisk."})
-                        session.repair_context = await self.quality.diagnose(self, session, text)
+                    if repair_intent:
+                        try:
+                            target = await self.quality.select_repair_target(self, session, text)
+                        except RepairChoiceNeeded as choice:
+                            repair_choice = str(choice)
+                        else:
+                            await self.emit(session, {"type":"assistant_message","turn_id":session.turn_id,
+                                "text":"Jeg undersøker «" + target["manifest"]["name"] + "» og feilhistorikken automatisk."})
+                            session.repair_context = await self.quality.diagnose(self, session, text)
                     if session.repair_context:
                         package = self.store.get("packages", session.repair_context["package_id"])
                         original = self.store.get("builds", package["build_id"]).get("summary", "")
                         reply = DialogReply(message="Appen er analysert. Jeg bruker kildekoden og feilhistorikken til en rettet versjon. Trykk A BUILD; du trenger ikke finne feillogger.",
                             clarification_needed=False, build_summary="Reparer eksisterende app. Behold funksjoner og kontroller, rett rotårsaken og test alle knapp-/tidsprofiler. Opprinnelige krav: " + original[:700])
-                    elif session.conversation_mode == "develop" and repair_requested(text):
-                        reply = DialogReply(message="Velg appen under Endre app eller Reparer valgt app på PC. Deretter undersøker jeg kildekoden og feilhistorikken uten at du trenger å finne logger.",
+                    elif repair_intent:
+                        reply = DialogReply(message=repair_choice or "Jeg finner ingen lagret app å reparere på denne enheten.",
                             clarification_needed=True,build_summary="")
                     else:
                         if session.dialog_connection is None:
