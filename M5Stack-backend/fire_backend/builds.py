@@ -14,7 +14,7 @@ from .models import Manifest,AppTestSequence
 from .storage import canonical
 from .app_names import app_id_for
 from .rendering import VISUAL_POLICY
-from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT
+from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT,service_closure
 from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VERSION,experience_contract
 from .capabilities import CapabilityError
 
@@ -57,8 +57,9 @@ async def validate_release(app, store, build_id):
         synchronous={"gpio","pwm","adc","dac","rtc","wifi","power"}
         active={k.split('.')[0] for k in calls if k.split('.')[-1] not in {"close","stop","release"}}
         active.update(k.split('.')[0] for k in jobs)
-        missing=(set(app['required_services'])&synchronous)-active
-        missing|=(set(app['required_services'])&asynchronous)-{k.split('.')[0] for k in jobs}
+        coverage=set(app.get('coverage_services',app['required_services']))
+        missing=(coverage&synchronous)-active
+        missing|=(coverage&asynchronous)-{k.split('.')[0] for k in jobs}
         if missing:raise ValueError("I/O coverage missing for "+", ".join(sorted(missing))+". Add/correct test_sequences that navigate menus and START these operations; keep the app features.")
     if {"display", "rgb"}.intersection(app["required_services"]) and not sum(p["api_operations"] for p in results):
         raise ValueError("Release suite: app declares display/RGB but produces no visible output in any input profile")
@@ -202,6 +203,7 @@ class Builder:
                 generated = await self.provider.generate(build["summary"], context, last_error, previous)
                 # Redact before persisting, validating or packaging any model output.
                 generated = type(generated).model_validate(self.store.redactor.value(generated.model_dump()))
+                api_version=(capabilities or {}).get("api_version",BASE_API)
                 payload = generated.main_lua.encode("utf-8")
                 if len(payload) > 100000:
                     raise ValueError("Generated source exceeds limit")
@@ -218,12 +220,19 @@ class Builder:
                 await progress("compiling", 50, "Kontrollerer Lua 5.4; ingen firmwarekompilering")
                 await progress("testing", 65, "Tester hele kjøretiden med sju knapp-/tidsprofiler")
                 try:
+                    generated=generated.model_copy(update={'required_services':service_closure(generated.required_services,api_version)})
                     Quality(self.store).reject_known_failure(project["id"], sha256(payload))
                     if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
                         raise ValueError("Generated app requests services absent from actual device capabilities")
                     budgets = {"max_memory": capabilities["max_memory"], "max_runtime_ms": capabilities["max_runtime_ms"]} if capabilities else {}
                     api_version=(capabilities or {}).get("api_version",BASE_API)
+                    coverage=set(generated.required_services)
+                    if 'speaker' in coverage:
+                        from .lua_worker import without_literals
+                        import re
+                        if not re.search(r'\bfire\s*\.\s*sd\b',without_literals(generated.main_lua)):coverage.discard('sd')
                     result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
+                        "coverage_services":sorted(coverage),
                         "hardware":(capabilities or {}).get("hardware") or {},
                         "require_io_coverage":self.settings.fire_ai_mode=="openai",
                         **({"experience_policy_version":UX_POLICY_VERSION} if self.settings.fire_ai_mode=="openai" else {})}, self.store, build_id)

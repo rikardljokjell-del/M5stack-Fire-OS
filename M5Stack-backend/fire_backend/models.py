@@ -2,7 +2,7 @@ from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
-from .api_registry import ALL_SERVICES,BASE_SERVICES,BASE_API,HARDWARE_API,API_CONTRACT
+from .api_registry import ALL_SERVICES,BASE_SERVICES,BASE_API,HARDWARE_API,API_CONTRACT,service_closure
 
 Identifier = str
 ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
@@ -87,6 +87,8 @@ class Manifest(StrictModel):
             raise ValueError("Legacy manifest has no hardware contract field")
         if self.api_version==HARDWARE_API and self.api_contract!=API_CONTRACT:
             raise ValueError("Hardware manifest contract mismatch")
+        if set(service_closure(self.required_services,self.api_version))!=set(self.required_services):
+            raise ValueError("Hardware service dependencies invalid")
         if sorted(self.permissions) != sorted("fire." + s for s in self.required_services):
             raise ValueError("Manifest permissions must exactly match required_services")
         return self

@@ -139,7 +139,7 @@ class Quality:
         if any(c.get("provenance")=="observed_native_source_failure" and c.get("source_sha256")==source_hash for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a live app with an observed native runtime failure. Make a substantive repair before release.")
         if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id")
-               and c.get("provenance")!="device_installation" for c in self.store.list("quality")):
+               and c.get("provenance") not in {"device_installation","package_contract"} for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a version reported broken. Make a substantive repair before release.")
 
     def repair_target(self, service, session, text, *, source="text", continuing_repair=False):

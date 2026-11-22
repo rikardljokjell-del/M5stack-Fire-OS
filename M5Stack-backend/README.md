@@ -1,5 +1,10 @@
 # FIRE OS AI Developer backend 0.2
 
+[Melodiappens avhengighetsfeil](docs/MELODY_DEPENDENCIES_FIX.md) er rettet:
+speaker får automatisk jobs+sd i manifest og permissions, også for tone-only.
+Manglende avhengigheter stoppes før levering; samme kontrakt brukes ved generering
+og validering.
+
 [Toolbox-bygg og forebygging](docs/TOOLBOX_BUILD_RECOVERY.md): samlet byggetid er
 tilpasset hele rettingsløkken, og nye hardwareapper må ha testsekvenser som faktisk
 starter instrumentene. Menyvisning alene teller ikke som test av I/O.

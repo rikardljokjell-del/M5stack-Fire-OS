@@ -33,8 +33,19 @@ def preview_capabilities():
                 "i2c":[0],"i2c_write_addresses":[64],"uart":[2],"spi":[2]}}
 
 
+def service_closure(services,api_version=HARDWARE_API):
+    required=set(services);methods=methods_for(api_version)
+    if not required<=set(methods):raise ValueError("Unknown service for this API")
+    while True:
+        dependencies={dep for name in required for method in methods[name].values() for dep in method.get("requires",[])}
+        if dependencies<=required:return sorted(required)
+        required.update(dependencies)
+
+
 def package_compatibility(package,capabilities):
     manifest=package["manifest"]
+    if set(service_closure(manifest['required_services'],manifest.get('api_version',BASE_API)))!=set(manifest['required_services']):
+        return "Appakken mangler nødvendige maskinvareavhengigheter; bygg en korrigert versjon."
     if manifest.get("api_version",BASE_API)==HARDWARE_API and capabilities.get("api_version",BASE_API)!=HARDWARE_API:
         return "Appversjonen krever det utvidede maskinvare-API-et i firmware."
     if manifest.get("api_version")==HARDWARE_API and (capabilities.get("api_contract")!=API_CONTRACT or manifest.get("api_contract")!=API_CONTRACT):
