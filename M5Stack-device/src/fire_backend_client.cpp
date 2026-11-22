@@ -82,6 +82,10 @@ void FireBackendClient::configure(const String& host, uint16_t port,
 void FireBackendClient::setConversationMode(const String& mode) {
   if (mode != "chat" && mode != "develop") return;
   conversationMode_ = mode;
+  if (mode == "chat") {
+    pendingAppMode_ = "";
+    pendingBasePackageId_ = "";
+  }
   if (sessionReady())
     sendEvent("mode_select", ",\"conversation_mode\":\"" + jsonEscape(mode) + "\"");
 }
