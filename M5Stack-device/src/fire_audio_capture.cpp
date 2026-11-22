@@ -16,6 +16,9 @@ bool firePrepareMicCapture(uint32_t sampleRate) {
     return false;
 
   if (cfg.use_adc && cfg.pin_data_in == GPIO_NUM_34) {
+    // FIRE speaker and ADC microphone share I2S0. Stop the speaker task and
+    // release its driver before installing the input DMA stream.
+    M5.Speaker.end();
     if (adc1_config_width(ADC_WIDTH_BIT_12) != ESP_OK ||
         adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11) !=
             ESP_OK)
@@ -38,10 +41,21 @@ bool firePrepareMicCapture(uint32_t sampleRate) {
     i2sConfig.use_apll = false;
     i2sConfig.tx_desc_auto_clear = false;
     i2sConfig.fixed_mclk = 0;
-    if (i2s_driver_install(i2sPort, &i2sConfig, 0, nullptr) != ESP_OK)
+    const esp_err_t installResult =
+        i2s_driver_install(i2sPort, &i2sConfig, 0, nullptr);
+    if (installResult != ESP_OK) {
+      Serial.printf("FIRE mic prepare: i2s install=%d\n",
+                    static_cast<int>(installResult));
       return false;
-    if (i2s_set_adc_mode(ADC_UNIT_1, ADC1_CHANNEL_6) != ESP_OK ||
-        i2s_adc_enable(i2sPort) != ESP_OK) {
+    }
+    const esp_err_t adcModeResult =
+        i2s_set_adc_mode(ADC_UNIT_1, ADC1_CHANNEL_6);
+    const esp_err_t adcEnableResult =
+        adcModeResult == ESP_OK ? i2s_adc_enable(i2sPort) : adcModeResult;
+    if (adcEnableResult != ESP_OK) {
+      Serial.printf("FIRE mic prepare: adc mode=%d enable=%d\n",
+                    static_cast<int>(adcModeResult),
+                    static_cast<int>(adcEnableResult));
       i2s_driver_uninstall(i2sPort);
       return false;
     }
@@ -62,6 +76,7 @@ void fireReleaseMicCapture() {
     i2s_driver_uninstall(i2sPort);
     i2sInstalled = false;
   }
+  M5.Speaker.begin();
 }
 
 bool fireRecordMic(int16_t* samples, size_t sampleCount, uint32_t sampleRate) {
