@@ -16,6 +16,7 @@ from .app_names import app_id_for
 from .rendering import VISUAL_POLICY
 from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT
 from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VERSION,experience_contract
+from .capabilities import CapabilityError
 
 
 def sha256(data):
@@ -30,7 +31,7 @@ async def validate_release(app, store, build_id):
     results = []
     profiles=RELEASE_PROFILES+(("io_error","io_timeout","io_disconnect") if app.get("api_version")==HARDWARE_API and set(app["required_services"])-BASE_SERVICES else ())
     if app.get("experience_policy_version")==UX_POLICY_VERSION:
-        profiles+=("os_long_a","os_long_b","os_long_c","os_double","long_session")
+        profiles+=("os_long_a","os_long_b","os_long_c","os_double","start_b_idle","play_directions","long_session")
     for profile in profiles:
         try:
             result = await simulate({**app, "profile": profile,
@@ -216,6 +217,8 @@ class Builder:
                         # Limited offline fixtures are explicitly identified; no live UX claim.
                         review_data.update(kind="app",**{name:True for name in FireAppReview.fire_checks()})
                     review=FireAppReview.model_validate(review_data)
+                    if (self.settings.fire_ai_mode=="openai" and review.kind=="game" and not ux_contract["game_audio_available"]):
+                        raise CapabilityError("game_audio_unavailable","Spill med lyd/melodier krever Lua speaker/jobs i firmware. AI-talesvar gir ikke spilllyd. Ingen stille erstatningspakke er levert.")
                     review_record={"source_sha256":sha256(payload),"approved":review.approved,
                         "experience_policy_version":UX_POLICY_VERSION,
                         "mode":"openai_source_review" if self.settings.fire_ai_mode=="openai" else "mock_fixture",
@@ -224,6 +227,8 @@ class Builder:
                     if not review.approved:raise ValueError(review.correction())
                     result.update(pre_delivery_review_required=True,pre_delivery_review=review_record)
                     break
+                except CapabilityError:
+                    raise  # Regenerating Lua cannot implement a missing native driver.
                 except (ValueError, asyncio.TimeoutError) as error:
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
                     Quality(self.store).record_validation(build, generated.main_lua, last_error)

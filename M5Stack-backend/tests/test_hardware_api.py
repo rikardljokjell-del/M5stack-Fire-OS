@@ -133,7 +133,7 @@ def test_async_jobs_complete_with_typed_success_or_fault(profile,expected):
     "fire.bluetooth.scan('ble');fire.bluetooth.read_gatt('addr','service','char');fire.bluetooth.write_gatt('addr','service','char',{1})",
     "fire.mic.level();fire.mic.record('test.wav',1000,16000);fire.speaker.tone(440,100,50);fire.speaker.play('test.wav',50);fire.speaker.stop()",
     "fire.sd.mkdir('logs');fire.sd.list('');fire.sd.write('a.txt','x',false);fire.sd.read('a.txt',0,16);fire.sd.remove('a.txt')",
-    "fire.power.status();fire.power.brightness(100);fire.power.sleep(100);fire.rtc.now();fire.rtc.set(1795305600)",
+    "fire.power.status();fire.power.sleep(100);fire.rtc.now();fire.rtc.set(1795305600)",
     "local t={1,2};table.insert(t,3);table.remove(t);if table.concat(t,',')~='1,2' or ('AB'):sub(1,1)~='A' then bad() end",
 ])
 def test_hardware_service_smokes_are_synthetic_and_bounded(body):

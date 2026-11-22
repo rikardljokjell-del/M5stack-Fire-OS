@@ -1,5 +1,7 @@
 # FIRE OS AI Developer backend 0.2
 
+[Prikkjakt-analyse og nye generelle regler](docs/PRIKKJAKT_ANALYSIS.md): spillstart i testene, mindre native rasterbelastning, begge RGB-barer, behagelig spillmusikk med ekte mute og respekt for OS mastervolum/bakgrunnslys. Spilllyd krever fortsatt native Lua-lydadapter; nye spill leveres ikke som stille erstatning for dette kravet.
+
 Felles [FIRE-standard for knapper, skjerm, spillmenyer og feilretting](docs/FIRE_EXPERIENCE_STANDARD.md)
 er nå obligatorisk i nye livebygg. A=forrige/opp, B=velg/bekreft, C=neste/ned;
 spill får effektinnstillinger før start og en utvidet, kildebundet UX-kontroll.

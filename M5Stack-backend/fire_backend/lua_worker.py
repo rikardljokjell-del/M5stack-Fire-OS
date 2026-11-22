@@ -67,6 +67,7 @@ local count, total, elapsed = 0, 0, 0
 local callback_ops, callback_work, peak_ops, peak_work = 0,0,0,0
 local callback_phase, clear_count, visible_ops, background = "",0,0,0
 local text_bytes, peak_text_bytes = 0,0
+local grid_pixels, peak_grid_pixels = 0,0
 local min_update_draws, update_count, peak_clears = nil,0,0
 local frames_run = 0
 local os_suppressed, os_suspended, os_exited, os_navigation = 0,0,false,""
@@ -109,7 +110,10 @@ local function record(name, ...)
   elseif name=="line" then work=math.max(math.abs(c-a),math.abs(d-b))+1
   elseif name=="circle" then work=math.ceil(7*c)
   elseif name=="fill_circle" then work=math.ceil(math.pi*c*c)
-  elseif name=="grid" then work=c*d*select(5,...)*select(6,...)
+  elseif name=="grid" then
+    work=c*d*select(5,...)*select(6,...)
+    grid_pixels=grid_pixels+work;peak_grid_pixels=math.max(peak_grid_pixels,grid_pixels)
+    if profile and grid_pixels>32768 then error("Native grid raster budget exceeded; compact the complete board and merge static/dynamic cells") end
   elseif name=="text" then
     work=#c*48;text_bytes=text_bytes+#c;peak_text_bytes=math.max(peak_text_bytes,text_bytes)
     if profile and text_bytes>256 then error("Per-callback text budget exceeded; cache labels and simplify the complete frame") end
@@ -229,6 +233,7 @@ local function call(fn, ...)
   count=0
   callback_ops,callback_work=0,0
   text_bytes=0
+  grid_pixels=0
   if hardware then hardware.begin_callback() end
   clear_count,visible_ops,background=0,0,0
   hook(quota,"",1000)
@@ -285,6 +290,14 @@ for frame=1,frames do
       os_navigation="configured_double_shortcut"
       if frame<45 then suspend_update=true end
     end
+  elseif profile=="start_b_idle" or profile=="play_directions" or profile=="long_session" then
+    button=""
+    if frame==1 then button="B"
+    elseif profile~="start_b_idle" and frame%30==0 then
+      local step=frame//30
+      button=step%8==0 and "B" or step%2==0 and "A" or "C"
+    end
+    if button~="" and env.on_button then callback_phase="on_button";call(env.on_button,button,"pressed") end
   elseif profile=="idle" then
     button=""
   elseif profile=="hold_a" or profile=="hold_b" or profile=="hold_c" then
@@ -308,7 +321,8 @@ end
 return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,max_callback_operations=peak_ops,max_callback_display_work=peak_work,
         min_update_draws=min_update_draws or 0,update_count=update_count,max_callback_clears=peak_clears,max_callback_text_bytes=peak_text_bytes,
         hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,
-        os_reserved_callbacks_suppressed=os_suppressed,os_updates_suspended=os_suspended,os_exited=os_exited,os_navigation=os_navigation}
+        os_reserved_callbacks_suppressed=os_suppressed,os_updates_suspended=os_suspended,os_exited=os_exited,os_navigation=os_navigation,
+        max_callback_grid_pixels=peak_grid_pixels}
 '''
 
 
@@ -354,6 +368,7 @@ def simulate(request):
             "max_callback_operations":result["max_callback_operations"],"max_callback_display_work":result["max_callback_display_work"],
             "min_update_draws":result["min_update_draws"],"update_count":result["update_count"],"max_callback_clears":result["max_callback_clears"],
             "max_callback_text_bytes":result["max_callback_text_bytes"],"resources_used":resources_used,
+            "max_callback_grid_pixels":result["max_callback_grid_pixels"],
             "hardware_simulated":api_version=="fire-lua-0.2","app_memory_peak":result["app_memory_peak"],"max_io_calls":hardware_metrics["max_io_calls"] if hardware_metrics else 0,
             "max_io_bytes":hardware_metrics["max_io_bytes"] if hardware_metrics else 0,"max_jobs":hardware_metrics["max_jobs"] if hardware_metrics else 0,
             "os_reserved_callbacks_suppressed":result["os_reserved_callbacks_suppressed"],

@@ -5,7 +5,7 @@ from pydantic import Field
 
 from .models import StrictModel
 
-UX_POLICY_VERSION = "fire-experience-v1"
+UX_POLICY_VERSION = "fire-experience-v2"
 
 
 def experience_contract(capabilities=None):
@@ -23,6 +23,8 @@ def experience_contract(capabilities=None):
                      "rgb":"toggle" if "rgb" in services else "unavailable",
                      "sound":"toggle before play; default off" if sound else "unavailable; no playback or fake toggle"},
         "game_audio_available":sound,"rgb_available":"rgb" in services,
+        "game_audio_required":True,
+        "os_settings":{"volume":"OS master/mute authoritative; app gain can only attenuate","backlight":"OS-owned; apps must not override"},
         "text":"fixed textSize1, black background; no font/size/transparent-text API; use supported geometry/grid for larger hierarchy",
         "limits":{"lua_bytes":caps.get("max_memory",131072),"callback_ms":12,"display_calls":24,
                   "text_bytes":256,"display_work":120000},
@@ -62,7 +64,47 @@ Every app must look deliberately designed for a 320x240 handheld screen:
 Treat this as a release requirement, not an optional enhancement for later.
 PC tests/review reduce risk; never claim they prove physical flawless operation.
 
-FIRE-specific interaction standard (fire-experience-v1), mandatory for ALL apps:
+Native performance regression rule: cumulative grid raster area at most 32768
+pixels per callback. Large grids plus separate detailed actors can overrun native
+callbacks even when desktop tests pass. Compact the board, merge enemy/static
+cells into one grid, precompute coordinates/labels. A menu-only soak is not proof
+of gameplay: review the start-B and play-direction profiles as well as idle.
+
+RGB bars are a core feedback channel for ALL apps when rgb is advertised. Use BOTH
+five-LED sides (indices0..9), not a single indicator pixel. Light multiple LEDs at
+comfortable brightness for intentional patterns, symmetric sweeps, progress and
+short event pulses. Games: point/pickup pulse, milestone wave, red loss/death pulse,
+blue/cyan win/success and a calm ready/pause state. Tools: red=error/disconnected,
+blue=good/connected/ready, amber=connecting/busy, dim/off=idle or disabled. Pair
+colour with on-screen status; never encode essential information only in colour.
+Keep RGB toggle working, clear ALL ten pixels on off, and restore after a round.
+Use dt-driven brief flashes (2..4 changes/second max), never blocking waits or
+intense full-brightness strobing. Each set flushes the strip: update only changed
+pixels on event/state transitions or limited animation ticks; stagger transitions
+within callback limits if necessary, WITHOUT splitting the visible screen frame.
+
+Game audio is REQUIRED: pleasant, restrained short original melodic loops suited
+to the game, plus distinct soft pickup/score/loss/win cues. Avoid harsh repetitive
+beeps, loud sudden changes or copied commercial themes. Provide an honest sound
+on/off setting BEFORE start and accessible in the pause/settings menu. Default
+off until chosen, comfortable volume, no overlap with AI speech, immediate mute
+cancels/stops/closes audio and blocks further scheduling. Keep setting over rounds.
+Use only actual speaker/jobs (and sd for file playback); tones can be sequenced
+as asynchronous bounded jobs with elapsed-time scheduling, not a blocking loop.
+Conversation audio flags are NOT game sound. If native game audio is unavailable,
+do not promise or deliver a silent game as satisfying this standard: explain the
+firmware prerequisite and retain the game request until support is available.
+Tools should use optional subtle confirmation/error melodies where useful and
+available, always muteable; never make a missing connection noisy indefinitely.
+
+OS master volume, mute and backlight are authoritative for ALL apps/games. Never
+call power.brightness or change OS brightness/volume to suit the app. A sound-on
+toggle cannot unmute OS; app gain may only attenuate the current OS master level,
+with OS zero always silent. Changes to OS settings take effect during playback;
+app exit leaves OS settings unchanged. Speaker volume arguments are app gain,
+never permission to bypass OS master. Native adapters must enforce this too.
+
+FIRE-specific interaction standard (fire-experience-v2), mandatory for ALL apps:
 Physical left=A, middle=B, right=C. In every menu/list/settings screen A means
 previous/up, B select/confirm, C next/down. Highlight the selected item and give
 immediate feedback. Gameplay may use A/C for opposing directions and B for the

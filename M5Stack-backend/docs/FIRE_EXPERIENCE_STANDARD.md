@@ -1,3 +1,7 @@
+# Oppdatering fire-experience-v2
+
+Se [PRIKKJAKT_ANALYSIS.md](PRIKKJAKT_ANALYSIS.md) for nyere krav: begge RGB-barer, spillmelodier med ekte av/på, OS mastervolum/mute og OS-eid bakgrunnslys, start-B/gameplay-profiler og rastergrense32768. Den historiske v1-beskrivelsen nedenfor gjelder eldre pakker; nye livebygg følger v2 og får14profiler (17for utvidet I/O). Spilllyd er påkrevd og manglende native driver blokkerer ny spilllevering; verktøylyd er valgfri.
+
 # Felles standard for apper og spill på FIRE
 
 Denne standarden gjelder automatisk ved ny app, oppdatering og reparasjon. Målet

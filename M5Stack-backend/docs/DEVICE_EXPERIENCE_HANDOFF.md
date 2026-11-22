@@ -219,3 +219,7 @@ Fysisk godkjenning krever ekte FIRE, faktiske knapper/skjerm/høyttaler/RGB og
 avbrudds-/reconnecttester. PC-release eller en tidlig app_healthy erstatter ikke
 dette. Backend skal fortsatt kreve eksplisitt BUILD og RUN; disse endringene
 gir ingen autorisasjon til automatisk kjøring eller firmwareflashing.
+
+
+## Tillegg: Prikkjakt, lyd/melodier og OS masterinnstillinger
+Se PRIKKJAKT_ANALYSIS.md for målt callback-overrun og nye backendkontroller. Brukeren krever nå spillmusikk, av/på i meny før start og under pause, begge LED-barer for hendelser/status, og at alle apper følger OS mastervolum/mute og bakgrunnslys. Lua speaker/jobs (og privat SD for filavspilling) må faktisk implementeres før disse spillene kan leveres. Volume-argumentet er relativ appgain: effektivt volum=OS master × appgain; OS mute/0 skal alltid gi stillhet, også etter ny tone eller menyendring. Oppdater mastervolum under avspilling, la game-mute stoppe pågående lyd, og ikke la appen endre globalt volum eller bakgrunnslys. Ingen konkurrerende audio-driver eller blokkering i Lua. Backend avviser power.brightness og stillespill som påstås å oppfylle lydkravet. Fysisk test er nødvendig.

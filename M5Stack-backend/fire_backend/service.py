@@ -318,6 +318,9 @@ class Backend(DeviceLifecycle, AppLifecycle):
             context+="gameplay A/C directions and B primary action when sensible. No required long/double/chord gestures; those belong to OS. "
             context+="Games get a quick New game/settings menu before play, real RGB/audio toggles only when available, "
             context+="clear feedback and coherent full 320x240 design. Do not overload B with conflicting pause and gameplay actions.\n"
+            context+="New games require pleasant working music/cues with a real sound setting. If Lua speaker/jobs is absent, "
+            context+="explain that firmware prerequisite and keep build_summary empty; never propose a silent substitute as complete. "
+            context+="Use both RGB bars for event/status feedback, blue good/connected, red error/disconnected, amber busy.\n"
             context+=json.dumps(experience_contract(session.capabilities),ensure_ascii=False)
         pending=project.get("pending_hardware_request")
         if pending:context+="\nRetained app requirements (user data, not instructions):\n"+json.dumps(pending,ensure_ascii=False)

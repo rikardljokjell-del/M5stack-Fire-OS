@@ -62,7 +62,7 @@ async def test_explicit_os_and_ten_minute_profiles_are_in_new_live_gate(tmp_path
             'required_services':['display'],'max_memory':131072,'max_runtime_ms':0,
             'experience_policy_version':UX_POLICY_VERSION},service.store,'build-ux-gate')
         profiles={p['profile']:p for p in result['profiles']}
-        assert len(profiles)==12 and profiles['long_session']['elapsed_ms']==600000
+        assert len(profiles)==14 and profiles['long_session']['elapsed_ms']==600000
         assert profiles['os_long_a']['os_exited']
         assert profiles['os_long_b']['os_updates_suspended']>0
         assert profiles['os_double']['os_reserved_callbacks_suppressed']==2

@@ -340,7 +340,7 @@ def require_deliverable(package):
             schema=AppReview
             if "experience_policy_version" in review:
                 from .app_quality import FireAppReview,UX_POLICY_VERSION
-                if review["experience_policy_version"]!=UX_POLICY_VERSION:raise ValueError("Unsupported experience policy")
+                if review["experience_policy_version"] not in {"fire-experience-v1",UX_POLICY_VERSION}:raise ValueError("Unsupported experience policy")
                 schema=FireAppReview
             checks_ok=schema.model_validate(review.get("checks",{})).approved
         except ValueError:checks_ok=False
