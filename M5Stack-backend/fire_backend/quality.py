@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 
 from .storage import new_id
 from .rendering import VISUAL_POLICY
+from .failure_learning import REGRESSION_CHECKS,regression_evidence,repair_delta,source_delta,source_from_archive,source_guard_eligible
 
 
 class RepairChoiceNeeded(ValueError):
@@ -34,6 +35,7 @@ RULES = {
     "api": "Use only declared fire APIs and the restricted base/math functions. Do not assume standard Lua libraries exist.",
     "text": "Display strings must fit 80 UTF-8 bytes. Format numbers safely without relying on unavailable string APIs.",
     "runtime": "Exercise init, update, reset, each button held and rapid input across the full advertised runtime. Inspect all branches.",
+    "installation": "Do not rewrite valid app code for a failed transfer or unavailable SD. Preserve the tested package and diagnose storage/transfer before retrying installation.",
 }
 
 
@@ -53,8 +55,10 @@ class Quality:
     def __init__(self, store):
         self.store = store
 
-    def record(self, *, project_id, package_id=None, source_hash=None, message, provenance, device_id=None, build_id=None):
-        category = failure_class(message)
+    def record(self, *, project_id, package_id=None, source_hash=None, message, provenance, device_id=None, build_id=None,block_package=True):
+        package=self.store.get("packages",package_id) if package_id else None
+        source_hash=source_hash or (package["manifest"]["checksum"] if package else None)
+        category = "installation" if provenance=="device_installation" else failure_class(message)
         safe = self.store.redactor.text(message)[:1200]
         fingerprint = hashlib.sha256(json.dumps([project_id, package_id, source_hash, category, safe, provenance], ensure_ascii=True).encode()).hexdigest()[:32]
         case_id = "case-" + fingerprint
@@ -65,13 +69,27 @@ class Quality:
                     "device_id":device_id,"build_id":build_id,"category":category,"message":safe,
                     "provenance":provenance,"status":"open","first_seen":time.time(),"count":0}
         case.update(count=case["count"]+1,last_seen=time.time())
+        case.setdefault("regression",regression_evidence(category))
+        case.setdefault("failure_evidence",{"source_sha256":source_hash,"provenance":provenance,
+            "physical_failure_observed":provenance in {"device_receipt","device_diagnostic"},"root_cause_verified":False})
         self.store.put("quality",case_id,case,critical=True)
         self.store.put("quality", "rule-"+category,
             {"id":"rule-"+category,"project_id":None,"category":category,"provenance":"fixed_rule_registry"},critical=True)
-        if package_id:
-            package=self.store.get("packages",package_id)
+        if package_id and block_package:
             package["quality"]={"blocked":True,"case_id":case_id,"reason":category}
             self.store.put("packages",package_id,package,critical=True)
+        if package and source_hash and re.fullmatch(r"[a-f0-9]{64}",source_hash) and source_guard_eligible(provenance,package,safe):
+            # Survives deletion without retaining app names, source or logs.
+            guard_id="bad-source-"+source_hash[:48]
+            self.store.put("quality",guard_id,{"id":guard_id,"project_id":None,"category":category,
+                "source_sha256":source_hash,"provenance":"observed_native_source_failure", "last_seen":time.time()},critical=True)
+        if package_id and provenance in {"device_receipt","device_diagnostic"}:
+            for prior in self._project_cases(project_id):
+                if prior.get("candidate_package_id")==package_id:
+                    prior.update(status="candidate_failed_on_device",candidate_failure_case_id=case_id)
+                    if prior.get("fix"):
+                        prior["fix"].update(status="failed_on_device",physical_resolution_verified=False)
+                    self.store.put("quality",prior["id"],prior,critical=True)
         return case
 
     def record_validation(self, build, source, message):
@@ -87,21 +105,41 @@ class Quality:
                 "event":event.event,"reported_at":time.time(),"error_code":event.error_code,"message":event.message,
                 "diagnostics":event.diagnostics.model_dump(exclude_none=True) if event.diagnostics else {}}
         self.store.put("feedback",report["id"],report,critical=True)
+        if event.event=="device_install_result" and event.status=="failed":
+            self.record(project_id=package["project_id"],package_id=package["id"],device_id=session.device_id,
+                source_hash=package["manifest"]["checksum"],message=(event.error_code or "install_failed")+": "+(event.message or ""),
+                provenance="device_installation",block_package=False)
+        if event.event in {"app_failed","app_diagnostic","device_install_result"}:
+            matching={"app_failed":"device_receipt","app_diagnostic":"device_diagnostic","device_install_result":"device_installation"}[event.event]
+            for case in self._project_cases(package["project_id"]):
+                if case.get("package_id")==package["id"] and case.get("provenance")==matching:
+                    case.setdefault("failure_evidence",{})["latest_feedback"]={
+                        "event_id":report["id"],"event":event.event,"boot_id":session.boot_id,
+                        "run_id":event.run_id,"error_code":event.error_code,"diagnostics":report["diagnostics"]}
+                    self.store.put("quality",case["id"],case,critical=True)
+                    break
         prior=sorted((r for r in self.store.list("feedback") if r["device_id"]==session.device_id),key=lambda r:r["reported_at"],reverse=True)
         for old in prior[100:]:self.store.path("feedback",old["id"]).unlink(missing_ok=True)
 
+    def _project_cases(self,project_id):
+        return sorted((x for x in self.store.list("quality") if x.get("project_id")==project_id),key=lambda x:x.get("last_seen",0),reverse=True)
+
     def cases(self, project_id):
-        return sorted((x for x in self.store.list("quality") if x["project_id"]==project_id),key=lambda x:x["last_seen"],reverse=True)[:12]
+        return self._project_cases(project_id)[:12]
 
     def policy(self):
         # Only fixed, reviewed rules are promoted. No generated prompt/code from logs.
         categories={case["category"] for case in self.store.list("quality")}
         from .app_quality import APP_QUALITY_POLICY
         rules={**RULES,"design":APP_QUALITY_POLICY}
-        return "\nLearned regression precautions (fixed rules from observed failures):\n"+"\n".join(rules[k] for k in sorted(categories) if k in rules) if categories else ""
+        return ("\nLearned regression precautions (fixed rules from observed failures):\n"+"\n".join(rules[k] for k in sorted(categories) if k in rules)
+            +"\nRequired regression checks:\n"+"\n".join(REGRESSION_CHECKS[k] for k in sorted(categories) if k in REGRESSION_CHECKS)) if categories else ""
 
     def reject_known_failure(self, project_id, source_hash):
-        if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id") for c in self.store.list("quality")):
+        if any(c.get("provenance")=="observed_native_source_failure" and c.get("source_sha256")==source_hash for c in self.store.list("quality")):
+            raise ValueError("Generated source is identical to a live app with an observed native runtime failure. Make a substantive repair before release.")
+        if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id")
+               and c.get("provenance")!="device_installation" for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a version reported broken. Make a substantive repair before release.")
 
     def repair_target(self, service, session, text, *, source="text", continuing_repair=False):
@@ -204,13 +242,14 @@ class Quality:
         reproduced=False
         error="Not reproduced on PC; preserve requirements and harden the app using correlated device evidence."
         try:
-            await validate_release({**package["manifest"],"main_lua":source},self.store,session.id)
+            resources=(session.capabilities or {}).get("hardware") or package.get("validation",{}).get("resources_used",{})
+            await validate_release({**package["manifest"],"main_lua":source,"hardware":resources},self.store,session.id)
         except (ValueError,TimeoutError) as failure:
             reproduced=True
             error=self.store.redactor.text(str(failure))[:2400]
             self.record(project_id=session.project_id,package_id=package_id,source_hash=package["manifest"]["checksum"],
                         message=error,provenance="repair_reproduction",device_id=session.device_id)
-        evidence=[{k:c.get(k) for k in ("id","category","message","provenance","package_id")} for c in self.cases(session.project_id) if c.get("package_id")==package_id]
+        evidence=[{k:c.get(k) for k in ("id","category","message","provenance","package_id","regression","fix")} for c in self.cases(session.project_id) if c.get("package_id")==package_id]
         result={"package_id":package_id,"source_sha256":package["manifest"]["checksum"],"reproduced_on_pc":reproduced,
                 "validator_error":error,"cases":evidence[:6],"case_id":report["id"]}
         native = sorted((c for c in self.store.list("quality") if c.get("project_id")==session.project_id and c.get("package_id")==package_id
@@ -226,15 +265,65 @@ class Quality:
         return result
 
     def candidate(self, project_id, failed_package_id, candidate_id):
-        for case in self.cases(project_id):
+        old=self.store.get("packages",failed_package_id);candidate=self.store.get("packages",candidate_id)
+        if old["project_id"]!=project_id or candidate["project_id"]!=project_id:
+            raise PermissionError("Repair evidence package scope mismatch")
+        delta=repair_delta(self.store,old,candidate)
+        for case in self._project_cases(project_id):
             if case.get("package_id")==failed_package_id:
                 case.update(status="candidate_validated_on_pc",candidate_package_id=candidate_id)
+                if case.get("fix") and case["fix"].get("candidate_package_id")!=candidate_id:
+                    case["fix_history"]=(case.get("fix_history",[])+[case["fix"]])[-4:]
+                case["fix"]={**delta,"status":"candidate_on_pc" if delta["source_changed"] else "candidate_unchanged",
+                    "category":case["category"],"rule_id":regression_evidence(case["category"])["rule_id"],
+                    "required_regression_check":REGRESSION_CHECKS.get(case["category"],REGRESSION_CHECKS["runtime"]),
+                    "candidate_package_id":candidate_id,"recorded_at":time.time()}
+                case["fix"]["summary"]=("Ny kandidat med endret kilde" if delta["source_changed"] else "Kandidaten har uendret kilde")+"; PC-validert, men fysisk feilretting er ikke bekreftet."
                 self.store.put("quality",case["id"],case,critical=True)
 
+    def validated_build(self,build_id,package_id):
+        """Connect internal rejected attempts to the first deliverable candidate."""
+        package=self.store.get("packages",package_id)
+        build=self.store.get("builds",build_id)
+        if package["build_id"]!=build_id or package["project_id"]!=build["project_id"]:
+            raise PermissionError("Internal repair evidence build scope mismatch")
+        cases=[c for c in self._project_cases(package["project_id"])
+               if c.get("build_id")==build_id and c.get("package_id") is None][:4]
+        if not cases:return
+        final_source=source_from_archive(self.store,package)
+        folder=self.store.path("builds",build_id,"")
+        attempts={}
+        for number in range(1,5):
+            path=folder/f"attempt-{number}.lua"
+            if path.is_file() and path.stat().st_size<=100000:
+                payload=path.read_bytes()
+                attempts[hashlib.sha256(payload).hexdigest()]=(number,payload.decode("utf-8"))
+        review_summary=(package.get("validation",{}).get("pre_delivery_review",{}).get("checks",{}).get("repair_summary") or "")
+        for case in cases:
+            prior=attempts.get(case.get("source_sha256"))
+            delta=source_delta(prior[1],final_source,None,package.get("validation")) if prior else {
+                "from_source_sha256":case.get("source_sha256"),"candidate_source_sha256":package["manifest"]["checksum"],
+                "source_changed":case.get("source_sha256")!=package["manifest"]["checksum"],
+                "delta_status":"source_unavailable","semantic_fix_verified":False,"physical_resolution_verified":False}
+            case.update(status="candidate_validated_on_pc",candidate_package_id=package_id)
+            case["fix"]={**delta,"status":"candidate_on_pc" if delta["source_changed"] else "candidate_unchanged",
+                "origin":"internal_correction","failed_attempt":prior[0] if prior else None,
+                "candidate_package_id":package_id,"recorded_at":time.time(),"category":case["category"],
+                "rule_id":regression_evidence(case["category"])["rule_id"],
+                "required_regression_check":REGRESSION_CHECKS.get(case["category"],REGRESSION_CHECKS["runtime"]),
+                "summary":"Internt avvist forsøk er knyttet til PC-validert kandidat; fysisk feilretting er ikke bekreftet."}
+            if review_summary:
+                case["fix"].update(reviewer_summary=self.store.redactor.text(str(review_summary))[:1200],
+                                  reviewer_summary_provenance="model_review_unverified")
+            self.store.put("quality",case["id"],case,critical=True)
+
     def observed_healthy(self, project_id, package_id):
-        for case in self.cases(project_id):
+        for case in self._project_cases(project_id):
             if case.get("candidate_package_id")==package_id:
-                case.update(status="device_reported_healthy",healthy_at=time.time())
+                case["healthy_at"]=time.time()
+                if case.get("status")!="candidate_failed_on_device":case["status"]="device_reported_healthy"
+                if case.get("fix") and case["fix"].get("status")!="failed_on_device":
+                    case["fix"].update(status="initial_device_observation",physical_resolution_verified=False)
                 self.store.put("quality",case["id"],case,critical=True)
 
 
@@ -247,7 +336,13 @@ def require_deliverable(package):
     if validation.get("pre_delivery_review_required"):
         review=validation.get("pre_delivery_review") or {}
         from .app_quality import AppReview
-        try:checks_ok=AppReview.model_validate(review.get("checks",{})).approved
+        try:
+            schema=AppReview
+            if "experience_policy_version" in review:
+                from .app_quality import FireAppReview,UX_POLICY_VERSION
+                if review["experience_policy_version"]!=UX_POLICY_VERSION:raise ValueError("Unsupported experience policy")
+                schema=FireAppReview
+            checks_ok=schema.model_validate(review.get("checks",{})).approved
         except ValueError:checks_ok=False
         if (review.get("approved") is not True or review.get("source_sha256")!=package["manifest"]["checksum"]
                 or not checks_ok or package.get("mode")=="openai" and review.get("mode")!="openai_source_review"):

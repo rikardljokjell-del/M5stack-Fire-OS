@@ -1,6 +1,6 @@
 # Negotiated Lua runtime contract
 
-The baseline below documents fire-lua-0.1. For the new fire-lua-0.2 contract, all exact method arguments/result shapes, OS resource ownership and firmware work, see [HARDWARE_API_HANDOFF.md](HARDWARE_API_HANDOFF.md) and [the exported registry](../contracts/HARDWARE_API-v0.2.json). Never infer physical hardware support from the PC simulator. Current inspected firmware 932ba8f still exposes the five baseline services. Conversation audio is independent of Lua mic/speaker permissions. Release-v4 adds a cumulative 256-text-byte callback limit and three I/O failure profiles for hardware apps.
+The baseline below documents fire-lua-0.1. For the new fire-lua-0.2 contract, all exact method arguments/result shapes, OS resource ownership and firmware work, see [HARDWARE_API_HANDOFF.md](HARDWARE_API_HANDOFF.md) and [the exported registry](../contracts/HARDWARE_API-v0.2.json). Never infer physical hardware support from the PC simulator. Current inspected firmware dae75bf / 74ac26a exposes display/buttons/rgb/imu/time/jobs/gpio/pwm/i2c/uart, with the limited resource profile in the device handoff. Other registered services remain unavailable. Conversation audio is independent of Lua mic/speaker permissions. Release-v4 adds a cumulative 256-text-byte callback limit and three I/O failure profiles for hardware apps.
 
 # fire-lua-0.1 runtime contract
 

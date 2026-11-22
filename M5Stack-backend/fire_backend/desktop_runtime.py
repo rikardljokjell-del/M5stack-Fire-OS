@@ -166,6 +166,9 @@ class DesktopRuntime:
     def desktop_conversation(self,device_id,**values):
         return self.request("POST","/desktop/conversations",json={"device_id":device_id,**values})
 
+    def app_quality(self,project_id):
+        return self.request("GET",f"/projects/{project_id}/quality")
+
     def stop_conversation(self,session_id):
         return self.request("POST","/session/stop",json={"session_id":session_id})
 

@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from .audio import AudioManager
 from .auth import authorize_project, authorize_session, principal
 from .config import Settings
-from .capabilities import CapabilityError, FIRMWARE_SOURCE_REVISION, HANDOFF_PATH
+from .capabilities import CapabilityError, FIRMWARE_SOURCE_REVISION, FIRMWARE_IMPLEMENTED_LUA_SERVICES, HANDOFF_PATH
 from .models import BuildConfirm, DeviceEvent, RunConfirm, SessionAction, SessionStart
 from .protocol import begin_event, dispatch, finish_event
 from .storage import new_id
@@ -141,7 +141,8 @@ def create_app(settings=None, provider=None):
         from .api_registry import API_CONTRACT,REGISTRY
         return {"api_version": "fire-lua-0.1", "context": service.context, "source_verified": True,
                 "hardware_api_version":"fire-lua-0.2","hardware_api_contract":API_CONTRACT,"hardware_api":REGISTRY,
-                "firmware_extended_runtime_implemented_in_inspected_source":False,
+                "firmware_extended_runtime_implemented_in_inspected_source":True,
+                "firmware_implemented_lua_services":FIRMWARE_IMPLEMENTED_LUA_SERVICES,
                 "firmware_source_revision": FIRMWARE_SOURCE_REVISION, "handoff_path": HANDOFF_PATH,
                 "firmware_runtime_implemented_in_source": True,
                 "firmware_runtime_verified": False, "physical_verified": False}

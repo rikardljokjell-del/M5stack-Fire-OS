@@ -2,7 +2,7 @@
 
 ## Source baseline and verification
 Authoritative handoff: M5Stack-device/BACKEND_HANDOFF.md.
-Read-only source review: commit 932ba8f (and preceding voice/lifecycle changes),
+Read-only source review: commit dae75bf / 74ac26a (and preceding voice/lifecycle changes),
 fire_backend_client.*, fire_lua_runtime.*, fire_lua_package_manager.*, fire_os.*,
 platformio.ini and the handoff. Actual FIRE observations take precedence over
 this source review and the PC simulator. physical_verified=false for PC tests.
@@ -34,10 +34,9 @@ SD CS GPIO4; I2C SDA/SCL GPIO21/22; Grove B GPIO36/26, Grove C GPIO16/17.
 GPIO16/17 are connected to PSRAM on FIRE: do not assign them to UART while PSRAM is active. GPIO34..39 are input-only without internal pull resistors. Pins are context, NOT a permission grant. Only the negotiated fire-lua-0.2 OS adapters may use explicitly announced pins/buses. FIRE has no built-in GPS: an external GNSS module can use a free announced UART. Never expose raw OS/M5 pointers.
 
 ## Version negotiation and authoritative session capabilities
-The injected session policy and exact host registry are authoritative. fire-lua-0.2 is a NEW BACKEND CONTRACT/PC SIMULATOR, not an assertion that current firmware implements it. It covers display/buttons/rgb/imu/time/jobs/gpio/adc/dac/pwm/i2c/uart/spi/wifi/bluetooth/mic/speaker/sd/power/rtc. Use its exact signatures, dependencies, advertised resource allowlists and contract fingerprint ONLY when api_version=fire-lua-0.2 and the matching service is announced. Async jobs must be polled without waiting, result errors handled, and handles closed after every outcome. Never replace a requested hardware toolbox with an unrelated demo when firmware support is missing; retain its requirements and explain the adapter prerequisite.
+The injected session policy and exact host registry are authoritative. fire-lua-0.2 is a versioned contract. Latest inspected firmware implements a SUBSET, not all registered services. The actual session handshake remains authoritative. It covers display/buttons/rgb/imu/time/jobs/gpio/adc/dac/pwm/i2c/uart/spi/wifi/bluetooth/mic/speaker/sd/power/rtc. Use its exact signatures, dependencies, advertised resource allowlists and contract fingerprint ONLY when api_version=fire-lua-0.2 and the matching service is announced. Async jobs must be polled without waiting, result errors handled, and handles closed after every outcome. Never replace a requested hardware toolbox with an unrelated demo when firmware support is missing; retain its requirements and explain the adapter prerequisite.
 
-The current source advertises api_version=fire-lua-0.1,
-services=[display,buttons,rgb,imu,time], max_memory=131072, max_runtime_ms=10000,
+The current source advertises api_version=fire-lua-0.2 with the matching registry hash, services=[display,buttons,rgb,imu,time,jobs,gpio,pwm,i2c,uart], max_memory=131072, max_runtime_ms=0 (until user exit). GPIO read26/35/36, write26, PWM26, I2C0 (writes64), UART2. No Lua speaker/mic/Wi-Fi/Bluetooth/SD yet. Legacy devices can still announce 0.1 and positive lifetime. Conversation flags:
 audio_input=true, audio_output=true, firmware_version=fire-os-0.2. Source now
 contains ADC capture on FIRE GPIO34, WAV upload and hashed PCM reply playback.
 Latest timed-ADC captures produced about 4.6 s audio from 4.8 s event intervals,
@@ -73,9 +72,8 @@ Define init() and update(dt_ms); optional on_button(button, action). Use local
 state, short returning callbacks, bounded tables and simple math. Never create
 your own event loop. Firmware owns Wi-Fi/BLE/SD/IMU/audio/RGB and UI scheduling.
 The OS uses a 320x240 16-bit canvas (153600 pixel bytes before overhead).
-The runtime source has a 200000-instruction hook and 12 ms callback check;
-source now also caps Lua allocation at 131072 bytes and per-start runtime at
-10000 ms in legacy firmware. New backend contract max_runtime_ms=0 means run until user exit; use it ONLY when advertised by this device. Never add an auto-close timer. Callback and memory limits remain mandatory. Test horizons are not app lifetime. These source limits do not prove physical enforcement.
+The runtime source has a 200000-instruction hook and 12 ms update callback check;
+source also caps Lua allocation at 131072 bytes; positive lifetimes up to 10000 ms apply to legacy firmware only. New backend contract max_runtime_ms=0 means run until user exit; use it ONLY when advertised by this device. Never add an auto-close timer. Callback and memory limits remain mandatory. Test horizons are not app lifetime. These source limits do not prove physical enforcement.
 neither PC timing nor source inspection proves actual ESP32 timing/enforcement.
 PC guards additionally cap allocator use, API calls and process duration.
 Use the actual manifest/session lifetime policy (0=until user exit, positive=legacy limit).
@@ -90,11 +88,9 @@ details are not bit-for-bit equivalent; use this conservative subset.
   must be finite integer-valued numbers; explicitly use math.floor/ceil where
   needed. Safe bounds: x=0..319, y=0..239, r=0..160, w=0..320, h=0..240,
   c=RGB565 0..65535; text <=80 UTF-8 bytes. Do not rely on native clamping.
-  Current host uses drawCircle/drawRect: OUTLINES, not filled shapes. clear fills
-  the canvas. Text size 1, black background; unsupported glyphs are not guaranteed.
+  Baseline circle/rect use drawCircle/drawRect OUTLINES. 0.2 additionally supports fill_rect/fill_circle/pixel/grid from the registry. Text size 1 has an opaque BLACK background; no scalable-font or transparent-text API is available. Use supported geometry/grid for larger emphasis; do not invent font functions.
 - fire.buttons.pressed("A"|"B"|"C") gives current down-state. Current OS forwards
-  only "pressed" to on_button; do not rely on a "released" callback. Poll for
-  release transitions if necessary. Long A=home, long B=quick settings,
+  only "pressed" to on_button AFTER RELEASE; do not rely on a "released" callback. An OS double shortcut may delay short delivery beyond 350 ms. In menus use one short-action path; never duplicate it through raw polling. Raw gameplay polling must not claim OS gestures. Long A=home, long B=quick settings,
   long C=back, threshold 650 ms; double-click window 350 ms where configured.
   OS navigation remains reserved and cannot be intercepted by generated apps.
 - fire.rgb.set(index,r,g,b), integer index 0..9/channels 0..255. Latest reviewed firmware implements per-pixel rendering; actual output still needs physical verification on the connected build.
@@ -133,3 +129,6 @@ build_confirm, and no run without explicit run_confirm. Simulator success never
 establishes physical current/installed/running. Device acknowledgements and actual
 hardware checks determine those facts. Never weaken the contract to hide a
 firmware problem; record outstanding source/hardware gaps for the device agent.
+
+## Mandatory FIRE experience
+A/left=previous/up, B/middle=select/confirm, C/right=next/down in all menus. OS owns long and configured double gestures; no required chords/holds/doubles. Use the whole 320x240 scene with coherent spacing and hierarchy, not a tiny desktop panel. Every game needs a quick New game and available RGB/sound settings menu before play; sound defaults off and requires actual Lua speaker+jobs (currently absent). RGB updates are rate-limited/state-based. Full standards are injected as fire-experience-v1 and enforced by the source-bound review. Settings persist over rounds; long sessions must not auto-close.

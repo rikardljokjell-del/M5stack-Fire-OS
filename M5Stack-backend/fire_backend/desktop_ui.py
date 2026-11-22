@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, scrolledtext
 
 from .desktop_config import DesktopConfig, DesktopStore
 from .desktop_runtime import DesktopRuntime, check_api_key, configure_firewall, firewall_ready, lan_addresses, network_info
@@ -336,6 +336,7 @@ class DesktopUI:
         self.edit_app_button = ttk.Button(actions, text="Endre valgt versjon", command=self.edit_saved)
         self.edit_app_button.pack(side="left", padx=8)
         ttk.Button(actions, text="Reparer valgt app", command=self.repair_saved).pack(side="left", padx=(0,8))
+        ttk.Button(actions,text="Feil og rettinger",command=self.show_app_quality).pack(side="left")
         deletion=ttk.Frame(page);deletion.pack(anchor="w",pady=(0,8))
         self.delete_app_button=ttk.Button(deletion,text="Slett alle versjoner …",command=self.delete_saved)
         self.delete_app_button.pack(side="left")
@@ -366,6 +367,31 @@ class DesktopUI:
 
     def selected_app(self):
         return self.apps_rows.get(self.version_choices.get(self.selected_version.get()))
+
+    def show_app_quality(self):
+        app=self.selected_app()
+        if not app:return
+        def show(records):
+            window=tk.Toplevel(self.root);window.title("Feil og rettinger – "+app['name']);window.geometry("800x560")
+            view=scrolledtext.ScrolledText(window,wrap="word",font=("Segoe UI",10),padx=16,pady=16)
+            view.pack(fill="both",expand=True)
+            lines=[app['name']+" – siste registrerte feil og rettinger",""]
+            if not records:lines.append("Ingen feil er registrert for denne appen.")
+            for case in records:
+                lines.extend(["Feil / observasjon ("+str(case.get('count',1))+" ganger):",case.get('message',''),""])
+                fix=case.get('fix') or {}
+                if fix:
+                    lines.append("Retting: "+fix.get('summary','Ny kandidat er registrert.'))
+                    if fix.get('reviewer_summary'):lines.append("AI-rapport: "+fix['reviewer_summary'])
+                    lines.append("Endrede linjer: +"+str(fix.get('lines_added','?'))+" / -"+str(fix.get('lines_removed','?')))
+                    if fix.get('status')=='failed_on_device':lines.append("Enheten rapporterte en ny feil med kandidaten.")
+                    lines.append("En første vellykket start bekrefter ikke at feilen er endelig løst.")
+                else:lines.append("Ingen rettet kandidat er registrert ennå.")
+                check=fix.get('required_regression_check') or case.get('regression',{}).get('required_check')
+                if check:lines.append("Tilbakefallstest: "+check)
+                lines.extend(["","—"*40,""])
+            view.insert("1.0","\n".join(lines));view.configure(state="disabled")
+        self.work(lambda:self.runtime.app_quality(app['project_id']),done=show,message="Henter feil og rettinger …")
 
     def choose_version(self):
         app=self.selected_app()
