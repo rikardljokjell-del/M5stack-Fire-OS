@@ -30,7 +30,7 @@ RULES = {
     "rendering": VISUAL_POLICY,
     "bounds": "Clamp display coordinates and RGB values; use finite integers and keep moving objects within screen bounds.",
     "nil": "Initialize state before callbacks. Check table indices, empty lists and missing values, including after reset and collisions.",
-    "budget": "Keep callbacks short and bounded: at most 24 output operations and 120000 display-work units per callback. Simplify a complete visible scene instead of splitting its drawing across updates; nonvisual preparation may be spread over updates. Cap tables/loops. Compile/top-level timing and a null Lua VM are firmware issues, not fixes achievable by cosmetic app rewrites.",
+    "budget": "Keep callbacks short and bounded: at most 24 output operations, 256 text bytes and 120000 display-work units per callback. Cache text/rotation/state transformations outside the hot rendering path. Simplify a complete visible scene instead of splitting its drawing across updates. Cap tables/loops. PC budgets are risk proxies, not ESP32 timing guarantees; native callbacks must account for host calls and preemption.",
     "api": "Use only declared fire APIs and the restricted base/math functions. Do not assume standard Lua libraries exist.",
     "text": "Display strings must fit 80 UTF-8 bytes. Format numbers safely without relying on unavailable string APIs.",
     "runtime": "Exercise init, update, reset, each button held and rapid input across the full advertised runtime. Inspect all branches.",
@@ -39,6 +39,7 @@ RULES = {
 
 def failure_class(message):
     text = message.lower()
+    if "design:" in text or "visual_quality_ok" in text:return "design"
     if "visual frame" in text or any(word in text for word in ("flimr", "flimmer", "flicker", "blank frame")): return "rendering"
     if any(word in text for word in ("bounds", "integer", "range", "coordinate")): return "bounds"
     if any(word in text for word in ("nil", "index", "length")): return "nil"
@@ -95,7 +96,9 @@ class Quality:
     def policy(self):
         # Only fixed, reviewed rules are promoted. No generated prompt/code from logs.
         categories={case["category"] for case in self.store.list("quality")}
-        return "\nLearned regression precautions (fixed rules from observed failures):\n"+"\n".join(RULES[k] for k in sorted(categories) if k in RULES) if categories else ""
+        from .app_quality import APP_QUALITY_POLICY
+        rules={**RULES,"design":APP_QUALITY_POLICY}
+        return "\nLearned regression precautions (fixed rules from observed failures):\n"+"\n".join(rules[k] for k in sorted(categories) if k in rules) if categories else ""
 
     def reject_known_failure(self, project_id, source_hash):
         if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id") for c in self.store.list("quality")):
@@ -238,8 +241,17 @@ class Quality:
 def require_deliverable(package):
     if package.get("quality",{}).get("blocked"):
         raise ValueError("Denne appversjonen er sperret etter en feil. Velg appen og be om reparasjon for en ny testet versjon.")
-    if package.get("validation",{}).get("suite") != "release-v3":
+    if package.get("validation",{}).get("suite") != "release-v4":
         raise ValueError("Denne eldre pakken mangler utvidet kjøretidstest. Velg appen og be om reparasjon/ny bygging før levering.")
+    validation=package.get("validation",{})
+    if validation.get("pre_delivery_review_required"):
+        review=validation.get("pre_delivery_review") or {}
+        from .app_quality import AppReview
+        try:checks_ok=AppReview.model_validate(review.get("checks",{})).approved
+        except ValueError:checks_ok=False
+        if (review.get("approved") is not True or review.get("source_sha256")!=package["manifest"]["checksum"]
+                or not checks_ok or package.get("mode")=="openai" and review.get("mode")!="openai_source_review"):
+            raise ValueError("Appversjonen mangler godkjent funksjons- og designkontroll for denne kildekoden.")
 
 
 def repair_requested(text):

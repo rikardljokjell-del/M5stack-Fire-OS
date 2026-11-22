@@ -13,6 +13,9 @@ class AppManager:
             require_deliverable(package)
             if capabilities:
                 manifest=package["manifest"]
+                from .api_registry import package_compatibility
+                incompatible=package_compatibility(package,capabilities)
+                if incompatible:return False,incompatible
                 if (not set(manifest["required_services"])<=set(capabilities["services"])
                         or manifest["max_memory"]>capabilities["max_memory"]
                         or capabilities["max_runtime_ms"]!=0 and

@@ -59,6 +59,9 @@ class DeviceLifecycle:
         verify_archive(self.store.path("packages", package_id, ".zip"), package["manifest"], package["archive_sha256"])
         if session.capabilities:
             manifest, caps = package["manifest"], session.capabilities
+            from .api_registry import package_compatibility
+            incompatible=package_compatibility(package,caps)
+            if incompatible:raise ValueError(incompatible)
             if (not set(manifest["required_services"]) <= set(caps["services"])
                     or manifest["max_memory"] > caps["max_memory"]
                     or (caps["max_runtime_ms"] != 0 and (manifest["max_runtime_ms"] == 0 or manifest["max_runtime_ms"] > caps["max_runtime_ms"]))):

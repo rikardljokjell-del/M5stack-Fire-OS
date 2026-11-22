@@ -1,0 +1,46 @@
+"""Reviewed Lua API contracts. A simulator entry never grants a device service."""
+import hashlib
+import json
+from importlib.resources import files
+
+BASE_API="fire-lua-0.1"
+HARDWARE_API="fire-lua-0.2"
+REGISTRY=json.loads(files("fire_backend").joinpath("data/HARDWARE_API-v0.2.json").read_text(encoding="utf-8"))
+API_CONTRACT=hashlib.sha256(json.dumps(REGISTRY,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+BASE_SERVICES={name for name,spec in REGISTRY["services"].items() if any(m["since"]==BASE_API for m in spec["methods"].values())}
+ALL_SERVICES=set(REGISTRY["services"])
+
+
+def methods_for(api_version):
+    if api_version not in {BASE_API,HARDWARE_API}:raise ValueError("Unsupported Lua API version")
+    return {service:{name:method for name,method in spec["methods"].items() if api_version==HARDWARE_API or method["since"]==BASE_API}
+            for service,spec in REGISTRY["services"].items() if api_version==HARDWARE_API or service in BASE_SERVICES}
+
+
+def generation_contract(api_version,services):
+    methods=methods_for(api_version)
+    return {"api_version":api_version,"api_contract":API_CONTRACT if api_version==HARDWARE_API else None,
+            "services":{name:methods[name] for name in sorted(services) if name in methods},
+            "limits":REGISTRY["limits"],"semantics":REGISTRY["semantics"],
+            "result_shapes":REGISTRY["result_shapes"],"environment":REGISTRY["environment"] if api_version==HARDWARE_API else {}}
+
+
+def preview_capabilities():
+    return {"api_version":HARDWARE_API,"api_contract":API_CONTRACT,"services":sorted(ALL_SERVICES),
+            "max_memory":131072,"max_runtime_ms":0,"audio_input":False,"audio_output":False,
+            "firmware_version":"PC hardware simulation ONLY","hardware":{
+                "gpio_read":[26,36],"gpio_write":[26],"adc":[36],"dac":[26],"pwm":[26],
+                "i2c":[0],"i2c_write_addresses":[64],"uart":[2],"spi":[2]}}
+
+
+def package_compatibility(package,capabilities):
+    manifest=package["manifest"]
+    if manifest.get("api_version",BASE_API)==HARDWARE_API and capabilities.get("api_version",BASE_API)!=HARDWARE_API:
+        return "Appversjonen krever det utvidede maskinvare-API-et i firmware."
+    if manifest.get("api_version")==HARDWARE_API and (capabilities.get("api_contract")!=API_CONTRACT or manifest.get("api_contract")!=API_CONTRACT):
+        return "Firmware og backend har ulike maskinvarekontrakter."
+    resources=(package.get("validation") or {}).get("resources_used",{})
+    advertised=capabilities.get("hardware") or {}
+    if any(not set(values)<=set(advertised.get(kind,[])) for kind,values in resources.items()):
+        return "Appen bruker pinner eller busser som denne firmwareprofilen ikke tilbyr."
+    return ""

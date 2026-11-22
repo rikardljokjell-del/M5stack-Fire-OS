@@ -21,7 +21,12 @@ single-line label; use simple supported glyphs. Keep entire circles/rectangles
 inside the screen, not merely their anchors. Never redraw only a changed object
 assuming the old canvas survives. Stay
 within callback budgets; choose a simpler complete scene over partial/blank frames.
-No invented sprite, framebuffer, fillRect, swap, flush or synchronization Lua APIs.
+Each callback has a cumulative 256-byte text budget, including unchanged labels.
+Cache labels and composed game rows when state changes, then redraw cached strings.
+For large game boards use the negotiated 0.2 display.grid batch API if available;
+on 0.1 use short cached rows instead of concatenating wide ASCII boards every frame.
+No invented APIs: use only the exact negotiated registry. 0.2 fill_rect/fill_circle/
+grid are available only on 0.2; 0.1 has outline primitives. No app sprite, swap or flush.
 The OS alone presents frames. PC checks detect known rendering defects, not physical
 tearing, actual display refresh timing, or every possible visual defect.
 """

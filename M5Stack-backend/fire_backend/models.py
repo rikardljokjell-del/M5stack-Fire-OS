@@ -1,12 +1,13 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
+from .api_registry import ALL_SERVICES,BASE_SERVICES,BASE_API,HARDWARE_API,API_CONTRACT
 
 Identifier = str
 ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
-SERVICES = {"display", "buttons", "rgb", "imu", "mic", "speaker", "wifi", "bluetooth", "sd", "time"}
-PROTOTYPE_SERVICES = {"display", "buttons", "rgb", "imu", "time"}
+SERVICES = ALL_SERVICES
+PROTOTYPE_SERVICES = BASE_SERVICES  # Legacy callers retain the original profile.
 
 
 class State(StrEnum):
@@ -40,7 +41,7 @@ class DialogReply(StrictModel):
 class GeneratedApp(StrictModel):
     name: str = Field(min_length=1, max_length=32)
     main_lua: str = Field(min_length=1, max_length=100_000)
-    required_services: list[str] = Field(max_length=10)
+    required_services: list[str] = Field(max_length=24)
 
     @field_validator("name")
     @classmethod
@@ -52,8 +53,8 @@ class GeneratedApp(StrictModel):
     @field_validator("required_services")
     @classmethod
     def valid_services(cls, value):
-        if not set(value) <= PROTOTYPE_SERVICES or len(value) != len(set(value)):
-            raise ValueError("Only implemented prototype services may be requested")
+        if not set(value) <= ALL_SERVICES or len(value) != len(set(value)):
+            raise ValueError("Unknown or duplicate Lua services")
         return value
 
 
@@ -61,7 +62,8 @@ class Manifest(StrictModel):
     id: str = Field(pattern=ID_PATTERN)
     name: str = Field(min_length=1, max_length=64)
     version: str = Field(pattern=r"^0\.1\.[1-9][0-9]*$")
-    api_version: Literal["fire-lua-0.1"] = "fire-lua-0.1"
+    api_version: Literal["fire-lua-0.1","fire-lua-0.2"] = "fire-lua-0.1"
+    api_contract: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
     entry: Literal["main.lua"] = "main.lua"
     required_services: list[str]
     max_memory: int = Field(default=262144, ge=65536, le=262144)
@@ -72,9 +74,21 @@ class Manifest(StrictModel):
     @model_validator(mode="after")
     def permissions_match(self):
         GeneratedApp.valid_services(self.required_services)
+        if self.api_version==BASE_API and not set(self.required_services)<=BASE_SERVICES:
+            raise ValueError("Extended hardware services require fire-lua-0.2")
+        if self.api_version==BASE_API and self.api_contract is not None:
+            raise ValueError("Legacy manifest has no hardware contract field")
+        if self.api_version==HARDWARE_API and self.api_contract!=API_CONTRACT:
+            raise ValueError("Hardware manifest contract mismatch")
         if sorted(self.permissions) != sorted("fire." + s for s in self.required_services):
             raise ValueError("Manifest permissions must exactly match required_services")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_contract(self,handler):
+        result=handler(self)
+        if self.api_version==BASE_API:result.pop("api_contract",None)
+        return result
 
 
 class SessionStart(StrictModel):
@@ -101,9 +115,41 @@ class SessionStart(StrictModel):
         return self
 
 
+class HardwareResources(StrictModel):
+    gpio_read: list[int] = Field(default_factory=list,max_length=40)
+    gpio_write: list[int] = Field(default_factory=list,max_length=34)
+    adc: list[int] = Field(default_factory=list,max_length=40)
+    dac: list[int] = Field(default_factory=list,max_length=2)
+    pwm: list[int] = Field(default_factory=list,max_length=34)
+    i2c: list[int] = Field(default_factory=list,max_length=2)
+    i2c_write_addresses: list[int] = Field(default_factory=list,max_length=126)
+    uart: list[int] = Field(default_factory=list,max_length=2)
+    spi: list[int] = Field(default_factory=list,max_length=2)
+
+    @field_validator("*",mode="before")
+    @classmethod
+    def strict_resource_list(cls,value):
+        if not isinstance(value,list) or any(type(n) is not int for n in value) or len(value)!=len(set(value)):
+            raise ValueError("Resources must be unique integer lists")
+        return value
+
+    @model_validator(mode="after")
+    def resource_bounds(self):
+        protected={6,7,8,9,10,11,16,17} # FIRE flash/PSRAM; never general GPIO.
+        gpio=(set(range(20))|{21,22,23,25,26,27,32,33,34,35,36,37,38,39})-protected
+        adc={0,2,4,12,13,14,15,25,26,27,32,33,34,35,36,37,38,39}
+        for kind,values in self.model_dump().items():
+            allowed=({0,1} if kind=="i2c" else {1,2} if kind in {"uart","spi"} else set(range(1,127)) if kind=="i2c_write_addresses"
+                     else {25,26} if kind=="dac" else adc if kind=="adc" else gpio&set(range(34)) if kind in {"gpio_write","pwm"} else gpio)
+            if not set(values)<=allowed:raise ValueError("Unsupported or reserved hardware resource")
+        return self
+
+
 class Capabilities(StrictModel):
-    api_version: Literal["fire-lua-0.1"] = "fire-lua-0.1"
-    services: list[str] = Field(max_length=5)
+    api_version: Literal["fire-lua-0.1","fire-lua-0.2"] = "fire-lua-0.1"
+    services: list[str] = Field(max_length=24)
+    api_contract: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
+    hardware: HardwareResources | None = None
     max_memory: int = Field(ge=65536, le=262144)
     max_runtime_ms: int = Field(ge=0, le=10000)
     audio_input: bool = False
@@ -115,9 +161,22 @@ class Capabilities(StrictModel):
     @field_validator("services")
     @classmethod
     def supported(cls, value):
-        if not set(value) <= PROTOTYPE_SERVICES or len(value) != len(set(value)):
+        if not set(value) <= ALL_SERVICES or len(value) != len(set(value)):
             raise ValueError("Unsupported or duplicate services")
         return value
+
+    @model_validator(mode="after")
+    def negotiated_api(self):
+        if self.api_version==BASE_API and not set(self.services)<=BASE_SERVICES:
+            raise ValueError("Hardware services require fire-lua-0.2")
+        if self.api_version==HARDWARE_API:
+            if self.api_contract!=API_CONTRACT:raise ValueError("Hardware API contract mismatch")
+            from .api_registry import methods_for
+            dependencies={dep for service in self.services for method in methods_for(HARDWARE_API)[service].values() for dep in method.get("requires",[])}
+            if not dependencies<=set(self.services):raise ValueError("Hardware service dependencies must be announced")
+            if set(self.services)&{"gpio","adc","dac","pwm","i2c","uart","spi"} and self.hardware is None:
+                raise ValueError("Hardware profile must announce its resources")
+        return self
 
 
 class SessionAction(StrictModel):
@@ -145,7 +204,7 @@ class DeviceApp(StrictModel):
 APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
                       "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None}
-CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304}
+CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None}
 
 
 class DeviceDiagnostics(StrictModel):

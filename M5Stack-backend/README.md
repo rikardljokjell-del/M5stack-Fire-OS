@@ -1,5 +1,14 @@
 # FIRE OS AI Developer backend 0.2
 
+Fast standard for alle nye apper/oppdateringer: [fungerende første levering og
+gjennomført grafisk design](docs/FIRST_DELIVERY_QUALITY.md). Etter kjøretidstestene
+gjør AI en separat kontroll av krav, kode og utforming. Konkrete funn rettes
+automatisk før pakking; uavklarte feil gir ingen ny leverbar pakke.
+
+Backend har nå et versjonert [maskinvare-API med 20 tjenestegrupper](docs/HARDWARE_API_HANDOFF.md), ressurskontroll og PC-simulering. Bruk «Maskinvareutkast på PC» under Apper for å forberede slike apper. Den nåværende firmwaren må få tilsvarende adaptere før faktisk I²C/GPIO/PWM/UART/Wi-Fi/Bluetooth/lyd/SD kan brukes fra Lua. Appønsket beholdes når en adapter mangler; det erstattes ikke med en annen demo.
+
+[Analyse av den første Tetris-feilen og ny ytelsesport](docs/TETRIS_RUNTIME_REPORT.md).
+
 Settings → App Manager kan nå hente backendkatalog/versjoner, be om nedlasting
 og bekrefte sletting av egne backendversjoner. Backenddelen er implementert;
 device-agenten kobler menyen til [DEVICE_APP_MANAGER_HANDOFF.md](docs/DEVICE_APP_MANAGER_HANDOFF.md).
@@ -11,7 +20,7 @@ rapportert kjørende versjon og importerer firmwarefiler. SD-overføring til
 [FIRMWARE_STORAGE_HANDOFF.md](docs/FIRMWARE_STORAGE_HANDOFF.md).
 
 Fast skjermregel for alle nye/reparerte apper: [DISPLAY_QUALITY.md](docs/DISPLAY_QUALITY.md).
-Release-v3 avviser kjente blanke mellomrammer og feil tegnerekkefølge før levering.
+Release-v4 avviser kjente blanke mellomrammer og feil tegnerekkefølge før levering.
 Regelen følger dagens firmware: tegn en komplett scene ved hver update.
 
 Siste runtime-/lydfunn og liten device-feedback: [URGENT_RUNTIME_VOICE.md](docs/URGENT_RUNTIME_VOICE.md).

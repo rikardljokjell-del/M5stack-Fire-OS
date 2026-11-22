@@ -14,6 +14,8 @@ from .models import Manifest
 from .storage import canonical
 from .app_names import app_id_for
 from .rendering import VISUAL_POLICY
+from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT
+from .app_quality import APP_QUALITY_POLICY,AppReview
 
 
 def sha256(data):
@@ -26,7 +28,8 @@ RELEASE_PROFILES = ("idle", "cycle", "hold_a", "hold_b", "hold_c", "rapid", "jit
 async def validate_release(app, store, build_id):
     """Fresh isolated VM per input/timing profile; no 180-frame release gate."""
     results = []
-    for profile in RELEASE_PROFILES:
+    profiles=RELEASE_PROFILES+(("io_error","io_timeout","io_disconnect") if app.get("api_version")==HARDWARE_API and set(app["required_services"])-BASE_SERVICES else ())
+    for profile in profiles:
         try:
             result = await simulate({**app, "profile": profile}, store, build_id)
         except (ValueError, asyncio.TimeoutError) as error:
@@ -34,7 +37,10 @@ async def validate_release(app, store, build_id):
         results.append({"profile": profile, **{k:v for k,v in result.items() if k != "trace"}})
     if {"display", "rgb"}.intersection(app["required_services"]) and not sum(p["api_operations"] for p in results):
         raise ValueError("Release suite: app declares display/RGB but produces no visible output in any input profile")
-    return {**results[0], "profiles": results, "suite": "release-v3", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
+    resources={}
+    for result in results:
+        for kind,values in result.get("resources_used",{}).items():resources[kind]=sorted(set(resources.get(kind,[]))|set(values))
+    return {**results[0], "profiles": results, "resources_used":resources,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
             "native_numeric_parity": False}
 
 
@@ -136,6 +142,12 @@ class Builder:
         context = context or self.context
         if VISUAL_POLICY not in context:
             context += VISUAL_POLICY
+        if APP_QUALITY_POLICY not in context:
+            context += APP_QUALITY_POLICY
+        from .quality import Quality
+        # Also applies to direct Builder callers, new apps and the first attempt.
+        learned_policy=Quality(self.store).policy()
+        if learned_policy and learned_policy not in context:context+=learned_policy
         request = {
             "summary": build["summary"], "context": context, "capabilities": capabilities,
             "base_package_id": project.get("latest_package"),
@@ -177,16 +189,31 @@ class Builder:
                 await progress("compiling", 50, "Kontrollerer Lua 5.4; ingen firmwarekompilering")
                 await progress("testing", 65, "Tester hele kjøretiden med sju knapp-/tidsprofiler")
                 try:
-                    from .quality import Quality
                     Quality(self.store).reject_known_failure(project["id"], sha256(payload))
                     if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
                         raise ValueError("Generated app requests services absent from actual device capabilities")
                     budgets = {"max_memory": capabilities["max_memory"], "max_runtime_ms": capabilities["max_runtime_ms"]} if capabilities else {}
-                    result = await validate_release({**generated.model_dump(), **budgets}, self.store, build_id)
+                    api_version=(capabilities or {}).get("api_version",BASE_API)
+                    result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
+                        "hardware":(capabilities or {}).get("hardware") or {}}, self.store, build_id)
+                    await progress("testing",75,"Kontrollerer funksjoner, stabilitet og grafisk utforming før levering")
+                    reviewer=getattr(self.provider,"review",None)
+                    if reviewer is None:
+                        if self.settings.fire_ai_mode!="mock":
+                            raise ValueError("Pre-delivery review is required for live generation")
+                        from .ai import MockProvider
+                        reviewer=MockProvider().review
+                    review=await reviewer(build["summary"],context,generated,result)
+                    review=AppReview.model_validate(self.store.redactor.value(review.model_dump()))
+                    review_record={"source_sha256":sha256(payload),"approved":review.approved,
+                        "mode":"openai_source_review" if self.settings.fire_ai_mode=="openai" else "mock_fixture",
+                        "checks":review.model_dump(),"physical_verified":False}
+                    self.store.write(folder / f"review-{attempt+1}.json",review_record)
+                    if not review.approved:raise ValueError(review.correction())
+                    result.update(pre_delivery_review_required=True,pre_delivery_review=review_record)
                     break
                 except (ValueError, asyncio.TimeoutError) as error:
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
-                    from .quality import Quality
                     Quality(self.store).record_validation(build, generated.main_lua, last_error)
                     self.store.log(build_id, f"Attempt {attempt + 1} failed: {last_error}")
                     if attempt == 3:
@@ -195,6 +222,8 @@ class Builder:
             version = project.get("next_version", 1)
             manifest = Manifest(
                 id=app_id_for(generated.name, project, self.store), name=generated.name, version=f"0.1.{version}",
+                api_version=api_version,
+                api_contract=API_CONTRACT if api_version==HARDWARE_API else None,
                 required_services=generated.required_services,
                 **budgets,
                 permissions=[f"fire.{s}" for s in generated.required_services], checksum=sha256(payload),

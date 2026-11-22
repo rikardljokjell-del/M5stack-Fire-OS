@@ -307,6 +307,7 @@ class DesktopUI:
         top=ttk.Frame(page);top.pack(fill="x",pady=(0,8))
         self.label(top, "Apper og versjoner", "Heading.TLabel").pack(side="left")
         ttk.Button(top,text="Lag ny app med AI",command=self.new_pc_app,style="Accent.TButton").pack(side="right")
+        ttk.Button(top,text="Maskinvareutkast på PC",command=lambda:self.new_pc_app(True)).pack(side="right",padx=8)
         self.label(page, "FIRE lagrer appen på SD-kortet i /apps/<app-ID>/.\n"
                    "Tabellen viser backendens pakker og enhetens siste kvitteringer, ikke en direktelesing av SD-kortet.",
                    "Muted.TLabel", wraplength=800).pack(anchor="w", pady=(0, 12))
@@ -356,7 +357,7 @@ class DesktopUI:
         app=self.selected_app()
         if app:
             quality_hint = ("Sperret etter feil – bruk Reparer valgt app.\n" if app.get("quality",{}).get("blocked") else
-                            "Trenger utvidet test – bruk Reparer valgt app eller bygg ny versjon.\n" if app.get("validation_suite") != "release-v3" else "")
+                            "Trenger utvidet test – bruk Reparer valgt app eller bygg ny versjon.\n" if app.get("validation_suite") != "release-v4" else "")
             self.apps_detail.configure(text=f"{app['name']} · {app['version']} · {app['mode']}\n"
                 f"SD-mappe: {app['sd_path']}\nPakke: {app['package_id']}\n"
                 + quality_hint
@@ -371,8 +372,9 @@ class DesktopUI:
         if app:self.version_selection[app["project_id"]]=app["package_id"]
         self.render_app_detail()
 
-    def new_pc_app(self):
-        self.work(lambda:self.runtime.desktop_conversation(self.device_id.get()),done=self.choose_pc_session,message="Starter AI-dialog på PC …")
+    def new_pc_app(self,hardware_preview=False):
+        self.work(lambda:self.runtime.desktop_conversation(self.device_id.get(),hardware_preview=hardware_preview),done=self.choose_pc_session,
+                  message="Starter maskinvareutkast med simulerte målinger …" if hardware_preview else "Starter AI-dialog på PC …")
 
     def choose_pc_session(self,result):
         self.snapshot["sessions"]=[s for s in self.snapshot["sessions"] if s["session_id"]!=result["session_id"]]+[{**result,"online":False,"history":[]}]
@@ -411,7 +413,7 @@ class DesktopUI:
     def edit_saved(self):
         app=self.selected_app()
         if app and app.get("device_id"):
-            self.work(lambda:self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"]),
+            self.work(lambda:self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"],hardware_preview=app.get("api_version")=="fire-lua-0.2"),
                       done=self.choose_pc_session,message="Åpner valgt versjon i AI-dialog på PC …")
 
     def delete_saved(self,only_version=False):
@@ -428,7 +430,7 @@ class DesktopUI:
         app=self.selected_app()
         if app and app.get("device_id"):
             def repair():
-                result=self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"])
+                result=self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"],hardware_preview=app.get("api_version")=="fire-lua-0.2")
                 self.runtime.send_text(result["session_id"],"Undersøk appen og reparer feilen. Behold funksjonene.")
                 return result
             self.work(repair,done=self.choose_pc_session,message="Undersøker valgt app automatisk …")
@@ -683,7 +685,7 @@ class DesktopUI:
 
     @staticmethod
     def session_name(session):
-        return f"PC-dialog · {session['desktop_device_id']} · {session['session_id'][-6:]}" if session.get("desktop_device_id") else f"FIRE · {session['device_id']}"
+        return f"{'PC maskinvareutkast' if session.get('hardware_preview') else 'PC-dialog'} · {session['desktop_device_id']} · {session['session_id'][-6:]}" if session.get("desktop_device_id") else f"FIRE · {session['device_id']}"
 
     def send_text(self):
         session = self.session()
@@ -810,7 +812,7 @@ class DesktopUI:
         choice_idle = idle_for_text and session["state"] != "processing" and session.get("activity", "idle") == "idle"
         physical=next((s for s in sessions if app and s["device_id"]==app.get("device_id")),None)
         can_install=physical and physical["state"] not in {"building","testing","processing","running","starting","stopping","rollback_pending"} and physical.get("activity","idle")=="idle"
-        deliverable = app and not app.get("quality",{}).get("blocked") and app.get("validation_suite") == "release-v3"
+        deliverable = app and not app.get("quality",{}).get("blocked") and app.get("validation_suite") == "release-v4"
         self.install_button.configure(state="normal" if can_install and deliverable and not self.busy else "disabled")
         self.edit_app_button.configure(state="normal" if ready and app and app.get("device_id") and not self.busy else "disabled")
         self.pc_app_button.configure(state="normal" if ready and not self.busy else "disabled")
@@ -860,7 +862,7 @@ class DesktopUI:
             self.session_detail.configure(text=f"Status: {session['state']}  ·  Installert: {device.get('installed_package_id') or '–'}\n"
                                                 f"Kjører: {device.get('running_package_id') or '–'}  ·  Fysisk test: ikke bekreftet")
             if session.get("desktop_device_id"):
-                self.session_detail.configure(text="PC-dialog for "+session["desktop_device_id"]+" · Enheten kan være frakoblet. Installer den ferdige versjonen under Apper.")
+                self.session_detail.configure(text=("MASKINVAREUTKAST: Alle målinger er simulert. Krever samsvarende firmware før installasjon." if session.get("hardware_preview") else "PC-dialog for "+session["desktop_device_id"]+" · Enheten kan være frakoblet. Installer den ferdige versjonen under Apper."))
             history = "\n\n".join(("Du: " if h.get("role") == "user" else "FIRE: ") + str(h.get("content", "")) for h in session.get("history", []))
             progress = session.get("progress", {})
             self.progress["value"] = progress.get("progress", 0)

@@ -4,8 +4,11 @@
       "additionalProperties": false,
       "properties": {
         "api_version": {
-          "const": "fire-lua-0.1",
           "default": "fire-lua-0.1",
+          "enum": [
+            "fire-lua-0.1",
+            "fire-lua-0.2"
+          ],
           "title": "Api Version",
           "type": "string"
         },
@@ -13,9 +16,33 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 5,
+          "maxItems": 24,
           "title": "Services",
           "type": "array"
+        },
+        "api_contract": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Contract"
+        },
+        "hardware": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HardwareResources"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "max_memory": {
           "maximum": 262144,
@@ -246,6 +273,85 @@
         }
       },
       "title": "DeviceDiagnostics",
+      "type": "object"
+    },
+    "HardwareResources": {
+      "additionalProperties": false,
+      "properties": {
+        "gpio_read": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 40,
+          "title": "Gpio Read",
+          "type": "array"
+        },
+        "gpio_write": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 34,
+          "title": "Gpio Write",
+          "type": "array"
+        },
+        "adc": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 40,
+          "title": "Adc",
+          "type": "array"
+        },
+        "dac": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "title": "Dac",
+          "type": "array"
+        },
+        "pwm": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 34,
+          "title": "Pwm",
+          "type": "array"
+        },
+        "i2c": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "title": "I2C",
+          "type": "array"
+        },
+        "i2c_write_addresses": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 126,
+          "title": "I2C Write Addresses",
+          "type": "array"
+        },
+        "uart": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "title": "Uart",
+          "type": "array"
+        },
+        "spi": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "title": "Spi",
+          "type": "array"
+        }
+      },
+      "title": "HardwareResources",
       "type": "object"
     }
   },
