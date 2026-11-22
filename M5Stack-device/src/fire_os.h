@@ -271,6 +271,7 @@ class FireOS {
   volatile bool aiAudioStopSent_ = false;
   volatile bool aiAudioUploadFinished_ = false;
   volatile bool aiAudioUploadOk_ = false;
+  bool aiAudioUploadStarted_ = false;
   bool aiAudioCaptureActive_ = false;
   size_t aiAudioCapturedSamples_ = 0;
   size_t aiAudioWavLength_ = 0;
@@ -282,6 +283,11 @@ class FireOS {
   String aiAudioOutputTurnId_;
   String aiLastAudioId_;
   String aiLastAudioTurnId_;
+  bool aiAudioDownloadPending_ = false;
+  String aiAudioDownloadId_;
+  String aiAudioDownloadTurnId_;
+  String aiAudioDownloadHash_;
+  uint32_t aiAudioDownloadSize_ = 0;
   bool aiConversationCancelPending_ = false;
 
   // Date/time editor state. A/C select a field; B enters/leaves editing.
@@ -318,6 +324,8 @@ class FireOS {
   uint16_t backendPort_ = 8765;
   String backendToken_;
   String backendDeviceId_ = "m5stack-fire-01";
+  uint32_t backendServerTime_ = 0;
+  uint32_t backendServerSeenAt_ = 0;
   uint8_t bluetoothIndex_ = 0;
   uint8_t bluetoothMode_ = 0;  // 0=Auto, 1=On, 2=Off
   int bluetoothScanCount_ = -1;
@@ -471,6 +479,7 @@ class FireOS {
   void resetSettings();
   void setWifi(bool enabled);
   bool allButtonsHeldAtBoot() const;
+  bool backendCommandUnexpired(uint32_t expiresAt) const;
 
   void draw();
   void drawScreen(Screen screen);

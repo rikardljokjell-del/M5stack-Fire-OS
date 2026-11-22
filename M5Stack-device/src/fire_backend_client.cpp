@@ -119,6 +119,11 @@ void FireBackendClient::setState(State state, const String& status) {
 }
 
 void FireBackendClient::disconnect() {
+  cancelAudioTransfer();
+  const uint32_t audioDeadline = millis() + 500;
+  while (audioTransferRunning_ &&
+         static_cast<int32_t>(millis() - audioDeadline) < 0)
+    delay(1);
   if (transportClient_ && reverseTransport_) {
     reverseTransport_->release(transportClient_);
     transportClient_ = nullptr;
@@ -134,6 +139,8 @@ void FireBackendClient::disconnect() {
   }
   handshakeBuffer_ = "";
   frameBuffer_ = "";
+  fragmentOpcode_ = 0;
+  fragmentBuffer_ = "";
   resetReceiveFrame();
   if (sessionId_.length() > 0) resumeSessionId_ = sessionId_;
   sessionId_ = "";
@@ -146,6 +153,7 @@ void FireBackendClient::resetReceiveFrame() {
   receiveStage_ = ReceiveStage::Header;
   receiveHeaderBytes_ = 0;
   receiveOpcode_ = 0;
+  receiveFin_ = false;
   receiveMasked_ = false;
   receiveExtendedNeeded_ = 0;
   receiveExtendedBytes_ = 0;
@@ -186,6 +194,10 @@ bool FireBackendClient::uploadAudio(const String& turnId,
                String(wavLength) + "\r\nConnection: close\r\n\r\n");
   size_t offset = 0;
   while (offset < wavLength) {
+    if (audioTransferCancel_) {
+      closeAudio();
+      return false;
+    }
     const size_t amount = min<size_t>(2048, wavLength - offset);
     if (audio->write(wavData + offset, amount) != amount) {
       closeAudio();
@@ -197,6 +209,10 @@ bool FireBackendClient::uploadAudio(const String& turnId,
   String response;
   while (millis() < deadline && audio->connected() &&
          response.indexOf("\r\n\r\n") < 0) {
+    if (audioTransferCancel_) {
+      closeAudio();
+      return false;
+    }
     while (audio->available() && response.length() < 512)
       response += static_cast<char>(audio->read());
     if (response.indexOf("\r\n\r\n") < 0) delay(1);
@@ -235,6 +251,10 @@ bool FireBackendClient::downloadAudio(const String& url, uint8_t* buffer,
   const uint32_t headerDeadline = millis() + 5000;
   while (millis() < headerDeadline && audio->connected() &&
          headers.length() < 8192 && headers.indexOf("\r\n\r\n") < 0) {
+    if (audioTransferCancel_) {
+      closeAudio();
+      return false;
+    }
     while (audio->available() && headers.length() < 8192) {
       headers += static_cast<char>(audio->read());
       if (headers.endsWith("\r\n\r\n")) break;
@@ -268,6 +288,10 @@ bool FireBackendClient::downloadAudio(const String& url, uint8_t* buffer,
   length = initial;
   const uint32_t bodyDeadline = millis() + 20000;
   while (length < contentLength && millis() < bodyDeadline) {
+    if (audioTransferCancel_) {
+      closeAudio();
+      return false;
+    }
     if (!audio->available()) {
       delay(1);
       continue;
@@ -278,6 +302,86 @@ bool FireBackendClient::downloadAudio(const String& url, uint8_t* buffer,
   }
   closeAudio();
   return length == contentLength;
+}
+
+bool FireBackendClient::beginAudioUpload(const String& turnId,
+                                         const uint8_t* wavData,
+                                         size_t wavLength) {
+  if (audioTransferRunning_ || !wavData || wavLength == 0 ||
+      wavLength > 524288 || !sessionReady())
+    return false;
+  audioTransfer_ = AudioTransfer::Upload;
+  audioTransferTurnId_ = turnId;
+  audioTransferUrl_ = "";
+  audioTransferUploadData_ = wavData;
+  audioTransferDownloadBuffer_ = nullptr;
+  audioTransferBytes_ = wavLength;
+  audioTransferLength_ = 0;
+  audioTransferCancel_ = false;
+  audioTransferFinished_ = false;
+  audioTransferOk_ = false;
+  audioTransferRunning_ = true;
+  if (xTaskCreatePinnedToCore(audioTaskEntry, "fire-audio-http", 6144, this, 2,
+                              &audioTask_, 0) != pdPASS) {
+    audioTransferRunning_ = false;
+    audioTransfer_ = AudioTransfer::None;
+    return false;
+  }
+  return true;
+}
+
+bool FireBackendClient::beginAudioDownload(const String& url, uint8_t* buffer,
+                                           size_t capacity) {
+  if (audioTransferRunning_ || !buffer || capacity == 0 || !sessionReady() ||
+      url.length() == 0)
+    return false;
+  audioTransfer_ = AudioTransfer::Download;
+  audioTransferTurnId_ = "";
+  audioTransferUrl_ = url;
+  audioTransferUploadData_ = nullptr;
+  audioTransferDownloadBuffer_ = buffer;
+  audioTransferBytes_ = capacity;
+  audioTransferLength_ = 0;
+  audioTransferCancel_ = false;
+  audioTransferFinished_ = false;
+  audioTransferOk_ = false;
+  audioTransferRunning_ = true;
+  if (xTaskCreatePinnedToCore(audioTaskEntry, "fire-audio-http", 6144, this, 2,
+                              &audioTask_, 0) != pdPASS) {
+    audioTransferRunning_ = false;
+    audioTransfer_ = AudioTransfer::None;
+    return false;
+  }
+  return true;
+}
+
+void FireBackendClient::cancelAudioTransfer() {
+  if (!audioTransferRunning_) return;
+  audioTransferCancel_ = true;
+}
+
+void FireBackendClient::audioTaskEntry(void* context) {
+  auto* client = static_cast<FireBackendClient*>(context);
+  if (client) client->runAudioTransfer();
+  vTaskDelete(nullptr);
+}
+
+void FireBackendClient::runAudioTransfer() {
+  bool ok = false;
+  size_t length = 0;
+  if (audioTransfer_ == AudioTransfer::Upload) {
+    ok = uploadAudio(audioTransferTurnId_, audioTransferUploadData_,
+                     audioTransferBytes_);
+  } else if (audioTransfer_ == AudioTransfer::Download) {
+    ok = downloadAudio(audioTransferUrl_, audioTransferDownloadBuffer_,
+                       audioTransferBytes_, length);
+  }
+  audioTransferLength_ = length;
+  audioTransferOk_ = ok && !audioTransferCancel_;
+  audioTransferFinished_ = true;
+  audioTransferRunning_ = false;
+  audioTask_ = nullptr;
+  audioTransfer_ = AudioTransfer::None;
 }
 
 String FireBackendClient::eventId(const char* prefix) {
@@ -524,7 +628,13 @@ void FireBackendClient::handleHandshake() {
     if (handshakeBuffer_.endsWith("\r\n\r\n")) break;
   }
   if (handshakeBuffer_.indexOf("\r\n\r\n") < 0) return;
-  if (!handshakeBuffer_.startsWith("HTTP/1.1 101")) {
+  String handshakeHeaders = handshakeBuffer_.substring(0, handshakeBuffer_.indexOf("\r\n\r\n"));
+  String lowerHandshake = handshakeHeaders;
+  lowerHandshake.toLowerCase();
+  if (!handshakeBuffer_.startsWith("HTTP/1.1 101") ||
+      lowerHandshake.indexOf("upgrade: websocket") < 0 ||
+      lowerHandshake.indexOf("connection: upgrade") < 0 ||
+      lowerHandshake.indexOf("sec-websocket-accept:") < 0) {
     disconnect();
     setState(State::Offline, "Backend handshake rejected");
     return;
@@ -584,12 +694,30 @@ void FireBackendClient::readFrames() {
         const int value = client->read();
         if (value < 0) return;
         if (receiveHeaderBytes_ == 0) {
-          receiveOpcode_ = static_cast<uint8_t>(value) & 0x0F;
+          const uint8_t header = static_cast<uint8_t>(value);
+          receiveFin_ = (header & 0x80) != 0;
+          if (header & 0x70) {
+            disconnect();
+            setState(State::Offline, "Invalid WebSocket flags");
+            return;
+          }
+          receiveOpcode_ = header & 0x0F;
+          if (receiveOpcode_ == 0x0 && fragmentOpcode_ == 0) {
+            disconnect();
+            setState(State::Offline, "Unexpected WebSocket continuation");
+            return;
+          }
         } else {
           receiveMasked_ = (static_cast<uint8_t>(value) & 0x80) != 0;
           const uint8_t lengthCode = static_cast<uint8_t>(value) & 0x7F;
           if (lengthCode <= 125) {
             receiveLength_ = lengthCode;
+            if (receiveOpcode_ >= 0x8 &&
+                (!receiveFin_ || receiveLength_ > 125)) {
+              disconnect();
+              setState(State::Offline, "Invalid WebSocket control frame");
+              return;
+            }
             receiveStage_ = receiveMasked_ ? ReceiveStage::Mask
                                            : ReceiveStage::Payload;
             frameBuffer_ = "";
@@ -656,9 +784,33 @@ void FireBackendClient::readFrames() {
         ++processed;
       }
       if (receivePayloadBytes_ < receiveLength_) return;
-      handleFrame(receiveOpcode_,
-                  reinterpret_cast<const uint8_t*>(frameBuffer_.c_str()),
-                  frameBuffer_.length());
+      if (receiveOpcode_ == 0x0) {
+        fragmentBuffer_ += frameBuffer_;
+        if (fragmentBuffer_.length() > kMaxFrameBytes) {
+          disconnect();
+          setState(State::Offline, "Fragmented WebSocket frame too large");
+          return;
+        }
+        if (receiveFin_) {
+          handleFrame(fragmentOpcode_,
+                      reinterpret_cast<const uint8_t*>(fragmentBuffer_.c_str()),
+                      fragmentBuffer_.length());
+          fragmentOpcode_ = 0;
+          fragmentBuffer_ = "";
+        }
+      } else if (receiveOpcode_ == 0x1 && fragmentOpcode_ == 0 &&
+                 !receiveFin_) {
+        fragmentOpcode_ = receiveOpcode_;
+        fragmentBuffer_ = frameBuffer_;
+      } else if (receiveOpcode_ == 0x1 && fragmentOpcode_ != 0) {
+        disconnect();
+        setState(State::Offline, "Overlapping WebSocket fragments");
+        return;
+      } else {
+        handleFrame(receiveOpcode_,
+                    reinterpret_cast<const uint8_t*>(frameBuffer_.c_str()),
+                    frameBuffer_.length());
+      }
       resetReceiveFrame();
     }
   }

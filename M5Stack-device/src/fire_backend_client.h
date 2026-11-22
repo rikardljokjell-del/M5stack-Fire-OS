@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 #include <WiFiClient.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "fire_reverse_transport.h"
 
 class FireBackendClient {
@@ -25,6 +27,14 @@ class FireBackendClient {
                   size_t wavLength);
   bool downloadAudio(const String& url, uint8_t* buffer, size_t capacity,
                      size_t& length);
+  bool beginAudioUpload(const String& turnId, const uint8_t* wavData,
+                        size_t wavLength);
+  bool beginAudioDownload(const String& url, uint8_t* buffer, size_t capacity);
+  void cancelAudioTransfer();
+  bool audioTransferActive() const { return audioTransferRunning_; }
+  bool audioTransferFinished() const { return audioTransferFinished_; }
+  bool audioTransferOk() const { return audioTransferOk_; }
+  size_t audioTransferLength() const { return audioTransferLength_; }
 
   bool configured() const { return host_.length() > 0 && token_.length() >= 24; }
   bool connected() const { return state_ == State::Connected && sessionStarted_; }
@@ -83,12 +93,28 @@ class FireBackendClient {
   uint32_t lastReceiveAt_ = 0;
   uint32_t lastPingAt_ = 0;
   uint32_t lastPongAt_ = 0;
+  enum class AudioTransfer : uint8_t { None, Upload, Download };
+  AudioTransfer audioTransfer_ = AudioTransfer::None;
+  TaskHandle_t audioTask_ = nullptr;
+  volatile bool audioTransferRunning_ = false;
+  volatile bool audioTransferFinished_ = false;
+  volatile bool audioTransferOk_ = false;
+  volatile bool audioTransferCancel_ = false;
+  volatile size_t audioTransferLength_ = 0;
+  String audioTransferTurnId_;
+  String audioTransferUrl_;
+  const uint8_t* audioTransferUploadData_ = nullptr;
+  uint8_t* audioTransferDownloadBuffer_ = nullptr;
+  size_t audioTransferBytes_ = 0;
+  static void audioTaskEntry(void* context);
+  void runAudioTransfer();
   String handshakeBuffer_;
   String frameBuffer_;
   enum class ReceiveStage : uint8_t { Header, ExtendedLength, Mask, Payload };
   ReceiveStage receiveStage_ = ReceiveStage::Header;
   uint8_t receiveHeaderBytes_ = 0;
   uint8_t receiveOpcode_ = 0;
+  bool receiveFin_ = false;
   bool receiveMasked_ = false;
   uint8_t receiveExtended_[8] = {};
   uint8_t receiveExtendedNeeded_ = 0;
@@ -97,6 +123,8 @@ class FireBackendClient {
   uint8_t receiveMaskBytes_ = 0;
   uint64_t receiveLength_ = 0;
   size_t receivePayloadBytes_ = 0;
+  uint8_t fragmentOpcode_ = 0;
+  String fragmentBuffer_;
   String status_ = "Backend not configured";
   uint32_t reconnectAt_ = 0;
   uint32_t eventCounter_ = 0;

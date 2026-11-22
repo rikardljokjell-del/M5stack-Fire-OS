@@ -1895,6 +1895,19 @@ bool FireOS::allButtonsHeldAtBoot() const {
          digitalRead(kButtonPins[1]) == LOW && digitalRead(kButtonPins[2]) == LOW;
 }
 
+bool FireOS::backendCommandUnexpired(uint32_t expiresAt) const {
+  if (expiresAt == 0) return false;
+  uint32_t now = 0;
+  if (backendServerTime_ > 0) {
+    now = backendServerTime_ + (millis() - backendServerSeenAt_) / 1000UL;
+  } else {
+    const time_t localNow = time(nullptr);
+    if (localNow < 1577836800) return false;
+    now = static_cast<uint32_t>(localNow);
+  }
+  return expiresAt > now;
+}
+
 void FireOS::pollButtons() {
   const uint32_t now = millis();
   for (uint8_t index = 0; index < kButtonCount; ++index) {
@@ -2763,6 +2776,7 @@ bool FireOS::startAiRecording() {
   aiAudioStopSent_ = false;
   aiAudioUploadFinished_ = false;
   aiAudioUploadOk_ = false;
+  aiAudioUploadStarted_ = false;
   aiAudioCaptureActive_ = true;
   aiAudioCapturedSamples_ = 0;
   aiAudioWavLength_ = 0;
@@ -2782,6 +2796,7 @@ bool FireOS::startAiRecording() {
 
 bool FireOS::stopAiAudioOutput() {
   if (!aiAudioOutputActive_ && !aiAudioOutputBuffer_) return true;
+  if (backendClient_) backendClient_->cancelAudioTransfer();
   M5.Speaker.stop();
   if (M5.Speaker.isPlaying()) return false;
   free(aiAudioOutputBuffer_);
@@ -2790,6 +2805,7 @@ bool FireOS::stopAiAudioOutput() {
   aiAudioOutputActive_ = false;
   aiAudioOutputId_ = "";
   aiAudioOutputTurnId_ = "";
+  aiAudioDownloadPending_ = false;
   return true;
 }
 
@@ -2797,10 +2813,13 @@ void FireOS::cancelConversationTurn(const String& reason, bool startNew) {
   const String oldTurn = aiTurnId_;
   fireStopMicCapture();
   fireReleaseMicCapture();
+  if (backendClient_) backendClient_->cancelAudioTransfer();
   aiAudioCaptureActive_ = false;
   aiAudioCaptureFinished_ = false;
   aiAudioUploadFinished_ = false;
   aiAudioUploadOk_ = false;
+  aiAudioUploadStarted_ = false;
+  aiAudioDownloadPending_ = false;
   stopAiAudioOutput();
   if (backendClient_ && backendClient_->sessionReady() && oldTurn.length() > 0)
     backendClient_->cancelTurn(oldTurn);
@@ -2876,12 +2895,21 @@ void FireOS::updateAiAudio() {
         aiAudioCaptureFinished_ = true;
         if (!aiAudioStopSent_) finishAiRecording();
         aiWorkflowText_ = "SENDING AUDIO";
-        aiAudioUploadOk_ = backendClient_ && backendClient_->uploadAudio(
+        aiAudioUploadStarted_ = backendClient_ && backendClient_->beginAudioUpload(
             aiTurnId_, aiAudioBuffer_, aiAudioWavLength_);
-        if (!aiAudioUploadOk_)
+        if (!aiAudioUploadStarted_) {
+          aiAudioUploadOk_ = false;
+          aiAudioUploadFinished_ = true;
           aiAudioError_ = "Backend audio upload failed";
-        aiAudioUploadFinished_ = true;
+        }
     }
+  }
+  if (aiAudioUploadStarted_ && backendClient_ &&
+      backendClient_->audioTransferFinished()) {
+    aiAudioUploadStarted_ = false;
+    aiAudioUploadOk_ = backendClient_->audioTransferOk();
+    aiAudioUploadFinished_ = true;
+    if (!aiAudioUploadOk_) aiAudioError_ = "Backend audio upload failed";
   }
   if (aiAudioCaptureFinished_ && !aiAudioStopSent_) finishAiRecording();
   if (aiAudioUploadFinished_) {
@@ -2897,6 +2925,54 @@ void FireOS::updateAiAudio() {
 }
 
 void FireOS::updateAiAudioOutput() {
+  if (aiAudioDownloadPending_) {
+    if (!backendClient_ || !backendClient_->audioTransferFinished()) return;
+    const bool transferOk = backendClient_->audioTransferOk() &&
+                            backendClient_->audioTransferLength() ==
+                                aiAudioDownloadSize_;
+    bool hashOk = false;
+    if (transferOk) {
+      uint8_t digest[32] = {};
+      mbedtls_sha256_context sha;
+      mbedtls_sha256_init(&sha);
+      mbedtls_sha256_starts_ret(&sha, 0);
+      mbedtls_sha256_update_ret(&sha, aiAudioOutputBuffer_,
+                                aiAudioDownloadSize_);
+      mbedtls_sha256_finish_ret(&sha, digest);
+      mbedtls_sha256_free(&sha);
+      const char* digits = "0123456789abcdef";
+      String actual;
+      actual.reserve(64);
+      for (uint8_t value : digest) {
+        actual += digits[value >> 4];
+        actual += digits[value & 0x0F];
+      }
+      hashOk = actual.equalsIgnoreCase(aiAudioDownloadHash_);
+    }
+    const bool played = transferOk && hashOk && M5.Speaker.isEnabled() &&
+                        M5.Speaker.playRaw(
+                            reinterpret_cast<const int16_t*>(aiAudioOutputBuffer_),
+                            aiAudioDownloadSize_ / sizeof(int16_t), 24000, false,
+                            1, 0, true);
+    aiAudioDownloadPending_ = false;
+    if (!played) {
+      free(aiAudioOutputBuffer_);
+      aiAudioOutputBuffer_ = nullptr;
+      aiAudioOutputLength_ = 0;
+      aiWorkflowText_ = "VOICE RESPONSE FAILED";
+      aiDeveloperMode_ = 2;
+      return;
+    }
+    aiAudioOutputLength_ = aiAudioDownloadSize_;
+    aiAudioOutputActive_ = true;
+    aiAudioOutputId_ = aiAudioDownloadId_;
+    aiAudioOutputTurnId_ = aiAudioDownloadTurnId_;
+    aiLastAudioId_ = aiAudioOutputId_;
+    aiLastAudioTurnId_ = aiAudioOutputTurnId_;
+    aiWorkflowText_ = "AI SPEAKING";
+    backendClient_->audioPlaybackStarted(aiAudioOutputId_,
+                                         aiAudioOutputTurnId_);
+  }
   if (!aiAudioOutputActive_) return;
   if (M5.Speaker.isPlaying()) return;
   if (backendClient_)
@@ -3143,6 +3219,8 @@ void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
   if (type == "session_started") {
+    backendServerTime_ = jsonIntField(message, "server_time");
+    backendServerSeenAt_ = millis();
     const String mode = jsonStringField(message, "conversation_mode");
     if (mode == "chat") aiConversationMode_ = 1;
     else if (mode == "develop") aiConversationMode_ = 0;
@@ -3150,6 +3228,8 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "session_snapshot") {
+    backendServerTime_ = jsonIntField(message, "server_time");
+    backendServerSeenAt_ = millis();
     const String mode = jsonStringField(message, "conversation_mode");
     if (mode == "chat") aiConversationMode_ = 1;
     else if (mode == "develop") aiConversationMode_ = 0;
@@ -3283,31 +3363,8 @@ void FireOS::handleBackendMessage(const String& message) {
     aiAudioOutputBuffer_ = static_cast<uint8_t*>(ps_malloc(size));
     if (!aiAudioOutputBuffer_)
       aiAudioOutputBuffer_ = static_cast<uint8_t*>(malloc(size));
-    size_t downloaded = 0;
-    bool ok = aiAudioOutputBuffer_ &&
-              backendClient_->downloadAudio(url, aiAudioOutputBuffer_, size,
-                                             downloaded);
-    if (ok) {
-      uint8_t digest[32] = {};
-      mbedtls_sha256_context sha;
-      mbedtls_sha256_init(&sha);
-      mbedtls_sha256_starts_ret(&sha, 0);
-      mbedtls_sha256_update_ret(&sha, aiAudioOutputBuffer_, downloaded);
-      mbedtls_sha256_finish_ret(&sha, digest);
-      mbedtls_sha256_free(&sha);
-      const char* digits = "0123456789abcdef";
-      String actual;
-      actual.reserve(64);
-      for (uint8_t value : digest) {
-        actual += digits[value >> 4];
-        actual += digits[value & 0x0F];
-      }
-      ok = actual.equalsIgnoreCase(expectedHash);
-    }
-    if (!ok || downloaded != size || !M5.Speaker.isEnabled() ||
-        !M5.Speaker.playRaw(reinterpret_cast<const int16_t*>(aiAudioOutputBuffer_),
-                            downloaded / sizeof(int16_t), sampleRate, false, 1,
-                            0, true)) {
+    if (!aiAudioOutputBuffer_ ||
+        !backendClient_->beginAudioDownload(url, aiAudioOutputBuffer_, size)) {
       free(aiAudioOutputBuffer_);
       aiAudioOutputBuffer_ = nullptr;
       aiAudioOutputLength_ = 0;
@@ -3315,16 +3372,14 @@ void FireOS::handleBackendMessage(const String& message) {
       aiDeveloperMode_ = 2;
       return;
     }
-    aiAudioOutputLength_ = downloaded;
-    aiAudioOutputActive_ = true;
-    aiAudioOutputId_ = audioId;
-    aiAudioOutputTurnId_ = turnId;
-    aiLastAudioId_ = audioId;
-    aiLastAudioTurnId_ = turnId;
+    aiAudioDownloadPending_ = true;
+    aiAudioDownloadId_ = audioId;
+    aiAudioDownloadTurnId_ = turnId;
+    aiAudioDownloadHash_ = expectedHash;
+    aiAudioDownloadSize_ = size;
     aiDeveloperMode_ = 3;
     aiWorkflowState_ = 2;
-    aiWorkflowText_ = "AI SPEAKING";
-    backendClient_->audioPlaybackStarted(audioId, turnId);
+    aiWorkflowText_ = "DOWNLOADING AI VOICE";
     return;
   }
   if (type == "package_ready") {
@@ -3346,11 +3401,18 @@ void FireOS::handleBackendMessage(const String& message) {
     const String projectId = jsonStringField(message, "project_id");
     const uint32_t size = static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
     const String commandBoot = jsonStringField(message, "boot_id");
+    const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
     if (backendClient_ && commandBoot.length() > 0 &&
         commandBoot != backendClient_->bootId()) {
       backendClient_->deviceInstallResult(aiInstallId_, aiPackageId_, false,
                                            hash, "stale boot_id");
       aiWorkflowText_ = "DOWNLOAD REJECTED";
+      return;
+    }
+    if (!backendCommandUnexpired(expiresAt)) {
+      if (backendClient_) backendClient_->deviceInstallResult(
+          aiInstallId_, aiPackageId_, false, hash, "expired install command");
+      aiWorkflowText_ = "DOWNLOAD EXPIRED";
       return;
     }
     const bool accepted = packageManager_ && packageManager_->startDownload(
@@ -3361,6 +3423,9 @@ void FireOS::handleBackendMessage(const String& message) {
                             projectId);
       saveSettings();
     }
+    if (!accepted && backendClient_)
+      backendClient_->deviceInstallResult(aiInstallId_, aiPackageId_, false,
+                                          hash, "download rejected");
     aiWorkflowText_ = accepted ? "DOWNLOADING" : "DOWNLOAD REJECTED";
     return;
   }
@@ -3369,6 +3434,7 @@ void FireOS::handleBackendMessage(const String& message) {
     const String packageId = jsonStringField(message, "package_id");
     const String commandBoot = jsonStringField(message, "boot_id");
     const String commandHash = jsonStringField(message, "archive_sha256");
+    const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
     if (runId.length() == 0 || packageId.length() == 0 ||
         (backendClient_ && commandBoot.length() > 0 &&
          commandBoot != backendClient_->bootId())) {
@@ -3378,14 +3444,22 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowText_ = "RUN REJECTED";
       return;
     }
+    if (!backendCommandUnexpired(expiresAt)) {
+      if (backendClient_)
+        backendClient_->appFailed(runId, packageId, "expired_command",
+                                  "Run command expired");
+      aiWorkflowText_ = "RUN EXPIRED";
+      return;
+    }
     const String consumedKey = compactPreferenceKey("rr_", runId);
     const String previousRun = preferences.getString(consumedKey.c_str(), "");
     if (previousRun.length() > 0) {
-      if (backendClient_ && previousRun != "failed")
+      if (backendClient_ && (previousRun == "started" || previousRun == "healthy"))
         backendClient_->appStarted(runId, packageId);
       else if (backendClient_)
         backendClient_->appFailed(runId, packageId, "previous_failure",
                                   "Run command was already consumed");
+      aiWorkflowText_ = previousRun == "failed" ? "RUN FAILED" : "RUN ALREADY CONSUMED";
       return;
     }
     const String path = preferences.getString(
@@ -3427,6 +3501,15 @@ void FireOS::handleBackendMessage(const String& message) {
     const String runId = jsonStringField(message, "run_id");
     const String packageId = jsonStringField(message, "package_id");
     const String stopId = jsonStringField(message, "stop_id");
+    const String commandBoot = jsonStringField(message, "boot_id");
+    const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
+    if (backendClient_ && commandBoot.length() > 0 &&
+        commandBoot != backendClient_->bootId()) {
+      if (backendClient_) backendClient_->appStopped(runId, packageId, stopId,
+                                                     "requested");
+      return;
+    }
+    if (!backendCommandUnexpired(expiresAt)) return;
     const bool activeRun = luaAppActive_ && luaRunId_ == runId;
     if (activeRun) stopLuaApp("remote_stop");
     if (backendClient_)
@@ -3439,10 +3522,12 @@ void FireOS::handleBackendMessage(const String& message) {
     const String rollbackId = jsonStringField(message, "rollback_id");
     const String packageId = jsonStringField(message, "package_id");
     const String commandBoot = jsonStringField(message, "boot_id");
+    const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
     const String path = preferences.getString(
         compactPreferenceKey("lp_", packageId).c_str(), "");
-    const bool bootOk = !backendClient_ || commandBoot.length() == 0 ||
-                        commandBoot == backendClient_->bootId();
+    const bool bootOk = backendCommandUnexpired(expiresAt) &&
+                        (!backendClient_ || commandBoot.length() == 0 ||
+                         commandBoot == backendClient_->bootId());
     const bool available = bootOk && path.length() > 0 && SD.exists(path);
     if (luaAppActive_) stopLuaApp("rollback");
     if (backendClient_)
