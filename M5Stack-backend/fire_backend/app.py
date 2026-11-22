@@ -275,6 +275,11 @@ def create_app(settings=None, provider=None):
     async def project(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
         return authorize_project(service.store, item_id, identity)
 
+    @app.get("/projects/{item_id}/quality")
+    async def project_quality(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
+        authorize_project(service.store, item_id, identity)
+        return service.quality.cases(item_id)
+
     @app.delete("/projects/{item_id}")
     async def delete(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
         project = authorize_project(service.store, item_id, identity)
@@ -312,6 +317,8 @@ def create_app(settings=None, provider=None):
     @app.get("/packages/{item_id}/download")
     async def download(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
         package = scoped_package(service, item_id, identity)
+        from .quality import require_deliverable
+        require_deliverable(package)
         if service.store.get("builds", package["build_id"])["status"] != "ready":
             raise Conflict("Package build has not passed")
         from .builds import verify_archive

@@ -26,7 +26,7 @@ class Store:
         self.redactor = redactor
         self.max_bytes = max_bytes
         self.failure_reserve = min(65536, max_bytes // 8)
-        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio"):
+        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio", "quality"):
             (self.root / name).mkdir(parents=True, exist_ok=True)
 
     def path(self, group: str, item_id: str, suffix=".json") -> Path:
@@ -90,6 +90,9 @@ class Store:
                 self.path("packages", package["id"]).unlink(missing_ok=True)
                 self.path("packages", package["id"], ".zip").unlink(missing_ok=True)
         self.path("projects", project_id).unlink()
+        for case in self.list("quality"):
+            if case.get("project_id") == project_id:
+                self.path("quality", case["id"]).unlink(missing_ok=True)
 
     def recover(self):
         for project in self.list("projects"):

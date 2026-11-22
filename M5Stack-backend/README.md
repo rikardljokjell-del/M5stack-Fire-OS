@@ -1,5 +1,12 @@
 # FIRE OS AI Developer backend 0.2
 
+Ny kvalitetsport og reparasjonsflyt: [APP_REPAIR_HANDOFF.md](docs/APP_REPAIR_HANDOFF.md).
+Feilrapport for valgt app henter kilde/diagnostikk automatisk; sju releaseprofiler
+og et varig feilregister beskytter neste bygging. Windows-appen har Reparer valgt app.
+Device-agenten må også følge instruksen der for feillogger fra lokalt startede apper
+og fjerning av automatisk ti-sekunders lukking. Backend støtter levetid 0=til brukerexit;
+firmware må annonsere/støtte profilen før den brukes.
+
 Lokal Python/FastAPI-backend for Windows, én backendprosess, filbasert lagring og
 direkte OpenAI API. Ingen Docker, database eller avhengighet av desktopappen ved
 kjøring. All backendutvikling skjer i denne mappen. `M5Stack-device/` leses for

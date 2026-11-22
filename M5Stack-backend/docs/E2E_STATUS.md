@@ -1,5 +1,12 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
+Nyeste reparasjonsleveranse: 206 regresjonstester bestått; [APP_REPAIR_HANDOFF.md](APP_REPAIR_HANDOFF.md).
+Releaseporten bruker sju full-varighetsprofiler, automatisk feilkontekst og
+varige feil-/forholdsregler; gamle eller feilrapporterte pakker sperres for ny
+levering. Isolert ekte OpenAI-dialog/kodegenerering har passert den nye porten.
+Ingen brukerapp er endret/installert av denne leveransen. Unlimited levetid og
+lokale runtime-diagnostikker trenger oppdatert firmware som beskrevet i handoffen.
+
 Nyeste leveranse: **194 tester består**, og pip check finner ingen brutte avhengigheter.
 Se [samtalekontrakten](CONVERSATION-v0.2.md) og
 [device-arbeidsordren med 37 funn](DEVICE_CONVERSATION_AUDIT.md). Backend har

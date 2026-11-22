@@ -82,6 +82,17 @@ async def run_task(service, session, package_id):
         await service.emit(session, {"type": "error", "code": "run_rejected", "message": str(error)[:240]})
 
 
+async def repair_after_stop(service, session, text):
+    try:
+        async with asyncio.timeout(service.settings.fire_command_timeout_seconds + 1):
+            while session.state in {State.running, State.stopping, State.starting, State.rollback_pending} and not session.stopped:
+                await asyncio.sleep(0.05)
+        if not session.stopped:
+            await service.text(session, text)
+    except TimeoutError:
+        await service.failure(session, ValueError("Appen svarte ikke på stopp. Reparasjonen er ikke startet; prøv igjen når FIRE er tilkoblet."))
+
+
 async def dispatch(service, session, event):
     if session.stopped:
         raise ValueError("Session was stopped")
@@ -119,6 +130,15 @@ async def handle(service, session, event):
         if session.protocol_version == "0.2":
             await service.session_snapshot(session)
         return {"status": "ok"}
+    if name == "app_diagnostic":
+        package = service.store.get("packages", event.package_id)
+        project = service.store.get("projects", package["project_id"])
+        if session.target != "device" or project.get("owner_device_id") != session.device_id or package["manifest"]["id"] != event.app_id:
+            raise PermissionError("Diagnostic package scope mismatch")
+        case = service.quality.record(project_id=project["id"],package_id=package["id"],device_id=session.device_id,
+            source_hash=package["manifest"]["checksum"],message=event.error_code+": "+(event.message or ""),provenance="device_diagnostic")
+        await service.emit(session,{"type":"repair_available","app_id":event.app_id,"package_id":package["id"],"case_id":case["id"]})
+        return {"status":"recorded","case_id":case["id"]}
     if name == "session_stop":
         await service.stop(session)
         await service.emit(session, {"type": "session_stopped"})
@@ -158,6 +178,11 @@ async def handle(service, session, event):
         await service.emit(session, {"type": "ui_event", "event": "button_received", "button": event.button, "action": event.action})
         return {"status": "received"}
     if name in {"text", "listen_start", "listen_stop"}:
+        from .quality import repair_requested
+        if name == "text" and session.conversation_mode == "develop" and event.text and repair_requested(event.text) and session.state == State.running:
+            await service.request_app_stop(session)
+            session.input_task = asyncio.create_task(repair_after_stop(service, session, event.text))
+            return {"status":"stopping_for_repair"}
         if name == "text" and (not event.text or not event.text.strip()):
             raise ValueError("Text is required")
         if name == "listen_stop" and event.turn_id in session.retired_turns:

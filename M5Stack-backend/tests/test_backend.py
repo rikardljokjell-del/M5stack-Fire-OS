@@ -62,7 +62,9 @@ async def test_confirmations_and_package_integrity(settings):
         await session.task
         assert session.state == State.ready_to_run
         package = service.store.get("packages", session.package_id)
-        assert package["validation"]["frames"] == 180
+        assert package["validation"]["suite"] == "release-v1"
+        assert len(package["validation"]["profiles"]) == 7
+        assert all(p["elapsed_ms"] == 10000 for p in package["validation"]["profiles"])
         assert service.store.get("projects", session.project_id)["current"] is None
         archive = service.store.path("packages", session.package_id, ".zip")
         assert verify_archive(archive, package["manifest"], package["archive_sha256"])

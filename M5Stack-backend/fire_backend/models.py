@@ -65,7 +65,7 @@ class Manifest(StrictModel):
     entry: Literal["main.lua"] = "main.lua"
     required_services: list[str]
     max_memory: int = Field(default=262144, ge=65536, le=262144)
-    max_runtime_ms: int = Field(default=10000, ge=1, le=10000)
+    max_runtime_ms: int = Field(default=10000, ge=0, le=10000)
     permissions: list[str]
     checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -105,7 +105,7 @@ class Capabilities(StrictModel):
     api_version: Literal["fire-lua-0.1"] = "fire-lua-0.1"
     services: list[str] = Field(max_length=5)
     max_memory: int = Field(ge=65536, le=262144)
-    max_runtime_ms: int = Field(ge=16, le=10000)
+    max_runtime_ms: int = Field(ge=0, le=10000)
     audio_input: bool = False
     audio_output: bool = False
     firmware_version: str = Field(default="unknown", max_length=64)
@@ -147,7 +147,7 @@ APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
 class DeviceEvent(StrictModel):
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic"]
     conversation_mode: Literal["chat", "develop"] | None = None
     app_mode: Literal["new", "update"] | None = None
     app_id: str | None = Field(default=None, pattern=ID_PATTERN)
@@ -198,6 +198,7 @@ class DeviceEvent(StrictModel):
                 "app_failed": ("run_id", "package_id", "error_code"), "app_stopped": ("run_id", "package_id"),
                 "rollback_result": ("rollback_id", "package_id", "status"),
                 "listen_start": ("turn_id",), "listen_stop": ("turn_id",),
+                "app_diagnostic": ("app_id", "package_id", "error_code"),
                 "audio_playback_started": ("audio_id", "turn_id"), "audio_playback_finished": ("audio_id", "turn_id"),
             }
             if any(not getattr(self, name) for name in required.get(self.event, ())):

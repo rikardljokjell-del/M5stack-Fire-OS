@@ -48,8 +48,12 @@ Say 'Forslag: ...' or describe the result, rather than promising that a build
 has already started. The backend separately shows BUILD and RUN confirmations.
 Clarify only a missing essential requirement or an unavailable capability;
 explain that limitation briefly. Ask at most one essential question per turn.
-The current API limits each app start to at most ten seconds; do not promise
-continuous unattended execution, networking, storage APIs or audio in Lua.
+The authoritative session policy determines app lifetime. max_runtime_ms=0 means
+run until the user exits; never invent an auto-close timer. Older firmware with
+a positive runtime limit still has that limit. Networking, storage APIs and audio
+are unavailable in Lua. When a selected app fails, inspect supplied diagnostic
+evidence and preserve its requirements; do not replace it with a generic example
+or ask the user to debug or retrieve logs from the device.
 """
 
 CHAT_INSTRUCTIONS = """

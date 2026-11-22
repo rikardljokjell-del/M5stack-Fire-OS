@@ -314,6 +314,7 @@ class DesktopUI:
         self.install_button.pack(side="left")
         self.edit_app_button = ttk.Button(actions, text="Endre valgt versjon", command=self.edit_saved)
         self.edit_app_button.pack(side="left", padx=8)
+        ttk.Button(actions, text="Reparer valgt app", command=self.repair_saved).pack(side="left", padx=(0,8))
         self.delete_app_button = ttk.Button(actions, text="Slett fra backend …", command=self.delete_saved)
         self.delete_app_button.pack(side="left")
         self.label(page, "Bruker lagret, testet pakke uten ny AI-generering. Appstart krever fortsatt A RUN / Bekreft kjøring.",
@@ -326,8 +327,11 @@ class DesktopUI:
         selected = self.apps_table.selection()
         app = self.apps_rows.get(selected[0]) if selected else None
         if app:
+            quality_hint = ("Sperret etter feil – bruk Reparer valgt app.\n" if app.get("quality",{}).get("blocked") else
+                            "Trenger utvidet test – bruk Reparer valgt app eller bygg ny versjon.\n" if app.get("validation_suite") != "release-v1" else "")
             self.apps_detail.configure(text=f"{app['name']} · {app['version']} · {app['mode']}\n"
                 f"SD-mappe: {app['sd_path']}\nPakke: {app['package_id']}\n"
+                + quality_hint
                 + (app.get("delete_block_reason") or "FIRE har bekreftet at appen er borte; PC-historikken kan slettes."))
 
     def new_app(self):
@@ -366,6 +370,16 @@ class DesktopUI:
         if messagebox.askyesno("Slett apphistorikk fra PC", f"Slette «{app['name']}» og alle {count} lagrede versjoner fra PC?\n\n"
                               "FIRE har bekreftet at appen er borte. PC-slettingen kan ikke angres.", parent=self.root):
             self.work(lambda: self.runtime.delete_app(app["project_id"]), message="Sletter apphistorikken fra PC …")
+
+    def repair_saved(self):
+        selected = self.apps_table.selection()
+        session = self.session()
+        app = self.apps_rows.get(selected[0]) if selected else None
+        if app and session:
+            def repair():
+                self.runtime.select_app(session["session_id"], "update", project_id=app["project_id"], base_package_id=app["package_id"])
+                return self.runtime.send_text(session["session_id"], "Undersøk appen og reparer feilen. Behold funksjonene.")
+            self.work(repair, done=lambda _: self.show("Aktivitet"), message="Undersøker valgt app automatisk …")
 
     def install_saved(self):
         selected = self.apps_table.selection()
@@ -698,7 +712,8 @@ class DesktopUI:
             self.apps_rows = rows
             for app in apps:
                 status = ("Slettet/borte fra FIRE" if app.get("device_presence") in {"deleted", "missing"} else
-                          "Kjører (kvittert)" if app["running"] else "Sist fungerende (kvittert)" if app["current_healthy"] else
+                          "Sperret etter feil" if app.get("quality",{}).get("blocked") else
+                          "Kjører (kvittert)" if app["running"] else "Tidligere kjøring bekreftet" if app["current_healthy"] else
                           "Installert (kvittert)" if app["installed_receipt"] else
                           "Tidligere installert; SD ukjent" if app.get("had_install_receipt") else "Testet på PC; ikke installert")
                 self.apps_table.insert("", "end", iid=app["package_id"], values=(app["name"], app["version"], app.get("device_id") or "PC-simulering", status))
@@ -712,7 +727,8 @@ class DesktopUI:
         app = self.apps_rows.get(selected[0]) if selected else None
         choice_idle = idle_for_text and session["state"] != "processing" and session.get("activity", "idle") == "idle"
         can_install = choice_idle and app and app.get("device_id") == session["device_id"]
-        self.install_button.configure(state="normal" if can_install and not self.busy else "disabled")
+        deliverable = app and not app.get("quality",{}).get("blocked") and app.get("validation_suite") == "release-v1"
+        self.install_button.configure(state="normal" if can_install and deliverable and not self.busy else "disabled")
         self.edit_app_button.configure(state="normal" if can_install and not self.busy else "disabled")
         self.new_app_button.configure(state="normal" if choice_idle and not self.busy else "disabled")
         self.delete_app_button.configure(state="normal" if ready and app and app.get("can_delete_backend") and not self.busy else "disabled")

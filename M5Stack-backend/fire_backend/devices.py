@@ -60,11 +60,14 @@ class DeviceLifecycle:
         if session.capabilities:
             manifest, caps = package["manifest"], session.capabilities
             if (not set(manifest["required_services"]) <= set(caps["services"])
-                    or manifest["max_memory"] > caps["max_memory"] or manifest["max_runtime_ms"] > caps["max_runtime_ms"]):
+                    or manifest["max_memory"] > caps["max_memory"]
+                    or (caps["max_runtime_ms"] != 0 and (manifest["max_runtime_ms"] == 0 or manifest["max_runtime_ms"] > caps["max_runtime_ms"]))):
                 raise ValueError("Package exceeds the actual device API or resource capabilities")
         return package
 
     async def offer_install(self, session, package):
+        from .quality import require_deliverable
+        require_deliverable(self.store.get("packages", package["id"]))
         device = self.device_record(session)
         presence = self.app_presence(device, package["manifest"]["id"])
         if (not session.install_permitted or presence.get("last_absent_counter", 0) > session.app_revision):
@@ -99,6 +102,8 @@ class DeviceLifecycle:
         if device.get("installed_package_id") != package_id:
             raise ValueError("Installation has not been confirmed by this device")
         package = self.verify_package(session, package_id)
+        from .quality import require_deliverable
+        require_deliverable(package)
         command = self.issue_command(session, "run", package_id, archive_sha256=package["archive_sha256"])
         device.update(runtime_status="starting", pending_run_id=command["id"])
         self.store.put("devices", device["id"], device)
@@ -164,6 +169,7 @@ class DeviceLifecycle:
                 if command["status"] != "started" or device.get("running_package_id") != package_id:
                     raise ValueError("App must start before reporting healthy")
                 self.finish_command(command, "healthy")
+                self.quality.observed_healthy(session.project_id, package_id)
                 if device.get("current") != package_id:
                     device.update(backup=device.get("previous"), previous=device.get("current"), current=package_id)
                 device.setdefault("projects", {})[session.project_id] = {key: device.get(key) for key in ("current", "previous", "backup")}
@@ -171,6 +177,9 @@ class DeviceLifecycle:
             else:
                 if not event.error_code:
                     raise ValueError("App failure requires error_code")
+                failed_package = self.store.get("packages", package_id)
+                self.quality.record(project_id=session.project_id,package_id=package_id,device_id=session.device_id,
+                    source_hash=failed_package["manifest"]["checksum"],message=(event.error_code+": "+(event.message or "")),provenance="device_receipt")
                 self.finish_command(command, "failed")
                 device.update(running_package_id=None, runtime_status="failed", last_error=event.error_code,
                               active_run_id=None, pending_run_id=None)

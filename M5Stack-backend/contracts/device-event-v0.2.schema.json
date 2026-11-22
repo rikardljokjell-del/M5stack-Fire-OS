@@ -25,7 +25,7 @@
         },
         "max_runtime_ms": {
           "maximum": 10000,
-          "minimum": 16,
+          "minimum": 0,
           "title": "Max Runtime Ms",
           "type": "integer"
         },
@@ -149,7 +149,8 @@
         "app_select",
         "app_deleted",
         "app_inventory",
-        "mode_select"
+        "mode_select",
+        "app_diagnostic"
       ],
       "title": "Event",
       "type": "string"
@@ -1033,6 +1034,36 @@
               "chat",
               "develop"
             ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_diagnostic"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "app_id",
+          "package_id",
+          "error_code"
+        ],
+        "properties": {
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "error_code": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
             "type": "string"
           }
         }

@@ -58,7 +58,7 @@ def validate_api(source, services):
 
 
 HARNESS = r'''
-local source, services, memory_ms, frames = ...
+local source, services, memory_ms, frames, profile, operation_limit = ...
 local compile, hook = load, debug.sethook
 local count, total, elapsed = 0, 0, 0
 local trace, trace_count = {}, 0
@@ -74,7 +74,7 @@ local function whole(v, lo, hi)
 end
 local function record(name, ...)
   total = total + 1
-  if total > 20000 then error("API operation budget exceeded") end
+  if total > operation_limit then error("API operation budget exceeded") end
   if trace_count < 240 then
     trace_count = trace_count + 1
     trace[trace_count] = {name, ...}
@@ -135,15 +135,26 @@ end
 if env.on_button~=nil and type(env.on_button)~="function" then error("Invalid on_button") end
 call(env.init)
 for frame=1,frames do
-  elapsed=elapsed+16
+  local dt=16
+  if profile=="jitter" then dt=({7,16,33,80,120})[(frame-1)%5+1] end
+  if profile then dt=math.min(dt,memory_ms-elapsed) end
+  if dt<=0 then break end
+  elapsed=elapsed+dt
   if elapsed>memory_ms then error("Runtime budget exceeded") end
-  if frame%30==0 then
-    button=({"A","B","C"})[(frame//30-1)%3+1]
+  if profile=="idle" then
+    button=""
+  elseif profile=="hold_a" or profile=="hold_b" or profile=="hold_c" then
+    local selected=profile:sub(-1):upper()
+    if frame==1 and env.on_button then call(env.on_button,selected,"pressed") end
+    button=selected
+  elseif frame%(profile=="rapid" and 2 or 30)==0 then
+    button=({"A","B","C"})[(frame//(profile=="rapid" and 2 or 30)-1)%3+1]
     if env.on_button then call(env.on_button,button,"pressed") end
   elseif button~="" then
     button=""
   end
-  call(env.update,16)
+  call(env.update,dt)
+  if profile and elapsed>=memory_ms then break end
 end
 return {frames=frames,elapsed_ms=elapsed,api_operations=total,trace=trace}
 '''
@@ -162,8 +173,11 @@ def simulate(request):
         max_memory=min(request.get("max_memory", 262144), 262144),
     )
     lua.compile(source, name="main.lua", mode="t")  # syntax only, never executes here
-    max_ms = min(request.get("max_runtime_ms", 10000), 10000)
-    result = lua.execute(HARNESS, source, ",".join(services), max_ms, min(180, max_ms // 16))
+    configured_ms = request.get("max_runtime_ms", 10000)
+    max_ms = 60000 if configured_ms == 0 else min(configured_ms, 10000)
+    result = lua.execute(HARNESS, source, ",".join(services), max_ms,
+                         (max_ms+15)//16 if request.get("profile") else min(180, max_ms // 16), request.get("profile"),
+                         max(20000, max_ms*2))
     trace = []
     for i in range(1, len(result["trace"]) + 1):
         command = result["trace"][i]

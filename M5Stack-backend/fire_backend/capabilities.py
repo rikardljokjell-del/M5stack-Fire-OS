@@ -4,7 +4,7 @@ import json
 from .models import PROTOTYPE_SERVICES
 
 
-FIRMWARE_SOURCE_REVISION = "a3f861a9e14c7de0d88841bff5323e7ce247d5a9"
+FIRMWARE_SOURCE_REVISION = "7787ed0"
 HANDOFF_PATH = "M5Stack-device/BACKEND_HANDOFF.md"
 
 
@@ -69,6 +69,8 @@ def generation_policy(settings, session):
         + json.dumps(effective, ensure_ascii=False)
         + "\nOnly the listed lua_services may be declared or called. Unavailable fire services: " + ", ".join(disabled)
         + ". Conversation audio flags NEVER grant fire.mic/fire.speaker or other Lua APIs. "
+        "App lifetime: max_runtime_ms=0 means until user exit, NOT a zero-duration app. "
+        "Keep callback/instruction/memory protection; never implement an app auto-close timer. "
         "Do not propose an unavailable feature; explain the limitation and ask for a supported alternative. "
         "Source presence and advertised budgets are not proof of physical testing or firmware enforcement."
     )

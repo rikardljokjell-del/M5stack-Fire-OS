@@ -3,7 +3,7 @@ import argparse
 import asyncio
 import json
 
-from .builds import sha256, simulate, verify_archive, write_archive
+from .builds import sha256, validate_release, verify_archive, write_archive
 from .config import Settings
 from .security import Redactor
 from .storage import Store, identifier
@@ -18,7 +18,7 @@ async def reproduce(build_id):
     source = (folder / "main.lua").read_bytes()
     if sha256(source) != metadata["manifest"]["checksum"]:
         raise ValueError("Frozen source checksum mismatch")
-    await simulate({"main_lua": source.decode("utf-8"), **metadata["manifest"]}, store, build_id)
+    await validate_release({"main_lua": source.decode("utf-8"), **metadata["manifest"]}, store, build_id)
     output = folder / "reproduced.zip"
     store.reserve(metadata["size_bytes"])
     write_archive(output, metadata["manifest"], source)

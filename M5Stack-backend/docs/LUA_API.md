@@ -17,13 +17,11 @@ Call top-level initialization, then init, then updates; every callback must
 return. OS owns scheduling, display, audio, input, SD and stop/navigation.
 Accumulate dt_ms or subtract a captured uptime baseline for relative animation;
 do not assume time.millis() starts at zero or a fixed FPS.
-PC tests use 180 frames at 16 ms, limited further by manifest.max_runtime_ms;
-these tests do not prove future frames, physical heap or hardware correctness.
+Release tests run seven fresh-VM input/timing profiles over the full positive lifetime, or a 60-second test horizon for max_runtime_ms=0. The old 180-frame worker is a smoke test only. No finite PC test proves every future state, native 32-bit arithmetic, physical heap or hardware correctness. See APP_REPAIR_HANDOFF.md.
 
 - max_memory: Lua allocator hard cap, 65536..262144 bytes, no higher than
   advertised device capability. Firmware must account for VM allocations too.
-- max_runtime_ms: TOTAL per-start wall runtime, 16..10000 ms. It is not a
-  per-frame allowance. At expiration stop with reason=runtime_limit.
+- max_runtime_ms: 0 means run until user exit; positive values are legacy per-start lifetime limits up to 10000ms. This is separate from callback safety. Never insert an app auto-close timer. Devices must explicitly advertise 0 before backend issues unlimited manifests. Firmware changes are required; see APP_REPAIR_HANDOFF.md.
 - max callback instruction count: 200000, hook every 1000 VM instructions;
   includes top-level initialization and button callbacks. Hook inaccessible to app.
 - max API calls per start: 20000. Stop on bounds/quota errors.

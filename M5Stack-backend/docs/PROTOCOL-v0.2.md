@@ -1,5 +1,10 @@
 # FIRE Developer device protocol 0.2
 
+Addendum: [APP_REPAIR_HANDOFF.md](APP_REPAIR_HANDOFF.md) defines app_diagnostic,
+automatic selected-app diagnosis and max_runtime_ms=0 (until explicit user exit).
+Zero is accepted only for devices advertising this lifetime profile. Legacy
+positive lifetime limits remain distinct from callback/memory safety limits.
+
 This is the backend/firmware implementation contract. Firmware remains owned by
 the device agent. Backend implementation follows this document; physical support
 is NOT verified until the complete flow has passed on a real FIRE.

@@ -19,6 +19,24 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+RELEASE_PROFILES = ("idle", "cycle", "hold_a", "hold_b", "hold_c", "rapid", "jitter")
+
+
+async def validate_release(app, store, build_id):
+    """Fresh isolated VM per input/timing profile; no 180-frame release gate."""
+    results = []
+    for profile in RELEASE_PROFILES:
+        try:
+            result = await simulate({**app, "profile": profile}, store, build_id)
+        except (ValueError, asyncio.TimeoutError) as error:
+            raise ValueError(f"Release profile {profile}: {str(error) or 'worker timeout'}") from error
+        results.append({"profile": profile, **{k:v for k,v in result.items() if k != "trace"}})
+    if {"display", "rgb"}.intersection(app["required_services"]) and not sum(p["api_operations"] for p in results):
+        raise ValueError("Release suite: app declares display/RGB but produces no visible output in any input profile")
+    return {**results[0], "profiles": results, "suite": "release-v1", "physical_verified": False,
+            "native_numeric_parity": False}
+
+
 async def simulate(app, store, build_id):
     # No secrets, inherited credentials, PYTHONPATH or current project code in child env.
     child_env = {key: value for key, value in os.environ.items()
@@ -127,7 +145,7 @@ class Builder:
         if len(canonical(request)) > self.settings.fire_max_build_kb * 1024:
             raise ValueError("Per-build disk limit exceeded")
         self.store.write(folder / "request.json", request)
-        last_error, previous = None, None
+        last_error, previous = build.get("repair_context"), None
         if project.get("latest_package"):
             base = self.store.get("packages", project["latest_package"])
             archive_path = self.store.path("packages", base["id"], ".zip")
@@ -154,15 +172,19 @@ class Builder:
                 self.store.put("builds", build_id, build)
                 await progress("validating", 35, "Validerer syntaks og tillatte API-er")
                 await progress("compiling", 50, "Kontrollerer Lua 5.4; ingen firmwarekompilering")
-                await progress("testing", 65, "Tester 180 frames i begrenset PC-simulering")
+                await progress("testing", 65, "Tester hele kjøretiden med sju knapp-/tidsprofiler")
                 try:
+                    from .quality import Quality
+                    Quality(self.store).reject_known_failure(project["id"], sha256(payload))
                     if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
                         raise ValueError("Generated app requests services absent from actual device capabilities")
                     budgets = {"max_memory": capabilities["max_memory"], "max_runtime_ms": capabilities["max_runtime_ms"]} if capabilities else {}
-                    result = await simulate({**generated.model_dump(), **budgets}, self.store, build_id)
+                    result = await validate_release({**generated.model_dump(), **budgets}, self.store, build_id)
                     break
                 except (ValueError, asyncio.TimeoutError) as error:
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
+                    from .quality import Quality
+                    Quality(self.store).record_validation(build, generated.main_lua, last_error)
                     self.store.log(build_id, f"Attempt {attempt + 1} failed: {last_error}")
                     if attempt == 3:
                         raise ValueError("Build failed after 3 corrections: " + last_error) from error

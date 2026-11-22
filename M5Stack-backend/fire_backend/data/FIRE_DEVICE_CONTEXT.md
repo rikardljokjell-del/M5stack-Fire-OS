@@ -2,7 +2,7 @@
 
 ## Source baseline and verification
 Authoritative handoff: M5Stack-device/BACKEND_HANDOFF.md.
-Read-only source review: commit a3f861a (and preceding voice/lifecycle changes),
+Read-only source review: commit 7787ed0 (and preceding voice/lifecycle changes),
 fire_backend_client.*, fire_lua_runtime.*, fire_lua_package_manager.*, fire_os.*,
 platformio.ini and the handoff. Actual FIRE observations take precedence over
 this source review and the PC simulator. physical_verified=false for PC tests.
@@ -62,12 +62,10 @@ your own event loop. Firmware owns Wi-Fi/BLE/SD/IMU/audio/RGB and UI scheduling.
 The OS uses a 320x240 16-bit canvas (153600 pixel bytes before overhead).
 The runtime source has a 200000-instruction hook and 12 ms callback check;
 source now also caps Lua allocation at 131072 bytes and per-start runtime at
-10000 ms. The reviewed source still reports this as app_failed/runtime_error;
-the device audit requires a normal runtime_limit stop instead. These source
-limits do not prove physical enforcement.
+10000 ms in legacy firmware. New backend contract max_runtime_ms=0 means run until user exit; use it ONLY when advertised by this device. Never add an auto-close timer. Callback and memory limits remain mandatory. Test horizons are not app lifetime. These source limits do not prove physical enforcement.
 neither PC timing nor source inspection proves actual ESP32 timing/enforcement.
 PC guards additionally cap allocator use, API calls and process duration.
-Use at most the manifest/session runtime (currently <=10000 ms per start).
+Use the actual manifest/session lifetime policy (0=until user exit, positive=legacy limit).
 
 Globals: fire, type, tonumber, tostring, pairs, ipairs, next; math only
 abs/floor/ceil/min/max/sqrt/sin/cos/pi. No string/table libraries or loaders.
@@ -87,10 +85,7 @@ details are not bit-for-bit equivalent; use this conservative subset.
   release transitions if necessary. Long A=home, long B=quick settings,
   long C=back, threshold 650 ms; double-click window 350 ms where configured.
   OS navigation remains reserved and cannot be intercepted by generated apps.
-- fire.rgb.set(index,r,g,b), integer index 0..9/channels 0..255. Current host
-  stores per-pixel values but renders the WHOLE strip with each call's colour
-  (brightness 180). Use uniform-strip effects; never promise independent pixels
-  or a moving pixel/gradient until firmware supports and tests that capability.
+- fire.rgb.set(index,r,g,b), integer index 0..9/channels 0..255. Latest reviewed firmware implements per-pixel rendering; actual output still needs physical verification on the connected build.
 - fire.imu.accel() returns {x,y,z} in g. Native host reads M5.Imu when enabled;
   source fallback is zeros if unavailable. PC values are synthetic, not telemetry.
 - fire.time.millis() returns native OS uptime (may wrap), not time since app init.

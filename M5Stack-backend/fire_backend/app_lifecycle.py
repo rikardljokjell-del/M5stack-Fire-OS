@@ -107,7 +107,7 @@ class AppLifecycle:
         for saved in self.store.list("sessions"):
             if saved["project_id"] == project["id"]:
                 saved.update(stopped=True, proposal_id=None, package_id=None, history=[], summary="", progress={},
-                             build_id=None, base_package_id=None, last_error="", audio_status={}, turn_id=None)
+                             build_id=None, base_package_id=None, last_error="", audio_status={}, turn_id=None,repair_context=None)
                 self.store.put("sessions", saved["session_id"], saved, critical=True)
         for device in self.store.list("devices"):
             changed = bool(device.get("projects", {}).pop(project["id"], None))
