@@ -33,13 +33,14 @@ Første device-handshake skal annonsere kun faktisk tilgjengelige tjenester:
   "services": ["display", "buttons", "rgb", "imu", "time"],
   "max_memory": 131072,
   "max_runtime_ms": 10000,
-  "audio_input": false,
-  "audio_output": false
+  "audio_input": true,
+  "audio_output": true
 }
 ```
 
-`audio_input` og `audio_output` skal først settes til `true` etter at fysisk
-opptak, WAV-opplasting, avspilling og kvitteringer er testet på FIRE.
+`audio_input` og `audio_output` er satt til `true` i produksjonsprofilen.
+Fysisk tale/ASR/TTS er rapportert i siste backend-handoff; full auditmatrise
+er fortsatt ikke ferdig verifisert.
 
 ## Backend-konfigurasjon via mobil/QR
 
@@ -194,7 +195,34 @@ appen fortsatt finnes.
 ## Nåværende lydstatus
 
 HTTP/WAV-transporten og UI-state-maskinen er lagt til. Mic-capture bruker nå en
-minimal direkte I2S-adapter med M5Unifieds faktiske FIRE-mic-konfigurasjon;
+timerstyrt direkte ADC-task på GPIO34 og separat asynkron lydtransport;
 standardbygget går rent med BLE/Wi-Fi/Lua aktivt. Device annonserer
-`audio_input=true`, men dette må fortsatt verifiseres fysisk med backend. Audio
-output er fortsatt `false` til playback er implementert og testet.
+`audio_input=true` og `audio_output=true`.
+
+## Samordnet conversation-audit status
+
+Dette er en device-agent handoff, ikke en pÃ¥stand om at alle fysiske matriser er
+bestÃ¥tt.
+
+- Firmware-SHA for denne leveransen: \`5886b20\` fÃ¸r siste lokale audit-commit.
+- Backend-SHA lest fra GitHub: \`3bd4f83\`.
+- Standardbygget \`m5stack-fire-ble\`: bestÃ¥tt, 1,4 % RAM og 25,2 % flash.
+- Async lyd-HTTP, session-resume/heartbeat, chat/develop/appvalg, input-retry,
+  cancel, fragmenterte tekstframes, command-expiry, app-inventory/app_deleted,
+  manifestkontroll, Lua-restart/runtime-limit, installasjonsbeskyttelse og
+  per-pixel RGB-rendering er lagt inn i device-koden.
+
+Backendens siste GitHub-handoff rapporterer to fysiske direkte-ADC-opptak:
+72 717 / 72 940 samples, omtrent 4,55 s av 4,81 s eventintervall, ASR-tekst
+og kvittert AI-lydsvar. Dette var fÃ¸r siste async transport-/auditendringer og
+beviser ikke full matrise eller korrekt norsk bestilling.
+
+Lokal backend-test kunne ikke kjÃ¸res fordi \`M5Stack-backend/.venv\`/Python
+ikke finnes i dette arbeidsmiljÃ¸et. Backend-agentens GitHub-status rapporterer
+194 bestÃ¥tte regresjonstester; dette er ikke kjÃ¸rt om igjen av device-agenten.
+
+Ikke fysisk verifisert i denne leveransen: 20 taleomganger, alle
+avbruddsfaser, 100-syklus soak, delvise HTTP-writes, rollback/strÃ¸mtap,
+full New/Update/build/install/run/healthy-flyt og SD-inventory etter
+offline-sletting. Disse mÃ¥ gjennomfÃ¸res mot kjÃ¸rende backend fÃ¸r FIRE OS
+kan rapporteres som ferdig auditert.
