@@ -1,5 +1,9 @@
 # FIRE OS AI Developer backend 0.2
 
+[Toolbox-bygg og forebygging](docs/TOOLBOX_BUILD_RECOVERY.md): samlet byggetid er
+tilpasset hele rettingsløkken, og nye hardwareapper må ha testsekvenser som faktisk
+starter instrumentene. Menyvisning alene teller ikke som test av I/O.
+
 [Prikkjakt-analyse og nye generelle regler](docs/PRIKKJAKT_ANALYSIS.md): spillstart i testene, mindre native rasterbelastning, begge RGB-barer, behagelig spillmusikk med ekte mute og respekt for OS mastervolum/bakgrunnslys. Spilllyd krever fortsatt native Lua-lydadapter; nye spill leveres ikke som stille erstatning for dette kravet.
 
 Felles [FIRE-standard for knapper, skjerm, spillmenyer og feilretting](docs/FIRE_EXPERIENCE_STANDARD.md)

@@ -152,6 +152,24 @@ Handle invalid actions, interruption, no connection, busy I/O and missing module
 without freezing. Preserve useful state/settings where the actual API permits;
 do not claim persistent SD storage when unavailable. The result must feel made
 for FIRE OS, not like a shrunken desktop app.
+
+Hardware tool invariants: queue accepted short inputs without overwriting them.
+Keep selected/setpoint values separate from confirmed physical output. A failed
+write or stop must leave an explicit unknown/not-confirmed state, never a claimed
+success. Busy means another owner denied the lease, not that the pin is free.
+Track current faults per instrument/pin and clear their active error indication
+when a subsequent operation recovers; keep historical errors separately. Do not
+leave red/disconnected status while showing confirmed healthy readings.
+Serialize UART read/write jobs: do not cancel/drop a pending read result to send.
+Keep a pending transmit request until the current read completes, then write.
+On a confirmed partial write retain only the unsent suffix. On timeout/error
+without a confirmed byte count, mark delivery unknown and do not offer an
+automatic retry that could duplicate data. Closing/reopening a port requires
+explicitly resolving/discarding prior pending bytes; do not silently send stale
+data to a new connection or baudrate. Drain full reads promptly within budgets;
+offer only baudrates the bounded polling/buffer strategy can handle. Cache I2C
+address display rows on completion/page change, never reformat the whole list
+each frame. Provide test_sequences which actually exercise each instrument.
 """
 
 

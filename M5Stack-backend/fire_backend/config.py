@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     fire_ai_mode: Literal["openai", "mock"] = "openai"
     fire_workspace: Path = Path("workspace")
     fire_backend_token: SecretStr = SecretStr("")
-    fire_build_timeout_seconds: int = Field(default=180, ge=5, le=900)
+    fire_build_timeout_seconds: int = Field(default=900, ge=5, le=900)
     fire_max_workspace_mb: int = Field(default=256, ge=1)
     fire_max_build_kb: int = Field(default=512, ge=8, le=4096)
     fire_progress_interval_seconds: float = Field(default=10, ge=1, le=30)

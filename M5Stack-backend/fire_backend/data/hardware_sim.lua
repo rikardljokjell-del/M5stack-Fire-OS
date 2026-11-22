@@ -3,6 +3,7 @@ return function(available, specs, resources, profile, now, trace, services)
   local jobs, used, pins, pwm, uart, spi, files, handles, gpio_modes, gpio_values = {},{},{},{},{},{},{},{},{},{}
   local next_job, next_handle, io_calls, io_bytes, peak_io, peak_bytes = 0,0,0,0,0,0
   local active_jobs, peak_jobs = 0,0
+  local calls, jobs_started = {},{}
   local function contains(t,v) for _,n in ipairs(t or {}) do if n==v then return true end end return false end
   local function resource(kind,value)
     if not contains(resources[kind],value) then error("Unannounced hardware resource: "..kind) end
@@ -95,6 +96,7 @@ return function(available, specs, resources, profile, now, trace, services)
   local function invoke(service,name,spec,...)
     local a=table.pack(...);args_ok(a,spec)
     local k=service.."."..name
+    calls[k]=(calls[k] or 0)+1
     if k=="power.brightness" then error("OS backlight setting is authoritative; apps must not override brightness") end
     local bytes=0;for i=1,a.n do if type(a[i])=="string" or type(a[i])=="table" then bytes=bytes+#a[i] end end
     note(k,bytes)
@@ -160,6 +162,7 @@ return function(available, specs, resources, profile, now, trace, services)
       if active_jobs>=4 then return nil,"busy" end
       next_job=next_job+1;if next_job>65535 then error("Job ID budget exceeded") end
       jobs[next_job]={state="pending",at=now(),kind=k,args=a,result=spec.result}
+      jobs_started[k]=(jobs_started[k] or 0)+1
       active_jobs=active_jobs+1;peak_jobs=math.max(peak_jobs,active_jobs);return next_job
     end
     if spec.returns=="boolean" then return true end
@@ -197,6 +200,6 @@ return function(available, specs, resources, profile, now, trace, services)
   return {begin_callback=function()io_calls,io_bytes=0,0 end,string=safe_string,table=safe_table,
     metrics=function()
       local resources_used={};for kind,values in pairs(used) do local list={};for v in pairs(values) do list[#list+1]=v end;table.sort(list);resources_used[kind]=list end
-      return {resources_used=resources_used,max_io_calls=peak_io,max_io_bytes=peak_bytes,max_jobs=peak_jobs}
+      return {resources_used=resources_used,max_io_calls=peak_io,max_io_bytes=peak_bytes,max_jobs=peak_jobs,calls=calls,jobs_started=jobs_started}
     end}
 end

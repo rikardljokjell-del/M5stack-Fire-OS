@@ -61,7 +61,8 @@ def validate_api(source, services, api_version="fire-lua-0.1"):
 
 
 HARNESS = r'''
-local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget = ...
+local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms = ...
+local sequence_index, next_input_ms = 1,16
 local compile, hook = load, debug.sethook
 local count, total, elapsed = 0, 0, 0
 local callback_ops, callback_work, peak_ops, peak_work = 0,0,0,0
@@ -266,7 +267,13 @@ for frame=1,frames do
   elapsed=elapsed+dt
   if elapsed>memory_ms then error("Runtime budget exceeded") end
   local suspend_update=false
-  if profile=="os_long_a" or profile=="os_long_b" or profile=="os_long_c" then
+  if sequence and #sequence>0 then
+    button=""
+    if sequence_index<=#sequence and elapsed>=next_input_ms then
+      button=sequence[sequence_index];sequence_index=sequence_index+1;next_input_ms=elapsed+interval_ms
+      if env.on_button then callback_phase="on_button";call(env.on_button,button,"pressed") end
+    end
+  elseif profile=="os_long_a" or profile=="os_long_b" or profile=="os_long_c" then
     -- Synthetic OS-owned gesture: raw state exists before ownership is claimed,
     -- but a consumed hold never becomes an application short-press callback.
     local selected=string.upper(string.sub(profile,-1))
@@ -328,6 +335,10 @@ return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,ma
 
 def simulate(request):
     source = request["main_lua"]
+    sequence=request.get("button_sequence",[])
+    interval=request.get("interval_ms",250)
+    if (not isinstance(sequence,list) or len(sequence)>32 or any(type(b) is not str or b not in {"A","B","C"} for b in sequence)
+            or type(interval) is not int or not 100<=interval<=1000):raise ValueError("Invalid bounded button sequence")
     if len(source.encode("utf-8")) > 100000:
         raise ValueError("Lua source too large")
     services = request["required_services"]
@@ -355,7 +366,7 @@ def simulate(request):
     factory=lua.execute((Path(__file__).parent/"data/hardware_sim.lua").read_text(encoding="utf-8")) if api_version=="fire-lua-0.2" else None
     result = lua.execute(HARNESS, source, ",".join(services), max_ms,
                          (max_ms+15)//16 if request.get("profile") else min(180, max_ms // 16), request.get("profile"),
-                         max(20000, max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory)
+                         max(20000, max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory,lua.table_from(sequence),interval)
     trace = []
     for i in range(1, len(result["trace"]) + 1):
         command = result["trace"][i]
@@ -371,6 +382,8 @@ def simulate(request):
             "max_callback_grid_pixels":result["max_callback_grid_pixels"],
             "hardware_simulated":api_version=="fire-lua-0.2","app_memory_peak":result["app_memory_peak"],"max_io_calls":hardware_metrics["max_io_calls"] if hardware_metrics else 0,
             "max_io_bytes":hardware_metrics["max_io_bytes"] if hardware_metrics else 0,"max_jobs":hardware_metrics["max_jobs"] if hardware_metrics else 0,
+            "io_calls":dict(hardware_metrics["calls"].items()) if hardware_metrics else {},
+            "jobs_started":dict(hardware_metrics["jobs_started"].items()) if hardware_metrics else {},
             "os_reserved_callbacks_suppressed":result["os_reserved_callbacks_suppressed"],
             "os_updates_suspended":result["os_updates_suspended"],"os_exited":result["os_exited"],"os_navigation":result["os_navigation"],
             "os_gesture_simulated":request.get("profile") in {"os_long_a","os_long_b","os_long_c","os_double"}}
