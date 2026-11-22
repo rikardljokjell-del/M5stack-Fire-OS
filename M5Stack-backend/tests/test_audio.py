@@ -122,7 +122,13 @@ class SlowTranscribe(MockProvider):
         await asyncio.sleep(60)
 
 
-async def test_empty_transcript_reports_measured_capture_gaps_without_inventing_words(tmp_path):
+@pytest.mark.parametrize("wall,seconds,gap,rate,expected", [
+    (5.0, 1.0, True, False, "ufullstendig"),
+    (2.8, 15.0, False, True, "Feil tidsforhold"),
+    (1.0, 1.1, False, False, "Ingen forståelig tale"),
+    (0.05, 0.5, False, False, "Ingen forståelig tale"),
+])
+async def test_empty_transcript_reports_measured_capture_timing_without_inventing_words(tmp_path, wall, seconds, gap, rate, expected):
     from fire_backend.audio import AudioManager
     from fire_backend.models import SessionStart
     from fire_backend.service import Backend
@@ -136,14 +142,17 @@ async def test_empty_transcript_reports_measured_capture_gaps_without_inventing_
         session = await service.start(SessionStart(device_id="fire-01", protocol_version="0.2", target="device",
             boot_id="boot-gaps", capabilities=CAPS), principal="fire-01")
         session.turn_id, session.activity = "turn-gaps", "processing"
-        session.audio_status = {"recording_wall_seconds": 5.0}
+        session.audio_status = {"recording_wall_seconds": wall}
         async def stream():
-            yield wav_data(seconds=1)
+            yield wav_data(seconds=seconds)
         await service.audio.receive(session, "turn-gaps", stream())
         await session.input_task
-        assert session.audio_status["capture_gap_suspected"] and session.audio_status["capture_fraction"] == 0.2
-        assert "ufullstendig" in session.last_error and session.state == "failed"
+        assert session.audio_status["capture_gap_suspected"] is gap
+        assert session.audio_status["capture_rate_suspected"] is rate
+        assert session.audio_status["capture_fraction"] == round(seconds/wall, 3)
+        assert expected in session.last_error and session.state == "failed"
         assert not session.history and not service.store.list("builds")
+        assert not list((tmp_path / "audio").glob("*.wav"))
     finally:
         await service.close()
 

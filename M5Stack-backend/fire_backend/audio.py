@@ -162,7 +162,8 @@ class AudioManager:
             wall = session.audio_status.get("recording_wall_seconds", 0)
             if wall:
                 metrics.update(recording_wall_seconds=wall, capture_fraction=round(metrics["duration_seconds"]/max(wall, 0.001), 3),
-                               capture_gap_suspected=wall > 0.5 and metrics["duration_seconds"] < wall * 0.6)
+                               capture_gap_suspected=wall > 0.5 and metrics["duration_seconds"] < wall * 0.6,
+                               capture_rate_suspected=wall > 0.5 and metrics["duration_seconds"] > max(wall * 1.6, wall + 0.75))
             self.store.reserve(len(data) + 2048)
             item = {"id": item_id, "session_id": session.id, "device_id": session.device_id,
                     "turn_id": turn_id, "sha256": digest, "status": "processing", **metrics,
@@ -201,6 +202,8 @@ class AudioManager:
                 item["status"] = "cancelled"
                 return
             if not text:
+                if item.get("capture_rate_suspected"):
+                    raise ValueError(f"Feil tidsforhold i mikrofonopptaket: {item['duration_seconds']:.1f} s lyd fra {item['recording_wall_seconds']:.1f} s opptak. Kontroller ADC-samplerate og WAV på FIRE.")
                 if item.get("capture_gap_suspected"):
                     raise ValueError(f"Opptaket ser ufullstendig ut: {item['duration_seconds']:.1f} s lyd fra {item['recording_wall_seconds']:.1f} s opptak. Kontroller kontinuerlig mikrofonopptak på FIRE.")
                 raise ValueError(f"Ingen forståelig tale i opptaket ({item.get('duration_seconds', item['samples']/16000):.1f} s). Trykk B, si en hel setning, og trykk B igjen.")

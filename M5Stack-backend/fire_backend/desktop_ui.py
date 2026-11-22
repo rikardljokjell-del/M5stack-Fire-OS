@@ -722,7 +722,11 @@ class DesktopUI:
                 "upload_missing": "Lydfilen kom ikke frem", "input_failed": "Opptaket kunne ikke tolkes",
                 "reply_failed": "Lydsvaret feilet; tekstsvaret er beholdt"}.get(audio.get("phase"), "")
             if audio_hint and audio.get("duration_seconds"):
-                audio_hint += f" · Opptak {audio['duration_seconds']:.1f} s"
+                audio_hint += f" · Lyd {audio['duration_seconds']:.1f} s"
+                if audio.get("recording_wall_seconds"):
+                    audio_hint += f" / opptakstid {audio['recording_wall_seconds']:.1f} s"
+                if audio.get("capture_rate_suspected") or audio.get("capture_gap_suspected"):
+                    audio_hint += " · Kontroller mikrofonens tidsforhold"
             self.pipeline_detail.configure(text=choice + " · " + workflow + ("\n" + detail if detail else "")
                                            + ("\n" + audio_hint if audio_hint else ""))
             device = next((d for d in self.snapshot["devices"] if d["id"] == session["device_id"]), {})

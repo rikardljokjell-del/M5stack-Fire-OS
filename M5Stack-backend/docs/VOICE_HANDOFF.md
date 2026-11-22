@@ -3,7 +3,57 @@
 Gjennomgått device-commit: `6d979894d6e04d7f46e538f6b5ef2a7188017600`.
 Backend-agenten endrer ingen device-filer og bygger/flasher ikke firmware.
 
-**Siste fysiske forsøk, etter DMA-commit 2ac854f:** brukeren får
+## Siste måling: 15 sekunders WAV fra 2,8 sekunders opptak
+
+Under feilsøkingen kom også `fad4294`: device-agenten erstatter I2S DMA med
+timerstyrt direkte ADC i egen task. Råskiftet nedenfor gjelder derfor den
+forrige DMA-implementasjonen og er fjernet i nyeste kode. Ny boot er observert,
+men det foreligger ennå ingen lydopplasting fra denne booten. Tidsforhold og
+forståelig tale må bekreftes på nytt; målingene nedenfor er fra før omstarten.
+
+Etter at driverstarten er rettet mottar backend WAV igjen. Fire påfølgende
+fysiske opplastinger har hver 240000 samples (15,000 s ved oppgitt 16000 Hz),
+mens listen_start → listen_stop målt på serveren tar henholdsvis 2,804,
+2,801, 2,815 og 2,763 s. Forholdet er 5,33–5,43. Siste opptak:
+AC-RMS 131,7, AC-peak 1136, DC 16, ingen registrert klipping, gain 8.
+OpenAI returnerer tom transkripsjon. Hele WAV-opplastingen mottas; det er
+ikke samme symptom som den tidligere manglende opplastingen.
+
+Dette er serverens eventintervall, ikke en måling av ADC-klokken. Synkroniser
+derfor med lokal capture-start/slutt i firmware. Dersom også lokal tid er
+omtrent 2,8 s, fylles 240000-samplebufferen med omtrent 86000 samples/s,
+selv om WAV-headeren sier 16000. Ikke rett dette ved vilkårlig å endre
+WAV-header eller strekke lyd i backend; mål faktisk klokke/slot-format,
+kontroller dupliserte samples og få 5 s opptak til å gi omtrent 80000
+sammenhengende, korrekt dekodede PCM-samples.
+
+GitHub-kode lest: `2367d00` flytter DMA-drenering til egen task. Dette
+retter den tidligere hovedløkke-begrensningen i kildekoden, men enhetens
+annonserte firmwareversjon inneholder ikke commit-ID, så backend kan ikke
+bevise at akkurat dette bygget kjørte i målingen.
+
+Et konkret ekstra kodeavvik å kontrollere: tasken bruker `raw[index] >> 4`
+før sentrering. ESP-IDF 4.4.3 dokumenterer ESP32 ADC type1 som 12 databits
+i **[11:0]** og kanal i **[15:12]**. Det offisielle legacy-I2S ADC-eksemplet
+maskerer de øvre fire bitene (`raw & 0x0fff`), fremfor å skifte data fire
+biter ned. Dagens skift taper fire signalbits og kan blande kanalinfo inn
+i signalet. Verifiser råformatet i den faktisk brukte driveren; logg kun
+numeriske kanal-/min-/maks-/rateverdier, ikke rå lyd eller hemmeligheter.
+
+Kilder: [ESP-IDF ADC type1](https://github.com/espressif/esp-idf/blob/v4.4.3/components/hal/include/hal/adc_types.h#L109-L114),
+[offisielt I2S ADC-eksempel](https://github.com/espressif/esp-idf/blob/v4.4.3/examples/peripherals/i2s/i2s_adc_dac/main/app_main.c#L158-L166).
+
+Backend viser nå både lydlengde og opptakstid i Aktivitet. Ved tom ASR og
+stort overskudd av samples kommer en egen melding om feil tidsforhold,
+fremfor å be brukeren gjenta samme setning. Målingen er diagnostikk:
+backend resampler ikke etter upresise nettverkstider og forkaster heller
+ikke en ellers gyldig transkripsjon bare på grunn av eventintervallet.
+22 relevante lydtester består, inkludert det konkrete 15 s / 2,8 s-tilfellet,
+vanlig tidsavvik og tilnærmet samtidige events. Rå WAV slettes etter behandling.
+
+## Tidligere blokkering: driverstart
+
+**Tidligere fysisk forsøk, etter DMA-commit 2ac854f:** brukeren fikk
 «Microphone capture unavailable». Denne strengen kommer fra
 FireOS::startAiRecording når firePrepareMicCapture feiler, før listen_start
 og WAV-opplasting. Logg hvilken ESP-IDF-operasjon som feiler og dens returkode;
@@ -11,7 +61,7 @@ undersøk særlig om M5Unified allerede eier I2S-porten. Dette er en mistanke
 fra kildelesing, ikke en målt driverfeilkode. Backend står klar og prøver ikke
 å omgå capture-feilen ved å fabrikere tale.
 
-DMA-endringen er et steg mot kontinuerlig capture, men updateAiAudio drenerer
+Den første DMA-endringen var et steg mot kontinuerlig capture, men updateAiAudio drenerte
 fortsatt bare 256 samples per hovedløkkekall. Etter at driveren starter må også
 forbrukerens throughput/ringbuffer verifiseres mot faktisk opptakstid. Ved
 vedvarende lav dreneringsrate trengs en egen task eller større, løpende drenering.
@@ -31,7 +81,7 @@ lydsvar og genererte/validerte `/apps/rgb-blink/` innenfor buttons/rgb-profilen.
 `python scripts/check_voice.py --live`; input der er eksplisitt AI-generert,
 ikke en påstått fysisk mikrofontest. Den endrer ikke den kjørende FIRE-sesjonen.
 
-## Målt blokkering: sammenhengende mikrofonopptak
+## Tidligere målt blokkering: sammenhengende mikrofonopptak
 
 WAV-opplasting når nå backend og passer format/størrelsesvalideringen.
 Men OpenAI finner ingen forståelig tale. Tidsmålinger fra de faktiske
