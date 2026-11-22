@@ -4,7 +4,7 @@ import contextlib
 import hashlib
 import time
 
-from .models import State, APP_EVENT_DEFAULTS
+from .models import State, APP_EVENT_DEFAULTS, CAPABILITY_DEFAULTS
 from .capabilities import require_audio_input
 from .storage import canonical, new_id
 
@@ -13,6 +13,9 @@ def begin_event(service, event):
     if event.protocol_version != "0.2":
         return None, None
     payload = event.model_dump()
+    if payload.get("capabilities"):
+        for name,default in CAPABILITY_DEFAULTS.items():
+            if payload["capabilities"].get(name)==default:payload["capabilities"].pop(name,None)
     for name, default in APP_EVENT_DEFAULTS.items():
         if payload.get(name) == default:
             payload.pop(name, None)
@@ -109,6 +112,9 @@ async def dispatch(service, session, event):
         return duplicate
     try:
         result = await handle(service, session, event)
+        if session.target == "device":
+            with contextlib.suppress(OSError,ValueError):
+                service.quality.feedback(session,event)
     except (ValueError, KeyError, PermissionError, FileNotFoundError) as error:
         if record:
             finish_event(service, record, {"error": type(error).__name__, "message": str(error)[:240]})
@@ -121,6 +127,8 @@ async def dispatch(service, session, event):
 
 async def handle(service, session, event):
     name = event.event
+    if name == "firmware_store_result":
+        return service.firmware.receipt(session,event)
     if name in {"app_list", "app_versions", "app_select", "app_deleted", "app_inventory"}:
         if session.target != "device" or session.protocol_version != "0.2":
             raise ValueError("App lifecycle requires a protocol-0.2 device session")
@@ -137,6 +145,10 @@ async def handle(service, session, event):
             raise PermissionError("Diagnostic package scope mismatch")
         case = service.quality.record(project_id=project["id"],package_id=package["id"],device_id=session.device_id,
             source_hash=package["manifest"]["checksum"],message=event.error_code+": "+(event.message or ""),provenance="device_diagnostic")
+        device=service.device_record(session)
+        if device.get("installed_package_id")==package["id"]:
+            device.update(last_failure_package_id=package["id"],last_failure_boot_id=session.boot_id)
+            service.store.put("devices",device["id"],device,critical=True)
         await service.emit(session,{"type":"repair_available","app_id":event.app_id,"package_id":package["id"],"case_id":case["id"]})
         return {"status":"recorded","case_id":case["id"]}
     if name == "session_stop":
@@ -167,11 +179,11 @@ async def handle(service, session, event):
         return {"install_id": (await service.offer_install(session, package))["id"]}
     if name in {"device_install_result", "app_started", "app_healthy", "app_failed", "app_stopped", "rollback_result"}:
         return await service.device_receipt(session, event)
-    if name in {"audio_playback_started", "audio_playback_finished"}:
+    if name in {"audio_playback_started", "audio_playback_finished", "audio_playback_failed"}:
         if event.turn_id in session.retired_turns:
             return {"status": "ignored", "reason": "retired_turn"}
-        await service.audio.playback(session, event)
-        return {"status": "recorded"}
+        outcome=await service.audio.playback(session, event)
+        return {"status": outcome or "recorded"}
     if name == "button":
         if not event.button or not event.action:
             raise ValueError("button and action are required")

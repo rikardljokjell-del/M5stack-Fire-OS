@@ -272,3 +272,34 @@ For PC-only sessions ready_to_run/run_result remain explicit pc_simulation.
 The JSON Schema in `contracts/device-event-v0.2.schema.json` defines field shapes;
 this document defines additional event-specific and stateful requirements. The
 backend validates both. Package/Lua contract: `LUA_API.md` and FIRE_DEVICE_CONTEXT.md.
+
+## Lightweight lifecycle and audio diagnostics
+
+Firmware SD storage is an additive, capability-gated contract:
+[FIRMWARE_STORAGE_HANDOFF.md](FIRMWARE_STORAGE_HANDOFF.md). It uses
+firmware_store_request/firmware_store_result and device-scoped binary download.
+It never authorizes flashing, and stored files never establish installed firmware.
+PC authoring and version deletion: [DESKTOP_APPS.md](DESKTOP_APPS.md).
+
+Existing install/start/healthy/stop/failure events and app_diagnostic may include
+optional diagnostics. Allowed phase values: load, init, update, on_button,
+install, start, stop, audio_download, audio_playback. Optional strict integer
+fields: elapsed_ms and frames (0..4294967295), callback_us (0..60000000),
+free_heap, min_free_heap, lua_bytes (0..16777216), source_bytes (0..100000).
+Unknown fields are rejected. Report transitions/errors only; no raw log file or
+per-frame reporting is needed. Retain original event, boot, session and package
+identity. Backend retains up to 100 lifecycle reports per device. app_healthy
+proves startup health only, not future bug-free execution.
+
+audio_playback_failed requires audio_id, turn_id and error_code, plus optional
+bounded message/diagnostics. Backend retires that clip and restores the SAME
+existing build_proposal. Text remains usable. A missing start acknowledgement
+times out after 35 seconds; a missing finish after at least 60 seconds. One
+audio_ready retry after 12 seconds is allowed only when no complete HTTP body
+has been sent. Server transfer completion is not proof of device receipt or
+audible playback. Late acknowledgements of retired clips are ignored.
+
+Local administrator POST /desktop/sessions/{id}/voice with {"test":true} plays
+a fixed speaker test; false repeats the last assistant reply. A connected idle
+session with an existing turn and advertised audio_output is required. Turn,
+app selection and proposal are retained; every replay has a new audio_id.

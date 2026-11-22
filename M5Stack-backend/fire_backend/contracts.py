@@ -7,6 +7,7 @@ from .models import DeviceEvent, Manifest, PROTOTYPE_SERVICES
 
 
 REQUIRED = {
+    "firmware_store_result": ["firmware_id","transfer_id","status"],
     "text": ["text"], "button": ["button", "action"], "build_confirm": ["proposal_id"],
     "run_confirm": ["package_id"], "device_install_result": ["install_id", "package_id", "status"],
     "install_retry": ["package_id"],
@@ -17,6 +18,7 @@ REQUIRED = {
     "app_select": ["app_mode"], "app_deleted": ["app_id"], "app_inventory": ["apps", "storage_ready", "complete"],
     "mode_select": ["conversation_mode"],
     "app_diagnostic": ["app_id", "package_id", "error_code"],
+    "audio_playback_failed": ["audio_id", "turn_id", "error_code"],
 }
 
 
@@ -47,6 +49,8 @@ def schemas():
     conditions.append({"if": {"properties": {"event": {"const": "device_install_result"}, "status": {"const": "ok"}}},
                        "then": {"required": ["archive_sha256"], "properties": {"archive_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}})
     event["allOf"] = conditions
+    conditions.append({"if":{"properties":{"event":{"const":"firmware_store_result"},"status":{"const":"ok"}}},
+                       "then":{"required":["sha256"],"properties":{"sha256":nonnull("sha256")}}})
     for event_name in ("app_versions", "app_select"):
         condition = {"event": {"const": event_name}}
         if event_name == "app_select":

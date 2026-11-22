@@ -1,5 +1,44 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
+Senere observasjon: tilkoblet FIRE rapporterer nå fire-os-0.2+storage-dev og
+firmware_storage=true, 4 MiB filgrense. Håndtrykk og Windows-status virker.
+Ingen fysisk firmwarefiloverføring er gjort: ferdig firmware.bin mangler på
+backend-PC-en, og den nye device-kilden/handoff er ennå ikke pushet til main.
+Se observasjonen øverst i FIRMWARE_STORAGE_HANDOFF.md. Annonsert støtte er
+ikke bevis for lagring på SD eller fysisk jevn skjerm.
+
+## PC-leveranse før siste deviceoppdatering
+
+254 tester bestått. Windows-UI er visuelt kontrollert: én rad per app, valg av
+Slangespill 0.1.3/0.1.2/0.1.1, separat PC-dialog samtidig med tilkoblet FIRE og
+egen firmwaremeny med rapportert kjørende versjon. Ingen brukerpakke er slettet.
+Lokal helsesjekk svarte 200 etter omstart. Ingen fysisk firmwarelagring er
+forsøkt: device annonserer ikke mottak til /firmware ennå. Instruks:
+[FIRMWARE_STORAGE_HANDOFF.md](FIRMWARE_STORAGE_HANDOFF.md).
+
+Release-v3 har fast tegneregel og sjekker for alle apper. Den lagrede
+Slangespill 0.1.3 avvises nå for tom update, som forklarer blanke mellomrammer
+med dagens sprite-host. Ny isolert ekte OpenAI-app passerte alle sju profiler.
+Fysisk jevn skjerm er ikke bevist av PC-testen; se
+[DISPLAY_QUALITY.md](DISPLAY_QUALITY.md). Eldre målinger nedenfor er historikk.
+
+## Siste måling: runtime og lydkvittering
+
+231 backendtester bestått. Isolert ekte OpenAI-reparasjon passerte release-v2
+med sju profiler; ingen brukerapp ble endret/installert av denne testen.
+Den fysisk avviste Slangespill 0.1.2-kilden avvises nå av per-callback-porten.
+Den native feilen var init callback budget exceeded, fulgt av Invalid Lua source.
+Device-kildens mislykkede start lukker VM uten å nullstille runtime-ready-flagget.
+Dette krever firmwareendring før nytt forsøk kan fungere pålitelig uten reboot.
+
+Backend har nå begrenset livssyklusfeedback, lydtransportmåling, watchdog,
+bevaring av tekst/forslag ved lydfeil og lokale Spill svar igjen/Test lyd-knapper.
+Siste FIRE-session var frakoblet under ferdigkontrollen. Ny fysisk lyd-/appflyt
+etter disse endringene er derfor ikke bekreftet. Se
+[konkret instruks til device-agenten](URGENT_RUNTIME_VOICE.md).
+
+Eldre målinger under er historikk, ikke en påstand om dagens firmwarestatus.
+
 Nyeste reparasjonsleveranse: 206 regresjonstester bestått; [APP_REPAIR_HANDOFF.md](APP_REPAIR_HANDOFF.md).
 Releaseporten bruker sju full-varighetsprofiler, automatisk feilkontekst og
 varige feil-/forholdsregler; gamle eller feilrapporterte pakker sperres for ny

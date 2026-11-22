@@ -13,6 +13,7 @@ from pathlib import Path
 from .models import Manifest
 from .storage import canonical
 from .app_names import app_id_for
+from .rendering import VISUAL_POLICY
 
 
 def sha256(data):
@@ -33,7 +34,7 @@ async def validate_release(app, store, build_id):
         results.append({"profile": profile, **{k:v for k,v in result.items() if k != "trace"}})
     if {"display", "rgb"}.intersection(app["required_services"]) and not sum(p["api_operations"] for p in results):
         raise ValueError("Release suite: app declares display/RGB but produces no visible output in any input profile")
-    return {**results[0], "profiles": results, "suite": "release-v1", "physical_verified": False,
+    return {**results[0], "profiles": results, "suite": "release-v3", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
             "native_numeric_parity": False}
 
 
@@ -133,6 +134,8 @@ class Builder:
         folder.mkdir(exist_ok=False)
         # Retained inputs allow revalidation/repackaging without another paid API call.
         context = context or self.context
+        if VISUAL_POLICY not in context:
+            context += VISUAL_POLICY
         request = {
             "summary": build["summary"], "context": context, "capabilities": capabilities,
             "base_package_id": project.get("latest_package"),

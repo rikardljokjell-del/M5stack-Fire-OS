@@ -89,7 +89,19 @@ def create_app(settings=None, provider=None):
     @app.middleware("http")
     async def request_limits(request, call_next):
         audio_upload = request.method == "POST" and re.fullmatch(r"/sessions/[a-z0-9_-]{1,64}/audio/[a-z0-9_-]{1,64}", request.url.path)
-        if audio_upload:
+        firmware_upload = request.method=="POST" and request.url.path=="/desktop/firmware"
+        if firmware_upload:
+            try:identity=principal(settings,request.headers.get("authorization"))
+            except PermissionError:return PlainTextResponse("Authentication required",status_code=401)
+            if (not settings.fire_desktop_enabled or identity!="admin" or not request.client or request.client.host not in {"127.0.0.1","::1","testclient"} or request.headers.get("origin")):
+                return PlainTextResponse("Local desktop only",status_code=403)
+            if request.headers.get("content-type","").split(";")[0]!="application/octet-stream":
+                return PlainTextResponse("Expected binary firmware",status_code=415)
+            from .firmware import MAX_FIRMWARE_BYTES
+            try:length=int(request.headers.get("content-length","0"))
+            except ValueError:return PlainTextResponse("Invalid Content-Length",status_code=400)
+            if length<0 or length>MAX_FIRMWARE_BYTES:return PlainTextResponse("Firmware too large",status_code=413)
+        elif audio_upload:
             # Authenticate BEFORE reading a large/chunked body. Only this exact
             # route bypasses the ordinary 8 KiB control-message limit.
             try:
@@ -144,20 +156,52 @@ def create_app(settings=None, provider=None):
         builds = service.store.list("builds")
         return {"sessions": sessions, "devices": service.store.list("devices"),
                 "builds": builds[-20:], "apps": service.app_library(),
+                "firmware":service.firmware.catalog(),
                 "physical_verified": False, "transport": service.reverse_tcp.status()}
 
     @app.post("/desktop/sessions/{session_id}/text", dependencies=[Depends(desktop_auth)])
     async def desktop_text(session_id: str, request: Request, service: Backend = Depends(backend)):
         session = service.session(session_id)
-        if session.target != "device" or not session.sockets:
+        if not session.desktop_device_id and (session.target != "device" or not session.sockets):
             raise Conflict("M5Stack må være tilkoblet før du sender tekst.")
         data = await request.json()
         if not isinstance(data, dict) or set(data) != {"text"}:
             raise HTTPException(422, "Expected text")
+        if not isinstance(data["text"],str) or not 1<=len(data["text"].strip())<=4000:
+            raise HTTPException(422,"Skriv 1–4000 tegn.")
+        if session.desktop_device_id:
+            if session.operation_task and not session.operation_task.done():raise Conflict("PC-samtalen behandler forrige melding.")
+            from .protocol import text_task
+            session.operation_task=asyncio.create_task(text_task(service,session,data["text"]))
+            return {"status":"accepted"}
         event = DeviceEvent(device_id=session.device_id, protocol_version=session.protocol_version,
                             event="text", event_id=new_id("desktop"), session_id=session.id,
                             boot_id=session.boot_id, text=data["text"])
         return await dispatch(service, session, event)
+
+    @app.post("/desktop/conversations", dependencies=[Depends(desktop_auth)])
+    async def desktop_conversation(request: Request, service: Backend = Depends(backend)):
+        data=await request.json()
+        if (not isinstance(data,dict) or "device_id" not in data or set(data)-{"device_id","project_id","base_package_id"}
+                or any(v is not None and (not isinstance(v,str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}",v)) for v in data.values())):
+            raise HTTPException(422,"Expected device_id and optional project/base version")
+        return service.snapshot(await service.desktop_conversation(**data))
+
+    @app.post("/desktop/firmware",dependencies=[Depends(desktop_auth)])
+    async def firmware_upload(request: Request,service: Backend=Depends(backend)):
+        async with asyncio.timeout(60):
+            return await service.firmware.upload(request.stream(),request.headers.get("x-firmware-name"),request.headers.get("x-firmware-version"))
+
+    @app.post("/desktop/firmware/{firmware_id}/send",dependencies=[Depends(desktop_auth)])
+    async def firmware_send(firmware_id: str,request: Request,service: Backend=Depends(backend)):
+        data=await request.json()
+        if not isinstance(data,dict) or set(data)!={"device_id"}:raise HTTPException(422,"Expected device_id")
+        return await service.firmware.send(firmware_id,data["device_id"])
+
+    @app.get("/firmware/{firmware_id}/download")
+    async def firmware_download(firmware_id: str,transfer_id: str,identity=Depends(auth),service: Backend=Depends(backend)):
+        path=service.firmware.download(firmware_id,transfer_id,identity)
+        return DeviceFileResponse(path,media_type="application/octet-stream",headers={"Cache-Control":"private, no-store"})
 
     @app.post("/desktop/sessions/{session_id}/install", dependencies=[Depends(desktop_auth)])
     async def desktop_install(session_id: str, request: Request, service: Backend = Depends(backend)):
@@ -179,6 +223,13 @@ def create_app(settings=None, provider=None):
                             session_id=session.id, boot_id=session.boot_id,
                             **({"conversation_mode": data["conversation_mode"]} if "conversation_mode" in data else {}))
         return await dispatch(service, session, event)
+
+    @app.post("/desktop/sessions/{session_id}/voice", dependencies=[Depends(desktop_auth)])
+    async def desktop_voice(session_id: str, request: Request, service: Backend = Depends(backend)):
+        data=await request.json()
+        if not isinstance(data,dict) or set(data)!={"test"} or type(data["test"]) is not bool:
+            raise HTTPException(422,"Expected test boolean")
+        return await service.audio.replay(service.session(session_id),test=data["test"])
 
     @app.post("/desktop/sessions/{session_id}/app", dependencies=[Depends(desktop_auth)])
     async def desktop_app(session_id: str, request: Request, service: Backend = Depends(backend)):
@@ -265,7 +316,8 @@ def create_app(settings=None, provider=None):
     @app.get("/audio/{audio_id}")
     async def audio_output(audio_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
         item, path = service.audio.clip(audio_id, identity)
-        return DeviceFileResponse(path, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Audio-Format": "pcm_s16le", "X-Audio-Sample-Rate": "24000"})
+        return DeviceFileResponse(path, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Audio-Format": "pcm_s16le", "X-Audio-Sample-Rate": "24000"},
+                                  completed=lambda stats:service.audio.download_result(audio_id,stats))
 
     @app.get("/projects")
     async def projects(identity=Depends(auth), service: Backend = Depends(backend)):
@@ -280,6 +332,11 @@ def create_app(settings=None, provider=None):
         authorize_project(service.store, item_id, identity)
         return service.quality.cases(item_id)
 
+    @app.get("/projects/{item_id}/feedback")
+    async def project_feedback(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
+        authorize_project(service.store,item_id,identity)
+        return [r for r in service.store.list("feedback") if r["project_id"]==item_id]
+
     @app.delete("/projects/{item_id}")
     async def delete(item_id: str, identity=Depends(auth), service: Backend = Depends(backend)):
         project = authorize_project(service.store, item_id, identity)
@@ -290,6 +347,12 @@ def create_app(settings=None, provider=None):
             raise Conflict(reason)
         service.delete_app_history(project)
         return {"status": "deleted"}
+
+    @app.delete("/projects/{item_id}/versions/{package_id}",dependencies=[Depends(desktop_auth)])
+    async def delete_version(item_id: str,package_id: str,service: Backend=Depends(backend)):
+        project=service.store.get("projects",item_id)
+        service.delete_app_version(project,package_id)
+        return {"status":"deleted","package_id":package_id}
 
     def scoped_build(service, item_id, identity):
         build = service.store.get("builds", item_id)

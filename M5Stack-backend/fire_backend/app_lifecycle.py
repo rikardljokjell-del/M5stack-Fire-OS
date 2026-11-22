@@ -118,6 +118,41 @@ class AppLifecycle:
                 self.store.put("devices", device["id"], device, critical=True)
         self.store.delete_project(project["id"])
 
+    def delete_app_version(self,project,package_id):
+        allowed,reason=self.backend_delete_check(project)
+        if not allowed:raise ValueError(reason)
+        versions=self.app_versions(project)
+        package=next((p for p in versions if p["id"]==package_id),None)
+        if not package:raise ValueError("Versjonen tilhører ikke denne appen.")
+        if len(versions)==1:
+            self.delete_app_history(project)
+            return
+        for device in self.store.list("devices"):
+            refs=[device.get(k) for k in ("current","previous","backup","installed_package_id","running_package_id")]
+            refs+=list(device.get("projects",{}).get(project["id"],{}).values())
+            if package_id in refs and device["id"]!=project.get("owner_device_id"):
+                raise ValueError("En annen enhet har fortsatt referanse til versjonen.")
+        # Validate recursive target before altering any pointers.
+        self.store.validate_build_directory(package["build_id"])
+        remaining=[p for p in versions if p["id"]!=package_id]
+        for key in ("current","previous","backup","candidate","last_simulated_package_id","simulated_previous","simulated_backup"):
+            if project.get(key)==package_id:project[key]=None
+        if project.get("latest_package")==package_id:
+            project["latest_package"]=remaining[0]["id"]
+            project["name"]=remaining[0]["manifest"]["name"]
+        self.store.put("projects",project["id"],project,critical=True)
+        for device in self.store.list("devices"):
+            for key in ("current","previous","backup","installed_package_id","running_package_id","last_failure_package_id"):
+                if device.get(key)==package_id:device[key]=None
+            for key,value in list(device.get("projects",{}).get(project["id"],{}).items()):
+                if value==package_id:device["projects"][project["id"]][key]=None
+            self.store.put("devices",device["id"],device,critical=True)
+        for saved in self.store.list("sessions"):
+            if saved["project_id"]==project["id"] and any(saved.get(k)==package_id for k in ("package_id","base_package_id","build_id")):
+                saved.update(package_id=None,base_package_id=None,build_id=None,proposal_id=None,repair_context=None,stopped=True)
+                self.store.put("sessions",saved["session_id"],saved,critical=True)
+        self.store.delete_version_files(package)
+
     def app_catalog(self, device_id):
         try:
             device = self.store.get("devices", device_id)
@@ -176,6 +211,7 @@ class AppLifecycle:
             session.project_id, session.base_package_id = project["id"], base["id"] if base else None
             session.app_mode, session.install_permitted = event.app_mode, True
             session.conversation_mode = "develop"
+            session.resume_project_aliases = []
             session.app_revision = device.get("app_change_counter", 0)
             session.package_id = session.build_id = session.proposal_id = session.turn_id = None
             session.summary, session.last_error, session.progress, session.history = "", "", {}, []

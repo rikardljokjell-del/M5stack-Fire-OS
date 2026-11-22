@@ -83,6 +83,11 @@ class DesktopUI:
         self.workspace = tk.StringVar(value=c.workspace)
         self.disk = tk.StringVar(value=str(c.max_workspace_mb))
         self.selected_session = tk.StringVar()
+        self.selected_version = tk.StringVar()
+        self.version_choices = {}
+        self.version_selection = {}
+        self.firmware_version = tk.StringVar()
+        self.firmware_rows = {}
         self.notice = tk.StringVar(value="Starter lokal backend …")
 
     def label(self, parent, text="", style=None, **kwargs):
@@ -95,7 +100,7 @@ class DesktopUI:
         tk.Label(nav, text="FIRE", bg=NAV, fg="#ff8456", font=("Segoe UI Black", 28)).pack(anchor="w", padx=25, pady=(27, 0))
         tk.Label(nav, text="BACKEND", bg=NAV, fg="white", font=("Segoe UI", 12)).pack(anchor="w", padx=27, pady=(0, 32))
         self.nav_buttons = {}
-        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Aktivitet", "Apper", "Innstillinger"):
+        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Aktivitet", "Apper", "Firmware", "Innstillinger"):
             button = tk.Button(nav, text=name, command=lambda n=name: self.show(n), anchor="w", relief="flat",
                                bg=NAV, fg="#c1ccd9", activebackground="#293b51", activeforeground="white",
                                font=("Segoe UI", 12), padx=25, pady=12, bd=0, cursor="hand2")
@@ -126,6 +131,7 @@ class DesktopUI:
         self.openai_page(self.pages["OpenAI"])
         self.activity_page(self.pages["Aktivitet"])
         self.apps_page(self.pages["Apper"])
+        self.firmware_page(self.pages["Firmware"])
         self.settings_page(self.pages["Innstillinger"])
         self.label(content, textvariable=self.notice, foreground=MUTED, wraplength=830).pack(anchor="w", pady=(14, 0))
         self.show("Oversikt")
@@ -261,11 +267,18 @@ class DesktopUI:
         ttk.Button(row, text="Oppdater", command=self.refresh_now).pack(side="left", padx=(8, 0))
         self.new_app_button = ttk.Button(row, text="Ny app", command=self.new_app)
         self.new_app_button.pack(side="left", padx=(8, 0))
+        self.pc_app_button=ttk.Button(row,text="Ny app på PC",command=self.new_pc_app)
+        self.pc_app_button.pack(side="left",padx=(8,0))
+        ttk.Button(page,text="Avslutt PC-samtalen",command=self.stop_pc_conversation).pack(anchor="e",pady=(0,4))
         row = ttk.Frame(page)
         row.pack(fill="x", pady=(0, 7))
         ttk.Button(row, text="Kun samtale", command=lambda: self.set_conversation("chat")).pack(side="left")
         ttk.Button(row, text="Lag/endre app", command=lambda: self.set_conversation("develop")).pack(side="left", padx=8)
         ttk.Button(row, text="Avbryt AI-svar", command=self.cancel_conversation).pack(side="left")
+        self.replay_voice_button=ttk.Button(row,text="Spill svar igjen",command=lambda:self.replay_voice(False))
+        self.replay_voice_button.pack(side="left",padx=8)
+        self.test_voice_button=ttk.Button(row,text="Test lyd",command=lambda:self.replay_voice(True))
+        self.test_voice_button.pack(side="left")
         self.session_detail = self.label(page, "Ingen FIRE tilkoblet ennå.", wraplength=810)
         self.session_detail.pack(anchor="w", pady=(0, 7))
         self.pipeline_detail = self.label(page, "", wraplength=810, foreground=MUTED)
@@ -291,14 +304,16 @@ class DesktopUI:
         self.logs.pack(fill="x", pady=(12, 0))
 
     def apps_page(self, page):
-        self.label(page, "App-pakker og mottatte installasjonskvitteringer", "Heading.TLabel").pack(anchor="w", pady=(0, 12))
+        top=ttk.Frame(page);top.pack(fill="x",pady=(0,8))
+        self.label(top, "Apper og versjoner", "Heading.TLabel").pack(side="left")
+        ttk.Button(top,text="Lag ny app med AI",command=self.new_pc_app,style="Accent.TButton").pack(side="right")
         self.label(page, "FIRE lagrer appen på SD-kortet i /apps/<app-ID>/.\n"
                    "Tabellen viser backendens pakker og enhetens siste kvitteringer, ikke en direktelesing av SD-kortet.",
                    "Muted.TLabel", wraplength=800).pack(anchor="w", pady=(0, 12))
         frame = ttk.Frame(page)
         frame.pack(fill="both", expand=True)
-        self.apps_table = ttk.Treeview(frame, columns=("name", "version", "device", "status"), show="headings", height=10)
-        for name, title, width in (("name", "App", 180), ("version", "Versjon", 75), ("device", "Enhet", 145), ("status", "Siste status", 210)):
+        self.apps_table = ttk.Treeview(frame, columns=("name", "version", "device", "status"), show="headings", height=7,selectmode="browse")
+        for name, title, width in (("name", "App", 180), ("version", "Versjoner", 85), ("device", "Enhet", 145), ("status", "Nyeste versjon", 210)):
             self.apps_table.heading(name, text=title)
             self.apps_table.column(name, width=width, minwidth=60)
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.apps_table.yview)
@@ -306,8 +321,13 @@ class DesktopUI:
         self.apps_table.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.apps_table.bind("<<TreeviewSelect>>", lambda _: self.render_app_detail())
+        version_row=ttk.Frame(page);version_row.pack(fill="x",pady=(10,0))
+        self.label(version_row,"Velg versjon").pack(side="left",padx=(0,12))
+        self.version_box=ttk.Combobox(version_row,textvariable=self.selected_version,state="readonly",width=42)
+        self.version_box.pack(side="left",fill="x",expand=True)
+        self.version_box.bind("<<ComboboxSelected>>",lambda _: self.choose_version())
         self.apps_detail = self.label(page, "Ingen app-pakker ennå. Beskriv appen under Aktivitet eller på FIRE.", wraplength=800)
-        self.apps_detail.pack(anchor="w", pady=16)
+        self.apps_detail.pack(anchor="w", pady=10)
         actions = ttk.Frame(page)
         actions.pack(anchor="w", pady=(0, 10))
         self.install_button = ttk.Button(actions, text="Installer på FIRE", command=self.install_saved, style="Accent.TButton")
@@ -315,8 +335,11 @@ class DesktopUI:
         self.edit_app_button = ttk.Button(actions, text="Endre valgt versjon", command=self.edit_saved)
         self.edit_app_button.pack(side="left", padx=8)
         ttk.Button(actions, text="Reparer valgt app", command=self.repair_saved).pack(side="left", padx=(0,8))
-        self.delete_app_button = ttk.Button(actions, text="Slett fra backend …", command=self.delete_saved)
+        deletion=ttk.Frame(page);deletion.pack(anchor="w",pady=(0,8))
+        self.delete_app_button=ttk.Button(deletion,text="Slett alle versjoner …",command=self.delete_saved)
         self.delete_app_button.pack(side="left")
+        self.delete_version_button=ttk.Button(deletion,text="Slett valgt versjon …",command=lambda:self.delete_saved(True))
+        self.delete_version_button.pack(side="left",padx=8)
         self.label(page, "Bruker lagret, testet pakke uten ny AI-generering. Appstart krever fortsatt A RUN / Bekreft kjøring.",
                    "Muted.TLabel", wraplength=800).pack(anchor="w")
         self.label(page, "PC-sletting tillates først når tilkoblet FIRE bekrefter at appen er borte.\n"
@@ -325,17 +348,46 @@ class DesktopUI:
 
     def render_app_detail(self):
         selected = self.apps_table.selection()
-        app = self.apps_rows.get(selected[0]) if selected else None
+        versions=sorted((a for a in self.apps_rows.values() if selected and a["project_id"]==selected[0]),key=lambda a:int(a["version"].split(".")[-1]),reverse=True)
+        self.version_choices={f"{a['version']} · {a['mode']}":a["package_id"] for a in versions}
+        self.version_box.configure(values=list(self.version_choices))
+        saved=self.version_selection.get(selected[0]) if selected else None
+        self.selected_version.set(next((label for label,pkg in self.version_choices.items() if pkg==saved),next(iter(self.version_choices),"")))
+        app=self.selected_app()
         if app:
             quality_hint = ("Sperret etter feil – bruk Reparer valgt app.\n" if app.get("quality",{}).get("blocked") else
-                            "Trenger utvidet test – bruk Reparer valgt app eller bygg ny versjon.\n" if app.get("validation_suite") != "release-v1" else "")
+                            "Trenger utvidet test – bruk Reparer valgt app eller bygg ny versjon.\n" if app.get("validation_suite") != "release-v3" else "")
             self.apps_detail.configure(text=f"{app['name']} · {app['version']} · {app['mode']}\n"
                 f"SD-mappe: {app['sd_path']}\nPakke: {app['package_id']}\n"
                 + quality_hint
                 + (app.get("delete_block_reason") or "FIRE har bekreftet at appen er borte; PC-historikken kan slettes."))
+        else:self.apps_detail.configure(text="Ingen app valgt.")
+
+    def selected_app(self):
+        return self.apps_rows.get(self.version_choices.get(self.selected_version.get()))
+
+    def choose_version(self):
+        app=self.selected_app()
+        if app:self.version_selection[app["project_id"]]=app["package_id"]
+        self.render_app_detail()
+
+    def new_pc_app(self):
+        self.work(lambda:self.runtime.desktop_conversation(self.device_id.get()),done=self.choose_pc_session,message="Starter AI-dialog på PC …")
+
+    def choose_pc_session(self,result):
+        self.snapshot["sessions"]=[s for s in self.snapshot["sessions"] if s["session_id"]!=result["session_id"]]+[{**result,"online":False,"history":[]}]
+        self.selected_session.set(self.session_name(result))
+        self.show("Aktivitet")
+        self.refresh_now()
+
+    def stop_pc_conversation(self):
+        session=self.session()
+        if session and session.get("desktop_device_id"):
+            self.work(lambda:self.runtime.stop_conversation(session["session_id"]),message="Avslutter PC-samtalen …")
 
     def new_app(self):
         session = self.session()
+        if session and session.get("desktop_device_id"):return self.new_pc_app()
         if session:
             self.work(lambda: self.runtime.select_app(session["session_id"], "new"),
                       done=lambda _: self.show("Aktivitet"), message="Velger ny app …")
@@ -352,41 +404,69 @@ class DesktopUI:
             self.work(lambda: self.runtime.conversation(session["session_id"], action="cancel"),
                       message="Avbryter AI-svaret …")
 
-    def edit_saved(self):
-        selected = self.apps_table.selection()
-        session = self.session()
-        app = self.apps_rows.get(selected[0]) if selected else None
-        if app and session:
-            self.work(lambda: self.runtime.select_app(session["session_id"], "update", project_id=app["project_id"],
-                                                      base_package_id=app["package_id"]),
-                      done=lambda _: self.show("Aktivitet"), message="Velger app og basisversjon …")
+    def replay_voice(self,test=False):
+        session=self.session()
+        if session:self.work(lambda:self.runtime.voice(session["session_id"],test),message="Tester talesvar …" if test else "Spiller svaret på nytt …")
 
-    def delete_saved(self):
-        selected = self.apps_table.selection()
-        app = self.apps_rows.get(selected[0]) if selected else None
+    def edit_saved(self):
+        app=self.selected_app()
+        if app and app.get("device_id"):
+            self.work(lambda:self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"]),
+                      done=self.choose_pc_session,message="Åpner valgt versjon i AI-dialog på PC …")
+
+    def delete_saved(self,only_version=False):
+        app=self.selected_app()
         if not app or not app.get("can_delete_backend") or self.busy:
             return
         count = sum(a["project_id"] == app["project_id"] for a in self.apps_rows.values())
-        if messagebox.askyesno("Slett apphistorikk fra PC", f"Slette «{app['name']}» og alle {count} lagrede versjoner fra PC?\n\n"
+        subject=f"versjon {app['version']} av «{app['name']}»" if only_version else f"«{app['name']}» og alle {count} lagrede versjoner"
+        if messagebox.askyesno("Slett fra PC", f"Slette {subject} fra PC?\n\n"
                               "FIRE har bekreftet at appen er borte. PC-slettingen kan ikke angres.", parent=self.root):
-            self.work(lambda: self.runtime.delete_app(app["project_id"]), message="Sletter apphistorikken fra PC …")
+            self.work(lambda:self.runtime.delete_version(app["project_id"],app["package_id"]) if only_version else self.runtime.delete_app(app["project_id"]),message="Sletter fra PC …")
 
     def repair_saved(self):
-        selected = self.apps_table.selection()
-        session = self.session()
-        app = self.apps_rows.get(selected[0]) if selected else None
-        if app and session:
+        app=self.selected_app()
+        if app and app.get("device_id"):
             def repair():
-                self.runtime.select_app(session["session_id"], "update", project_id=app["project_id"], base_package_id=app["package_id"])
-                return self.runtime.send_text(session["session_id"], "Undersøk appen og reparer feilen. Behold funksjonene.")
-            self.work(repair, done=lambda _: self.show("Aktivitet"), message="Undersøker valgt app automatisk …")
+                result=self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"])
+                self.runtime.send_text(result["session_id"],"Undersøk appen og reparer feilen. Behold funksjonene.")
+                return result
+            self.work(repair,done=self.choose_pc_session,message="Undersøker valgt app automatisk …")
 
     def install_saved(self):
-        selected = self.apps_table.selection()
-        session = self.session()
-        if selected and session:
-            self.work(lambda: self.runtime.install_saved(session["session_id"], selected[0]),
+        app=self.selected_app()
+        session=next((s for s in self.snapshot["sessions"] if app and s["target"]=="device" and s.get("online") and s["device_id"]==app["device_id"]),None)
+        if app and session:
+            self.work(lambda: self.runtime.install_saved(session["session_id"], app["package_id"]),
                       message="Sender valgt app til FIRE for installasjon …")
+
+    def firmware_page(self,page):
+        self.label(page,"Firmware på FIRE", "Heading.TLabel").pack(anchor="w",pady=(0,10))
+        self.firmware_status=self.label(page,"Venter på enhetsstatus …",wraplength=800)
+        self.firmware_status.pack(anchor="w",pady=(0,14))
+        self.label(page,"Firmwarefiler på PC", "Heading.TLabel").pack(anchor="w",pady=(0,8))
+        self.firmware_table=ttk.Treeview(page,columns=("name","version","size","status"),show="headings",height=7,selectmode="browse")
+        for name,title,width in (("name","Fil",220),("version","Versjon",140),("size","Størrelse",90),("status","SD-overføring",240)):
+            self.firmware_table.heading(name,text=title);self.firmware_table.column(name,width=width,minwidth=60)
+        self.firmware_table.pack(fill="both",expand=True)
+        grid=ttk.Frame(page);grid.pack(fill="x",pady=10)
+        self.field(grid,0,"Versjon / byggnavn",self.firmware_version)
+        row=ttk.Frame(page);row.pack(fill="x",pady=8)
+        ttk.Button(row,text="Legg til firmware.bin …",command=self.upload_firmware,style="Accent.TButton").pack(side="left")
+        self.firmware_send_button=ttk.Button(row,text="Send valgt fil til /firmware",command=self.send_firmware)
+        self.firmware_send_button.pack(side="left",padx=8)
+        self.label(page,"Filer lagres på SD-kortet i /firmware. En lagret fil er ikke installert firmware.\n"
+                   "Installert versjon over vises fra FIREs egen tilkoblingsmelding. Overføring starter ingen flashing.","Muted.TLabel",wraplength=800).pack(anchor="w",pady=10)
+
+    def upload_firmware(self):
+        path=filedialog.askopenfilename(parent=self.root,title="Velg ESP32 firmware.bin",filetypes=[("ESP32 firmware","*.bin")])
+        if not path:return
+        version=self.firmware_version.get().strip() or Path(path).stem
+        self.work(lambda:self.runtime.upload_firmware(path,version),message="Legger firmwarefilen til på PC …")
+
+    def send_firmware(self):
+        selected=self.firmware_table.selection()
+        if selected:self.work(lambda:self.runtime.send_firmware(selected[0],self.device_id.get()),message="Sender firmwarefil til SD-kortet …")
 
     def settings_page(self, page):
         grid = ttk.Frame(page)
@@ -603,13 +683,13 @@ class DesktopUI:
 
     @staticmethod
     def session_name(session):
-        return f"{session['device_id']}  ·  {session['session_id']}"
+        return f"PC-dialog · {session['desktop_device_id']} · {session['session_id'][-6:]}" if session.get("desktop_device_id") else f"FIRE · {session['device_id']}"
 
     def send_text(self):
         session = self.session()
         text = self.prompt.get("1.0", "end").strip()
         if not session or not text or len(text) > 4000:
-            self.notice.set("Velg en tilkoblet FIRE og skriv 1–4000 tegn.")
+            self.notice.set("Velg en PC-dialog eller tilkoblet FIRE og skriv 1–4000 tegn.")
             return
         self.work(lambda: self.runtime.send_text(session["session_id"], text), message="Sender tekst til FIRE-samtalen …")
 
@@ -679,7 +759,7 @@ class DesktopUI:
         self.summary_labels["api"].configure(text=mode + ("\nNøkkel lagret" if self.key_saved else "\nNøkkel mangler"))
         sessions = [s for s in self.snapshot["sessions"] if s["target"] == "device" and s.get("online") and ready]
         self.summary_labels["device"].configure(text=f"{len(sessions)} tilkoblet" if sessions else "Venter på FIRE")
-        choices = [self.session_name(s) for s in sessions]
+        choices = [self.session_name(s) for s in self.snapshot["sessions"] if ready and (s.get("desktop_device_id") or s["target"]=="device" and s.get("online"))]
         self.session_box.configure(values=choices)
         if self.selected_session.get() not in choices:
             self.selected_session.set(choices[0] if choices else "")
@@ -710,31 +790,39 @@ class DesktopUI:
             selected = self.apps_table.selection()
             self.apps_table.delete(*self.apps_table.get_children())
             self.apps_rows = rows
-            for app in apps:
+            groups={}
+            for app in apps:groups.setdefault(app["project_id"],[]).append(app)
+            for project_id,versions in sorted(groups.items(),key=lambda item:item[1][0]["name"].casefold()):
+                app=max(versions,key=lambda a:int(a["version"].split(".")[-1]))
                 status = ("Slettet/borte fra FIRE" if app.get("device_presence") in {"deleted", "missing"} else
                           "Sperret etter feil" if app.get("quality",{}).get("blocked") else
                           "Kjører (kvittert)" if app["running"] else "Tidligere kjøring bekreftet" if app["current_healthy"] else
                           "Installert (kvittert)" if app["installed_receipt"] else
                           "Tidligere installert; SD ukjent" if app.get("had_install_receipt") else "Testet på PC; ikke installert")
-                self.apps_table.insert("", "end", iid=app["package_id"], values=(app["name"], app["version"], app.get("device_id") or "PC-simulering", status))
-            if selected and selected[0] in rows:
+                self.apps_table.insert("", "end", iid=project_id, values=(app["name"], len(versions), app.get("device_id") or "PC-simulering", app["version"]+" · "+status))
+            if selected and selected[0] in groups:
                 self.apps_table.selection_set(selected[0])
-            elif apps:
-                self.apps_table.selection_set(apps[-1]["package_id"])
+            elif groups:
+                self.apps_table.selection_set(next(iter(groups)))
             self.render_app_detail()
         idle_for_text = session and session["state"] not in {"building", "testing", "running", "starting", "stopping", "rollback_pending"}
-        selected = self.apps_table.selection()
-        app = self.apps_rows.get(selected[0]) if selected else None
+        app=self.selected_app()
         choice_idle = idle_for_text and session["state"] != "processing" and session.get("activity", "idle") == "idle"
-        can_install = choice_idle and app and app.get("device_id") == session["device_id"]
-        deliverable = app and not app.get("quality",{}).get("blocked") and app.get("validation_suite") == "release-v1"
+        physical=next((s for s in sessions if app and s["device_id"]==app.get("device_id")),None)
+        can_install=physical and physical["state"] not in {"building","testing","processing","running","starting","stopping","rollback_pending"} and physical.get("activity","idle")=="idle"
+        deliverable = app and not app.get("quality",{}).get("blocked") and app.get("validation_suite") == "release-v3"
         self.install_button.configure(state="normal" if can_install and deliverable and not self.busy else "disabled")
-        self.edit_app_button.configure(state="normal" if can_install and not self.busy else "disabled")
+        self.edit_app_button.configure(state="normal" if ready and app and app.get("device_id") and not self.busy else "disabled")
+        self.pc_app_button.configure(state="normal" if ready and not self.busy else "disabled")
+        for button in (self.replay_voice_button,self.test_voice_button):
+            button.configure(state="normal" if session and session["target"]=="device" and session.get("online") and not self.busy else "disabled")
         self.new_app_button.configure(state="normal" if choice_idle and not self.busy else "disabled")
         self.delete_app_button.configure(state="normal" if ready and app and app.get("can_delete_backend") and not self.busy else "disabled")
+        self.delete_version_button.configure(state="normal" if ready and app and app.get("can_delete_backend") and not self.busy else "disabled")
         self.send_button.configure(state="normal" if choice_idle and session.get("install_permitted", True) and not self.busy else "disabled")
         self.build_button.configure(state="normal" if session and session.get("install_permitted", True) and session["state"] == "awaiting_build_confirmation" and session.get("proposal_id") and not self.busy else "disabled")
-        self.run_button.configure(state="normal" if session and session["state"] == "installed" and session.get("package_id") and not self.busy else "disabled")
+        self.run_button.configure(text="Testkjøring på PC" if session and session.get("desktop_device_id") else "Bekreft kjøring",state="normal" if session and session["state"] in ({"ready_to_run"} if session.get("desktop_device_id") else {"installed"}) and session.get("package_id") and not self.busy else "disabled")
+        self.render_firmware(ready)
         if session:
             workflow = {"idle": "Klar for tale eller tekst", "listening": "Tar opp tale på FIRE …", "processing": "Tolker bestillingen …",
                         "clarification_needed": "Svar på spørsmålet med et nytt opptak eller tekst",
@@ -755,7 +843,8 @@ class DesktopUI:
                 "generating_reply": "Lager AI-lydsvar …", "reply_ready": "Lydsvaret er klart for FIRE",
                 "playing": "FIRE spiller av lydsvaret", "played": "FIRE har kvittert for avspilling",
                 "upload_missing": "Lydfilen kom ikke frem", "input_failed": "Opptaket kunne ikke tolkes",
-                "reply_failed": "Lydsvaret feilet; tekstsvaret er beholdt"}.get(audio.get("phase"), "")
+                "reply_failed": "Lydsvaret feilet; tekstsvaret er beholdt",
+                "playback_failed": "Avspilling mangler/feilet på FIRE; tekst og forslag er beholdt"}.get(audio.get("phase"), "")
             if audio.get("phase") == "retry":
                 audio_hint = "Klar for nytt opptak · trykk B"
             if audio_hint and audio.get("duration_seconds"):
@@ -770,16 +859,41 @@ class DesktopUI:
             device = next((d for d in self.snapshot["devices"] if d["id"] == session["device_id"]), {})
             self.session_detail.configure(text=f"Status: {session['state']}  ·  Installert: {device.get('installed_package_id') or '–'}\n"
                                                 f"Kjører: {device.get('running_package_id') or '–'}  ·  Fysisk test: ikke bekreftet")
+            if session.get("desktop_device_id"):
+                self.session_detail.configure(text="PC-dialog for "+session["desktop_device_id"]+" · Enheten kan være frakoblet. Installer den ferdige versjonen under Apper.")
             history = "\n\n".join(("Du: " if h.get("role") == "user" else "FIRE: ") + str(h.get("content", "")) for h in session.get("history", []))
             progress = session.get("progress", {})
             self.progress["value"] = progress.get("progress", 0)
             self.set_text(self.history, history or "Skriv hva appen skal gjøre. Backend gir et forslag før bygging.")
         else:
             self.pipeline_detail.configure(text="")
-            self.session_detail.configure(text="Ingen FIRE tilkoblet ennå. Åpne AI Developer på enheten etter konfigurering.")
-            self.set_text(self.history, "Venter på enheten. Tilkoblingsverdiene finner du under M5Stack.")
+            self.session_detail.configure(text="Start Ny app på PC for AI-dialog, eller åpne AI Developer på FIRE.")
+            self.set_text(self.history, "Velg Ny app på PC for å lage apper, også uten en tilkoblet FIRE.")
             self.progress["value"] = 0
         self.set_text(self.logs, self.runtime.logs.text() if self.runtime.logs else "Backend-loggen vises her etter oppstart.")
+
+    def render_firmware(self,ready):
+        device=next((d for d in self.snapshot["devices"] if d["id"]==self.device_id.get()),{})
+        caps=device.get("capabilities") or {}
+        online=ready and device.get("online")
+        version=caps.get("firmware_version","Ukjent")
+        support=online and caps.get("firmware_storage",False)
+        self.firmware_status.configure(text="Installert versjon ("+("rapportert av tilkoblet FIRE" if online else "sist rapportert; FIRE er frakoblet")+"): "+version+"\n"+
+            ("Mottak til /firmware er tilgjengelig." if support else "Denne enhetsversjonen kan ikke motta firmwarefiler ennå. Device-agenten må legge til SD-mottak; se GitHub-instruksen."))
+        firmware=self.snapshot.get("firmware",{})
+        jobs=firmware.get("transfers",[])
+        view=[]
+        for item in firmware.get("files",[]):
+            job=next((j for j in jobs if j["firmware_id"]==item["id"] and j["device_id"]==self.device_id.get()),{})
+            status={"stored":"Lagret i /firmware (kvittert)","pending":"Overfører …","failed":"Overføring feilet","expired":"Tidsavbrudd","unknown":"Ukjent etter omstart"}.get(job.get("status"),"Kun lagret på PC")
+            view.append((item["id"],item["filename"],item["version"],f"{item['size_bytes']/1024:.0f} KB",status))
+        if view!=getattr(self,"firmware_view",None):
+            selected=self.firmware_table.selection();self.firmware_view=view
+            self.firmware_table.delete(*self.firmware_table.get_children())
+            for item_id,*values in view:self.firmware_table.insert("","end",iid=item_id,values=values)
+            if selected and selected[0] in {v[0] for v in view}:self.firmware_table.selection_set(selected[0])
+            elif view:self.firmware_table.selection_set(view[0][0])
+        self.firmware_send_button.configure(state="normal" if support and view and not self.busy else "disabled")
 
     def close(self):
         if self.closing:

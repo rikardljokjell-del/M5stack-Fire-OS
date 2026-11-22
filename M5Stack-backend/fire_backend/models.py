@@ -46,7 +46,7 @@ class GeneratedApp(StrictModel):
     @classmethod
     def short_name(cls, value):
         if not value.strip() or any(ord(c) < 32 for c in value):
-            raise ValueError("Appnavnet må være kort, lesbart og uten kontrolltegn")
+            raise ValueError("Appnavnet mÃ¥ vÃ¦re kort, lesbart og uten kontrolltegn")
         return " ".join(value.split())
 
     @field_validator("required_services")
@@ -109,6 +109,8 @@ class Capabilities(StrictModel):
     audio_input: bool = False
     audio_output: bool = False
     firmware_version: str = Field(default="unknown", max_length=64)
+    firmware_storage: bool = Field(default=False,strict=True)
+    firmware_max_bytes: int = Field(default=4194304,ge=1024,le=4194304,strict=True)
 
     @field_validator("services")
     @classmethod
@@ -141,14 +143,31 @@ class DeviceApp(StrictModel):
 # Excluding absent extension defaults keeps pre-extension event replay hashes
 # compatible with persisted protocol-0.2 events.
 APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
-                      "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None}
+                      "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
+                      "firmware_id":None,"transfer_id":None,"sha256":None}
+CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304}
+
+
+class DeviceDiagnostics(StrictModel):
+    phase: Literal["load","init","update","on_button","install","start","stop","audio_download","audio_playback"] | None = None
+    elapsed_ms: int | None = Field(default=None,ge=0,le=4294967295,strict=True)
+    callback_us: int | None = Field(default=None,ge=0,le=60000000,strict=True)
+    free_heap: int | None = Field(default=None,ge=0,le=16777216,strict=True)
+    min_free_heap: int | None = Field(default=None,ge=0,le=16777216,strict=True)
+    lua_bytes: int | None = Field(default=None,ge=0,le=16777216,strict=True)
+    source_bytes: int | None = Field(default=None,ge=0,le=100000,strict=True)
+    frames: int | None = Field(default=None,ge=0,le=4294967295,strict=True)
 
 
 class DeviceEvent(StrictModel):
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result"]
     conversation_mode: Literal["chat", "develop"] | None = None
+    diagnostics: DeviceDiagnostics | None = None
+    firmware_id: str | None = Field(default=None,pattern=ID_PATTERN)
+    transfer_id: str | None = Field(default=None,pattern=ID_PATTERN)
+    sha256: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
     app_mode: Literal["new", "update"] | None = None
     app_id: str | None = Field(default=None, pattern=ID_PATTERN)
     base_package_id: str | None = Field(default=None, pattern=ID_PATTERN)
@@ -200,11 +219,15 @@ class DeviceEvent(StrictModel):
                 "listen_start": ("turn_id",), "listen_stop": ("turn_id",),
                 "app_diagnostic": ("app_id", "package_id", "error_code"),
                 "audio_playback_started": ("audio_id", "turn_id"), "audio_playback_finished": ("audio_id", "turn_id"),
+                "audio_playback_failed": ("audio_id", "turn_id", "error_code"),
+                "firmware_store_result": ("firmware_id","transfer_id","status"),
             }
             if any(not getattr(self, name) for name in required.get(self.event, ())):
                 raise ValueError("Missing event-specific fields")
             if self.event == "device_install_result" and self.status == "ok" and not self.archive_sha256:
                 raise ValueError("Successful installation requires archive_sha256")
+            if self.event == "firmware_store_result" and self.status == "ok" and not self.sha256:
+                raise ValueError("Stored firmware requires sha256")
             if self.event == "app_stopped" and not self.stop_id and self.reason not in {"completed", "user_exit", "runtime_limit"}:
                 raise ValueError("Natural stop requires reason")
             if self.event == "app_select":

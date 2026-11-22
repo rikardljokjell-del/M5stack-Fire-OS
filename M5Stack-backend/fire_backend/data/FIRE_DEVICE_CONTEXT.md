@@ -56,6 +56,18 @@ that input/output path has been physically tested. Backend audio enablement alon
 does not grant hardware support. Do not fabricate a transcript or a spoken reply.
 
 ## Lua lifecycle, limits and OS ownership
+Mandatory display model: FireOS::drawLuaApp clears the OFFSCREEN sprite to black
+before EVERY update. Previous drawings do not persist. Render the entire scene,
+including static text, on every update, also while waiting/paused/game-over.
+Separate simulation ticks from unconditional rendering; never early-return before
+drawing. on_button only changes state. At most one clear before drawing; no
+clear after drawing. One completed sprite is presented by OS, never by Lua.
+Full redraw in one offscreen frame is safe; empty intermediate frames are not.
+Keep text readable and within a conservative 6-pixel-per-byte by 8-pixel-high
+single-line footprint; keep full shapes on screen. Simplify the complete scene
+to meet budgets instead of splitting its rendering across updates. No sprite,
+flush, swap or fillRect APIs are exposed to Lua. This rule applies to ALL apps.
+
 Define init() and update(dt_ms); optional on_button(button, action). Use local
 state, short returning callbacks, bounded tables and simple math. Never create
 your own event loop. Firmware owns Wi-Fi/BLE/SD/IMU/audio/RGB and UI scheduling.

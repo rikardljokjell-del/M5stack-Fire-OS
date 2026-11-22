@@ -26,7 +26,7 @@ class Store:
         self.redactor = redactor
         self.max_bytes = max_bytes
         self.failure_reserve = min(65536, max_bytes // 8)
-        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio", "quality"):
+        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio", "quality", "feedback"):
             (self.root / name).mkdir(parents=True, exist_ok=True)
 
     def path(self, group: str, item_id: str, suffix=".json") -> Path:
@@ -93,6 +93,27 @@ class Store:
         for case in self.list("quality"):
             if case.get("project_id") == project_id:
                 self.path("quality", case["id"]).unlink(missing_ok=True)
+        for report in self.list("feedback"):
+            if report.get("project_id") == project_id:
+                self.path("feedback",report["id"]).unlink(missing_ok=True)
+
+    def validate_build_directory(self,build_id):
+        folder=self.path("builds",build_id,"").resolve()
+        if folder.parent!=(self.root/"builds").resolve():raise ValueError("Unsafe build directory")
+        folder.relative_to((self.root/"builds").resolve())
+        return folder
+
+    def delete_version_files(self,package):
+        folder=self.validate_build_directory(package["build_id"])
+        self.path("packages",package["id"]).unlink(missing_ok=True)
+        self.path("packages",package["id"],".zip").unlink(missing_ok=True)
+        self.path("builds",package["build_id"]).unlink(missing_ok=True)
+        self.path("logs",package["build_id"],".log").unlink(missing_ok=True)
+        if folder.exists():shutil.rmtree(folder)
+        for group in ("quality","feedback","commands"):
+            for record in self.list(group):
+                if record.get("package_id")==package["id"] or record.get("build_id")==package["build_id"]:
+                    self.path(group,record["id"]).unlink(missing_ok=True)
 
     def recover(self):
         for project in self.list("projects"):

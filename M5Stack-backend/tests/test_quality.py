@@ -40,7 +40,7 @@ async def test_release_gate_catches_late_held_button_and_jitter_paths(tmp_path,c
 
 async def test_until_exit_keeps_bounded_test_horizon_and_detects_late_failure(tmp_path):
     store=Store(tmp_path,Redactor(),10_000_000)
-    source="local elapsed=0 function init() end function update(dt) elapsed=elapsed+dt fire.display.clear(0) if elapsed>11000 then fire.display.circle(400,0,1,1) end end"
+    source="local elapsed=0 function init() end function update(dt) elapsed=elapsed+dt fire.display.circle(20,20,5,2016) if elapsed>11000 then fire.display.circle(400,0,1,1) end end"
     app={"main_lua":source,"required_services":["display"],"max_runtime_ms":10000}
     assert (await validate_release(app,store,"case-legacy"))["elapsed_ms"]==10000
     with pytest.raises(ValueError,match="Release profile idle"):
@@ -76,7 +76,7 @@ async def test_repair_uses_selected_source_without_dialog_questions_and_keeps_au
         new=service.store.get("packages",session.package_id)
         assert new["manifest"]["id"]==old["manifest"]["id"] and new["manifest"]["version"]=="0.1.2"
         assert provider.previous and "function update" in provider.previous
-        assert new["validation"]["suite"]=="release-v1" and not new.get("quality",{}).get("blocked")
+        assert new["validation"]["suite"]=="release-v3" and not new.get("quality",{}).get("blocked")
         assert original==service.store.path("packages",old["id"],".zip").read_bytes()
         assert any(c.get("candidate_package_id")==new["id"] for c in service.quality.cases(session.project_id))
         with pytest.raises(ValueError,match="identical"):

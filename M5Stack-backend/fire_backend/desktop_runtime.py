@@ -148,6 +148,9 @@ class DesktopRuntime:
     def conversation(self, session_id, **values):
         return self.request("POST", f"/desktop/sessions/{session_id}/conversation", json=values)
 
+    def voice(self,session_id,test=False):
+        return self.request("POST",f"/desktop/sessions/{session_id}/voice",json={"test":test})
+
     def install_saved(self, session_id, package_id):
         return self.request("POST", f"/desktop/sessions/{session_id}/install", json={"package_id": package_id})
 
@@ -156,6 +159,26 @@ class DesktopRuntime:
 
     def delete_app(self, project_id):
         return self.request("DELETE", f"/projects/{project_id}")
+
+    def delete_version(self,project_id,package_id):
+        return self.request("DELETE",f"/projects/{project_id}/versions/{package_id}")
+
+    def desktop_conversation(self,device_id,**values):
+        return self.request("POST","/desktop/conversations",json={"device_id":device_id,**values})
+
+    def stop_conversation(self,session_id):
+        return self.request("POST","/session/stop",json={"session_id":session_id})
+
+    def upload_firmware(self,path,version):
+        path=Path(path)
+        from .firmware import MAX_FIRMWARE_BYTES
+        if path.stat().st_size>MAX_FIRMWARE_BYTES:raise ValueError("Velg en firmware.bin på maks 4 MB.")
+        # Header names/versions are ASCII to avoid ambiguous transport encoding.
+        return self.request("POST","/desktop/firmware",content=path.read_bytes(),headers={
+            "Content-Type":"application/octet-stream","X-Firmware-Name":path.name,"X-Firmware-Version":version})
+
+    def send_firmware(self,firmware_id,device_id):
+        return self.request("POST",f"/desktop/firmware/{firmware_id}/send",json={"device_id":device_id})
 
     def confirm(self, session_id, kind, item_id):
         field = "proposal_id" if kind == "build" else "package_id"

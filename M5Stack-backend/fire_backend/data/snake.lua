@@ -11,14 +11,7 @@ function on_button(button, action)
   if button == "A" then dx,dy = dy,-dx end
   if button == "C" then dx,dy = -dy,dx end
 end
-function update(dt_ms)
-  elapsed = elapsed + dt_ms
-  if not alive then
-    fire.display.text(80,110,"Game over",65535)
-    return
-  end
-  if elapsed < 160 then return end
-  elapsed = 0
+local function step()
   local head = {x=(snake[1].x+dx)%20,y=(snake[1].y+dy)%15}
   local eat = head.x==food.x and head.y==food.y
   local length = #snake
@@ -28,12 +21,22 @@ function update(dt_ms)
     if snake[i].x==head.x and snake[i].y==head.y then alive=false; return end
   end
   if eat then
-    length = math.min(60,length+1)
+    length = math.min(20,length+1)
     food = {x=(food.x+7)%20,y=(food.y+3)%15}
   end
   for i=length,2,-1 do snake[i]=snake[i-1] end
   snake[1]=head
-  fire.display.clear(0)
-  for i=1,length do fire.display.rect(snake[i].x*16,snake[i].y*16,14,14,2016) end
+end
+local function render()
+  for i=1,#snake do fire.display.rect(snake[i].x*16,snake[i].y*16,14,14,2016) end
   fire.display.rect(food.x*16,food.y*16,14,14,63488)
+  if not alive then fire.display.text(80,110,"Game over",65535) end
+end
+function update(dt_ms)
+  if alive then
+    elapsed = elapsed + dt_ms
+    if elapsed >= 160 then elapsed = elapsed % 160; step() end
+  end
+  -- Render even between movement ticks and after game over.
+  render()
 end

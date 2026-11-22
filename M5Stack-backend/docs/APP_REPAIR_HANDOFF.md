@@ -1,5 +1,12 @@
 # Automatisk feilsøking, kvalitetsport og applevetid
 
+Nyeste leveringsport er **release-v3** med obligatorisk skjermregel for ALLE
+genereringer/reparasjoner. Se [DISPLAY_QUALITY.md](DISPLAY_QUALITY.md).
+Eldre omtale av release-v2 under beskriver forrige port. Synlig tegning må ikke
+fordeles over frames når firmware tømmer sprite før hver update; forenkle en
+komplett scene. De nye kontrollene avviser den lagrede Slangespill 0.1.3-pakkens
+tomme update. Ny bygging/reparasjon kreves; installerte filer endres ikke her.
+
 Backendendring, 22. november 2026. Device-kilde er lest til 7787ed0; ingen firmware er endret eller flashet av backend-agenten. Bruk dette som tillegg til samtale- og applivssykluskontrakten.
 
 ## Hvorfor gamle apper kunne slippe gjennom
@@ -10,7 +17,38 @@ Dialogen fikk manifest og krav, men ikke en automatisk sammenstilling av kilde/f
 
 ## Implementert backendflyt
 
-1. Brukeren velger app og sier for eksempel «den fungerer ikke, fiks den» eller «undersøk appen og rett feilen».
+### Navngitt reparasjon uten appvelger
+
+«Fiks slangespillet. Jeg får app error når jeg starter det.» finner nå automatisk
+den entydige Slangespill-appen innenfor den autentiserte enhetens egne prosjekter.
+Navn/SD-ID søkes med store/små bokstaver og norske endelser som slangespill/slangespillet.
+Navnet er et søkekriterium; kildeidentiteten verifiseres fortsatt med eier, prosjekt,
+pakke og arkivhash. Andre enheters apper kommer aldri med i kandidatsøket.
+
+Et navngitt mål overstyrer en annen valgt app uten å blande historikk. Generisk
+«fiks appen» bruker valgt app, en entydig faktisk installert/kjørende app eller
+den eneste lagrede appen. Ukjent navn gir aldri reparasjon av en tilfeldig app.
+Bare ekte flertydighet gir et kort spørsmål med appalternativer. Ingen krav om
+PC-appvelger, linjenummer eller manuell feillogg når appen allerede er identifiserbar.
+
+Valgt app er også samtalekontekst, ikke bare et søkefilter. Når et taleopptak
+inneholder et ukjent eller lignende appnavn (for eksempel sjakkespill etter valg
+av Slangespill), fortsetter backend med den valgte appen og navngir den tydelig
+i svaret. Under en pågående reparasjon tåles også et lignende feilstavet navn
+i tekst. Original transkripsjon beholdes uendret som «Jeg hørte»; backend påstår
+ikke at mikrofonen faktisk gjenkjente riktig ord. Et tydelig «bytt til …»
+respekteres. Et gjenkjent, tydelig forskjellig appnavn kan velge den andre appen;
+et lignende navn fra ASR får lavere vekt enn eksisterende eksplisitt appvalg.
+Uten valgt app eller ved et ukjent eksplisitt bytte gjettes det ikke.
+
+Aktiv session/turn beholdes gjennom automatisk prosjektvalg. BUILD/RUN-bekreftelser
+beholdes. Backend husker begrensede, verifiserte tidligere prosjekt-ID-er for denne
+sesjonen, slik at resume fra gammel firmware ikke mister reparasjonen hvis dens
+prosjektcache ennå er gammel. Eksplisitt nytt appvalg nuller disse resume-aliasene.
+Device bør håndtere app_selected og oppdatere lokal prosjekt/basecache fra serveren,
+uten å avbryte det aktive opptaket eller slette gjeldende turn_id.
+
+1. Brukeren navngir appen eller bruker allerede valgt app, for eksempel «Fiks slangespillet» eller «den fungerer ikke, fiks den».
 2. Backend identifiserer bare valgt prosjekt/baseversjon, verifiserer arkivet, leser hele kilden og tester den automatisk mot releaseporten. Ingen navnebasert gjetting eller spørsmål om linjenummer/loggutdrag.
 3. Tidligere korrelerte device-feil og resultatet fra gjenskaping på PC samles i en reparasjonskontekst. Feil som ikke gjenskapes rapporteres som ikke gjenskapt; de påstås ikke løst.
 4. Backend lager et målrettet reparasjonsforslag som bevarer opprinnelige funksjoner/kontroller. BUILD bekreftes med den eksisterende knappen; det stilles ikke en ny runde tekniske spørsmål. Ved reparasjon av en kjørende app stopper backend først den korrelerte kjøringen og venter på kvittering uten å blokkere kontrollkanalen.
@@ -58,7 +96,22 @@ Ny avtalt sentinel: capabilities.max_runtime_ms=0 og manifest.max_runtime_ms=0 b
 
 ## Backendverifisering
 
-206 samlede pytest-tester bestått. Isolert ekte OpenAI-dialog/kodegenerering har passert sju-profil-porten og ga en validert Sprettsirkel-pakke. Dette var en separat testmappe, ikke brukerens Snake-app og ikke en fysisk installasjon. Ingen API-nøkler eller brukerpakker publiseres i GitHub. Windows-appen har Reparer valgt app, viser leveringssperrer og skjuler installasjon for pakker uten ny releaseport.
+Siste kontroll: 231 tester bestått. Release-v2 har konservative grenser per
+callback: 24 output-kall, 120000 estimerte tegningsarbeidsenheter og 20000
+Lua-instruksjoner. Sju profiler beholdes. Dette er ingen kalibrering av ESP32s
+veggklokketid. Den fysisk avviste Slangespill-kilden avvises nå også på PC.
+Eldre release-v1-pakker må bygges/testes på nytt før ny levering; eksisterende
+device-filer endres ikke. En isolert ekte OpenAI-reparasjon passerte release-v2;
+ingen brukerapp ble endret eller installert under denne testen.
+
+Små, verifiserte install/start/healthy/stop/error-rapporter lagres under feedback
+med maks 100 rapporter per enhet. GET /projects/{id}/feedback følger prosjektets
+eierskapskontroll. Ingen loggfil eller rapportering per frame er nødvendig.
+Se [hasterapporten](URGENT_RUNTIME_VOICE.md) for diagnostics-kontrakten og den
+bekreftede null-VM-feilen. Den feilen blokkerer gjentatte appomskrivinger for
+samme installerte pakke og boot; ny boot opphever denne runtime-blokkeringen.
+
+221 samlede pytest-tester bestått, inkludert navngitt automatisk reparasjon, enhetsscope og resume etter prosjektbytte. Isolert ekte OpenAI-dialog/kodegenerering har passert sju-profil-porten og ga en validert Sprettsirkel-pakke. Dette var en separat testmappe, ikke brukerens Snake-app og ikke en fysisk installasjon. Ingen API-nøkler eller brukerpakker publiseres i GitHub. Windows-appen har Reparer valgt app, viser leveringssperrer og skjuler installasjon for pakker uten ny releaseport.
 
 ## Akseptansekriterier
 

@@ -44,6 +44,18 @@
           "maxLength": 64,
           "title": "Firmware Version",
           "type": "string"
+        },
+        "firmware_storage": {
+          "default": false,
+          "title": "Firmware Storage",
+          "type": "boolean"
+        },
+        "firmware_max_bytes": {
+          "default": 4194304,
+          "maximum": 4194304,
+          "minimum": 1024,
+          "title": "Firmware Max Bytes",
+          "type": "integer"
         }
       },
       "required": [
@@ -107,6 +119,134 @@
       ],
       "title": "DeviceApp",
       "type": "object"
+    },
+    "DeviceDiagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "anyOf": [
+            {
+              "enum": [
+                "load",
+                "init",
+                "update",
+                "on_button",
+                "install",
+                "start",
+                "stop",
+                "audio_download",
+                "audio_playback"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Phase"
+        },
+        "elapsed_ms": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Elapsed Ms"
+        },
+        "callback_us": {
+          "anyOf": [
+            {
+              "maximum": 60000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Callback Us"
+        },
+        "free_heap": {
+          "anyOf": [
+            {
+              "maximum": 16777216,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Free Heap"
+        },
+        "min_free_heap": {
+          "anyOf": [
+            {
+              "maximum": 16777216,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Free Heap"
+        },
+        "lua_bytes": {
+          "anyOf": [
+            {
+              "maximum": 16777216,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lua Bytes"
+        },
+        "source_bytes": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Bytes"
+        },
+        "frames": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frames"
+        }
+      },
+      "title": "DeviceDiagnostics",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -150,7 +290,9 @@
         "app_deleted",
         "app_inventory",
         "mode_select",
-        "app_diagnostic"
+        "app_diagnostic",
+        "audio_playback_failed",
+        "firmware_store_result"
       ],
       "title": "Event",
       "type": "string"
@@ -170,6 +312,56 @@
       ],
       "default": null,
       "title": "Conversation Mode"
+    },
+    "diagnostics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeviceDiagnostics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "firmware_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Firmware Id"
+    },
+    "transfer_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Transfer Id"
+    },
+    "sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sha256"
     },
     "app_mode": {
       "anyOf": [
@@ -567,6 +759,39 @@
   "title": "DeviceEvent",
   "type": "object",
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "firmware_store_result"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "firmware_id",
+          "transfer_id",
+          "status"
+        ],
+        "properties": {
+          "firmware_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "transfer_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {
@@ -1073,6 +1298,36 @@
       "if": {
         "properties": {
           "event": {
+            "const": "audio_playback_failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "audio_id",
+          "turn_id",
+          "error_code"
+        ],
+        "properties": {
+          "audio_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "turn_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "error_code": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
             "not": {
               "const": "session_start"
             }
@@ -1178,6 +1433,29 @@
           "archive_sha256": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "firmware_store_result"
+          },
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "sha256"
+        ],
+        "properties": {
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
           }
         }
       }
