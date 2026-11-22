@@ -235,10 +235,12 @@ class AudioManager:
                 item["status"] = "no_speech"
                 await self.service.input_retry(session, message)
                 return
-            if len(text) > 4000:
+            if len(text) > 4000 or len(text.encode("utf-8")) > 6000:
                 raise ValueError("Taleomgangen er for lang. Prøv et kortere opptak.")
             session.audio_status["phase"] = "dialog"
-            session.audio_status["transcript"] = text
+            # Full text uses the dedicated transcript event/history; snapshots
+            # must still fit the firmware's 8192-byte control-frame budget.
+            session.audio_status["transcript"] = text[:300]
             await self.service.emit(session, {"type": "transcript", "turn_id": item["turn_id"], "text": text,
                                               "mode": self.settings.fire_ai_mode})
             await self.service.text(session, text)

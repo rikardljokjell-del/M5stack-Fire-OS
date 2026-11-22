@@ -323,3 +323,17 @@ async def test_unrelated_http_request_cancellation_is_not_swallowed(tmp_path):
         assert not flow.service.audio.uploads
         assert flow.session.turn_id == "turn-current"
         assert not list((tmp_path / "audio").glob("*.wav"))
+
+
+async def test_large_multibyte_transcript_cannot_overflow_firmware_control_frames(tmp_path):
+    class Multibyte(MockProvider):
+        async def transcribe(self, data):
+            return "\u597d" * 2500
+    async with conversation(tmp_path, Multibyte()) as flow:
+        await flow.record("turn-unicode")
+        await flow.upload("turn-unicode")
+        await flow.finish_reply()
+        assert "for lang" in flow.session.last_error
+        assert not flow.session.history and not flow.session.proposal_id
+        assert not any(event["type"] == "transcript" for event in flow.socket.events)
+        assert not list((tmp_path / "audio").glob("*.wav"))

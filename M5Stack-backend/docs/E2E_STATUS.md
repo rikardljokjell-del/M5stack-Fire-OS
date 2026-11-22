@@ -1,6 +1,6 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
-Nyeste leveranse: **193 tester består**, og pip check finner ingen brutte avhengigheter.
+Nyeste leveranse: **194 tester består**, og pip check finner ingen brutte avhengigheter.
 Se [samtalekontrakten](CONVERSATION-v0.2.md) og
 [device-arbeidsordren med 37 funn](DEVICE_CONVERSATION_AUDIT.md). Backend har
 Kun samtale, avbrytelse og reconnect-recovery; nyeste kildegjennomgang er a3f861a.

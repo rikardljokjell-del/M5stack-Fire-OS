@@ -123,7 +123,7 @@ device-arbeidsordren. Ingen API-/adminnøkler sendes til FIRE.
 
 ## Verifisering og gjenværende grenser
 
-Samlet pytest: **193 bestått**, én eksisterende Starlette/httpx-avviklingsadvarsel.
+Samlet pytest: **194 bestått**, én eksisterende Starlette/httpx-avviklingsadvarsel.
 pip check: ingen brutte avhengigheter.
 Regresjoner dekker ASR/dialog/TTS-avbrudd, samtidige/stagnerte gamle opplastinger,
 gammel playback/stop, tomt/stille signal, chat selv ved feilaktig providerplan,
