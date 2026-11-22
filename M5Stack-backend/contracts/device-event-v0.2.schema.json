@@ -148,10 +148,27 @@
         "app_versions",
         "app_select",
         "app_deleted",
-        "app_inventory"
+        "app_inventory",
+        "mode_select"
       ],
       "title": "Event",
       "type": "string"
+    },
+    "conversation_mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "chat",
+            "develop"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conversation Mode"
     },
     "app_mode": {
       "anyOf": [
@@ -994,6 +1011,29 @@
           },
           "complete": {
             "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "mode_select"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "conversation_mode"
+        ],
+        "properties": {
+          "conversation_mode": {
+            "enum": [
+              "chat",
+              "develop"
+            ],
+            "type": "string"
           }
         }
       }

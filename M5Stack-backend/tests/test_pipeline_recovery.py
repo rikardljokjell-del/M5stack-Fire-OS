@@ -38,7 +38,7 @@ async def test_missing_wav_times_out_and_new_recording_recovers_without_implicit
         await listen(service, session, "listen_stop")
         service.audio.awaiting[session.id] = (session.turn_id, 0)
         await service.audio.expire_waiting()
-        assert session.state == "failed" and session.activity == "idle"
+        assert session.state == "idle" and session.activity == "idle"
         assert "kom ikke frem" in session.last_error
         await listen(service, session, "listen_start", "turn-retry", "2")
         assert session.last_error == ""

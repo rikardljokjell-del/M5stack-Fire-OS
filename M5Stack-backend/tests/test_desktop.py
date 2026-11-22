@@ -130,16 +130,19 @@ def test_desktop_text_targets_real_session_without_implicit_build_or_run(tmp_pat
         assert client.post(url, json={"text": "Lag en sirkel"}, headers=headers(ADMIN)).status_code == 409
 
 
-def test_desktop_runtime_start_stop_restart_and_real_http(tmp_path):
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+def test_desktop_runtime_start_stop_restart_and_real_http(tmp_path, host):
     runtime = DesktopRuntime()
     store = DesktopStore(tmp_path, MemoryVault())
-    with socket.socket() as available:
-        available.bind(("127.0.0.1", 0))
+    if host == "::1" and not socket.has_ipv6:
+        pytest.skip("IPv6 loopback unavailable")
+    with socket.socket(socket.AF_INET6 if host == "::1" else socket.AF_INET) as available:
+        available.bind((host, 0))
         port = available.getsockname()[1]
     store.save(store.config.model_copy(update={"port": port, "allow_lan": False}))
     try:
         for _ in range(2):
-            runtime.start(store.settings())
+            runtime.start(store.settings().model_copy(update={"fire_backend_host": host}))
             deadline = time.monotonic() + 8
             while not runtime.ready and time.monotonic() < deadline:
                 time.sleep(0.05)
@@ -238,3 +241,20 @@ def test_bundled_worker_entry_returns_bounded_file_result(tmp_path, monkeypatch)
     with pytest.raises(SystemExit) as result:
         main()
     assert result.value.code == 0 and json.loads(response.read_text())["ok"]
+
+
+def test_local_conversation_controls_preserve_scope_and_disable_chat_builds(tmp_path):
+    with TestClient(create_app(configured(tmp_path, fire_desktop_enabled=True))) as client:
+        with client.websocket_connect("/ws/device", headers=headers()) as socket:
+            device = Device(socket)
+            device.start()
+            url = f"/desktop/sessions/{device.session_id}/conversation"
+            assert client.post(url, json={"conversation_mode":"chat"}, headers=headers()).status_code == 403
+            assert client.post(url, json={"action":"unknown"}, headers=headers(ADMIN)).status_code == 422
+            assert client.post(url, json={"conversation_mode":"chat"}, headers=headers(ADMIN)).json() == {"conversation_mode":"chat"}
+            device.send("text", text="Lag en RGB-app")
+            device.until("assistant_message")
+            status = client.get("/desktop/status", headers=headers(ADMIN)).json()["sessions"][0]
+            assert status["conversation_mode"] == "chat" and status["proposal_id"] is None
+            assert not client.app.state.backend.store.list("builds")
+            assert client.post(url, json={"action":"cancel"}, headers=headers(ADMIN)).json()["status"] == "cancelled"

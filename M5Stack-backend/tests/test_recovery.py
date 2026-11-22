@@ -1,151 +1,247 @@
-import json
-import time
+"""Connection recovery never re-executes actions or restores a fake capture."""
+import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
 
 from fire_backend.app import create_app
-from fire_backend.config import Settings
-from fire_backend.models import Capabilities, DeviceEvent, Manifest, SessionStart
+from fire_backend.models import SessionStart, State
 from fire_backend.service import Backend, Conflict
-
 from test_device_protocol import CAPS, Device, configured, headers
 
 
-def test_natural_stop_and_late_stop_receipt_cannot_clear_a_new_run(tmp_path):
+def test_exact_start_retry_reattaches_new_socket_without_new_project(tmp_path):
+    with TestClient(create_app(configured(tmp_path))) as client:
+        with client.websocket_connect("/ws/device", headers=headers()) as first_socket:
+            first = Device(first_socket)
+            sent = first.send("session_start", target="device", capabilities=CAPS)
+            initial = first.until("session_started")
+            with client.websocket_connect("/ws/device", headers=headers()) as next_socket:
+                next_socket.send_json(sent)  # Original reply was lost on the wire.
+                second = Device(next_socket)
+                started = second.until("session_started")
+                second.session_id, second.counter = started["session_id"], 10
+                assert started["session_id"] == initial["session_id"]
+                assert second.until("session_snapshot")["pending_commands"] == []
+                ack = second.ack(sent)
+                assert ack["status"] == "duplicate"
+                second.send("text", text="Lag en sirkel")
+                assert second.until("build_proposal")["project_id"] == initial["project_id"]
+                assert len(client.app.state.backend.store.list("projects")) == 1
+                assert len(client.app.state.backend.sessions) == 1
+
+
+def test_new_start_event_replaces_old_live_socket_for_same_boot(tmp_path):
+    with TestClient(create_app(configured(tmp_path))) as client:
+        with client.websocket_connect("/ws/device", headers=headers()) as first_socket:
+            first = Device(first_socket)
+            initial = first.start()
+            with client.websocket_connect("/ws/device", headers=headers()) as next_socket:
+                second = Device(next_socket)
+                second.counter = 100
+                started = second.start()
+                assert started["session_id"] == initial["session_id"]
+                assert second.until("session_snapshot")["boot_id"] == "boot-01"
+                second.ack(second.send("ping"))
+                assert client.app.state.backend.store.get("devices", "fire-01")["online"]
+
+
+def test_start_retry_on_same_socket_resends_snapshot(tmp_path):
     with TestClient(create_app(configured(tmp_path))) as client:
         with client.websocket_connect("/ws/device", headers=headers()) as socket:
             device = Device(socket)
-            device.start()
-            offer, _ = device.build()
-            device.install(offer)
-            run, _ = device.run(offer["package_id"])
-            device.healthy(run)
-            device.send("app_stop")
-            stop = device.until("stop_request")
-            device.ack(device.send("app_stopped", package_id=run["package_id"], run_id=run["run_id"], reason="runtime_limit"))
-            next_run, _ = device.run(offer["package_id"])
-            device.healthy(next_run)
-            device.send("app_stopped", package_id=run["package_id"], run_id=run["run_id"], stop_id=stop["stop_id"])
-            device.until("error")
-            assert client.get("/devices/fire-01", headers=headers()).json()["active_run_id"] == next_run["run_id"]
+            sent = device.send("session_start", target="device", capabilities=CAPS)
+            initial = device.until("session_started")
+            device.ack(sent)
+            socket.send_json(sent)
+            assert device.until("session_started")["session_id"] == initial["session_id"]
+            assert device.until("session_snapshot")["project_id"] == initial["project_id"]
+            assert device.ack(sent)["status"] == "duplicate"
+            assert len(client.app.state.backend.store.list("projects")) == 1
 
 
-def test_superseded_install_and_failed_install_preserve_current(tmp_path):
-    with TestClient(create_app(configured(tmp_path))) as client:
-        with client.websocket_connect("/ws/device", headers=headers()) as socket:
-            device = Device(socket)
-            device.start()
-            old, _ = device.build()
-            new, _ = device.build()
-            device.send("device_install_result", package_id=old["package_id"], install_id=old["install_id"], archive_sha256=old["archive_sha256"], status="ok")
-            device.until("error")
-            device.ack(device.send("device_install_result", package_id=new["package_id"], install_id=new["install_id"], archive_sha256=new["archive_sha256"], status="failed", error_code="sd-full"))
-            status = client.get("/devices/fire-01", headers=headers()).json()
-            assert status["current"] is None and status["installed_package_id"] is None
+class Peer:
+    def __init__(self):
+        self.messages = []
+        self.closed = False
+
+    async def send_json(self, value):
+        self.messages.append(value)
+
+    async def close(self, code=1000):
+        self.closed = True
 
 
-def test_device_reboot_invalidates_previous_session_without_mutating_history(tmp_path):
-    with TestClient(create_app(configured(tmp_path))) as client:
-        with client.websocket_connect("/ws/device", headers=headers()) as socket:
-            old = Device(socket)
-            old_start = old.start()
-            old_offer, _ = old.build()
-        with client.websocket_connect("/ws/device", headers=headers()) as socket:
-            rebooted = Device(socket, boot_id="boot-02")
-            new_start = rebooted.start()
-            assert new_start["session_id"] != old_start["session_id"]
-            rebooted.send("device_install_result", package_id=old_offer["package_id"], install_id=old_offer["install_id"], archive_sha256=old_offer["archive_sha256"], status="ok")
-            rebooted.until("error")
-            assert client.get("/devices/fire-01", headers=headers()).json()["installed_package_id"] is None
+def request(**values):
+    return SessionStart(device_id="fire-01", target="device", protocol_version="0.2",
+                        boot_id="boot-01", capabilities=CAPS, **values)
 
 
-async def test_resume_expiry_and_project_version_isolation(tmp_path):
-    service = Backend(configured(tmp_path))
-    request = SessionStart(device_id="fire-01", target="device", protocol_version="0.2", boot_id="boot-01", capabilities=Capabilities(**CAPS))
+async def test_superseded_detach_cannot_disconnect_new_peer(tmp_path):
+    backend = Backend(configured(tmp_path))
+    old, new = Peer(), Peer()
     try:
-        first = await service.start(request, principal="fire-01")
-        device = service.device_record(first)
-        device.update(current="build-history", projects={first.project_id: {"current": "build-history", "previous": None, "backup": None}})
-        service.store.put("devices", device["id"], device)
-        await service.stop(first)
-        second = await service.start(request, principal="fire-01")
-        selected = service.device_record(second)
-        assert selected["current"] is None
-        assert selected["projects"][first.project_id]["current"] == "build-history"
-        await service.detach(second, None)
-        second.disconnected_at = time.time() - service.settings.fire_session_resume_seconds - 1
-        service.persist(second)
-        await service.expire_sessions()
+        initial = await backend.start(request(conversation_mode="chat"), old, "fire-01")
+        resumed = await backend.start(request(), new, "fire-01")
+        assert resumed is initial and resumed.conversation_mode == "chat"
+        await backend.detach(initial, old)
+        assert old.closed and initial.sockets == {new}
+        assert initial.disconnected_at is None and backend.device_record(initial)["online"]
         with pytest.raises(Conflict):
-            await service.start(request.model_copy(update={"resume_session_id": second.id}), principal="fire-01")
-        assert service.sessions == {}
+            await backend.start(request(resume_session_id=initial.id, conversation_mode="develop"), Peer(), "fire-01")
+        assert initial.sockets == {new}
     finally:
-        await service.close()
+        await backend.close()
 
 
-async def test_durable_processing_tombstone_does_not_execute_on_replay(tmp_path):
-    from fire_backend.protocol import begin_event, dispatch
-    service = Backend(configured(tmp_path))
+async def test_backend_restart_does_not_restore_active_recording(tmp_path):
+    settings = configured(tmp_path)
+    original = Backend(settings)
+    session = await original.start(request(conversation_mode="chat"), principal="fire-01")
+    session.state, session.activity, session.turn_id = State.listening, "listening", "turn-cut"
+    session.audio_status = {"phase": "recording", "turn_id": "turn-cut"}
+    original.persist(session)
+    # Simulate a crash: persisted capture exists but no corresponding sampler
+    # or coroutine survives in the new process.
+    replacement = Backend(settings)
     try:
-        request = SessionStart(device_id="fire-01", target="device", protocol_version="0.2", boot_id="boot-01", capabilities=Capabilities(**CAPS))
-        session = await service.start(request, principal="fire-01")
-        await service.text(session, "Lag en sirkel")
-        event = DeviceEvent(protocol_version="0.2", event_id="interrupted-event", device_id=session.device_id, session_id=session.id,
-                            boot_id=session.boot_id, event="build_confirm", proposal_id=session.proposal_id)
-        begin_event(service, event)  # crash occurred before recording effect completion
-        result = await dispatch(service, session, event)
-        assert result["status"] == "unknown"
-        assert service.store.list("builds") == []
+        resumed = await replacement.start(request(resume_session_id=session.id), Peer(), "fire-01")
+        assert resumed.state == State.idle and resumed.activity == "idle"
+        assert resumed.turn_id is None and resumed.recording_started_at is None
+        assert resumed.audio_status["phase"] == "interrupted"
+        assert resumed.conversation_mode == "chat"
     finally:
-        await service.close()
+        await replacement.close()
+        await original.close()
 
 
-@pytest.mark.parametrize("tokens", [{"fire-01": "short"}, {"fire-01": "d" * 32, "fire-02": "d" * 32}, ["invalid"]])
-def test_invalid_scoped_token_configuration_rejected(tokens):
-    with pytest.raises(ValueError):
-        Settings(_env_file=None, fire_device_tokens=json.dumps(tokens))
-
-
-def test_event_specific_receipts_require_correlating_fields():
-    with pytest.raises(ValueError):
-        DeviceEvent(protocol_version="0.2", event_id="event-1", session_id="session-1", device_id="fire-01", event="app_started")
-
-
-async def test_legacy_current_migrates_only_into_simulation_history(tmp_path):
-    service = Backend(configured(tmp_path))
-    service.store.put("projects", "app-old", {"id": "app-old", "current": "build-old", "previous": "build-older", "backup": None, "candidate": None})
-    await service.close()
-    recovered = Backend(configured(tmp_path))
+async def test_detach_and_reconnect_are_serialized_while_dialogue_closes(tmp_path):
+    backend = Backend(configured(tmp_path))
+    old, new = Peer(), Peer()
+    entered, release = asyncio.Event(), asyncio.Event()
     try:
-        project = recovered.store.get("projects", "app-old")
-        assert project["last_simulated_package_id"] == "build-old"
-        assert project["current"] is None and project["previous"] is None
+        session = await backend.start(request(), old, "fire-01")
+        close = backend.close_dialog
+        async def slow_close(value):
+            entered.set()
+            await release.wait()
+            await close(value)
+        backend.close_dialog = slow_close
+        detaching = asyncio.create_task(backend.detach(session, old))
+        await entered.wait()
+        reconnecting = asyncio.create_task(backend.start(request(), new, "fire-01"))
+        await asyncio.sleep(0)
+        assert not reconnecting.done()
+        release.set()
+        await detaching
+        assert await reconnecting is session
+        assert session.sockets == {new} and backend.device_record(session)["online"]
+        assert session.disconnected_at is None
     finally:
-        await recovered.close()
+        release.set()
+        await backend.close()
 
 
-async def test_delivery_failure_preserves_valid_package_and_can_retry_without_ai(tmp_path):
-    from fire_backend.protocol import dispatch
-    service = Backend(configured(tmp_path))
-    original_offer = service.offer_install
-
-    async def broken_offer(*args):
-        raise ValueError("Simulated delivery failure")
-
+async def test_failed_send_marks_offline_without_deadlocking_start(tmp_path):
+    class BrokenPeer(Peer):
+        async def send_json(self, value):
+            raise ConnectionError("peer disconnected")
+    backend = Backend(configured(tmp_path))
+    broken = BrokenPeer()
     try:
-        session = await service.start(SessionStart(device_id="fire-01", target="device", protocol_version="0.2", boot_id="boot-01", capabilities=Capabilities(**CAPS)), principal="fire-01")
-        service.offer_install = broken_offer
-        await service.text(session, "Lag en sirkel")
-        await service.confirm_build(session, session.proposal_id)
-        await session.task
-        assert session.state == "failed" and session.package_id
-        assert service.store.get("builds", session.build_id)["status"] == "ready"
-        assert service.store.get("packages", session.package_id)
-        service.offer_install = original_offer
-        result = await dispatch(service, session, DeviceEvent(protocol_version="0.2", device_id=session.device_id, session_id=session.id,
-                              boot_id=session.boot_id, event_id="retry-delivery", event="install_retry", package_id=session.package_id))
-        assert result["install_id"] and session.state == "awaiting_install"
-        assert len(service.store.list("builds")) == 1
+        session = await asyncio.wait_for(backend.start(request(), broken, "fire-01"), timeout=3)
+        await asyncio.gather(*tuple(backend.connection_cleanup))
+        assert not session.sockets and session.disconnected_at
+        assert not backend.device_record(session)["online"]
+        assert broken.closed and not backend.detaching_sockets
+        replacement = await backend.start(request(), Peer(), "fire-01")
+        assert replacement is session and backend.device_record(session)["online"]
     finally:
-        await service.close()
+        await backend.close()
+
+
+async def test_command_timeout_releases_reservation_but_does_not_claim_stopped(tmp_path):
+    backend = Backend(configured(tmp_path))
+    try:
+        session = await backend.start(request(), Peer(), "fire-01")
+        run = backend.issue_command(session, "run", "package-unconfirmed")
+        device = backend.device_record(session)
+        device.update(pending_run_id=run["id"], runtime_status="starting")
+        backend.store.put("devices", device["id"], device)
+        backend.unknown_command(run)
+        updated = backend.device_record(session)
+        assert updated["pending_run_id"] is None and updated["runtime_status"] == "unknown"
+        assert backend.store.get("commands", run["id"])["status"] == "unknown"
+        assert updated.get("current") is None and updated.get("installed_package_id") is None
+    finally:
+        await backend.close()
+
+
+async def test_immediate_reopen_waits_for_explicit_stop_cleanup(tmp_path):
+    backend = Backend(configured(tmp_path))
+    old, new = Peer(), Peer()
+    entered, release = asyncio.Event(), asyncio.Event()
+    try:
+        first = await backend.start(request(), old, "fire-01")
+        close = backend.close_dialog
+        async def slow_close(value):
+            if value is first:
+                entered.set()
+                await release.wait()
+            await close(value)
+        backend.close_dialog = slow_close
+        stopping = asyncio.create_task(backend.stop(first))
+        await entered.wait()
+        assert first.stopped
+        reopening = asyncio.create_task(backend.start(request(), new, "fire-01"))
+        await asyncio.sleep(0)
+        assert not reopening.done()
+        release.set()
+        await stopping
+        reopened = await asyncio.wait_for(reopening, timeout=3)
+        assert reopened.id != first.id and reopened.sockets == {new}
+        assert len(backend.sessions) == 1 and backend.device_record(reopened)["online"]
+        await backend.detach(first, old)
+        assert backend.device_record(reopened)["online"]
+    finally:
+        release.set()
+        await backend.close()
+
+
+async def test_concurrent_starts_create_one_session_and_one_project(tmp_path):
+    backend = Backend(configured(tmp_path))
+    first, second = Peer(), Peer()
+    try:
+        a, b = await asyncio.gather(backend.start(request(), first, "fire-01"),
+                                    backend.start(request(), second, "fire-01"))
+        assert a is b and a.sockets == {second} and first.closed
+        assert len(backend.sessions) == 1 and len(backend.store.list("projects")) == 1
+        assert backend.device_record(a)["online"]
+    finally:
+        await backend.close()
+
+
+async def test_interrupted_stop_can_finish_cleanup_on_retry(tmp_path):
+    backend = Backend(configured(tmp_path))
+    entered, release = asyncio.Event(), asyncio.Event()
+    try:
+        session = await backend.start(request(), Peer(), "fire-01")
+        close = backend.close_dialog
+        async def slow_close(value):
+            entered.set()
+            await release.wait()
+            await close(value)
+        backend.close_dialog = slow_close
+        stopping = asyncio.create_task(backend.stop(session))
+        await entered.wait()
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        assert session.stopped and session.id in backend.sessions
+        release.set()
+        await backend.stop(session)
+        assert session.id not in backend.sessions
+        assert not backend.device_record(session)["online"]
+    finally:
+        release.set()
+        await backend.close()

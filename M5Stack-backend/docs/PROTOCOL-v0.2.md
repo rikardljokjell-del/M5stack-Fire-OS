@@ -4,6 +4,11 @@ This is the backend/firmware implementation contract. Firmware remains owned by
 the device agent. Backend implementation follows this document; physical support
 is NOT verified until the complete flow has passed on a real FIRE.
 
+Conversation modes, barge-in, retryable capture feedback and reconnect recovery
+are specified in [CONVERSATION-v0.2.md](CONVERSATION-v0.2.md). These additive
+fields/events are implemented by the backend; see the linked device audit for
+required firmware work. Existing explicit BUILD/RUN authorization is unchanged.
+
 ## Transport and authentication
 
 - Control: `ws://PC:8765/ws/device`, UTF-8 JSON, <=8192 bytes/message.

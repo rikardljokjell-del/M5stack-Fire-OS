@@ -166,6 +166,20 @@ def create_app(settings=None, provider=None):
             raise HTTPException(422, "Expected package_id")
         return await service.install_saved(service.session(session_id), data["package_id"])
 
+    @app.post("/desktop/sessions/{session_id}/conversation", dependencies=[Depends(desktop_auth)])
+    async def desktop_conversation(session_id: str, request: Request, service: Backend = Depends(backend)):
+        data = await request.json()
+        if not isinstance(data, dict) or set(data) not in ({"conversation_mode"}, {"action"}):
+            raise HTTPException(422, "Expected conversation_mode or action")
+        if "action" in data and data["action"] != "cancel":
+            raise HTTPException(422, "Expected cancel action")
+        session = service.session(session_id)
+        event = DeviceEvent(device_id=session.device_id, protocol_version=session.protocol_version,
+                            event="cancel_turn" if "action" in data else "mode_select", event_id=new_id("desktop"),
+                            session_id=session.id, boot_id=session.boot_id,
+                            **({"conversation_mode": data["conversation_mode"]} if "conversation_mode" in data else {}))
+        return await dispatch(service, session, event)
+
     @app.post("/desktop/sessions/{session_id}/app", dependencies=[Depends(desktop_auth)])
     async def desktop_app(session_id: str, request: Request, service: Backend = Depends(backend)):
         data = await request.json()
@@ -329,6 +343,9 @@ def create_app(settings=None, provider=None):
                 packet = await socket.receive()
                 if packet["type"] == "websocket.disconnect":
                     break
+                if session and socket not in session.sockets:
+                    await socket.close(code=1000)
+                    break  # A replacement connection now owns this session.
                 raw = packet.get("text")
                 if raw is None:
                     await socket.close(code=1003)
@@ -343,6 +360,21 @@ def create_app(settings=None, provider=None):
                             raise PermissionError("Device identity mismatch")
                         record, duplicate = begin_event(service, event)
                         if duplicate:
+                            # A lost session_started may cause an exact retry on
+                            # a new socket. Dedup acknowledges the action, but
+                            # the transport must still attach to that session.
+                            prior_id = (duplicate.get("result") or {}).get("session_id")
+                            if prior_id:
+                                request = SessionStart(**{k: getattr(event, k) for k in SessionStart.model_fields})
+                                if session is None:
+                                    request = request.model_copy(update={"resume_session_id": prior_id})
+                                    session = await service.start(request, socket, identity)
+                                elif session.id != prior_id:
+                                    raise Conflict("Session start belongs to another session")
+                                else:
+                                    await service.emit(session, {"type": "session_started", **service.snapshot(session)})
+                                    await service.session_snapshot(session)
+                                duplicate = {**duplicate, "result": service.snapshot(session)}
                             await (service.emit(session, duplicate) if session else socket.send_json(duplicate))
                             continue
                         if session:

@@ -3,6 +3,10 @@
 Gjennomgått device-commit: `6d979894d6e04d7f46e538f6b5ef2a7188017600`.
 Backend-agenten endrer ingen device-filer og bygger/flasher ikke firmware.
 
+**Ny samlet gjennomgang:** [37 device-funn og arbeidsordre](DEVICE_CONVERSATION_AUDIT.md)
+og [implementert samtalekontrakt](CONVERSATION-v0.2.md). Disse har prioritet for
+videre arbeid; målehistorikken nedenfor beholdes som dokumentasjon.
+
 ## Siste måling: 15 sekunders WAV fra 2,8 sekunders opptak
 
 Under feilsøkingen kom også `fad4294`: device-agenten erstatter I2S DMA med

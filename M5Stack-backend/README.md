@@ -8,8 +8,11 @@ integrasjon, men endres/bygges/flashes ikke av backendarbeidet.
 Ekte OpenAI-dialog og kodegenerering er nå testet frem til Lua-validert ZIP.
 Fysisk reverse TCP/WebSocket er observert. **Full tale → installert/kjørende
 app på FIRE er fortsatt ikke verifisert.** Se [oppdatert ende-til-ende-status](docs/E2E_STATUS.md)
-og [målt lydstatus](docs/VOICE_HANDOFF.md). Norsk talesvar er fysisk bekreftet,
-mens ADC-opptakene foreløpig mangler store deler av samples og gir tom transkripsjon.
+og [målt lydstatus](docs/VOICE_HANDOFF.md). Norsk talesvar er fysisk bekreftet.
+Nyeste ADC-opptak har bedre tidsforhold, men talegjenkjenning og knappflyt må
+fortsatt forbedres på enheten. Backend støtter nå Kun samtale, avbrytelse og
+robust gjenoppkobling; se [samtalekontrakten](docs/CONVERSATION-v0.2.md).
+**Device-agent: start med [arbeidsordren med 37 konkrete funn](docs/DEVICE_CONVERSATION_AUDIT.md).**
 Ny app / endre valgt versjon og kontrollert backend-sletting følger
 [app-livssyklusen](docs/APP_LIFECYCLE.md).
 Se [leveranserapport](docs/DELIVERY.md), [enhetskontrakt](docs/PROTOCOL-v0.2.md),

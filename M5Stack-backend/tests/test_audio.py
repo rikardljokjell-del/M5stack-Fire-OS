@@ -124,9 +124,9 @@ class SlowTranscribe(MockProvider):
 
 @pytest.mark.parametrize("wall,seconds,gap,rate,expected", [
     (5.0, 1.0, True, False, "ufullstendig"),
-    (2.8, 15.0, False, True, "Feil tidsforhold"),
-    (1.0, 1.1, False, False, "Ingen forståelig tale"),
-    (0.05, 0.5, False, False, "Ingen forståelig tale"),
+    (2.8, 15.0, False, True, "feil tidsforhold"),
+    (1.0, 1.1, False, False, "Jeg fikk ikke tak i ordene"),
+    (0.05, 0.5, False, False, "Jeg fikk ikke tak i ordene"),
 ])
 async def test_empty_transcript_reports_measured_capture_timing_without_inventing_words(tmp_path, wall, seconds, gap, rate, expected):
     from fire_backend.audio import AudioManager
@@ -150,7 +150,8 @@ async def test_empty_transcript_reports_measured_capture_timing_without_inventin
         assert session.audio_status["capture_gap_suspected"] is gap
         assert session.audio_status["capture_rate_suspected"] is rate
         assert session.audio_status["capture_fraction"] == round(seconds/wall, 3)
-        assert expected in session.last_error and session.state == "failed"
+        assert expected in session.last_error and session.state == "idle"
+        assert session.audio_status["phase"] == "retry" and session.activity == "idle"
         assert not session.history and not service.store.list("builds")
         assert not list((tmp_path / "audio").glob("*.wav"))
     finally:

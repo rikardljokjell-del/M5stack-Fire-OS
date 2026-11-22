@@ -1,6 +1,15 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
-Siste oppdatering: **158 tester består**. Norsk OpenAI-lydsvar ble lastet ned
+Nyeste leveranse: **193 tester består**, og pip check finner ingen brutte avhengigheter.
+Se [samtalekontrakten](CONVERSATION-v0.2.md) og
+[device-arbeidsordren med 37 funn](DEVICE_CONVERSATION_AUDIT.md). Backend har
+Kun samtale, avbrytelse og reconnect-recovery; nyeste kildegjennomgang er a3f861a.
+Ekte isolert OpenAI-voice-check har passert igjen med korrekt norsk tekst og
+validert Lysblink-app. Det var AI-generert testtale, ikke FIRE-mikrofon.
+Nyeste fysiske opptak har ca. 4,6s lyd fra 4,8s eventintervall; gjenkjenning er
+fortsatt ikke pålitelig nok. Device-endringene og fysisk testmatrise gjenstår.
+
+Historikk før denne samlede gjennomgangen: 158 tester bestod. Norsk OpenAI-lydsvar ble lastet ned
 og spilt av på ekte FIRE, og brukeren bekreftet at det var forståelig.
 WAV fra mikrofonen når nå backend, men måling viser bare ca. 20 % av nødvendig
 samplemengde i forhold til opptakstiden. Det gir tom transkripsjon. Se

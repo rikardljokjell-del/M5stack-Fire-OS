@@ -2,7 +2,7 @@
 
 ## Source baseline and verification
 Authoritative handoff: M5Stack-device/BACKEND_HANDOFF.md.
-Read-only source review: commit 6d979894d6e04d7f46e538f6b5ef2a7188017600,
+Read-only source review: commit a3f861a (and preceding voice/lifecycle changes),
 fire_backend_client.*, fire_lua_runtime.*, fire_lua_package_manager.*, fire_os.*,
 platformio.ini and the handoff. Actual FIRE observations take precedence over
 this source review and the PC simulator. physical_verified=false for PC tests.
@@ -38,10 +38,11 @@ The current source advertises api_version=fire-lua-0.1,
 services=[display,buttons,rgb,imu,time], max_memory=131072, max_runtime_ms=10000,
 audio_input=true, audio_output=true, firmware_version=fire-os-0.2. Source now
 contains ADC capture on FIRE GPIO34, WAV upload and hashed PCM reply playback.
-Microphone continuity remains unverified: physical WAV samples covered only
-about 20% of measured recording wall time and transcription was empty. One
-speaker reply was downloaded/acknowledged and confirmed understandable by the
-user. Neither fact grants Lua audio APIs. Older input-only or no-audio firmware
+Latest timed-ADC captures produced about 4.6 s audio from 4.8 s event intervals,
+after earlier capture gaps and a wrong-rate DMA stream. Some transcripts remain
+inaccurate; do not assume reliable recognition or correct language from a nonempty
+transcript. One speaker reply was downloaded/acknowledged and confirmed
+understandable by the user. Neither fact grants Lua audio APIs. Older input-only or no-audio firmware
 remains valid and must receive the appropriate fallback.
 Generate and declare ONLY the services actually advertised in this session.
 Never substitute all simulator services for a missing device capability.
@@ -61,8 +62,9 @@ your own event loop. Firmware owns Wi-Fi/BLE/SD/IMU/audio/RGB and UI scheduling.
 The OS uses a 320x240 16-bit canvas (153600 pixel bytes before overhead).
 The runtime source has a 200000-instruction hook and 12 ms callback check;
 source now also caps Lua allocation at 131072 bytes and per-start runtime at
-10000 ms. The source reports the latter as an app failure; it should be a normal
-runtime_limit stop. These source limits do not prove physical enforcement.
+10000 ms. The reviewed source still reports this as app_failed/runtime_error;
+the device audit requires a normal runtime_limit stop instead. These source
+limits do not prove physical enforcement.
 neither PC timing nor source inspection proves actual ESP32 timing/enforcement.
 PC guards additionally cap allocator use, API calls and process duration.
 Use at most the manifest/session runtime (currently <=10000 ms per start).

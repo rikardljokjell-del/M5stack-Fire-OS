@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from types import SimpleNamespace
 
@@ -9,21 +10,31 @@ from fire_backend.ai import OpenAIProvider
 from fire_backend.config import Settings
 
 
-async def test_transcription_uses_real_sdk_multipart_and_language_hints():
+@pytest.mark.parametrize("model", ["gpt-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"])
+async def test_transcription_uses_real_sdk_multipart_and_language_hints(model):
     calls = []
 
     def handle(request):
         calls.append(request)
         return httpx.Response(200, json={"text": "Lag en sirkel", "languages": [{"code": "no"}]})
 
-    provider = OpenAIProvider(Settings(_env_file=None, openai_api_key="sk-sdk-secret", openai_transcribe_model="gpt-transcribe"))
+    provider = OpenAIProvider(Settings(_env_file=None, openai_api_key="sk-sdk-secret", openai_transcribe_model=model))
     provider.client = AsyncOpenAI(api_key="sk-sdk-secret", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)))
     try:
         assert await provider.transcribe(b"test-wav-content") == "Lag en sirkel"
         request = calls[0]
         assert str(request.url) == "https://api.openai.com/v1/audio/transcriptions"
-        assert b'gpt-transcribe' in request.content and b'turn.wav' in request.content
-        assert b'languages' in request.content and b'no' in request.content
+        assert model.encode() in request.content and b'turn.wav' in request.content
+        if model == "gpt-transcribe":
+            assert b'name="languages"' in request.content or b'name="languages[]"' in request.content
+            assert b'keywords' in request.content
+            assert b'name="language"' not in request.content
+        else:
+            assert b'name="language"' in request.content
+            assert b'keywords' not in request.content and b'languages' not in request.content
+        assert b'no' in request.content
+        assert ('Norsk samtale'.encode() in request.content) is ("diarize" not in model)
+        assert b'Snake' not in request.content  # Do not bias every recording towards one demo app.
         assert b'sk-sdk-secret' not in request.content
     finally:
         await provider.close()
@@ -71,6 +82,44 @@ async def test_speech_uses_realtime_pcm_and_closes_connection():
     assert calls[0]["session"]["audio"]["output"]["format"] == {"type": "audio/pcm", "rate": 24000}
     assert "Hei fra FIRE" in calls[1]["item"]["content"][0]["text"]
     assert calls[-1] == "closed"
+
+
+async def test_cancelling_speech_releases_provider_connection_immediately():
+    started, closed = asyncio.Event(), asyncio.Event()
+
+    class Connection:
+        def __init__(self):
+            self.session = SimpleNamespace(update=self.ignore)
+            self.conversation = SimpleNamespace(item=SimpleNamespace(create=self.ignore))
+            self.response = SimpleNamespace(create=self.ignore)
+
+        async def ignore(self, **values):
+            pass
+
+        def __aiter__(self):
+            async def events():
+                started.set()
+                await asyncio.Event().wait()
+                yield  # never produces audio after cancellation
+            return events()
+
+    class Manager:
+        async def __aenter__(self):
+            return Connection()
+
+        async def __aexit__(self, *args):
+            closed.set()
+
+    provider = OpenAIProvider(Settings(_env_file=None, openai_api_key="test"))
+    provider.client = SimpleNamespace(realtime=SimpleNamespace(connect=lambda **values: Manager()))
+    async def consume():
+        return [chunk async for chunk in provider.speech("Dette avbrytes.")]
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(started.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 1)
+    assert closed.is_set()
 
 
 async def test_interrupted_realtime_function_is_not_an_accepted_plan():

@@ -41,6 +41,12 @@ def finish_event(service, record, result):
 
 
 async def cancel_turn(service, session):
+    old_turn = session.turn_id
+    if old_turn:
+        session.retired_turns = (session.retired_turns + [old_turn])[-32:]
+    session.turn_id = None  # invalidate old work BEFORE yielding to cancellation
+    if hasattr(service, "audio"):
+        service.audio.cancel(session)
     for task in (session.input_task, session.operation_task):
         if task and task is not asyncio.current_task() and not task.done():
             task.cancel()
@@ -53,9 +59,13 @@ async def cancel_turn(service, session):
         with contextlib.suppress(asyncio.CancelledError):
             await session.speech_task
     session.proposal_id, session.summary, session.turn_id = None, "", None
+    session.recording_started_at = None
+    session.last_error = ""
     if session.state not in {State.building, State.testing, State.running}:
         await service.state(session, State.idle if session.target == "device" else State.listening)
     await service.activity(session, "idle")
+    if old_turn:
+        await service.emit(session, {"type": "turn_cancelled", "turn_id": old_turn})
 
 
 async def text_task(service, session, text):
@@ -114,8 +124,20 @@ async def handle(service, session, event):
         await service.emit(session, {"type": "session_stopped"})
         return {"status": "stopped"}
     if name == "cancel_turn":
+        if event.turn_id and event.turn_id in session.retired_turns:
+            return {"status": "ignored", "reason": "retired_turn"}
+        if event.turn_id and event.turn_id != session.turn_id:
+            raise ValueError("No matching turn to cancel")
         await cancel_turn(service, session)
         return {"status": "cancelled"}
+    if name == "mode_select":
+        if session.state in {State.building, State.testing, State.running, State.starting, State.stopping, State.rollback_pending, State.awaiting_install}:
+            raise ValueError("Fullfør eller stopp app-handlingen før du bytter samtalemodus.")
+        await cancel_turn(service, session)
+        session.conversation_mode = event.conversation_mode
+        session.history = []
+        await service.emit(session, {"type": "conversation_mode", "conversation_mode": session.conversation_mode})
+        return {"conversation_mode": session.conversation_mode}
     if name == "app_stop":
         return {"stop_id": (await service.request_app_stop(session))["id"]}
     if name == "install_retry":
@@ -126,6 +148,8 @@ async def handle(service, session, event):
     if name in {"device_install_result", "app_started", "app_healthy", "app_failed", "app_stopped", "rollback_result"}:
         return await service.device_receipt(session, event)
     if name in {"audio_playback_started", "audio_playback_finished"}:
+        if event.turn_id in session.retired_turns:
+            return {"status": "ignored", "reason": "retired_turn"}
         await service.audio.playback(session, event)
         return {"status": "recorded"}
     if name == "button":
@@ -133,11 +157,21 @@ async def handle(service, session, event):
             raise ValueError("button and action are required")
         await service.emit(session, {"type": "ui_event", "event": "button_received", "button": event.button, "action": event.action})
         return {"status": "received"}
-    if session.input_task and not session.input_task.done():
-        raise ValueError("Session is busy")
     if name in {"text", "listen_start", "listen_stop"}:
-        if session.lock.locked() or session.state in {State.building, State.testing, State.running, State.starting, State.stopping, State.rollback_pending}:
-            raise ValueError("Session is busy")
+        if name == "text" and (not event.text or not event.text.strip()):
+            raise ValueError("Text is required")
+        if name == "listen_stop" and event.turn_id in session.retired_turns:
+            return {"status": "ignored", "reason": "retired_turn"}
+        if session.state in {State.building, State.testing, State.running, State.starting, State.stopping, State.rollback_pending}:
+            raise ValueError("App-handling pågår. Vent til den er ferdig, eller stopp appen før du snakker.")
+        if name in {"text", "listen_start"}:
+            if name == "listen_start":
+                require_audio_input(service.settings, session)
+                if event.turn_id in session.retired_turns:
+                    return {"status": "ignored", "reason": "retired_turn"}
+                if event.turn_id == session.turn_id and session.activity == "listening":
+                    return {"turn_id": session.turn_id, "status": "already_recording"}
+            await cancel_turn(service, session)
         if name == "text":
             if not event.text or not event.text.strip():
                 raise ValueError("Text is required")
@@ -160,6 +194,8 @@ async def handle(service, session, event):
             await service.state(session, State.listening)
             await service.activity(session, "listening")
         else:
+            if session.turn_id == event.turn_id and session.activity != "listening" and session.audio_status.get("phase") in {"awaiting_upload", "transcribing", "dialog", "text_ready", "generating_reply", "reply_ready", "playing", "played", "retry"}:
+                return {"turn_id": session.turn_id, "status": "already_stopped"}
             if session.turn_id != event.turn_id or session.activity != "listening":
                 raise ValueError("No matching recording")
             if session.recording_started_at is not None:
@@ -168,6 +204,8 @@ async def handle(service, session, event):
             await service.activity(session, "processing")
             service.audio.expect_upload(session)
         return {"turn_id": session.turn_id}
+    if session.input_task and not session.input_task.done():
+        raise ValueError("Venter på AI-svaret. Trykk B for å avbryte og snakke på nytt.")
     if name == "build_confirm":
         build = await service.confirm_build(session, event.proposal_id)
         return {"build_id": build["id"]}

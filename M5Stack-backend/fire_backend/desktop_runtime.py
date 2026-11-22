@@ -86,7 +86,8 @@ class DesktopRuntime:
         self.settings, self.failure = settings, ""
         self.logs = LogBuffer(settings)
         self.app = create_app(settings)
-        self.base_url = f"http://127.0.0.1:{settings.fire_backend_port}"
+        control_host = "[::1]" if ":" in settings.fire_backend_host else ("127.0.0.1" if settings.fire_backend_host == "0.0.0.0" else settings.fire_backend_host)
+        self.base_url = f"http://{control_host}:{settings.fire_backend_port}"
         config = uvicorn.Config(self.app, host=settings.fire_backend_host, port=settings.fire_backend_port,
                                 workers=1, access_log=False, ws_max_size=8192, log_config=None, loop="asyncio", http="h11")
         self.server = uvicorn.Server(config)
@@ -99,7 +100,7 @@ class DesktopRuntime:
             logger.setLevel(logging.INFO)
             try:
                 lock = WorkspaceLock(settings.fire_workspace)
-                listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                listener = socket.socket(socket.AF_INET6 if ":" in settings.fire_backend_host else socket.AF_INET, socket.SOCK_STREAM)
                 if os.name == "nt":
                     listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
                 listener.bind((settings.fire_backend_host, settings.fire_backend_port))
@@ -143,6 +144,9 @@ class DesktopRuntime:
 
     def send_text(self, session_id, text):
         return self.request("POST", f"/desktop/sessions/{session_id}/text", json={"text": text})
+
+    def conversation(self, session_id, **values):
+        return self.request("POST", f"/desktop/sessions/{session_id}/conversation", json=values)
 
     def install_saved(self, session_id, package_id):
         return self.request("POST", f"/desktop/sessions/{session_id}/install", json={"package_id": package_id})

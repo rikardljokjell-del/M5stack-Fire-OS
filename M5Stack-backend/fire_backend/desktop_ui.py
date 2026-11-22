@@ -253,7 +253,7 @@ class DesktopUI:
                    "ikke at hele tale-/byggeflyten virker. Bruk av OpenAI kan koste penger.", "Muted.TLabel").pack(anchor="w", pady=12)
 
     def activity_page(self, page):
-        self.label(page, "Beskriv appen her, eller bruk B på FIRE for taleopptak.", "Muted.TLabel").pack(anchor="w")
+        self.label(page, "Snakk med AI eller beskriv en app. B på FIRE starter et nytt opptak og avbryter forrige svar.", "Muted.TLabel").pack(anchor="w")
         row = ttk.Frame(page)
         row.pack(fill="x", pady=9)
         self.session_box = ttk.Combobox(row, textvariable=self.selected_session, state="readonly", width=48)
@@ -261,6 +261,11 @@ class DesktopUI:
         ttk.Button(row, text="Oppdater", command=self.refresh_now).pack(side="left", padx=(8, 0))
         self.new_app_button = ttk.Button(row, text="Ny app", command=self.new_app)
         self.new_app_button.pack(side="left", padx=(8, 0))
+        row = ttk.Frame(page)
+        row.pack(fill="x", pady=(0, 7))
+        ttk.Button(row, text="Kun samtale", command=lambda: self.set_conversation("chat")).pack(side="left")
+        ttk.Button(row, text="Lag/endre app", command=lambda: self.set_conversation("develop")).pack(side="left", padx=8)
+        ttk.Button(row, text="Avbryt AI-svar", command=self.cancel_conversation).pack(side="left")
         self.session_detail = self.label(page, "Ingen FIRE tilkoblet ennå.", wraplength=810)
         self.session_detail.pack(anchor="w", pady=(0, 7))
         self.pipeline_detail = self.label(page, "", wraplength=810, foreground=MUTED)
@@ -330,6 +335,18 @@ class DesktopUI:
         if session:
             self.work(lambda: self.runtime.select_app(session["session_id"], "new"),
                       done=lambda _: self.show("Aktivitet"), message="Velger ny app …")
+
+    def set_conversation(self, mode):
+        session = self.session()
+        if session:
+            self.work(lambda: self.runtime.conversation(session["session_id"], conversation_mode=mode),
+                      message="Bytter samtalemodus …")
+
+    def cancel_conversation(self):
+        session = self.session()
+        if session:
+            self.work(lambda: self.runtime.conversation(session["session_id"], action="cancel"),
+                      message="Avbryter AI-svaret …")
 
     def edit_saved(self):
         selected = self.apps_table.selection()
@@ -714,6 +731,8 @@ class DesktopUI:
             base = self.apps_rows.get(session.get("base_package_id"), {})
             choice = (f"Endrer {base.get('name', 'valgt app')} fra versjon {base.get('version', 'valgt basis')}" if session.get("app_mode") == "update"
                       else "Ny app")
+            if session.get("conversation_mode") == "chat":
+                choice = "Kun samtale · ingen app bygges"
             audio = session.get("audio_status", {})
             audio_hint = {"recording": "Tar opp tale …", "awaiting_upload": "Venter på lyd fra FIRE …",
                 "transcribing": "Gjenkjenner tale …", "dialog": "AI tolker bestillingen …",
@@ -721,6 +740,8 @@ class DesktopUI:
                 "playing": "FIRE spiller av lydsvaret", "played": "FIRE har kvittert for avspilling",
                 "upload_missing": "Lydfilen kom ikke frem", "input_failed": "Opptaket kunne ikke tolkes",
                 "reply_failed": "Lydsvaret feilet; tekstsvaret er beholdt"}.get(audio.get("phase"), "")
+            if audio.get("phase") == "retry":
+                audio_hint = "Klar for nytt opptak · trykk B"
             if audio_hint and audio.get("duration_seconds"):
                 audio_hint += f" · Lyd {audio['duration_seconds']:.1f} s"
                 if audio.get("recording_wall_seconds"):
@@ -728,7 +749,8 @@ class DesktopUI:
                 if audio.get("capture_rate_suspected") or audio.get("capture_gap_suspected"):
                     audio_hint += " · Kontroller mikrofonens tidsforhold"
             self.pipeline_detail.configure(text=choice + " · " + workflow + ("\n" + detail if detail else "")
-                                           + ("\n" + audio_hint if audio_hint else ""))
+                                           + ("\n" + audio_hint if audio_hint else "")
+                                           + ("\nJeg hørte: " + audio["transcript"][:200] if audio.get("transcript") else ""))
             device = next((d for d in self.snapshot["devices"] if d["id"] == session["device_id"]), {})
             self.session_detail.configure(text=f"Status: {session['state']}  ·  Installert: {device.get('installed_package_id') or '–'}\n"
                                                 f"Kjører: {device.get('running_package_id') or '–'}  ·  Fysisk test: ikke bekreftet")

@@ -97,6 +97,43 @@ async def test_realtime_text_contract_and_backend_owned_connection():
     await manager.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("context,expected", [
+    ("conversation_mode=chat\nDevice context", ""),
+    ("conversation_mode=develop\nDevice context", "Lag en sirkel"),
+    ("Device context\nconversation_mode=chat", "Lag en sirkel"),
+])
+async def test_provider_cannot_create_an_app_plan_in_authoritative_chat_mode(context, expected):
+    class Plan(FakeRealtime):
+        def __aiter__(self):
+            async def events():
+                yield SimpleNamespace(type="response.function_call_arguments.done", name="dialog_reply", arguments=json.dumps({
+                    "message": "En sirkel som spretter.", "clarification_needed": False, "build_summary": "Lag en sirkel"}))
+                yield SimpleNamespace(type="response.done", response=SimpleNamespace(status="completed"))
+            return events()
+    connection = Plan()
+    provider = OpenAIProvider(Settings(_env_file=None))
+    reply = await provider.dialog([{"role": "user", "content": "Lag en sirkel"}], context, connection)
+    assert reply.build_summary == expected
+    assert reply.message == "En sirkel som spretter."
+    assert not reply.clarification_needed
+
+
+async def test_reconnect_request_retains_corrections_and_agreed_requirements():
+    history = [
+        {"role": "user", "content": "Lag en grønn sirkel som spretter."},
+        {"role": "assistant", "content": "Forslag: en grønn sirkel som spretter."},
+        {"role": "user", "content": "Gjør den blå, og litt raskere."},
+    ]
+    connection = FakeRealtime()
+    provider = OpenAIProvider(Settings(_env_file=None))
+    await provider.dialog(history, "conversation_mode=develop\nDevice", connection)
+    request = connection.calls[0][1]["response"]
+    assert json.loads(request["input"][0]["content"][0]["text"]) == history
+    assert request["conversation"] == "none"
+    assert "a short correction" in request["instructions"]
+    assert "all still-agreed requirements" in request["instructions"].replace("\n", " ")
+
+
 class LeakyProvider(MockProvider):
     async def generate(self, *args, **kwargs):
         return GeneratedApp(name="No key", main_lua="local s='sk-test-very-secret-key'\nfunction init() end function update(dt) end", required_services=[])

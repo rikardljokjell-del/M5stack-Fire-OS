@@ -86,6 +86,7 @@ class SessionStart(StrictModel):
     capabilities: "Capabilities | None" = None
     resume_session_id: str | None = Field(default=None, pattern=ID_PATTERN)
     app_mode: Literal["new", "update"] | None = None
+    conversation_mode: Literal["chat", "develop"] | None = None
     app_id: str | None = Field(default=None, pattern=ID_PATTERN)
     base_package_id: str | None = Field(default=None, pattern=ID_PATTERN)
 
@@ -140,13 +141,14 @@ class DeviceApp(StrictModel):
 # Excluding absent extension defaults keeps pre-extension event replay hashes
 # compatible with persisted protocol-0.2 events.
 APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
-                      "offset": 0, "apps": [], "storage_ready": None, "complete": None}
+                      "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None}
 
 
 class DeviceEvent(StrictModel):
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select"]
+    conversation_mode: Literal["chat", "develop"] | None = None
     app_mode: Literal["new", "update"] | None = None
     app_id: str | None = Field(default=None, pattern=ID_PATTERN)
     base_package_id: str | None = Field(default=None, pattern=ID_PATTERN)
@@ -181,6 +183,8 @@ class DeviceEvent(StrictModel):
 
     @model_validator(mode="after")
     def versioned_envelope(self):
+        if self.event == "mode_select" and not self.conversation_mode:
+            raise ValueError("conversation_mode is required")
         if self.protocol_version == "0.2":
             if not self.event_id:
                 raise ValueError("Protocol 0.2 requires event_id")
