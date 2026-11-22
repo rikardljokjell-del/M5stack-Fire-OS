@@ -11,6 +11,19 @@ extern "C" {
 // narrow callbacks owned by FIRE OS.
 class FireLuaRuntime {
  public:
+  struct JobSnapshot {
+    enum ResultKind : uint8_t { None, I2cScan, Bytes, Write, Uart };
+    uint8_t state = 0;  // 0=pending, 1=ready, 2=failed, 3=cancelled
+    ResultKind resultKind = None;
+    String errorCode;
+    uint16_t addresses[126] = {};
+    uint16_t addressCount = 0;
+    uint8_t bytes[512] = {};
+    uint16_t byteCount = 0;
+    String text;
+    uint32_t written = 0;
+  };
+
   struct Host {
     void* context = nullptr;
     void (*displayClear)(void*, int) = nullptr;
@@ -18,10 +31,36 @@ class FireLuaRuntime {
     void (*displayRect)(void*, int, int, int, int, int) = nullptr;
     void (*displayLine)(void*, int, int, int, int, int) = nullptr;
     void (*displayText)(void*, int, int, const char*, int) = nullptr;
+    void (*displayFillRect)(void*, int, int, int, int, int) = nullptr;
+    void (*displayFillCircle)(void*, int, int, int, int) = nullptr;
+    void (*displayPixel)(void*, int, int, int) = nullptr;
+    void (*displayGrid)(void*, int, int, int, int, int, int,
+                        const uint8_t*, size_t, const uint16_t*, size_t) = nullptr;
     bool (*buttonPressed)(void*, const char*) = nullptr;
     void (*rgbSet)(void*, int, int, int, int) = nullptr;
     bool (*imuAccel)(void*, float*, float*, float*) = nullptr;
+    bool (*imuGyro)(void*, float*, float*, float*) = nullptr;
+    bool (*imuTemperature)(void*, float*) = nullptr;
     uint32_t (*timeMillis)(void*) = nullptr;
+    bool (*gpioMode)(void*, int, const char*, const char**) = nullptr;
+    bool (*gpioRead)(void*, int, int*, const char**) = nullptr;
+    bool (*gpioWrite)(void*, int, int, const char**) = nullptr;
+    bool (*gpioRelease)(void*, int, const char**) = nullptr;
+    bool (*pwmConfigure)(void*, int, int, int, const char**) = nullptr;
+    bool (*pwmWrite)(void*, int, int, const char**) = nullptr;
+    bool (*pwmStop)(void*, int, const char**) = nullptr;
+    bool (*uartOpen)(void*, int, int, int, int, const char*, const char**) = nullptr;
+    uint16_t (*uartRead)(void*, int, int, const char**) = nullptr;
+    uint16_t (*uartWrite)(void*, int, const char*, size_t, const char**) = nullptr;
+    bool (*uartClose)(void*, int, const char**) = nullptr;
+    uint16_t (*i2cScan)(void*, int, const char**) = nullptr;
+    uint16_t (*i2cRead)(void*, int, int, int, int, const char**) = nullptr;
+    uint16_t (*i2cWrite)(void*, int, int, const uint8_t*, size_t,
+                         const char**) = nullptr;
+    bool (*jobPoll)(void*, uint16_t, JobSnapshot*) = nullptr;
+    bool (*jobResult)(void*, uint16_t, JobSnapshot*) = nullptr;
+    bool (*jobClose)(void*, uint16_t) = nullptr;
+    bool (*jobCancel)(void*, uint16_t) = nullptr;
   };
 
   static constexpr size_t kMaxSourceBytes = 100000;
@@ -32,6 +71,8 @@ class FireLuaRuntime {
   static constexpr uint32_t kDefaultRuntimeMs = kMaxRuntimeMs;
 
   bool begin(const Host& host);
+  void setHardwareApi(bool enabled) { hardwareApi_ = enabled; }
+  void setServiceMask(uint32_t mask) { serviceMask_ = mask; }
   void setMaxRuntimeMs(uint32_t maxRuntimeMs);
   bool loadSource(const uint8_t* source, size_t length);
   void stop();
@@ -46,6 +87,8 @@ class FireLuaRuntime {
   uint32_t lastCallbackUs() const { return lastCallbackUs_; }
   uint32_t frameCount() const { return frames_; }
   size_t sourceBytes() const { return sourceBytes_; }
+  static const char* hardwareApiContract();
+  static const char* hardwareApiVersion() { return "fire-lua-0.2"; }
   const char* lastPhase() const;
 
  private:
@@ -67,6 +110,11 @@ class FireLuaRuntime {
   enum class CallbackPhase : uint8_t { None, Load, Init, Update, OnButton };
   CallbackPhase callbackPhase_ = CallbackPhase::None;
   size_t memoryUsed_ = 0;
+  bool hardwareApi_ = false;
+  uint32_t serviceMask_ = 0x1FU;
+  uint16_t ioCalls_ = 0;
+  uint16_t ioBytes_ = 0;
+  uint16_t textBytes_ = 0;
 
   static void* allocator(void* user, void* pointer, size_t oldSize,
                          size_t newSize);
@@ -75,6 +123,7 @@ class FireLuaRuntime {
   static void registerApi(lua_State* state);
   static void registerBase(lua_State* state);
   static void registerMath(lua_State* state);
+  static void registerSafeHelpers(lua_State* state);
   static void removeUnsafeGlobals(lua_State* state);
   static bool checkColor(lua_State* state, int index);
   static int displayClear(lua_State* state);
@@ -82,11 +131,38 @@ class FireLuaRuntime {
   static int displayRect(lua_State* state);
   static int displayLine(lua_State* state);
   static int displayText(lua_State* state);
+  static int displayFillRect(lua_State* state);
+  static int displayFillCircle(lua_State* state);
+  static int displayPixel(lua_State* state);
+  static int displayGrid(lua_State* state);
   static int buttonPressed(lua_State* state);
   static int rgbSet(lua_State* state);
   static int imuAccel(lua_State* state);
+  static int imuGyro(lua_State* state);
+  static int imuTemperature(lua_State* state);
   static int timeMillis(lua_State* state);
+  static int gpioMode(lua_State* state);
+  static int gpioRead(lua_State* state);
+  static int gpioWrite(lua_State* state);
+  static int gpioRelease(lua_State* state);
+  static int pwmConfigure(lua_State* state);
+  static int pwmWrite(lua_State* state);
+  static int pwmStop(lua_State* state);
+  static int uartOpen(lua_State* state);
+  static int uartRead(lua_State* state);
+  static int uartWrite(lua_State* state);
+  static int uartClose(lua_State* state);
+  static int i2cScan(lua_State* state);
+  static int i2cRead(lua_State* state);
+  static int i2cWrite(lua_State* state);
+  static int jobsPoll(lua_State* state);
+  static int jobsResult(lua_State* state);
+  static int jobsClose(lua_State* state);
+  static int jobsCancel(lua_State* state);
   static void setFunction(lua_State* state, const char* name, lua_CFunction fn);
+  static bool serviceAllowed(const FireLuaRuntime* runtime, uint32_t bit);
+  bool chargeIo(size_t bytes, bool text = false);
+  static int pushError(lua_State* state, const char* error);
 
   bool callVoid(const char* function, int argumentCount = 0);
   void beginCallback(CallbackPhase phase, uint32_t budgetMs);

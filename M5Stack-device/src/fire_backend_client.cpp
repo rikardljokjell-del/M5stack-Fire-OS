@@ -2,6 +2,7 @@
 
 #include <base64.h>
 #include <esp_system.h>
+#include "fire_lua_runtime.h"
 
 namespace {
 constexpr size_t kMaxFrameBytes = 8192;
@@ -755,7 +756,9 @@ void FireBackendClient::handleHandshake() {
   setState(State::Connected, "Waiting for backend session");
   const String fields = ",\"target\":\"device\",\"boot_id\":\"" +
                         jsonEscape(bootId_) +
-                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":true,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
+                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.2\",\"api_contract\":\"" +
+                        FireLuaRuntime::hardwareApiContract() +
+                        "\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\",\"jobs\",\"gpio\",\"pwm\",\"i2c\",\"uart\"],\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[],\"dac\":[],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":[64],\"uart\":[2],\"spi\":[]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":true,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
                         jsonEscape(firmwareVersion_) + "\"}";
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +

@@ -318,6 +318,41 @@ class FireOS {
   uint8_t luaAppCount_ = 0;
   bool fileExplorerScanPending_ = false;
 
+  enum class LuaJobKind : uint8_t { None, I2cScan, I2cRead, I2cWrite,
+                                    UartRead, UartWrite };
+  struct LuaHardwareJob {
+    uint16_t id = 0;
+    LuaJobKind kind = LuaJobKind::None;
+    uint8_t state = 0;  // 0=pending, 1=ready, 2=failed, 3=cancelled
+    uint32_t startedAt = 0;
+    uint32_t lastProgressAt = 0;
+    uint8_t bus = 0;
+    uint8_t address = 0;
+    int16_t reg = -1;
+    uint16_t count = 0;
+    uint16_t step = 0;
+    uint8_t payload[128] = {};
+    uint16_t payloadCount = 0;
+    uint8_t bytes[512] = {};
+    uint16_t byteCount = 0;
+    uint16_t addresses[126] = {};
+    uint16_t addressCount = 0;
+    uint32_t written = 0;
+    String text;
+    String errorCode;
+  };
+  static constexpr uint8_t kMaxLuaJobs = 4;
+  LuaHardwareJob luaJobs_[kMaxLuaJobs];
+  uint16_t nextLuaJobId_ = 1;
+  bool luaGpioClaimed_[40] = {};
+  uint8_t luaGpioMode_[40] = {};
+  int8_t luaPwmPin_ = -1;
+  uint8_t luaPwmChannel_ = 7;
+  bool luaI2cStarted_ = false;
+  bool luaUartOpen_ = false;
+  int luaUartRxPin_ = -1;
+  int luaUartTxPin_ = -1;
+
   FireLuaRuntime* luaRuntime_ = nullptr;
   bool luaRuntimeReady_ = false;
   bool luaAppActive_ = false;
@@ -499,6 +534,33 @@ class FireOS {
   void releaseSdImageBuffer();
   void scanExternalApps();
   void scanLuaApps();
+  void serviceLuaHardwareJobs();
+  void releaseLuaHardware();
+  LuaHardwareJob* findLuaJob(uint16_t id);
+  const LuaHardwareJob* findLuaJob(uint16_t id) const;
+  uint16_t createLuaJob(LuaJobKind kind, const char** error);
+  static void setLuaError(const char** error, const char* value);
+  bool luaI2cAllowed(uint8_t bus, uint8_t address, bool write) const;
+  bool luaGpioAllowed(int pin, bool write) const;
+  bool luaPwmAllowed(int pin) const;
+  static bool luaGpioModeCallback(void*, int, const char*, const char**);
+  static bool luaGpioReadCallback(void*, int, int*, const char**);
+  static bool luaGpioWriteCallback(void*, int, int, const char**);
+  static bool luaGpioReleaseCallback(void*, int, const char**);
+  static bool luaPwmConfigureCallback(void*, int, int, int, const char**);
+  static bool luaPwmWriteCallback(void*, int, int, const char**);
+  static bool luaPwmStopCallback(void*, int, const char**);
+  static bool luaUartOpenCallback(void*, int, int, int, int, const char*, const char**);
+  static uint16_t luaUartReadCallback(void*, int, int, const char**);
+  static uint16_t luaUartWriteCallback(void*, int, const char*, size_t, const char**);
+  static bool luaUartCloseCallback(void*, int, const char**);
+  static uint16_t luaI2cScanCallback(void*, int, const char**);
+  static uint16_t luaI2cReadCallback(void*, int, int, int, int, const char**);
+  static uint16_t luaI2cWriteCallback(void*, int, int, const uint8_t*, size_t, const char**);
+  static bool luaJobPollCallback(void*, uint16_t, FireLuaRuntime::JobSnapshot*);
+  static bool luaJobResultCallback(void*, uint16_t, FireLuaRuntime::JobSnapshot*);
+  static bool luaJobCloseCallback(void*, uint16_t);
+  static bool luaJobCancelCallback(void*, uint16_t);
   void rebuildAppManagerItems();
   int8_t managerItemForAppId(const String& appId) const;
   void sendAppInventory();
@@ -678,10 +740,21 @@ class FireOS {
                              int color);
   static void luaDisplayText(void* context, int x, int y, const char* text,
                              int color);
+  static void luaDisplayFillRect(void* context, int x, int y, int width,
+                                 int height, int color);
+  static void luaDisplayFillCircle(void* context, int x, int y, int radius,
+                                   int color);
+  static void luaDisplayPixel(void* context, int x, int y, int color);
+  static void luaDisplayGrid(void* context, int x, int y, int cellWidth,
+                             int cellHeight, int columns, int rows,
+                             const uint8_t* cells, size_t cellCount,
+                             const uint16_t* palette, size_t paletteCount);
   static bool luaButtonPressed(void* context, const char* button);
   static void luaRgbSet(void* context, int index, int red, int green,
                         int blue);
   static bool luaImuAccel(void* context, float* x, float* y, float* z);
+  static bool luaImuGyro(void* context, float* x, float* y, float* z);
+  static bool luaImuTemperature(void* context, float* value);
   static uint32_t luaTimeMillis(void* context);
 };
 

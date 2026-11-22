@@ -424,8 +424,12 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
       manifestIntField(manifest, "max_memory", FireLuaRuntime::kMaxMemoryBytes);
   const int maxRuntime = manifestIntField(
       manifest, "max_runtime_ms", FireLuaRuntime::kDefaultRuntimeMs);
+  const String manifestApi = manifestField(manifest, "api_version");
+  const bool hardwareApi = manifestApi == "fire-lua-0.2";
   if (manifestField(manifest, "id") != appId ||
-      manifestField(manifest, "api_version") != "fire-lua-0.1" ||
+      (manifestApi != "fire-lua-0.1" && !hardwareApi) ||
+      (hardwareApi && manifestField(manifest, "api_contract") !=
+                          FireLuaRuntime::hardwareApiContract()) ||
       !manifestField(manifest, "checksum").equalsIgnoreCase(
           hexDigest(payloadDigest, sizeof(payloadDigest)))) {
     reason = "Manifest or Lua checksum mismatch";

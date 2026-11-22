@@ -10,6 +10,16 @@ extern "C" {
 namespace {
 constexpr int kDisplayWidth = 320;
 constexpr int kDisplayHeight = 240;
+constexpr uint32_t kServiceDisplay = 1u << 0;
+constexpr uint32_t kServiceButtons = 1u << 1;
+constexpr uint32_t kServiceRgb = 1u << 2;
+constexpr uint32_t kServiceImu = 1u << 3;
+constexpr uint32_t kServiceTime = 1u << 4;
+constexpr uint32_t kServiceJobs = 1u << 5;
+constexpr uint32_t kServiceGpio = 1u << 6;
+constexpr uint32_t kServicePwm = 1u << 7;
+constexpr uint32_t kServiceI2c = 1u << 8;
+constexpr uint32_t kServiceUart = 1u << 9;
 
 int boundedInt(lua_State* state, int index, int minimum, int maximum) {
   const lua_Integer value = luaL_checkinteger(state, index);
@@ -20,6 +30,10 @@ const char* checkedString(lua_State* state, int index) {
   return luaL_checklstring(state, index, nullptr);
 }
 }  // namespace
+
+const char* FireLuaRuntime::hardwareApiContract() {
+  return "0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40";
+}
 
 void* FireLuaRuntime::allocator(void* user, void* pointer, size_t oldSize,
                                 size_t newSize) {
@@ -79,35 +93,108 @@ void FireLuaRuntime::setFunction(lua_State* state, const char* name,
   lua_setfield(state, -2, name);
 }
 
+bool FireLuaRuntime::serviceAllowed(const FireLuaRuntime* runtime,
+                                    uint32_t bit) {
+  return runtime && (runtime->serviceMask_ & bit) != 0;
+}
+
+bool FireLuaRuntime::chargeIo(size_t bytes, bool text) {
+  if (++ioCalls_ > 64 || ioBytes_ + bytes > 2048) return false;
+  if (text && textBytes_ + bytes > 256) return false;
+  ioBytes_ = static_cast<uint16_t>(ioBytes_ + min<size_t>(bytes, 65535));
+  if (text) textBytes_ = static_cast<uint16_t>(textBytes_ + min<size_t>(bytes, 65535));
+  return true;
+}
+
+int FireLuaRuntime::pushError(lua_State* state, const char* error) {
+  lua_pushnil(state);
+  lua_pushstring(state, error ? error : "unavailable");
+  return 2;
+}
+
 void FireLuaRuntime::registerApi(lua_State* state) {
   auto* runtime = self(state);
   if (!runtime) return;
 
   lua_newtable(state);  // fire
 
-  lua_newtable(state);  // fire.display
-  setFunction(state, "clear", displayClear);
-  setFunction(state, "circle", displayCircle);
-  setFunction(state, "rect", displayRect);
-  setFunction(state, "line", displayLine);
-  setFunction(state, "text", displayText);
-  lua_setfield(state, -2, "display");
-
-  lua_newtable(state);  // fire.buttons
-  setFunction(state, "pressed", buttonPressed);
-  lua_setfield(state, -2, "buttons");
-
-  lua_newtable(state);  // fire.rgb
-  setFunction(state, "set", rgbSet);
-  lua_setfield(state, -2, "rgb");
-
-  lua_newtable(state);  // fire.imu
-  setFunction(state, "accel", imuAccel);
-  lua_setfield(state, -2, "imu");
-
-  lua_newtable(state);  // fire.time
-  setFunction(state, "millis", timeMillis);
-  lua_setfield(state, -2, "time");
+  if (serviceAllowed(runtime, kServiceDisplay)) {
+    lua_newtable(state);  // fire.display
+    setFunction(state, "clear", displayClear);
+    setFunction(state, "circle", displayCircle);
+    setFunction(state, "rect", displayRect);
+    setFunction(state, "line", displayLine);
+    setFunction(state, "text", displayText);
+    if (runtime->hardwareApi_) {
+      setFunction(state, "fill_rect", displayFillRect);
+      setFunction(state, "fill_circle", displayFillCircle);
+      setFunction(state, "pixel", displayPixel);
+      setFunction(state, "grid", displayGrid);
+    }
+    lua_setfield(state, -2, "display");
+  }
+  if (serviceAllowed(runtime, kServiceButtons)) {
+    lua_newtable(state);
+    setFunction(state, "pressed", buttonPressed);
+    lua_setfield(state, -2, "buttons");
+  }
+  if (serviceAllowed(runtime, kServiceRgb)) {
+    lua_newtable(state);
+    setFunction(state, "set", rgbSet);
+    lua_setfield(state, -2, "rgb");
+  }
+  if (serviceAllowed(runtime, kServiceImu)) {
+    lua_newtable(state);
+    setFunction(state, "accel", imuAccel);
+    if (runtime->hardwareApi_) {
+      setFunction(state, "gyro", imuGyro);
+      setFunction(state, "temperature", imuTemperature);
+    }
+    lua_setfield(state, -2, "imu");
+  }
+  if (serviceAllowed(runtime, kServiceTime)) {
+    lua_newtable(state);
+    setFunction(state, "millis", timeMillis);
+    lua_setfield(state, -2, "time");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceJobs)) {
+    lua_newtable(state);
+    setFunction(state, "poll", jobsPoll);
+    setFunction(state, "result", jobsResult);
+    setFunction(state, "close", jobsClose);
+    setFunction(state, "cancel", jobsCancel);
+    lua_setfield(state, -2, "jobs");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceGpio)) {
+    lua_newtable(state);
+    setFunction(state, "mode", gpioMode);
+    setFunction(state, "read", gpioRead);
+    setFunction(state, "write", gpioWrite);
+    setFunction(state, "release", gpioRelease);
+    lua_setfield(state, -2, "gpio");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServicePwm)) {
+    lua_newtable(state);
+    setFunction(state, "configure", pwmConfigure);
+    setFunction(state, "write", pwmWrite);
+    setFunction(state, "stop", pwmStop);
+    lua_setfield(state, -2, "pwm");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceI2c)) {
+    lua_newtable(state);
+    setFunction(state, "scan", i2cScan);
+    setFunction(state, "read", i2cRead);
+    setFunction(state, "write", i2cWrite);
+    lua_setfield(state, -2, "i2c");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceUart)) {
+    lua_newtable(state);
+    setFunction(state, "open", uartOpen);
+    setFunction(state, "read", uartRead);
+    setFunction(state, "write", uartWrite);
+    setFunction(state, "close", uartClose);
+    lua_setfield(state, -2, "uart");
+  }
 
   lua_setglobal(state, "fire");
 }
@@ -184,6 +271,126 @@ void FireLuaRuntime::registerBase(lua_State* state) {
   setFunction(state, "pairs", luaBasePairs);
   setFunction(state, "ipairs", luaBaseIpairs);
   lua_pop(state, 1);
+}
+
+namespace {
+int luaStringLen(lua_State* state) {
+  size_t length = 0;
+  luaL_checklstring(state, 1, &length);
+  lua_pushinteger(state, static_cast<lua_Integer>(length));
+  return 1;
+}
+
+int luaStringSub(lua_State* state) {
+  const char* value = luaL_checkstring(state, 1);
+  const int start = boundedInt(state, 2, -512, 512);
+  const int end = lua_gettop(state) >= 3 ? boundedInt(state, 3, -512, 512) : -1;
+  String text(value);
+  const int length = static_cast<int>(text.length());
+  int first = start >= 0 ? start : length + start + 1;
+  int last = end == -1 ? length : (end >= 0 ? end : length + end + 1);
+  first = max(1, first);
+  last = min(length, last);
+  if (first > last) {
+    lua_pushliteral(state, "");
+  } else {
+    lua_pushlstring(state, text.substring(first - 1, last).c_str(),
+                    static_cast<size_t>(last - first + 1));
+  }
+  return 1;
+}
+
+int luaStringByte(lua_State* state) {
+  const char* value = luaL_checkstring(state, 1);
+  const int index = boundedInt(state, 2, 1, 512);
+  if (index > static_cast<int>(strlen(value))) {
+    lua_pushnil(state);
+    return 1;
+  }
+  lua_pushinteger(state, static_cast<unsigned char>(value[index - 1]));
+  return 1;
+}
+
+int luaStringChar(lua_State* state) {
+  const int count = lua_gettop(state);
+  if (count > 16) return luaL_error(state, "string.char limit");
+  char buffer[17] = {};
+  for (int index = 1; index <= count; ++index)
+    buffer[index - 1] = static_cast<char>(boundedInt(state, index, 0, 255));
+  lua_pushlstring(state, buffer, count);
+  return 1;
+}
+
+int luaTableConcat(lua_State* state) {
+  luaL_checktype(state, 1, LUA_TTABLE);
+  const char* separator = lua_gettop(state) >= 2 ? luaL_checkstring(state, 2) : "";
+  String output;
+  for (int index = 1; index <= 128; ++index) {
+    lua_geti(state, 1, index);
+    if (lua_isnil(state, -1)) {
+      lua_pop(state, 1);
+      break;
+    }
+    if (!lua_isstring(state, -1)) return luaL_error(state, "table.concat value");
+    if (output.length() > 0) output += separator;
+    output += lua_tostring(state, -1);
+    lua_pop(state, 1);
+    if (output.length() > 512) return luaL_error(state, "table.concat too long");
+  }
+  lua_pushlstring(state, output.c_str(), output.length());
+  return 1;
+}
+
+int luaTableInsert(lua_State* state) {
+  luaL_checktype(state, 1, LUA_TTABLE);
+  const int top = static_cast<int>(lua_rawlen(state, 1));
+  if (top >= 128) return luaL_error(state, "table limit");
+  const int position = lua_gettop(state) >= 3 ? boundedInt(state, 2, 1, top + 1) : top + 1;
+  if (lua_gettop(state) >= 3) {
+    for (int index = top + 1; index > position; --index) {
+      lua_geti(state, 1, index - 1);
+      lua_seti(state, 1, index);
+    }
+    lua_pushvalue(state, 3);
+    lua_seti(state, 1, position);
+  } else {
+    lua_pushvalue(state, 2);
+    lua_seti(state, 1, top + 1);
+  }
+  return 0;
+}
+
+int luaTableRemove(lua_State* state) {
+  luaL_checktype(state, 1, LUA_TTABLE);
+  const int top = static_cast<int>(lua_rawlen(state, 1));
+  if (top == 0) {
+    lua_pushnil(state);
+    return 1;
+  }
+  const int position = lua_gettop(state) >= 2 ? boundedInt(state, 2, 1, top) : top;
+  lua_geti(state, 1, position);
+  for (int index = position; index < top; ++index) {
+    lua_geti(state, 1, index + 1);
+    lua_seti(state, 1, index);
+  }
+  lua_pushnil(state);
+  lua_seti(state, 1, top);
+  return 1;
+}
+}  // namespace
+
+void FireLuaRuntime::registerSafeHelpers(lua_State* state) {
+  lua_newtable(state);
+  setFunction(state, "len", luaStringLen);
+  setFunction(state, "sub", luaStringSub);
+  setFunction(state, "byte", luaStringByte);
+  setFunction(state, "char", luaStringChar);
+  lua_setglobal(state, "string");
+  lua_newtable(state);
+  setFunction(state, "concat", luaTableConcat);
+  setFunction(state, "insert", luaTableInsert);
+  setFunction(state, "remove", luaTableRemove);
+  lua_setglobal(state, "table");
 }
 
 namespace {
@@ -286,6 +493,7 @@ bool FireLuaRuntime::begin(const Host& host) {
   // Only the small, safe subset needed by generated apps is exposed.
   registerBase(lua_);
   registerMath(lua_);
+  if (hardwareApi_) registerSafeHelpers(lua_);
   removeUnsafeGlobals(lua_);
   registerApi(lua_);
   lua_sethook(lua_, instructionHook, LUA_MASKCOUNT, 1000);
@@ -307,6 +515,9 @@ void FireLuaRuntime::beginCallback(CallbackPhase phase, uint32_t budgetMs) {
   instructions_ = 0;
   frameStarted_ = millis();
   callbackStartedUs_ = static_cast<uint64_t>(esp_timer_get_time());
+  ioCalls_ = 0;
+  ioBytes_ = 0;
+  textBytes_ = 0;
 }
 
 void FireLuaRuntime::finishCallback() {
@@ -474,6 +685,7 @@ bool FireLuaRuntime::checkColor(lua_State* state, int index) {
 int FireLuaRuntime::displayClear(lua_State* state) {
   auto* runtime = self(state);
   const int color = boundedInt(state, 1, 0, 65535);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   if (runtime->host_.displayClear) runtime->host_.displayClear(runtime->host_.context, color);
   return 0;
 }
@@ -484,6 +696,7 @@ int FireLuaRuntime::displayCircle(lua_State* state) {
   const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
   const int radius = boundedInt(state, 3, 0, kDisplayWidth);
   if (!checkColor(state, 4)) return luaL_error(state, "invalid color");
+  if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   const int color = static_cast<int>(lua_tointeger(state, 4));
   if (runtime->host_.displayCircle) runtime->host_.displayCircle(runtime->host_.context, x, y, radius, color);
   return 0;
@@ -496,6 +709,7 @@ int FireLuaRuntime::displayRect(lua_State* state) {
   const int width = boundedInt(state, 3, 0, kDisplayWidth);
   const int height = boundedInt(state, 4, 0, kDisplayHeight);
   if (!checkColor(state, 5)) return luaL_error(state, "invalid color");
+  if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   const int color = static_cast<int>(lua_tointeger(state, 5));
   if (runtime->host_.displayRect) runtime->host_.displayRect(runtime->host_.context, x, y, width, height, color);
   return 0;
@@ -508,6 +722,7 @@ int FireLuaRuntime::displayLine(lua_State* state) {
   const int x2 = boundedInt(state, 3, 0, kDisplayWidth - 1);
   const int y2 = boundedInt(state, 4, 0, kDisplayHeight - 1);
   if (!checkColor(state, 5)) return luaL_error(state, "invalid color");
+  if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   const int color = static_cast<int>(lua_tointeger(state, 5));
   if (runtime->host_.displayLine) runtime->host_.displayLine(runtime->host_.context, x1, y1, x2, y2, color);
   return 0;
@@ -519,8 +734,90 @@ int FireLuaRuntime::displayText(lua_State* state) {
   const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
   const char* text = checkedString(state, 3);
   if (strlen(text) > 80) return luaL_error(state, "text too long");
+  if (!runtime->chargeIo(strlen(text), true))
+    return luaL_error(state, "display io budget exceeded");
   if (!checkColor(state, 4)) return luaL_error(state, "invalid color");
   if (runtime->host_.displayText) runtime->host_.displayText(runtime->host_.context, x, y, text, static_cast<int>(lua_tointeger(state, 4)));
+  return 0;
+}
+
+int FireLuaRuntime::displayFillRect(lua_State* state) {
+  auto* runtime = self(state);
+  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
+  const int width = boundedInt(state, 3, 1, kDisplayWidth);
+  const int height = boundedInt(state, 4, 1, kDisplayHeight);
+  if (!checkColor(state, 5)) return luaL_error(state, "invalid color");
+  if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
+  if (runtime->host_.displayFillRect)
+    runtime->host_.displayFillRect(runtime->host_.context, x, y, width, height,
+                                   static_cast<int>(lua_tointeger(state, 5)));
+  return 0;
+}
+
+int FireLuaRuntime::displayFillCircle(lua_State* state) {
+  auto* runtime = self(state);
+  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
+  const int radius = boundedInt(state, 3, 0, 160);
+  if (!checkColor(state, 4)) return luaL_error(state, "invalid color");
+  if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
+  if (runtime->host_.displayFillCircle)
+    runtime->host_.displayFillCircle(runtime->host_.context, x, y, radius,
+                                     static_cast<int>(lua_tointeger(state, 4)));
+  return 0;
+}
+
+int FireLuaRuntime::displayPixel(lua_State* state) {
+  auto* runtime = self(state);
+  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
+  if (!checkColor(state, 3)) return luaL_error(state, "invalid color");
+  if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
+  if (runtime->host_.displayPixel)
+    runtime->host_.displayPixel(runtime->host_.context, x, y,
+                                static_cast<int>(lua_tointeger(state, 3)));
+  return 0;
+}
+
+int FireLuaRuntime::displayGrid(lua_State* state) {
+  auto* runtime = self(state);
+  const int x = boundedInt(state, 1, 0, 319);
+  const int y = boundedInt(state, 2, 0, 239);
+  const int cellWidth = boundedInt(state, 3, 1, 32);
+  const int cellHeight = boundedInt(state, 4, 1, 32);
+  const int columns = boundedInt(state, 5, 1, 32);
+  const int rows = boundedInt(state, 6, 1, 32);
+  luaL_checktype(state, 7, LUA_TTABLE);
+  luaL_checktype(state, 8, LUA_TTABLE);
+  const size_t cellCount = static_cast<size_t>(columns) * rows;
+  if (cellCount > 384 || !runtime->chargeIo(cellCount, false))
+    return luaL_error(state, "display grid budget exceeded");
+  uint8_t cells[384] = {};
+  uint16_t palette[16] = {};
+  const int paletteCount = static_cast<int>(lua_rawlen(state, 8));
+  if (paletteCount < 1 || paletteCount > 16)
+    return luaL_error(state, "invalid palette");
+  for (int index = 1; index <= paletteCount; ++index) {
+    lua_geti(state, 8, index);
+    if (!lua_isinteger(state, -1) || !checkColor(state, -1))
+      return luaL_error(state, "invalid palette");
+    palette[index - 1] = static_cast<uint16_t>(lua_tointeger(state, -1));
+    lua_pop(state, 1);
+  }
+  for (size_t index = 0; index < cellCount; ++index) {
+    lua_geti(state, 7, static_cast<lua_Integer>(index + 1));
+    if (!lua_isinteger(state, -1)) return luaL_error(state, "invalid cells");
+    const lua_Integer value = lua_tointeger(state, -1);
+    lua_pop(state, 1);
+    if (value < 0 || value >= paletteCount)
+      return luaL_error(state, "invalid cell index");
+    cells[index] = static_cast<uint8_t>(value);
+  }
+  if (runtime->host_.displayGrid)
+    runtime->host_.displayGrid(runtime->host_.context, x, y, cellWidth,
+                               cellHeight, columns, rows, cells, cellCount,
+                               palette, paletteCount);
   return 0;
 }
 
@@ -555,8 +852,328 @@ int FireLuaRuntime::imuAccel(lua_State* state) {
   return 1;
 }
 
+int FireLuaRuntime::imuGyro(lua_State* state) {
+  auto* runtime = self(state);
+  float x = 0.0f, y = 0.0f, z = 0.0f;
+  if (!runtime->host_.imuGyro ||
+      !runtime->host_.imuGyro(runtime->host_.context, &x, &y, &z))
+    return pushError(state, "unavailable");
+  lua_newtable(state);
+  lua_pushnumber(state, x);
+  lua_setfield(state, -2, "x");
+  lua_pushnumber(state, y);
+  lua_setfield(state, -2, "y");
+  lua_pushnumber(state, z);
+  lua_setfield(state, -2, "z");
+  return 1;
+}
+
+int FireLuaRuntime::imuTemperature(lua_State* state) {
+  auto* runtime = self(state);
+  float value = 0.0f;
+  if (!runtime->host_.imuTemperature ||
+      !runtime->host_.imuTemperature(runtime->host_.context, &value))
+    return pushError(state, "unavailable");
+  lua_pushnumber(state, value);
+  return 1;
+}
+
 int FireLuaRuntime::timeMillis(lua_State* state) {
   auto* runtime = self(state);
   lua_pushinteger(state, runtime->host_.timeMillis ? runtime->host_.timeMillis(runtime->host_.context) : millis());
+  return 1;
+}
+
+int FireLuaRuntime::gpioMode(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = boundedInt(state, 1, 0, 39);
+  const char* mode = checkedString(state, 2);
+  const char* error = nullptr;
+  if (!runtime->host_.gpioMode ||
+      !runtime->host_.gpioMode(runtime->host_.context, pin, mode, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::gpioRead(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = boundedInt(state, 1, 0, 39);
+  const char* error = nullptr;
+  int value = 0;
+  if (!runtime->host_.gpioRead ||
+      !runtime->host_.gpioRead(runtime->host_.context, pin, &value, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushinteger(state, value);
+  return 1;
+}
+
+int FireLuaRuntime::gpioWrite(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = boundedInt(state, 1, 0, 33);
+  const int value = boundedInt(state, 2, 0, 1);
+  const char* error = nullptr;
+  if (!runtime->host_.gpioWrite ||
+      !runtime->host_.gpioWrite(runtime->host_.context, pin, value, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::gpioRelease(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = boundedInt(state, 1, 0, 39);
+  const char* error = nullptr;
+  if (!runtime->host_.gpioRelease ||
+      !runtime->host_.gpioRelease(runtime->host_.context, pin, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::pwmConfigure(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = boundedInt(state, 1, 0, 33);
+  const int frequency = boundedInt(state, 2, 1, 20000);
+  const int resolution = boundedInt(state, 3, 1, 12);
+  const char* error = nullptr;
+  if (!runtime->host_.pwmConfigure ||
+      !runtime->host_.pwmConfigure(runtime->host_.context, pin, frequency,
+                                    resolution, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::pwmWrite(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = boundedInt(state, 1, 0, 33);
+  const int duty = boundedInt(state, 2, 0, 4095);
+  const char* error = nullptr;
+  if (!runtime->host_.pwmWrite ||
+      !runtime->host_.pwmWrite(runtime->host_.context, pin, duty, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::pwmStop(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = boundedInt(state, 1, 0, 33);
+  const char* error = nullptr;
+  if (!runtime->host_.pwmStop ||
+      !runtime->host_.pwmStop(runtime->host_.context, pin, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::uartOpen(lua_State* state) {
+  auto* runtime = self(state);
+  const int port = boundedInt(state, 1, 1, 2);
+  const int baud = boundedInt(state, 2, 300, 1000000);
+  const int rx = boundedInt(state, 3, 0, 39);
+  const int tx = boundedInt(state, 4, 0, 33);
+  const char* format = checkedString(state, 5);
+  const char* error = nullptr;
+  if (!runtime->host_.uartOpen ||
+      !runtime->host_.uartOpen(runtime->host_.context, port, baud, rx, tx,
+                               format, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::uartRead(lua_State* state) {
+  auto* runtime = self(state);
+  const int port = boundedInt(state, 1, 1, 2);
+  const int maxBytes = boundedInt(state, 2, 1, 512);
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.uartRead
+                           ? runtime->host_.uartRead(runtime->host_.context,
+                                                     port, maxBytes, &error)
+                           : 0;
+  if (job == 0) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::uartWrite(lua_State* state) {
+  auto* runtime = self(state);
+  const int port = boundedInt(state, 1, 1, 2);
+  size_t length = 0;
+  const char* text = luaL_checklstring(state, 2, &length);
+  if (length > 512) return pushError(state, "payload_too_large");
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.uartWrite
+                           ? runtime->host_.uartWrite(runtime->host_.context,
+                                                      port, text, length, &error)
+                           : 0;
+  if (job == 0) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::uartClose(lua_State* state) {
+  auto* runtime = self(state);
+  const int port = boundedInt(state, 1, 1, 2);
+  const char* error = nullptr;
+  if (!runtime->host_.uartClose ||
+      !runtime->host_.uartClose(runtime->host_.context, port, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::i2cScan(lua_State* state) {
+  auto* runtime = self(state);
+  const int bus = boundedInt(state, 1, 0, 1);
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.i2cScan
+                           ? runtime->host_.i2cScan(runtime->host_.context, bus,
+                                                    &error)
+                           : 0;
+  if (job == 0) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::i2cRead(lua_State* state) {
+  auto* runtime = self(state);
+  const int bus = boundedInt(state, 1, 0, 1);
+  const int address = boundedInt(state, 2, 1, 126);
+  const int reg = boundedInt(state, 3, -1, 255);
+  const int count = boundedInt(state, 4, 1, 128);
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.i2cRead
+                           ? runtime->host_.i2cRead(runtime->host_.context, bus,
+                                                    address, reg, count, &error)
+                           : 0;
+  if (job == 0) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::i2cWrite(lua_State* state) {
+  auto* runtime = self(state);
+  const int bus = boundedInt(state, 1, 0, 1);
+  const int address = boundedInt(state, 2, 1, 126);
+  luaL_checktype(state, 3, LUA_TTABLE);
+  const int count = static_cast<int>(lua_rawlen(state, 3));
+  if (count < 1 || count > 128) return pushError(state, "invalid_payload");
+  uint8_t bytes[128] = {};
+  for (int index = 1; index <= count; ++index) {
+    lua_geti(state, 3, index);
+    if (!lua_isinteger(state, -1)) return pushError(state, "invalid_payload");
+    bytes[index - 1] = static_cast<uint8_t>(boundedInt(state, -1, 0, 255));
+    lua_pop(state, 1);
+  }
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.i2cWrite
+                           ? runtime->host_.i2cWrite(runtime->host_.context, bus,
+                                                     address, bytes, count, &error)
+                           : 0;
+  if (job == 0) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+static void pushJobState(lua_State* state,
+                         const FireLuaRuntime::JobSnapshot& snapshot) {
+  lua_newtable(state);
+  const char* stateName = snapshot.state == 0
+                              ? "pending"
+                          : snapshot.state == 1
+                              ? "ready"
+                          : snapshot.state == 2 ? "failed" : "cancelled";
+  lua_pushstring(state, stateName);
+  lua_setfield(state, -2, "state");
+  lua_pushboolean(state, snapshot.state != 0);
+  lua_setfield(state, -2, "done");
+  if (snapshot.errorCode.length() > 0) {
+    lua_pushlstring(state, snapshot.errorCode.c_str(), snapshot.errorCode.length());
+    lua_setfield(state, -2, "error_code");
+  }
+}
+
+static void pushJobResult(lua_State* state,
+                          const FireLuaRuntime::JobSnapshot& snapshot) {
+  if (snapshot.state == 0) {
+    lua_newtable(state);
+    lua_pushboolean(state, 0);
+    lua_setfield(state, -2, "ok");
+    lua_pushliteral(state, "not_ready");
+    lua_setfield(state, -2, "error_code");
+    return;
+  }
+  if (snapshot.state != 1) {
+    lua_newtable(state);
+    lua_pushboolean(state, 0);
+    lua_setfield(state, -2, "ok");
+    lua_pushlstring(state, snapshot.errorCode.c_str(), snapshot.errorCode.length());
+    lua_setfield(state, -2, "error_code");
+    return;
+  }
+  lua_newtable(state);
+  lua_pushboolean(state, 1);
+  lua_setfield(state, -2, "ok");
+  if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::I2cScan) {
+    lua_newtable(state);
+    for (uint16_t index = 0; index < snapshot.addressCount; ++index) {
+      lua_pushinteger(state, snapshot.addresses[index]);
+      lua_seti(state, -2, index + 1);
+    }
+    lua_setfield(state, -2, "addresses");
+  } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::Bytes ||
+             snapshot.resultKind == FireLuaRuntime::JobSnapshot::Uart) {
+    lua_newtable(state);
+    for (uint16_t index = 0; index < snapshot.byteCount; ++index) {
+      lua_pushinteger(state, snapshot.bytes[index]);
+      lua_seti(state, -2, index + 1);
+    }
+    lua_setfield(state, -2, "bytes");
+    lua_pushlstring(state, snapshot.text.c_str(), snapshot.text.length());
+    lua_setfield(state, -2, "text");
+  } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::Write) {
+    lua_pushinteger(state, snapshot.written);
+    lua_setfield(state, -2, "written");
+  }
+}
+
+int FireLuaRuntime::jobsPoll(lua_State* state) {
+  auto* runtime = self(state);
+  const uint16_t id = static_cast<uint16_t>(boundedInt(state, 1, 1, 65535));
+  JobSnapshot snapshot;
+  if (!runtime->host_.jobPoll ||
+      !runtime->host_.jobPoll(runtime->host_.context, id, &snapshot))
+    return pushError(state, "invalid_handle");
+  pushJobState(state, snapshot);
+  return 1;
+}
+
+int FireLuaRuntime::jobsResult(lua_State* state) {
+  auto* runtime = self(state);
+  const uint16_t id = static_cast<uint16_t>(boundedInt(state, 1, 1, 65535));
+  JobSnapshot snapshot;
+  if (!runtime->host_.jobResult ||
+      !runtime->host_.jobResult(runtime->host_.context, id, &snapshot))
+    return pushError(state, "invalid_handle");
+  pushJobResult(state, snapshot);
+  return 1;
+}
+
+int FireLuaRuntime::jobsClose(lua_State* state) {
+  auto* runtime = self(state);
+  const uint16_t id = static_cast<uint16_t>(boundedInt(state, 1, 1, 65535));
+  lua_pushboolean(state, runtime->host_.jobClose &&
+                              runtime->host_.jobClose(runtime->host_.context, id));
+  return 1;
+}
+
+int FireLuaRuntime::jobsCancel(lua_State* state) {
+  auto* runtime = self(state);
+  const uint16_t id = static_cast<uint16_t>(boundedInt(state, 1, 1, 65535));
+  lua_pushboolean(state, runtime->host_.jobCancel &&
+                              runtime->host_.jobCancel(runtime->host_.context, id));
   return 1;
 }

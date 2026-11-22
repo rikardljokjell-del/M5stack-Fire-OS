@@ -351,6 +351,35 @@ full New/Update/build/install/run/healthy-flyt og SD-inventory etter
 offline-sletting. Disse mÃ¥ gjennomfÃ¸res mot kjÃ¸rende backend fÃ¸r FIRE OS
 kan rapporteres som ferdig auditert.
 
+## fire-lua-0.2 hardware adapter update
+
+Implementert mot [HARDWARE_API_HANDOFF.md](../M5Stack-backend/docs/HARDWARE_API_HANDOFF.md)
+og eksportert kontrakt `0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40`.
+FIRE annonserer nå `fire-lua-0.2` med tjenestene `display`, `buttons`, `rgb`,
+`imu`, `time`, `jobs`, `gpio`, `pwm`, `i2c` og `uart`, samt dette begrensede
+ressursregisteret:
+
+```json
+{"gpio_read":[26,35,36],"gpio_write":[26],"pwm":[26],"i2c":[0],"i2c_write_addresses":[64],"uart":[2]}
+```
+
+Implementert i runtime/OS:
+
+- `display.fill_rect`, `fill_circle`, `pixel` og batchbasert `grid` uten
+  framebuffer-flush per celle;
+- appbundne fire jobber med poll/result/cancel/close og bounded resultater;
+- GPIO mode/read/write/release med pinne-allowlist og leases;
+- PWM configure/write/stop på GPIO26 med LEDC;
+- I²C scan/read/write på OS-bus 0, med write-allowlist 0x40 og korte
+  hovedloop-transaksjoner;
+- UART2 open/read/write/close på GPIO36 RX / GPIO26 TX, med bounded buffers;
+- Lua 0.2-kontrakthash, safe string/table-hjelpere og lokal manifestkontroll.
+
+Tetris-/callbackkontroll har per-callback I/O- og tekstbudsjett, og jobber
+forlater ikke Lua-callbacken blokkert. Ressurser og jobber frigjøres ved appstopp.
+Fysisk GPIO/PWM/I²C/UART-loopback og Tetris-soak må fortsatt måles på FIRE;
+PC-simulatoren og dette bygget er ikke fysisk verifikasjon.
+
 ## App Manager: backendkatalog, nedlasting og backend-sletting
 
 Implementert mot `M5Stack-backend/docs/DEVICE_APP_MANAGER_HANDOFF.md`:
