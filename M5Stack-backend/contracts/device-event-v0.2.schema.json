@@ -292,7 +292,10 @@
         "mode_select",
         "app_diagnostic",
         "audio_playback_failed",
-        "firmware_store_result"
+        "firmware_store_result",
+        "app_download",
+        "app_backend_delete_prepare",
+        "app_backend_delete_confirm"
       ],
       "title": "Event",
       "type": "string"
@@ -362,6 +365,35 @@
       ],
       "default": null,
       "title": "Sha256"
+    },
+    "delete_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delete Id"
+    },
+    "delete_scope": {
+      "anyOf": [
+        {
+          "enum": [
+            "version",
+            "all"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delete Scope"
     },
     "app_mode": {
       "anyOf": [
@@ -759,6 +791,69 @@
   "title": "DeviceEvent",
   "type": "object",
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_download"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "package_id"
+        ],
+        "properties": {
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_backend_delete_prepare"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "delete_scope"
+        ],
+        "properties": {
+          "delete_scope": {
+            "enum": [
+              "version",
+              "all"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_backend_delete_confirm"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "delete_id"
+        ],
+        "properties": {
+          "delete_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {
@@ -1531,6 +1626,83 @@
             }
           }
         ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_backend_delete_prepare"
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "app_id"
+            ],
+            "properties": {
+              "app_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "required": [
+              "project_id"
+            ],
+            "properties": {
+              "project_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_backend_delete_prepare"
+          },
+          "delete_scope": {
+            "const": "version"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "package_id"
+        ],
+        "properties": {
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_backend_delete_prepare"
+          },
+          "delete_scope": {
+            "const": "all"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "package_id": {
+            "type": "null"
+          }
+        }
       }
     },
     {

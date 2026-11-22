@@ -1,5 +1,24 @@
 # Device-agent: firmwarefiler til /firmware på SD
 
+## Senere fysisk lagringstest: bestått
+
+Device-agenten publiserte nå f0ecdee, flettet i f1d884a, med ekte kandidat i
+firmware/fire-os-0.2-storage-dev.bin og firmware/index.json. Backend verifiserte
+repoartefaktens størrelse og SHA256, importerte den og sendte en eksplisitt
+firmware_store_request gjennom den faktiske reverse TCP-forbindelsen.
+
+FIRE kvitterte status=ok og riktig hash etter omtrent 37,4 sekunder:
+
+- 1 836 160 bytes.
+- SHA256 f13163c2148a0c67482873997550c194b1fc2bc5d7c2ecb8485b39cb076c4551.
+- SD-bane /firmware/fire-f13163c2148a0c67.bin.
+- Transfer fwstore-7f52da92f7e34dc5a4b8, backendstatus stored.
+
+Dette bekrefter én ekte overføring og device-kvittert hash/lagring. Ingen
+flashing/OTA eller ny firmwareinstallasjon ble bestilt av backend-agenten.
+Feilmatrisen under er fortsatt ikke fysisk fullført. Den tidligere mangelen
+på kilde/binær i neste avsnitt er historikk og er nå løst.
+
 ## Observert på enheten, 22. november 2026
 
 FIRE har autentisert en ny sesjon med firmware_version=fire-os-0.2+storage-dev,

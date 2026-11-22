@@ -3,9 +3,10 @@ import time
 
 from .models import State
 from .storage import new_id
+from .app_manager import AppManager
 
 
-class AppLifecycle:
+class AppLifecycle(AppManager):
     async def request_inventory(self, session):
         if session.target != "device":
             return
@@ -66,9 +67,12 @@ class AppLifecycle:
                       project.get("latest_package")]
         return next((p for candidate in candidates for p in versions if p["id"] == candidate), versions[0])
 
-    def backend_delete_check(self, project):
+    def backend_delete_check(self, project, *, ignore_session_id=None):
         device_id = project.get("owner_device_id")
-        if any(s.project_id == project["id"] for s in self.sessions.values() if not s.stopped):
+        active=[s for s in self.sessions.values() if not s.stopped and s.project_id==project["id"] and s.id!=ignore_session_id]
+        if any(s.desktop_device_id for s in active):
+            return False,"Appen er åpen i en PC-samtale. Avslutt PC-samtalen før sletting."
+        if active:
             return False, "Velg Ny app eller en annen app før historikken slettes."
         if any(p["id"] in self.active_downloads for p in self.app_versions(project)):
             return False, "En nedlasting av appen pågår fortsatt."
@@ -153,7 +157,7 @@ class AppLifecycle:
                 self.store.put("sessions",saved["session_id"],saved,critical=True)
         self.store.delete_version_files(package)
 
-    def app_catalog(self, device_id):
+    def app_catalog(self, device_id, session=None):
         try:
             device = self.store.get("devices", device_id)
         except FileNotFoundError:
@@ -167,15 +171,19 @@ class AppLifecycle:
                 continue
             presence = self.app_presence(device, self.project_app_id(project))
             allowed, reason = self.backend_delete_check(project)
+            device_allowed,device_reason=self.manager_delete_check(session,project) if session else (False,reason)
+            downloadable,download_reason=self.app_download_check(versions[0],session.capabilities if session else device.get("capabilities"))
             apps.append({"app_id": self.project_app_id(project), "project_id": project["id"], "name": project["name"],
                          "latest_package_id": versions[0]["id"], "latest_version": versions[0]["manifest"]["version"],
                          "base_package_id": self.update_base(project, device)["id"], "version_count": len(versions),
                          "device_presence": presence.get("state", "unknown"),
-                         "can_delete_backend": allowed, "delete_block_reason": reason})
+                         "can_delete_backend": allowed, "delete_block_reason": reason,
+                         "can_delete_from_device":device_allowed,"device_delete_block_reason":device_reason,
+                         "downloadable":downloadable,"download_block_reason":download_reason})
         return sorted(apps, key=lambda a: (a["name"].casefold(), a["app_id"]))
 
-    def require_app_choice_idle(self, session):
-        if (session.stopped or not session.sockets or session.lock.locked() or session.operation_task
+    def require_app_choice_idle(self, session, *, held_lock=False):
+        if (session.stopped or not session.sockets or (session.lock.locked() and not held_lock) or session.operation_task
                 or (session.input_task and not session.input_task.done()) or session.activity in {"listening", "processing", "speaking"}
                 or session.state in {State.building, State.testing, State.processing, State.running, State.starting,
                                      State.stopping, State.rollback_pending}):
@@ -303,6 +311,15 @@ class AppLifecycle:
         return {"status": "recorded", "count": len(event.apps)}
 
     async def app_event(self, session, event):
+        if event.event=="app_download":
+            package=self.store.get("packages",event.package_id)
+            project=self.app_project(session.device_id,event.project_id or package["project_id"],event.app_id)
+            if package["project_id"]!=project["id"]:raise PermissionError("Pakken tilhører ikke valgt app.")
+            allowed,reason=self.app_download_check(package,session.capabilities)
+            if not allowed:raise ValueError(reason)
+            return await self.install_saved(session,package["id"])
+        if event.event=="app_backend_delete_prepare":return await self.prepare_backend_delete(session,event)
+        if event.event=="app_backend_delete_confirm":return await self.confirm_backend_delete(session,event)
         if event.event == "app_select":
             return await self.select_app(session, event)
         if event.event == "app_deleted":
@@ -311,16 +328,21 @@ class AppLifecycle:
         if event.event == "app_inventory":
             return await self.inventory(session, event)
         if event.event == "app_list":
-            apps = self.app_catalog(session.device_id)
+            apps = self.app_catalog(session.device_id,session)
             page, size = apps[event.offset:event.offset+4], 4
             message = {"type": "app_catalog", "apps": page}
         else:
             project = self.app_project(session.device_id, event.project_id, event.app_id)
             versions = self.app_versions(project)
-            apps = [{"package_id": p["id"], "version": p["manifest"]["version"],
-                     "checksum": p["manifest"]["checksum"], "archive_sha256": p["archive_sha256"]} for p in versions]
+            apps=[]
+            for package in versions:
+                downloadable,reason=self.app_download_check(package,session.capabilities)
+                apps.append({"package_id":package["id"],"version":package["manifest"]["version"],
+                    "checksum":package["manifest"]["checksum"],"archive_sha256":package["archive_sha256"],
+                    "size_bytes":package["size_bytes"],"downloadable":downloadable,"download_block_reason":reason})
             page, size = apps[event.offset:event.offset+8], 8
             message = {"type": "app_versions", "project_id": project["id"], "versions": page}
-        message.update(offset=event.offset, next_offset=event.offset+size if event.offset+size < len(apps) else None)
+        message.update(offset=event.offset, next_offset=event.offset+size if event.offset+size < len(apps) else None,
+                       request_event_id=event.event_id)
         await self.emit(session, message)
         return {"status": "listed", "count": len(page)}

@@ -1,5 +1,9 @@
 # FIRE OS AI Developer backend 0.2
 
+Settings → App Manager kan nå hente backendkatalog/versjoner, be om nedlasting
+og bekrefte sletting av egne backendversjoner. Backenddelen er implementert;
+device-agenten kobler menyen til [DEVICE_APP_MANAGER_HANDOFF.md](docs/DEVICE_APP_MANAGER_HANDOFF.md).
+
 Windows-appen har nå [én rad per app, versjonsvalg, sletting per versjon og
 AI-dialog uten tilkoblet FIRE](docs/DESKTOP_APPS.md). Egen Firmware-meny viser
 rapportert kjørende versjon og importerer firmwarefiler. SD-overføring til

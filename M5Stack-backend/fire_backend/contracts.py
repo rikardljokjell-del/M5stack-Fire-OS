@@ -7,6 +7,9 @@ from .models import DeviceEvent, Manifest, PROTOTYPE_SERVICES
 
 
 REQUIRED = {
+    "app_download":["package_id"],
+    "app_backend_delete_prepare":["delete_scope"],
+    "app_backend_delete_confirm":["delete_id"],
     "firmware_store_result": ["firmware_id","transfer_id","status"],
     "text": ["text"], "button": ["button", "action"], "build_confirm": ["proposal_id"],
     "run_confirm": ["package_id"], "device_install_result": ["install_id", "package_id", "status"],
@@ -51,12 +54,16 @@ def schemas():
     event["allOf"] = conditions
     conditions.append({"if":{"properties":{"event":{"const":"firmware_store_result"},"status":{"const":"ok"}}},
                        "then":{"required":["sha256"],"properties":{"sha256":nonnull("sha256")}}})
-    for event_name in ("app_versions", "app_select"):
+    for event_name in ("app_versions", "app_select", "app_backend_delete_prepare"):
         condition = {"event": {"const": event_name}}
         if event_name == "app_select":
             condition["app_mode"] = {"const": "update"}
         conditions.append({"if": {"properties": condition}, "then": {"anyOf": [
             {"required": [name], "properties": {name: nonnull(name)}} for name in ("app_id", "project_id")]}})
+    conditions.append({"if":{"properties":{"event":{"const":"app_backend_delete_prepare"},"delete_scope":{"const":"version"}}},
+                       "then":{"required":["package_id"],"properties":{"package_id":nonnull("package_id")}}})
+    conditions.append({"if":{"properties":{"event":{"const":"app_backend_delete_prepare"},"delete_scope":{"const":"all"}}},
+                       "then":{"properties":{"package_id":{"type":"null"}}}})
     conditions.append({"if": {"properties": {"event": {"const": "app_select"}, "app_mode": {"const": "new"}}},
                        "then": {"properties": {name: {"type": "null"} for name in ("app_id", "project_id", "base_package_id")}}})
     manifest = Manifest.model_json_schema()
