@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <SD.h>
+#include <time.h>
 #include <WiFiClientSecure.h>
 #include <mbedtls/sha256.h>
 
@@ -69,6 +70,8 @@ class FireGithubFirmwareManager {
   uint32_t received_ = 0;
   uint32_t startedAt_ = 0;
   uint32_t lastDataAt_ = 0;
+  uint32_t clockSyncStartedAt_ = 0;
+  bool clockSyncRequested_ = false;
   String status_;
   String errorCode_;
   String errorMessage_;
