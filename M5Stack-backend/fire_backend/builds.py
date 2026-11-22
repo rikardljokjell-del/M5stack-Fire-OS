@@ -15,7 +15,8 @@ from .storage import canonical
 from .app_names import app_id_for
 from .rendering import VISUAL_POLICY
 from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT
-from .app_quality import APP_QUALITY_POLICY,AppReview
+from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VERSION,experience_contract
+from .capabilities import CapabilityError
 
 
 def sha256(data):
@@ -29,9 +30,12 @@ async def validate_release(app, store, build_id):
     """Fresh isolated VM per input/timing profile; no 180-frame release gate."""
     results = []
     profiles=RELEASE_PROFILES+(("io_error","io_timeout","io_disconnect") if app.get("api_version")==HARDWARE_API and set(app["required_services"])-BASE_SERVICES else ())
+    if app.get("experience_policy_version")==UX_POLICY_VERSION:
+        profiles+=("os_long_a","os_long_b","os_long_c","os_double","start_b_idle","play_directions","long_session")
     for profile in profiles:
         try:
-            result = await simulate({**app, "profile": profile}, store, build_id)
+            result = await simulate({**app, "profile": profile,
+                **({"test_horizon_ms":600000} if profile=="long_session" and app.get("max_runtime_ms")==0 else {})}, store, build_id)
         except (ValueError, asyncio.TimeoutError) as error:
             raise ValueError(f"Release profile {profile}: {str(error) or 'worker timeout'}") from error
         results.append({"profile": profile, **{k:v for k,v in result.items() if k != "trace"}})
@@ -144,6 +148,8 @@ class Builder:
             context += VISUAL_POLICY
         if APP_QUALITY_POLICY not in context:
             context += APP_QUALITY_POLICY
+        ux_contract=experience_contract(capabilities)
+        context+="\nBackend-authored FIRE experience contract:\n"+json.dumps(ux_contract,ensure_ascii=False)
         from .quality import Quality
         # Also applies to direct Builder callers, new apps and the first attempt.
         learned_policy=Quality(self.store).policy()
@@ -156,6 +162,7 @@ class Builder:
             "python": platform.python_version(),
             "dependencies": {n: metadata.version(n) for n in ("openai", "lupa", "pydantic")},
             "max_corrections": 3,
+            "experience_contract":ux_contract,
         }
         if len(canonical(request)) > self.settings.fire_max_build_kb * 1024:
             raise ValueError("Per-build disk limit exceeded")
@@ -195,7 +202,8 @@ class Builder:
                     budgets = {"max_memory": capabilities["max_memory"], "max_runtime_ms": capabilities["max_runtime_ms"]} if capabilities else {}
                     api_version=(capabilities or {}).get("api_version",BASE_API)
                     result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
-                        "hardware":(capabilities or {}).get("hardware") or {}}, self.store, build_id)
+                        "hardware":(capabilities or {}).get("hardware") or {},
+                        **({"experience_policy_version":UX_POLICY_VERSION} if self.settings.fire_ai_mode=="openai" else {})}, self.store, build_id)
                     await progress("testing",75,"Kontrollerer funksjoner, stabilitet og grafisk utforming før levering")
                     reviewer=getattr(self.provider,"review",None)
                     if reviewer is None:
@@ -204,14 +212,23 @@ class Builder:
                         from .ai import MockProvider
                         reviewer=MockProvider().review
                     review=await reviewer(build["summary"],context,generated,result)
-                    review=AppReview.model_validate(self.store.redactor.value(review.model_dump()))
+                    review_data=self.store.redactor.value(review.model_dump())
+                    if self.settings.fire_ai_mode=="mock" and not isinstance(review,FireAppReview):
+                        # Limited offline fixtures are explicitly identified; no live UX claim.
+                        review_data.update(kind="app",**{name:True for name in FireAppReview.fire_checks()})
+                    review=FireAppReview.model_validate(review_data)
+                    if (self.settings.fire_ai_mode=="openai" and review.kind=="game" and not ux_contract["game_audio_available"]):
+                        raise CapabilityError("game_audio_unavailable","Spill med lyd/melodier krever Lua speaker/jobs i firmware. AI-talesvar gir ikke spilllyd. Ingen stille erstatningspakke er levert.")
                     review_record={"source_sha256":sha256(payload),"approved":review.approved,
+                        "experience_policy_version":UX_POLICY_VERSION,
                         "mode":"openai_source_review" if self.settings.fire_ai_mode=="openai" else "mock_fixture",
                         "checks":review.model_dump(),"physical_verified":False}
                     self.store.write(folder / f"review-{attempt+1}.json",review_record)
                     if not review.approved:raise ValueError(review.correction())
                     result.update(pre_delivery_review_required=True,pre_delivery_review=review_record)
                     break
+                except CapabilityError:
+                    raise  # Regenerating Lua cannot implement a missing native driver.
                 except (ValueError, asyncio.TimeoutError) as error:
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
                     Quality(self.store).record_validation(build, generated.main_lua, last_error)
@@ -254,5 +271,6 @@ class Builder:
             finally:
                 staged.unlink(missing_ok=True)
             self.store.put("packages", build_id, package)
+            Quality(self.store).validated_build(build_id,build_id)
             self.store.log(build_id, f"Package tests passed. SHA256={package['archive_sha256']}")
             return package

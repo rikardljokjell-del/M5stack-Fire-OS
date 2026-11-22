@@ -1,5 +1,7 @@
 # Device-agent: utvidet maskinvare i AI Developer
 
+Oppdatert kildestatus: dae75bf / 74ac26a har nå de første native adapterne for display/buttons/rgb/imu/time/jobs/gpio/pwm/i2c/uart. Det opprinnelige implementeringsoppdraget nedenfor beskriver kontrakten; resten av driverne gjenstår. Les også [DEVICE_EXPERIENCE_HANDOFF.md](DEVICE_EXPERIENCE_HANDOFF.md) for nyeste OS-/knappe-/lydfunn. Fysisk maskinvareverifikasjon er fortsatt separat.
+
 22. november 2026. Kun backend er endret. Device-kilde lest fra GitHub `932ba8f`.
 
 ## Oppgaven og status

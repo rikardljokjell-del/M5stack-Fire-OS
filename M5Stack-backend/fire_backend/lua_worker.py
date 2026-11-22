@@ -67,8 +67,10 @@ local count, total, elapsed = 0, 0, 0
 local callback_ops, callback_work, peak_ops, peak_work = 0,0,0,0
 local callback_phase, clear_count, visible_ops, background = "",0,0,0
 local text_bytes, peak_text_bytes = 0,0
+local grid_pixels, peak_grid_pixels = 0,0
 local min_update_draws, update_count, peak_clears = nil,0,0
 local frames_run = 0
+local os_suppressed, os_suspended, os_exited, os_navigation = 0,0,false,""
 local host_baseline, app_memory_peak = 0,0
 local has_display = string.match(services,"display") ~= nil
 local trace, trace_count = {}, 0
@@ -108,7 +110,10 @@ local function record(name, ...)
   elseif name=="line" then work=math.max(math.abs(c-a),math.abs(d-b))+1
   elseif name=="circle" then work=math.ceil(7*c)
   elseif name=="fill_circle" then work=math.ceil(math.pi*c*c)
-  elseif name=="grid" then work=c*d*select(5,...)*select(6,...)
+  elseif name=="grid" then
+    work=c*d*select(5,...)*select(6,...)
+    grid_pixels=grid_pixels+work;peak_grid_pixels=math.max(peak_grid_pixels,grid_pixels)
+    if profile and grid_pixels>32768 then error("Native grid raster budget exceeded; compact the complete board and merge static/dynamic cells") end
   elseif name=="text" then
     work=#c*48;text_bytes=text_bytes+#c;peak_text_bytes=math.max(peak_text_bytes,text_bytes)
     if profile and text_bytes>256 then error("Per-callback text budget exceeded; cache labels and simplify the complete frame") end
@@ -228,6 +233,7 @@ local function call(fn, ...)
   count=0
   callback_ops,callback_work=0,0
   text_bytes=0
+  grid_pixels=0
   if hardware then hardware.begin_callback() end
   clear_count,visible_ops,background=0,0,0
   hook(quota,"",1000)
@@ -259,7 +265,40 @@ for frame=1,frames do
   if dt<=0 then break end
   elapsed=elapsed+dt
   if elapsed>memory_ms then error("Runtime budget exceeded") end
-  if profile=="idle" then
+  local suspend_update=false
+  if profile=="os_long_a" or profile=="os_long_b" or profile=="os_long_c" then
+    -- Synthetic OS-owned gesture: raw state exists before ownership is claimed,
+    -- but a consumed hold never becomes an application short-press callback.
+    local selected=string.upper(string.sub(profile,-1))
+    if elapsed<650 then button=selected
+    else
+      button=""
+      if os_suppressed==0 then
+        os_suppressed=1
+        os_navigation=selected=="A" and "home" or selected=="B" and "quick_settings" or "back"
+      end
+      if selected~="B" then os_exited=true;break end
+      -- Model an OS overlay suspending app updates, then returning control.
+      if elapsed<1150 then suspend_update=true end
+    end
+  elseif profile=="os_double" then
+    -- A configured OS double-click shortcut consumes both short clicks.
+    -- The physical B down-state may still be observed before the shortcut.
+    button=(frame<=4 or frame>=10 and frame<=13) and "B" or ""
+    if frame==5 or frame==14 then os_suppressed=os_suppressed+1 end
+    if frame>=14 then
+      os_navigation="configured_double_shortcut"
+      if frame<45 then suspend_update=true end
+    end
+  elseif profile=="start_b_idle" or profile=="play_directions" or profile=="long_session" then
+    button=""
+    if frame==1 then button="B"
+    elseif profile~="start_b_idle" and frame%30==0 then
+      local step=frame//30
+      button=step%8==0 and "B" or step%2==0 and "A" or "C"
+    end
+    if button~="" and env.on_button then callback_phase="on_button";call(env.on_button,button,"pressed") end
+  elseif profile=="idle" then
     button=""
   elseif profile=="hold_a" or profile=="hold_b" or profile=="hold_c" then
     local selected=string.upper(string.sub(profile,-1))
@@ -271,14 +310,19 @@ for frame=1,frames do
   elseif button~="" then
     button=""
   end
-  callback_phase="update"
-  call(env.update,dt)
-  frames_run=frames_run+1
+  if suspend_update then os_suspended=os_suspended+1
+  else
+    callback_phase="update"
+    call(env.update,dt)
+    frames_run=frames_run+1
+  end
   if profile and elapsed>=memory_ms then break end
 end
 return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,max_callback_operations=peak_ops,max_callback_display_work=peak_work,
         min_update_draws=min_update_draws or 0,update_count=update_count,max_callback_clears=peak_clears,max_callback_text_bytes=peak_text_bytes,
-        hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak}
+        hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,
+        os_reserved_callbacks_suppressed=os_suppressed,os_updates_suspended=os_suspended,os_exited=os_exited,os_navigation=os_navigation,
+        max_callback_grid_pixels=peak_grid_pixels}
 '''
 
 
@@ -299,7 +343,14 @@ def simulate(request):
     )
     lua.compile(source, name="main.lua", mode="t")  # syntax only, never executes here
     configured_ms = request.get("max_runtime_ms", 10000)
-    max_ms = 60000 if configured_ms == 0 else min(configured_ms, 10000)
+    horizon=request.get("test_horizon_ms")
+    if horizon is not None:
+        if type(horizon) is not int or not 1000<=horizon<=600000:
+            raise ValueError("Test horizon must be an integer from 1000 to 600000 ms")
+        if configured_ms!=0:
+            raise ValueError("An extended test horizon requires an until-exit app")
+    default_horizon=600000 if request.get("profile")=="long_session" else 60000
+    max_ms=(horizon if horizon is not None else default_horizon) if configured_ms==0 else min(configured_ms,10000)
     specs={s:REGISTRY["services"][s]["methods"] for s in services} if api_version=="fire-lua-0.2" else {}
     factory=lua.execute((Path(__file__).parent/"data/hardware_sim.lua").read_text(encoding="utf-8")) if api_version=="fire-lua-0.2" else None
     result = lua.execute(HARNESS, source, ",".join(services), max_ms,
@@ -317,8 +368,12 @@ def simulate(request):
             "max_callback_operations":result["max_callback_operations"],"max_callback_display_work":result["max_callback_display_work"],
             "min_update_draws":result["min_update_draws"],"update_count":result["update_count"],"max_callback_clears":result["max_callback_clears"],
             "max_callback_text_bytes":result["max_callback_text_bytes"],"resources_used":resources_used,
+            "max_callback_grid_pixels":result["max_callback_grid_pixels"],
             "hardware_simulated":api_version=="fire-lua-0.2","app_memory_peak":result["app_memory_peak"],"max_io_calls":hardware_metrics["max_io_calls"] if hardware_metrics else 0,
-            "max_io_bytes":hardware_metrics["max_io_bytes"] if hardware_metrics else 0,"max_jobs":hardware_metrics["max_jobs"] if hardware_metrics else 0}
+            "max_io_bytes":hardware_metrics["max_io_bytes"] if hardware_metrics else 0,"max_jobs":hardware_metrics["max_jobs"] if hardware_metrics else 0,
+            "os_reserved_callbacks_suppressed":result["os_reserved_callbacks_suppressed"],
+            "os_updates_suspended":result["os_updates_suspended"],"os_exited":result["os_exited"],"os_navigation":result["os_navigation"],
+            "os_gesture_simulated":request.get("profile") in {"os_long_a","os_long_b","os_long_c","os_double"}}
 
 
 if __name__ == "__main__":

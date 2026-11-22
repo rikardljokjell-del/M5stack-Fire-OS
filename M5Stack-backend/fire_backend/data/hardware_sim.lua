@@ -95,6 +95,7 @@ return function(available, specs, resources, profile, now, trace, services)
   local function invoke(service,name,spec,...)
     local a=table.pack(...);args_ok(a,spec)
     local k=service.."."..name
+    if k=="power.brightness" then error("OS backlight setting is authoritative; apps must not override brightness") end
     local bytes=0;for i=1,a.n do if type(a[i])=="string" or type(a[i])=="table" then bytes=bytes+#a[i] end end
     note(k,bytes)
     if service=="jobs" then

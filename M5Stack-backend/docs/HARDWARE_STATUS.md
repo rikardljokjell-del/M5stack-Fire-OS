@@ -1,5 +1,7 @@
 # Status: maskinvareapper og Tetris
 
+Nyere kildestatus: dae75bf / 74ac26a implementerer første native delmengde display/buttons/rgb/imu/time/jobs/gpio/pwm/i2c/uart. Dermed er den tidligere implementeringsstatusen nedenfor historisk. Fysisk støtte er fortsatt ikke bevist av kilde/PC-test. [FIRE_EXPERIENCE_STANDARD.md](FIRE_EXPERIENCE_STANDARD.md) og [DEVICE_EXPERIENCE_HANDOFF.md](DEVICE_EXPERIENCE_HANDOFF.md) beskriver nyeste krav og funn.
+
 22. november 2026. Backendens maskinvarekontrakt er utvidet fra fem til 20
 tjenestegrupper / 67 metoder, med eksakt versjon/hash, argument-/ressurskontroll,
 ikke-blokkerende jobbmodell og syntetisk PC-host. OpenAI får den forhandlede

@@ -3,7 +3,7 @@ import copy
 import pytest
 
 from fire_backend.ai import MockProvider,OpenAIProvider
-from fire_backend.app_quality import APP_QUALITY_POLICY,AppReview,ReviewIssue
+from fire_backend.app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,ReviewIssue
 from fire_backend.models import GeneratedApp
 from fire_backend.quality import require_deliverable
 from fire_backend.revalidation import revalidate_package
@@ -100,11 +100,11 @@ async def test_live_provider_uses_separate_structured_review_without_executing_c
     class Responses:
         async def parse(self,**values):
             calls.append(values)
-            return SimpleNamespace(status='completed',output_parsed=approve())
+            return SimpleNamespace(status='completed',output_parsed=FireAppReview(**approve().model_dump(),kind='app',**{name:True for name in FireAppReview.fire_checks()}))
     settings=configured(tmp_path,openai_api_key='test-only-key');provider=OpenAIProvider(settings)
     provider.client=SimpleNamespace(responses=Responses())
     app=GeneratedApp(name='Sirkel',main_lua="function init() end function update(dt) fire.display.circle(20,20,5,2016) end",required_services=['display'])
     review=await provider.review('Lag en sirkel','negotiated API',app,simulate({'main_lua':app.main_lua,'required_services':['display']}))
-    assert review.approved and calls[0]['text_format'] is AppReview and calls[0]['store'] is False
+    assert review.approved and calls[0]['text_format'] is FireAppReview and calls[0]['store'] is False
     assert calls[0]['model']==settings.openai_code_model
     assert APP_QUALITY_POLICY in calls[0]['instructions'] and 'main_lua' in calls[0]['input']

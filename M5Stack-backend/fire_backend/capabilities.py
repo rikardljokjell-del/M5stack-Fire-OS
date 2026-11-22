@@ -5,7 +5,8 @@ from .models import PROTOTYPE_SERVICES
 from .api_registry import ALL_SERVICES,BASE_API,generation_contract
 
 
-FIRMWARE_SOURCE_REVISION = "932ba8f"
+FIRMWARE_SOURCE_REVISION = "dae75bf"
+FIRMWARE_IMPLEMENTED_LUA_SERVICES = ["display","buttons","rgb","imu","time","jobs","gpio","pwm","i2c","uart"]
 HANDOFF_PATH = "M5Stack-device/BACKEND_HANDOFF.md"
 
 

@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 
 from .models import DialogReply, GeneratedApp
 from .rendering import VISUAL_POLICY
-from .app_quality import APP_QUALITY_POLICY, AppReview
+from .app_quality import APP_QUALITY_POLICY, AppReview, FireAppReview
 
 
 DIALOG_INSTRUCTIONS = """
@@ -181,9 +181,17 @@ class OpenAIProvider:
             "Require a coherent, attractive and readable design for this particular app within its API/budget. "
             "Report only concrete actionable release defects, not speculative faults or optional features. "
             "Give precise corrections and locations; do not return replacement code or ask the user to debug. "
-            "Approve only if requirements, runtime safety and visual quality all pass with no issues.",
+            "Classify the actual app as app/game from requirements and code, not a label chosen to evade game rules. "
+            "Explicitly check A-prev/B-confirm/C-next menus, no OS long/double conflicts or duplicate input, "
+            "full-screen readable hierarchy, game startup/New game menu, real RGB/audio settings, "
+            "muting/cleanup, interruption recovery and meaningful three-button gameplay/progression. "
+            "For a non-game game_experience_ok means correctly not applicable; other checks still apply. "
+            "If correcting a known failure, put a concise factual description of the source correction and "
+            "its regression check in repair_summary; do not claim physical verification or proven root cause. "
+            "An unimplemented sound toggle is not a pass. Missing sound service must be unavailable with no playback. "
+            "Approve only if EVERY named check passes with no concrete unresolved issues.",
             input=json.dumps({"confirmed_app":summary,"candidate":generated.model_dump(),"pc_validation":validation},ensure_ascii=False),
-            text_format=AppReview,store=False,max_output_tokens=3000,
+            text_format=FireAppReview,store=False,max_output_tokens=4000,
         )
         if response.status!="completed" or response.output_parsed is None:
             raise ValueError("Pre-delivery review incomplete or refused")

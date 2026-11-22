@@ -1,11 +1,19 @@
 # FIRE OS AI Developer backend 0.2
 
+[Prikkjakt-analyse og nye generelle regler](docs/PRIKKJAKT_ANALYSIS.md): spillstart i testene, mindre native rasterbelastning, begge RGB-barer, behagelig spillmusikk med ekte mute og respekt for OS mastervolum/bakgrunnslys. Spilllyd krever fortsatt native Lua-lydadapter; nye spill leveres ikke som stille erstatning for dette kravet.
+
+Felles [FIRE-standard for knapper, skjerm, spillmenyer og feilretting](docs/FIRE_EXPERIENCE_STANDARD.md)
+er nå obligatorisk i nye livebygg. A=forrige/opp, B=velg/bekreft, C=neste/ned;
+spill får effektinnstillinger før start og en utvidet, kildebundet UX-kontroll.
+[Firmwareoppfølging](docs/DEVICE_EXPERIENCE_HANDOFF.md) beskriver faktiske funn
+om OS-knappeierskap, lyd, typografi og tapsfri feilmelding.
+
 Fast standard for alle nye apper/oppdateringer: [fungerende første levering og
 gjennomført grafisk design](docs/FIRST_DELIVERY_QUALITY.md). Etter kjøretidstestene
 gjør AI en separat kontroll av krav, kode og utforming. Konkrete funn rettes
 automatisk før pakking; uavklarte feil gir ingen ny leverbar pakke.
 
-Backend har nå et versjonert [maskinvare-API med 20 tjenestegrupper](docs/HARDWARE_API_HANDOFF.md), ressurskontroll og PC-simulering. Bruk «Maskinvareutkast på PC» under Apper for å forberede slike apper. Den nåværende firmwaren må få tilsvarende adaptere før faktisk I²C/GPIO/PWM/UART/Wi-Fi/Bluetooth/lyd/SD kan brukes fra Lua. Appønsket beholdes når en adapter mangler; det erstattes ikke med en annen demo.
+Backend har nå et versjonert [maskinvare-API med 20 tjenestegrupper](docs/HARDWARE_API_HANDOFF.md), ressurskontroll og PC-simulering. Bruk «Maskinvareutkast på PC» under Apper for å forberede slike apper. Nyeste firmwarekilde har første adaptere for I²C/GPIO/PWM/UART; fysisk verifikasjon gjenstår. Wi-Fi/Bluetooth/lyd/SD med flere krever fortsatt egne Lua-adaptere. Appønsket beholdes når en adapter mangler; det erstattes ikke med en annen demo.
 
 [Analyse av den første Tetris-feilen og ny ytelsesport](docs/TETRIS_RUNTIME_REPORT.md).
 
