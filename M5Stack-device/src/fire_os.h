@@ -182,6 +182,9 @@ class FireOS {
   static constexpr uint8_t kFileVisibleRows = 6;
   static constexpr uint8_t kMaxExternalApps = 16;
   static constexpr uint8_t kMaxLuaApps = 32;
+  static constexpr uint8_t kMaxBackendApps = 32;
+  static constexpr uint8_t kMaxBackendVersions = 8;
+  static constexpr uint8_t kMaxManagerItems = 40;
   static constexpr uint8_t kMaxFirmwareFiles = 24;
   bool sdReady_ = false;
   uint32_t sdLastProbe_ = 0;
@@ -246,7 +249,70 @@ class FireOS {
   String externalAppMessage_;
   bool appManagerActionMenu_ = false;
   uint8_t appManagerActionIndex_ = 0;
+  uint8_t appManagerActionCount_ = 0;
+  uint8_t appManagerActionCodes_[6] = {};
+  String appManagerActionLabels_[6];
   bool appManagerDeleteConfirm_ = false;
+  uint8_t appManagerDeleteMode_ = 0;  // 1=local, 2=backend
+  String appManagerDeleteId_;
+  String appManagerDeleteProjectId_;
+  String appManagerDeleteAppId_;
+  String appManagerDeletePackageId_;
+  String appManagerDeleteName_;
+  uint8_t appManagerDeleteScope_ = 0;  // 1=version, 2=all
+  bool appManagerDeleteWaiting_ = false;
+
+  struct BackendAppInfo {
+    String appId;
+    String projectId;
+    String name;
+    String latestPackageId;
+    String latestVersion;
+    String deleteReason;
+    bool downloadable = false;
+    bool canDelete = false;
+    uint8_t versionCount = 0;
+  };
+  BackendAppInfo backendApps_[kMaxBackendApps];
+  uint8_t backendAppCount_ = 0;
+  bool backendCatalogRequested_ = false;
+  bool backendCatalogLoading_ = false;
+  int32_t backendCatalogNextOffset_ = 0;
+  String backendCatalogStatus_;
+
+  struct ManagerItem {
+    uint8_t kind = 0;  // 0=external, 1=Lua, 2=backend-only
+    bool local = false;
+    bool backend = false;
+    bool downloadable = false;
+    bool canDeleteBackend = false;
+    String appId;
+    String projectId;
+    String name;
+    String localPath;
+    String localVersion;
+    String localPackageId;
+    String packageId;
+    String version;
+    String backendBlockReason;
+    uint8_t versionCount = 0;
+  };
+  ManagerItem managerItems_[kMaxManagerItems];
+  uint8_t managerItemCount_ = 0;
+  uint8_t managerSelection_ = 0;
+  uint8_t managerOffset_ = 0;
+  String managerStatus_;
+
+  bool appManagerVersionDialog_ = false;
+  uint8_t appManagerVersionSelection_ = 0;
+  uint8_t appManagerVersionOffset_ = 0;
+  String appManagerVersionProjectId_;
+  String appManagerVersionAppId_;
+  String appManagerVersionPackageIds_[kMaxBackendVersions];
+  String appManagerVersionLabels_[kMaxBackendVersions];
+  String appManagerVersionReasons_[kMaxBackendVersions];
+  bool appManagerVersionDownloadable_[kMaxBackendVersions] = {};
+  uint8_t appManagerVersionCount_ = 0;
   String luaAppPaths_[kMaxLuaApps];
   String luaAppNames_[kMaxLuaApps];
   uint8_t luaAppCount_ = 0;
@@ -433,6 +499,8 @@ class FireOS {
   void releaseSdImageBuffer();
   void scanExternalApps();
   void scanLuaApps();
+  void rebuildAppManagerItems();
+  int8_t managerItemForAppId(const String& appId) const;
   void sendAppInventory();
   bool deleteExternalApp(const String& path);
   bool deleteLuaApp(const String& path);
@@ -468,6 +536,11 @@ class FireOS {
   void handleAppsButton(uint8_t index);
   void handleFirmwareButton(uint8_t index);
   void handleAppsSettingsButton(uint8_t index);
+  void updateAppManagerBackend();
+  void parseBackendAppCatalog(const String& message);
+  void parseBackendAppVersions(const String& message);
+  void prepareAppManagerActions();
+  void requestSelectedAppVersions();
   void handleWifiButton(uint8_t index);
   void handleBluetoothButton(uint8_t index);
   void handleBluetoothScanDialogButton(uint8_t index);
@@ -568,6 +641,8 @@ class FireOS {
   void drawMainMenuSettings();
   void drawShortcuts();
   void drawAppsSettings();
+  void drawAppsSettingsBackend();
+  void drawAppManagerVersions();
   void drawHelp();
   void drawQuickSettings();
   void drawPlaceholder();

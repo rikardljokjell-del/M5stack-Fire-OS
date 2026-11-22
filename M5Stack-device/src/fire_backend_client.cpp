@@ -473,6 +473,57 @@ bool FireBackendClient::appInventory(const String& appsJson, bool storageReady,
                                   ",\"apps\":" + appsJson);
 }
 
+bool FireBackendClient::appList(uint32_t offset) {
+  return sendEvent("app_list", ",\"offset\":" + String(offset));
+}
+
+bool FireBackendClient::appVersions(const String& projectId,
+                                    const String& appId, uint32_t offset) {
+  String fields = ",\"offset\":" + String(offset);
+  if (projectId.length() > 0)
+    fields += ",\"project_id\":\"" + jsonEscape(projectId) + "\"";
+  else if (appId.length() > 0)
+    fields += ",\"app_id\":\"" + jsonEscape(appId) + "\"";
+  else
+    return false;
+  return sendEvent("app_versions", fields);
+}
+
+bool FireBackendClient::appDownload(const String& projectId,
+                                    const String& packageId,
+                                    const String& appId) {
+  if (packageId.length() == 0) return false;
+  String fields = ",\"package_id\":\"" + jsonEscape(packageId) + "\"";
+  if (projectId.length() > 0)
+    fields += ",\"project_id\":\"" + jsonEscape(projectId) + "\"";
+  if (appId.length() > 0)
+    fields += ",\"app_id\":\"" + jsonEscape(appId) + "\"";
+  return sendEvent("app_download", fields);
+}
+
+bool FireBackendClient::appBackendDeletePrepare(
+    const String& projectId, const String& appId, const String& scope,
+    const String& packageId) {
+  if ((projectId.length() == 0 && appId.length() == 0) ||
+      (scope != "all" && scope != "version") ||
+      (scope == "version" && packageId.length() == 0))
+    return false;
+  String fields = ",\"delete_scope\":\"" + jsonEscape(scope) + "\"";
+  if (projectId.length() > 0)
+    fields += ",\"project_id\":\"" + jsonEscape(projectId) + "\"";
+  if (appId.length() > 0)
+    fields += ",\"app_id\":\"" + jsonEscape(appId) + "\"";
+  if (packageId.length() > 0)
+    fields += ",\"package_id\":\"" + jsonEscape(packageId) + "\"";
+  return sendEvent("app_backend_delete_prepare", fields);
+}
+
+bool FireBackendClient::appBackendDeleteConfirm(const String& deleteId) {
+  if (deleteId.length() == 0) return false;
+  return sendEvent("app_backend_delete_confirm", ",\"delete_id\":\"" +
+                                                   jsonEscape(deleteId) + "\"");
+}
+
 bool FireBackendClient::confirmBuild(const String& proposalId) {
   return sendEvent("build_confirm", ",\"proposal_id\":\"" +
                    jsonEscape(proposalId) + "\"");

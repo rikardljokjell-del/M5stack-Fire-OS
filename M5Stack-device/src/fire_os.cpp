@@ -385,6 +385,22 @@ int jsonIntField(const String& json, const char* key, int fallback = 0) {
   return json.substring(end).toInt();
 }
 
+bool jsonBoolField(const String& json, const char* key, bool fallback = false) {
+  const String marker = String("\"") + key + "\"";
+  const int keyAt = json.indexOf(marker);
+  if (keyAt < 0) return fallback;
+  const int colon = json.indexOf(':', keyAt + marker.length());
+  if (colon < 0) return fallback;
+  int start = colon + 1;
+  while (start < json.length() &&
+         (json[start] == ' ' || json[start] == '\t' || json[start] == '\r' ||
+          json[start] == '\n'))
+    ++start;
+  if (json.startsWith("true", start)) return true;
+  if (json.startsWith("false", start)) return false;
+  return fallback;
+}
+
 const char* luaFailureCode(const String& error) {
   if (error == "vm_not_initialized") return "vm_not_initialized";
   if (error == "source_empty") return "source_empty";
@@ -1030,6 +1046,7 @@ void FireOS::update() {
     appScanPending_ = false;
     if (screen_ == Screen::Apps || screen_ == Screen::AppsSettings) {
       scanExternalApps();
+      if (screen_ == Screen::AppsSettings) rebuildAppManagerItems();
       redrawRequested_ = true;
     }
   }
@@ -2032,6 +2049,211 @@ void FireOS::scanLuaApps() {
   }
 }
 
+int8_t FireOS::managerItemForAppId(const String& appId) const {
+  if (appId.length() == 0) return -1;
+  for (uint8_t index = 0; index < managerItemCount_; ++index) {
+    if (managerItems_[index].appId == appId) return index;
+  }
+  return -1;
+}
+
+void FireOS::rebuildAppManagerItems() {
+  managerItemCount_ = 0;
+  for (uint8_t index = 0;
+       index < externalAppCount_ && managerItemCount_ < kMaxManagerItems;
+       ++index) {
+    ManagerItem& item = managerItems_[managerItemCount_++];
+    item = ManagerItem();
+    item.kind = 0;
+    item.local = true;
+    item.name = externalAppNames_[index];
+    item.localPath = externalAppPaths_[index];
+  }
+  for (uint8_t index = 0;
+       index < luaAppCount_ && managerItemCount_ < kMaxManagerItems;
+       ++index) {
+    const String source = luaAppPaths_[index];
+    const int slash = source.lastIndexOf('/');
+    const String folder = slash > 0 ? source.substring(0, slash) : source;
+    const String appId = sdBaseName(folder);
+    ManagerItem& item = managerItems_[managerItemCount_++];
+    item = ManagerItem();
+    item.kind = 1;
+    item.local = true;
+    item.appId = appId;
+    item.name = luaAppNames_[index];
+    item.localPath = source;
+    item.localPackageId = preferences.getString(
+        compactPreferenceKey("ap_", appId).c_str(), "");
+    File manifest = SD.open(sdJoinPath(folder, "manifest.json"), FILE_READ);
+    if (manifest && manifest.size() <= 8192) {
+      String body;
+      while (manifest.available()) body += static_cast<char>(manifest.read());
+      item.localVersion = jsonStringField(body, "version");
+    }
+    if (manifest) manifest.close();
+  }
+
+  for (uint8_t backendIndex = 0; backendIndex < backendAppCount_; ++backendIndex) {
+    const BackendAppInfo& backend = backendApps_[backendIndex];
+    int8_t found = managerItemForAppId(backend.appId);
+    if (found < 0) {
+      if (managerItemCount_ >= kMaxManagerItems) continue;
+      found = managerItemCount_++;
+      managerItems_[found] = ManagerItem();
+      managerItems_[found].kind = 2;
+    }
+    ManagerItem& item = managerItems_[found];
+    item.backend = true;
+    item.appId = backend.appId;
+    item.projectId = backend.projectId;
+    if (item.name.length() == 0) item.name = backend.name;
+    item.packageId = backend.latestPackageId;
+    item.version = backend.latestVersion;
+    item.versionCount = backend.versionCount;
+    item.downloadable = backend.downloadable;
+    item.canDeleteBackend = backend.canDelete;
+    item.backendBlockReason = backend.downloadable ? backend.deleteReason
+                                                   : backend.deleteReason;
+  }
+
+  for (uint8_t i = 0; i < managerItemCount_; ++i) {
+    for (uint8_t j = i + 1; j < managerItemCount_; ++j) {
+      if (managerItems_[j].name.compareTo(managerItems_[i].name) >= 0) continue;
+      ManagerItem swap = managerItems_[i];
+      managerItems_[i] = managerItems_[j];
+      managerItems_[j] = swap;
+    }
+  }
+  const uint8_t itemCount = managerItemCount_ + 1;
+  if (managerSelection_ >= itemCount) managerSelection_ = itemCount - 1;
+  if (managerSelection_ < managerOffset_) managerOffset_ = managerSelection_;
+  if (managerSelection_ >= managerOffset_ + 6)
+    managerOffset_ = managerSelection_ - 5;
+}
+
+void FireOS::updateAppManagerBackend() {
+  if (screen_ != Screen::AppsSettings || !backendClient_ ||
+      !backendClient_->sessionReady())
+    return;
+  if (!backendCatalogRequested_ && !backendCatalogLoading_) {
+    backendCatalogRequested_ = backendClient_->appList(0);
+    backendCatalogLoading_ = backendCatalogRequested_;
+    if (backendCatalogRequested_) {
+      backendCatalogNextOffset_ = 0;
+      backendCatalogStatus_ = "Loading backend apps...";
+      managerStatus_ = backendCatalogStatus_;
+      redrawRequested_ = true;
+    }
+  }
+}
+
+void FireOS::parseBackendAppCatalog(const String& message) {
+  const int appsAt = message.indexOf("\"apps\"");
+  int cursor = appsAt >= 0 ? message.indexOf('{', appsAt) : -1;
+  while (cursor >= 0 && backendAppCount_ < kMaxBackendApps) {
+    const int end = message.indexOf('}', cursor);
+    if (end < 0) break;
+    const String object = message.substring(cursor, end + 1);
+    const String appId = jsonStringField(object, "app_id");
+    if (appId.length() > 0) {
+      int8_t existing = -1;
+      for (uint8_t index = 0; index < backendAppCount_; ++index) {
+        if (backendApps_[index].appId == appId) {
+          existing = index;
+          break;
+        }
+      }
+      const uint8_t index = existing >= 0
+                                 ? static_cast<uint8_t>(existing)
+                                 : backendAppCount_++;
+      BackendAppInfo& item = backendApps_[index];
+      item.appId = appId;
+      item.projectId = jsonStringField(object, "project_id");
+      item.name = jsonStringField(object, "name");
+      item.latestPackageId = jsonStringField(object, "latest_package_id");
+      item.latestVersion = jsonStringField(object, "latest_version");
+      item.versionCount = static_cast<uint8_t>(
+          constrain(jsonIntField(object, "version_count"), 0, 255));
+      item.downloadable = jsonBoolField(object, "downloadable");
+      item.canDelete = jsonBoolField(object, "can_delete_from_device");
+      item.deleteReason = jsonStringField(object, "download_block_reason");
+      if (item.deleteReason.length() == 0)
+        item.deleteReason = jsonStringField(object, "device_delete_block_reason");
+    }
+    cursor = message.indexOf('{', end + 1);
+  }
+  rebuildAppManagerItems();
+  const bool complete = message.indexOf("\"next_offset\":null") >= 0;
+  if (!complete) {
+    const int next = jsonIntField(message, "next_offset", -1);
+    if (next >= 0 && next != backendCatalogNextOffset_ &&
+        backendClient_ && backendClient_->sessionReady()) {
+      backendCatalogNextOffset_ = next;
+      backendCatalogLoading_ = backendClient_->appList(next);
+      return;
+    }
+  }
+  backendCatalogLoading_ = false;
+  backendCatalogRequested_ = true;
+  backendCatalogStatus_ = "Backend apps: " + String(backendAppCount_);
+  managerStatus_ = backendCatalogStatus_;
+  redrawRequested_ = true;
+}
+
+void FireOS::parseBackendAppVersions(const String& message) {
+  appManagerVersionCount_ = 0;
+  appManagerVersionProjectId_ = jsonStringField(message, "project_id");
+  const int versionsAt = message.indexOf("\"versions\"");
+  int cursor = versionsAt >= 0 ? message.indexOf('{', versionsAt) : -1;
+  while (cursor >= 0 && appManagerVersionCount_ < kMaxBackendVersions) {
+    const int end = message.indexOf('}', cursor);
+    if (end < 0) break;
+    const String object = message.substring(cursor, end + 1);
+    const uint8_t index = appManagerVersionCount_++;
+    appManagerVersionPackageIds_[index] = jsonStringField(object, "package_id");
+    appManagerVersionLabels_[index] = jsonStringField(object, "version");
+    appManagerVersionReasons_[index] = jsonStringField(object, "download_block_reason");
+    appManagerVersionDownloadable_[index] =
+        jsonBoolField(object, "downloadable");
+    cursor = message.indexOf('{', end + 1);
+  }
+  appManagerVersionSelection_ = 0;
+  appManagerVersionOffset_ = 0;
+  appManagerVersionDialog_ = appManagerVersionCount_ > 0;
+  managerStatus_ = appManagerVersionDialog_ ? "Choose version" : "No versions";
+  redrawRequested_ = true;
+}
+
+void FireOS::prepareAppManagerActions() {
+  appManagerActionCount_ = 0;
+  if (managerSelection_ >= managerItemCount_) return;
+  const ManagerItem& item = managerItems_[managerSelection_];
+  auto add = [&](uint8_t code, const char* label) {
+    if (appManagerActionCount_ >= 6) return;
+    appManagerActionCodes_[appManagerActionCount_] = code;
+    appManagerActionLabels_[appManagerActionCount_++] = label;
+  };
+  if (item.local) add(1, "Launch");
+  if (item.backend && item.packageId.length() > 0) add(2, "Download/update");
+  if (item.local) add(3, "Delete local");
+  if (item.backend && item.canDeleteBackend) add(4, "Delete backend");
+  add(5, "Back");
+  appManagerActionIndex_ = 0;
+}
+
+void FireOS::requestSelectedAppVersions() {
+  if (managerSelection_ >= managerItemCount_ || !backendClient_) return;
+  const ManagerItem& item = managerItems_[managerSelection_];
+  if (!item.backend) return;
+  appManagerVersionProjectId_ = item.projectId;
+  appManagerVersionAppId_ = item.appId;
+  appManagerVersionDialog_ = false;
+  managerStatus_ = "Loading versions...";
+  if (!backendClient_->appVersions(item.projectId, item.appId, 0))
+    managerStatus_ = "Backend unavailable";
+}
+
 void FireOS::sendAppInventory() {
   if (!backendClient_ || !backendClient_->sessionReady()) return;
   if (!sdReady_) {
@@ -2090,6 +2312,7 @@ bool FireOS::deleteLuaApp(const String& path) {
     if (backendClient_ && backendClient_->sessionReady())
       backendClient_->appDeleted(appId);
     scanLuaApps();
+    rebuildAppManagerItems();
     sendAppInventory();
   }
   return ok;
@@ -2640,6 +2863,17 @@ void FireOS::open(Screen screen) {
     appManagerActionMenu_ = false;
     appManagerActionIndex_ = 0;
     appManagerDeleteConfirm_ = false;
+    appManagerDeleteMode_ = 0;
+    appManagerDeleteWaiting_ = false;
+    appManagerVersionDialog_ = false;
+    managerSelection_ = 0;
+    managerOffset_ = 0;
+    managerItemCount_ = 0;
+    managerStatus_ = "Scanning apps...";
+    backendAppCount_ = 0;
+    backendCatalogRequested_ = false;
+    backendCatalogLoading_ = false;
+    backendCatalogNextOffset_ = 0;
     externalAppCount_ = 0;
     luaAppCount_ = 0;
     externalAppMessage_ = "Scanning apps...";
@@ -3972,6 +4206,7 @@ void FireOS::updateBackend() {
                               screen_ == Screen::AiApi ||
                               screen_ == Screen::LuaApp ||
                               screen_ == Screen::Settings ||
+                              screen_ == Screen::AppsSettings ||
                               screen_ == Screen::Firmware ||
                               (packageManager_ && packageManager_->busy()) ||
                               (firmwareStorage_ && firmwareStorage_->busy()) ||
@@ -3989,6 +4224,7 @@ void FireOS::updateBackend() {
     requestWifi(true);
   }
   backendClient_->service(WiFi.status() == WL_CONNECTED);
+  updateAppManagerBackend();
   flushLuaDiagnostic();
 }
 
@@ -3996,6 +4232,11 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   os->backendStatus_ = status;
+  if (!connected && os->screen_ == Screen::AppsSettings) {
+    os->backendCatalogLoading_ = false;
+    os->backendCatalogRequested_ = false;
+    os->managerStatus_ = "Backend disconnected";
+  }
   os->redrawRequested_ = true;
   if (!connected && os->screen_ == Screen::AiDeveloper &&
       os->aiWorkflowState_ > 0) {
@@ -4007,6 +4248,7 @@ void FireOS::packageStatus(void* context, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   os->aiWorkflowText_ = status;
+  if (os->screen_ == Screen::AppsSettings) os->managerStatus_ = status;
   os->aiDeveloperMode_ = 2;
 }
 
@@ -4016,6 +4258,14 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
   if (!os) return;
   os->aiPackageId_ = packageId;
   os->aiWorkflowText_ = ok ? "INSTALLED" : message;
+  if (os->screen_ == Screen::AppsSettings) {
+    os->managerStatus_ = ok ? "Downloaded to FIRE" : message;
+    if (ok) {
+      os->scanExternalApps();
+      os->rebuildAppManagerItems();
+      os->sendAppInventory();
+    }
+  }
   if (ok) {
     const String installedPath = os->packageManager_
                                      ? os->packageManager_->installedPath()
@@ -4128,7 +4378,60 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "app_inventory_request") {
     scanLuaApps();
+    rebuildAppManagerItems();
     sendAppInventory();
+    return;
+  }
+  if (type == "app_catalog") {
+    parseBackendAppCatalog(message);
+    return;
+  }
+  if (type == "app_versions") {
+    parseBackendAppVersions(message);
+    return;
+  }
+  if (type == "app_backend_delete_ready") {
+    appManagerDeleteId_ = jsonStringField(message, "delete_id");
+    appManagerDeleteProjectId_ = jsonStringField(message, "project_id");
+    appManagerDeleteAppId_ = jsonStringField(message, "app_id");
+    appManagerDeletePackageId_ = jsonStringField(message, "package_id");
+    appManagerDeleteName_ = jsonStringField(message, "name");
+    const String scope = jsonStringField(message, "delete_scope");
+    appManagerDeleteScope_ = scope == "version" ? 1 : 2;
+    appManagerDeleteMode_ = 2;
+    appManagerDeleteConfirm_ = appManagerDeleteId_.length() > 0;
+    appManagerDeleteWaiting_ = false;
+    appManagerActionMenu_ = false;
+    managerStatus_ = "Confirm backend delete";
+    redrawRequested_ = true;
+    return;
+  }
+  if (type == "app_backend_deleted") {
+    const String deletedAppId = jsonStringField(message, "app_id");
+    for (uint8_t index = 0; index < backendAppCount_; ++index) {
+      if (backendApps_[index].appId != deletedAppId) continue;
+      backendApps_[index] = BackendAppInfo();
+      for (uint8_t move = index + 1; move < backendAppCount_; ++move)
+        backendApps_[move - 1] = backendApps_[move];
+      if (backendAppCount_ > 0) --backendAppCount_;
+      break;
+    }
+    appManagerDeleteConfirm_ = false;
+    appManagerDeleteWaiting_ = false;
+    appManagerDeleteMode_ = 0;
+    rebuildAppManagerItems();
+    managerStatus_ = "Backend app deleted";
+    backendCatalogRequested_ = false;
+    redrawRequested_ = true;
+    return;
+  }
+  if (type == "event_ack") {
+    const String status = jsonStringField(message, "status");
+    if (status == "awaiting_device_install")
+      managerStatus_ = "Download queued";
+    else if (status == "confirmation_required")
+      managerStatus_ = "Confirm deletion";
+    redrawRequested_ = true;
     return;
   }
   if (type == "assistant_message" || type == "transcript") {
@@ -4650,77 +4953,118 @@ void FireOS::handleAppsButton(uint8_t index) {
 
 void FireOS::handleAppsSettingsButton(uint8_t index) {
   if (screen_ == Screen::AppsSettings) {
+    if (appManagerVersionDialog_) {
+      const uint8_t itemCount = appManagerVersionCount_ + 1;
+      if (index == 0)
+        appManagerVersionSelection_ =
+            (appManagerVersionSelection_ + itemCount - 1) % itemCount;
+      else if (index == 2)
+        appManagerVersionSelection_ =
+            (appManagerVersionSelection_ + 1) % itemCount;
+      else if (appManagerVersionSelection_ == appManagerVersionCount_) {
+        appManagerVersionDialog_ = false;
+      } else if (appManagerVersionDownloadable_[appManagerVersionSelection_]) {
+        const String packageId =
+            appManagerVersionPackageIds_[appManagerVersionSelection_];
+        if (backendClient_ && backendClient_->appDownload(
+                                  appManagerVersionProjectId_, packageId,
+                                  appManagerVersionAppId_)) {
+          appManagerVersionDialog_ = false;
+          managerStatus_ = "Download requested";
+        } else {
+          managerStatus_ = "Backend unavailable";
+        }
+      } else {
+        managerStatus_ = appManagerVersionReasons_[appManagerVersionSelection_];
+        if (managerStatus_.length() == 0) managerStatus_ = "Version unavailable";
+      }
+      if (appManagerVersionSelection_ < appManagerVersionOffset_)
+        appManagerVersionOffset_ = appManagerVersionSelection_;
+      if (appManagerVersionSelection_ >= appManagerVersionOffset_ + 6)
+        appManagerVersionOffset_ = appManagerVersionSelection_ - 5;
+      return;
+    }
     if (appManagerDeleteConfirm_) {
-      if (index == 1) {
-        const bool luaSelected = externalAppSelection_ >= externalAppCount_ &&
-                                 externalAppSelection_ < externalAppCount_ + luaAppCount_;
-        const uint8_t selectedIndex = luaSelected
-                                          ? externalAppSelection_ - externalAppCount_
-                                          : externalAppSelection_;
-        const bool deleted = luaSelected
-                                 ? deleteLuaApp(luaAppPaths_[selectedIndex])
-                                 : selectedIndex < externalAppCount_ &&
-                                       deleteExternalApp(externalAppPaths_[selectedIndex]);
+      if (index == 0 || index == 2) {
         appManagerDeleteConfirm_ = false;
-        appManagerActionMenu_ = false;
-        externalAppMessage_ = deleted ? "App deleted" : "Delete failed";
-        scanExternalApps();
-        if (externalAppSelection_ > externalAppCount_)
-          externalAppSelection_ = externalAppCount_;
-      } else if (index == 0 || index == 2) {
-        appManagerDeleteConfirm_ = false;
+        appManagerDeleteMode_ = 0;
+      } else if (index == 1 && appManagerDeleteMode_ == 1) {
+        if (managerSelection_ < managerItemCount_) {
+          const ManagerItem& item = managerItems_[managerSelection_];
+          bool deleted = false;
+          if (item.kind == 1) deleted = deleteLuaApp(item.localPath);
+          else if (item.kind == 0) deleted = deleteExternalApp(item.localPath);
+          managerStatus_ = deleted ? "Local app deleted" : "Local delete failed";
+          appManagerDeleteConfirm_ = false;
+          appManagerDeleteMode_ = 0;
+          scanExternalApps();
+          rebuildAppManagerItems();
+          sendAppInventory();
+          backendCatalogRequested_ = false;
+        }
+      } else if (index == 1 && appManagerDeleteMode_ == 2) {
+        if (backendClient_ && backendClient_->appBackendDeleteConfirm(
+                                  appManagerDeleteId_)) {
+          appManagerDeleteConfirm_ = false;
+          appManagerDeleteWaiting_ = true;
+          managerStatus_ = "Deleting backend history...";
+        } else {
+          managerStatus_ = "Backend unavailable";
+        }
       }
       return;
     }
     if (appManagerActionMenu_) {
-      constexpr uint8_t kActionCount = 3;
-      if (index == 0) {
+      if (index == 0)
         appManagerActionIndex_ =
-            (appManagerActionIndex_ + kActionCount - 1) % kActionCount;
-      } else if (index == 2) {
+            (appManagerActionIndex_ + appManagerActionCount_ - 1) %
+            appManagerActionCount_;
+      else if (index == 2)
         appManagerActionIndex_ =
-            (appManagerActionIndex_ + 1) % kActionCount;
-      } else if (appManagerActionIndex_ == 0) {
-        const bool luaSelected = externalAppSelection_ >= externalAppCount_ &&
-                                 externalAppSelection_ < externalAppCount_ + luaAppCount_;
-        const uint8_t selectedIndex = luaSelected
-                                          ? externalAppSelection_ - externalAppCount_
-                                          : externalAppSelection_;
-        if (luaSelected) {
-          appManagerActionMenu_ = false;
-          startLuaApp(luaAppPaths_[selectedIndex], luaAppNames_[selectedIndex]);
-          return;
+            (appManagerActionIndex_ + 1) % appManagerActionCount_;
+      else {
+        const uint8_t action =
+            appManagerActionCodes_[appManagerActionIndex_];
+        appManagerActionMenu_ = false;
+        if (managerSelection_ >= managerItemCount_) return;
+        const ManagerItem& item = managerItems_[managerSelection_];
+        if (action == 1) {
+          if (item.kind == 1)
+            startLuaApp(item.localPath, item.name, item.localPackageId);
+          else if (item.kind == 0)
+            installExternalApp(item.localPath, true, false);
+        } else if (action == 2) {
+          requestSelectedAppVersions();
+        } else if (action == 3) {
+          appManagerDeleteMode_ = 1;
+          appManagerDeleteConfirm_ = true;
+        } else if (action == 4) {
+          if (backendClient_ && backendClient_->appBackendDeletePrepare(
+                                    item.projectId, item.appId, "all")) {
+            appManagerDeleteWaiting_ = true;
+            managerStatus_ = "Preparing backend delete...";
+          } else {
+            managerStatus_ = "Backend unavailable";
+          }
         }
-        externalAppMessage_ = "Installing...";
-        appManagerActionMenu_ = false;
-        draw();
-        installExternalApp(externalAppPaths_[externalAppSelection_], true,
-                           false);
-      } else if (appManagerActionIndex_ == 1) {
-        appManagerDeleteConfirm_ = true;
-      } else {
-        appManagerActionMenu_ = false;
       }
       return;
     }
 
-    const uint8_t appCount = externalAppCount_ + luaAppCount_;
-    const uint8_t itemCount = appCount + 1;  // Includes Back.
+    const uint8_t itemCount = managerItemCount_ + 1;
     if (index == 0 || index == 2) {
-      externalAppSelection_ =
-          (externalAppSelection_ + itemCount + (index == 0 ? -1 : 1)) %
-          itemCount;
-      if (externalAppSelection_ < externalAppOffset_)
-        externalAppOffset_ = externalAppSelection_;
-      if (externalAppSelection_ >= externalAppOffset_ + 6)
-        externalAppOffset_ = externalAppSelection_ - 5;
-    } else if (externalAppSelection_ == appCount) {
+      managerSelection_ =
+          (managerSelection_ + itemCount + (index == 0 ? -1 : 1)) % itemCount;
+      if (managerSelection_ < managerOffset_) managerOffset_ = managerSelection_;
+      if (managerSelection_ >= managerOffset_ + 6)
+        managerOffset_ = managerSelection_ - 5;
+    } else if (managerSelection_ == managerItemCount_) {
       back();
-    } else if (appCount == 0) {
-      externalAppMessage_ = "No apps in /apps";
+    } else if (managerItemCount_ == 0) {
+      managerStatus_ = "No apps found";
     } else {
-      appManagerActionIndex_ = 0;
-      appManagerActionMenu_ = true;
+      prepareAppManagerActions();
+      appManagerActionMenu_ = appManagerActionCount_ > 0;
     }
     return;
   }
@@ -6140,7 +6484,7 @@ void FireOS::drawScreen(Screen screen) {
       drawShortcuts();
       break;
     case Screen::AppsSettings:
-      drawAppsSettings();
+      drawAppsSettingsBackend();
       break;
     case Screen::Help:
       drawHelp();
@@ -7291,6 +7635,109 @@ void FireOS::drawAppsSettings() {
   if (externalAppMessage_.length() > 0)
     drawText(16, 190, externalAppMessage_, kOrange, 1);
   drawFooter("A  UP", "B  ACTIONS", "DOWN  C");
+}
+
+void FireOS::drawAppsSettingsBackend() {
+  drawStatusBar("App Manager");
+  if (appManagerVersionDialog_) {
+    drawAppManagerVersions();
+    return;
+  }
+  if (appManagerDeleteConfirm_) {
+    ui.fillRoundRect(18, 54, 284, 112, 10, kPanel);
+    drawText(32, 68, appManagerDeleteMode_ == 2 ? "Delete backend?"
+                                                : "Delete local?",
+             TFT_WHITE, 2, kPanel);
+    String name = appManagerDeleteName_;
+    if (name.length() == 0 && managerSelection_ < managerItemCount_)
+      name = managerItems_[managerSelection_].name;
+    if (name.length() > 27) name = name.substring(0, 24) + "...";
+    drawText(32, 101, name, kText, 1, kPanel);
+    drawText(32, 128, appManagerDeleteMode_ == 2
+                          ? "ALL backend versions"
+                          : "Only local SD files",
+             kOrange, 1, kPanel);
+    drawFooter("Cancel", "Confirm", "Cancel");
+    return;
+  }
+  if (appManagerActionMenu_) {
+    ui.fillRoundRect(18, 40, 284, 150, 10, kPanel);
+    String name = managerSelection_ < managerItemCount_
+                      ? managerItems_[managerSelection_].name
+                      : String();
+    if (name.length() > 26) name = name.substring(0, 23) + "...";
+    drawText(30, 50, name, TFT_WHITE, 1, kPanel);
+    for (uint8_t row = 0; row < appManagerActionCount_; ++row) {
+      const int y = 82 + row * 27;
+      const bool selected = row == appManagerActionIndex_;
+      if (selected) ui.fillRoundRect(26, y - 4, 268, 22, 5, kCyan);
+      drawText(38, y, appManagerActionLabels_[row], selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+    drawFooter("A  UP", "B  SELECT", "DOWN  C");
+    return;
+  }
+
+  String heading = "Local + backend apps";
+  if (backendClient_ && !backendClient_->sessionReady()) heading += " (offline)";
+  drawText(16, 34, heading, kMuted, 1);
+  const uint8_t itemCount = managerItemCount_ + 1;
+  const uint8_t visible = min<uint8_t>(6, itemCount - managerOffset_);
+  for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = managerOffset_ + row;
+    const int y = 54 + row * 22;
+    const bool selected = item == managerSelection_;
+    if (selected) ui.fillRoundRect(12, y - 3, 296, 19, 4, kCyan);
+    if (item == managerItemCount_) {
+      drawText(22, y, "Back", selected ? kBg : kText, 1,
+               selected ? kCyan : kBg);
+      continue;
+    }
+    const ManagerItem& managerItem = managerItems_[item];
+    String name = managerItem.name;
+    if (name.length() > 26) name = name.substring(0, 23) + "...";
+    drawText(22, y, name, selected ? kBg : kText, 1,
+             selected ? kCyan : kBg);
+    ui.setTextDatum(MR_DATUM);
+    String value = managerItem.backend && managerItem.local
+                       ? "Both"
+                   : managerItem.backend
+                       ? (managerItem.downloadable ? "Cloud" : "Locked")
+                   : managerItem.kind == 0 ? "BIN" : "Lua";
+    drawText(300, y, value, selected ? kBg : kMuted, 1,
+             selected ? kCyan : kBg);
+    ui.setTextDatum(TL_DATUM);
+  }
+  String status = managerStatus_.length() > 0 ? managerStatus_ : externalAppMessage_;
+  if (status.length() > 38) status = status.substring(0, 38);
+  drawText(16, 190, status, kMuted, 1);
+  drawFooter("A  UP", "B  ACTIONS", "DOWN  C");
+}
+
+void FireOS::drawAppManagerVersions() {
+  drawStatusBar("App versions");
+  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
+  drawText(18, 39, "Choose version", TFT_WHITE, 2, kPanel);
+  const uint8_t itemCount = appManagerVersionCount_ + 1;
+  const uint8_t visible = min<uint8_t>(6, itemCount - appManagerVersionOffset_);
+  for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = appManagerVersionOffset_ + row;
+    const bool selected = item == appManagerVersionSelection_;
+    const int y = 64 + row * 23;
+    if (selected) ui.fillRoundRect(15, y - 3, 290, 19, 4, kCyan);
+    if (item == appManagerVersionCount_) {
+      drawText(22, y, "Back", selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    } else {
+      String label = appManagerVersionLabels_[item];
+      if (label.length() == 0) label = "Version";
+      if (!appManagerVersionDownloadable_[item]) label += " (locked)";
+      if (label.length() > 28) label = label.substring(0, 25) + "...";
+      drawText(22, y, label, selected ? kBg : kText, 1,
+               selected ? kCyan : kPanel);
+    }
+  }
+  drawFooter("A  UP", "B  DOWNLOAD", "DOWN  C");
 }
 
 void FireOS::drawHelp() {

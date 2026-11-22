@@ -350,3 +350,30 @@ avbruddsfaser, 100-syklus soak, delvise HTTP-writes, rollback/strÃ¸mtap,
 full New/Update/build/install/run/healthy-flyt og SD-inventory etter
 offline-sletting. Disse mÃ¥ gjennomfÃ¸res mot kjÃ¸rende backend fÃ¸r FIRE OS
 kan rapporteres som ferdig auditert.
+
+## App Manager: backendkatalog, nedlasting og backend-sletting
+
+Implementert mot `M5Stack-backend/docs/DEVICE_APP_MANAGER_HANDOFF.md`:
+
+- `Settings -> App Manager` holder sessionen aktiv, henter paginert
+  `app_catalog` og fletter backendapper med lokale Lua-apper. Eksterne `.bin`
+  apper beholdes som lokale FIRE-apper.
+- Backendapper viser `Cloud`, `Both` eller `Locked`. Versjonsdialogen henter
+  `app_versions` og sender bare eksplisitt `app_download`; nedlasting starter
+  ikke appen automatisk.
+- Eksisterende `install_request`/ZIP-staging brukes for nedlasting. Etter ekte
+  installasjon sendes `device_install_result`, inventory oppdateres, og App
+  Manager blir stående åpen.
+- Lokal sletting sender `app_deleted` først etter faktisk SD-sletting.
+- Backend-sletting bruker `app_backend_delete_prepare`, konkret bekreftelse og
+  `app_backend_delete_confirm`; backend-historikk slettes ikke ved vanlig
+  lokal sletting.
+- `app_inventory_request`, `app_catalog`, `app_versions`, `event_ack`,
+  `app_backend_delete_ready` og `app_backend_deleted` behandles uten å åpne AI
+  Developer eller starte/kjøre apper.
+
+Backend-agentens siste GitHub-kode inneholder allerede serverkontrakten og
+testene for denne flyten. Backend-testene kunne ikke kjøres lokalt fordi
+`M5Stack-backend/.venv` mangler i dette miljøet. Device-build:
+`m5stack-fire-ble` bestått, RAM 1,4 %, flash 28,2 %. Fysisk App Manager-
+katalog/nedlasting/sletting må fortsatt verifiseres mot kjørende backend og SD.

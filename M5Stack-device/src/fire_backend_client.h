@@ -48,6 +48,15 @@ class FireBackendClient {
   bool cancelTurn(const String& turnId = String());
   bool appDeleted(const String& appId);
   bool appInventory(const String& appsJson, bool storageReady, bool complete);
+  bool appList(uint32_t offset = 0);
+  bool appVersions(const String& projectId, const String& appId = String(),
+                  uint32_t offset = 0);
+  bool appDownload(const String& projectId, const String& packageId,
+                  const String& appId = String());
+  bool appBackendDeletePrepare(const String& projectId, const String& appId,
+                               const String& scope,
+                               const String& packageId = String());
+  bool appBackendDeleteConfirm(const String& deleteId);
   bool confirmBuild(const String& proposalId);
   bool confirmRun(const String& packageId);
   bool appStop();
