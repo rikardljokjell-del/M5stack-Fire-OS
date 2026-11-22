@@ -4,7 +4,7 @@ import contextlib
 import hashlib
 import time
 
-from .models import State, APP_EVENT_DEFAULTS
+from .models import State, APP_EVENT_DEFAULTS, CAPABILITY_DEFAULTS
 from .capabilities import require_audio_input
 from .storage import canonical, new_id
 
@@ -13,6 +13,9 @@ def begin_event(service, event):
     if event.protocol_version != "0.2":
         return None, None
     payload = event.model_dump()
+    if payload.get("capabilities"):
+        for name,default in CAPABILITY_DEFAULTS.items():
+            if payload["capabilities"].get(name)==default:payload["capabilities"].pop(name,None)
     for name, default in APP_EVENT_DEFAULTS.items():
         if payload.get(name) == default:
             payload.pop(name, None)
@@ -124,6 +127,8 @@ async def dispatch(service, session, event):
 
 async def handle(service, session, event):
     name = event.event
+    if name == "firmware_store_result":
+        return service.firmware.receipt(session,event)
     if name in {"app_list", "app_versions", "app_select", "app_deleted", "app_inventory"}:
         if session.target != "device" or session.protocol_version != "0.2":
             raise ValueError("App lifecycle requires a protocol-0.2 device session")

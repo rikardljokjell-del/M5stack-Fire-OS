@@ -1,5 +1,15 @@
 # FIRE OS AI Developer backend 0.2
 
+Windows-appen har nå [én rad per app, versjonsvalg, sletting per versjon og
+AI-dialog uten tilkoblet FIRE](docs/DESKTOP_APPS.md). Egen Firmware-meny viser
+rapportert kjørende versjon og importerer firmwarefiler. SD-overføring til
+/firmware er backendklar, men krever ny mottaker i device:
+[FIRMWARE_STORAGE_HANDOFF.md](docs/FIRMWARE_STORAGE_HANDOFF.md).
+
+Fast skjermregel for alle nye/reparerte apper: [DISPLAY_QUALITY.md](docs/DISPLAY_QUALITY.md).
+Release-v3 avviser kjente blanke mellomrammer og feil tegnerekkefølge før levering.
+Regelen følger dagens firmware: tegn en komplett scene ved hver update.
+
 Siste runtime-/lydfunn og liten device-feedback: [URGENT_RUNTIME_VOICE.md](docs/URGENT_RUNTIME_VOICE.md).
 Backend lagrer korte livssyklusrapporter, skiller transport fra avspilling og
 beholder byggeforslaget ved lydfeil. Release-v2 begrenser arbeid per callback.

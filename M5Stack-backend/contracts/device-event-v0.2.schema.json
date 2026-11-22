@@ -44,6 +44,18 @@
           "maxLength": 64,
           "title": "Firmware Version",
           "type": "string"
+        },
+        "firmware_storage": {
+          "default": false,
+          "title": "Firmware Storage",
+          "type": "boolean"
+        },
+        "firmware_max_bytes": {
+          "default": 4194304,
+          "maximum": 4194304,
+          "minimum": 1024,
+          "title": "Firmware Max Bytes",
+          "type": "integer"
         }
       },
       "required": [
@@ -279,7 +291,8 @@
         "app_inventory",
         "mode_select",
         "app_diagnostic",
-        "audio_playback_failed"
+        "audio_playback_failed",
+        "firmware_store_result"
       ],
       "title": "Event",
       "type": "string"
@@ -310,6 +323,45 @@
         }
       ],
       "default": null
+    },
+    "firmware_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Firmware Id"
+    },
+    "transfer_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Transfer Id"
+    },
+    "sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sha256"
     },
     "app_mode": {
       "anyOf": [
@@ -707,6 +759,39 @@
   "title": "DeviceEvent",
   "type": "object",
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "firmware_store_result"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "firmware_id",
+          "transfer_id",
+          "status"
+        ],
+        "properties": {
+          "firmware_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "transfer_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {
@@ -1348,6 +1433,29 @@
           "archive_sha256": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "firmware_store_result"
+          },
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "sha256"
+        ],
+        "properties": {
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
           }
         }
       }

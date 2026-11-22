@@ -17,14 +17,14 @@ from test_audio import recording,wav_data
 from test_repair_target import saved_app,session
 
 
-async def test_heavy_init_is_rejected_but_incremental_init_passes(tmp_path):
+async def test_heavy_init_is_rejected_but_simpler_complete_scene_passes(tmp_path):
     store=Store(tmp_path,Redactor(),10_000_000)
     source="function init() for i=1,30 do fire.display.line(i,0,i,239,1) end end function update(dt) end"
     with pytest.raises(ValueError,match="Per-callback display work"):
         await validate_release({"main_lua":source,"required_services":["display"]},store,"heavy-init")
-    fixed="local n=1 function init() fire.display.clear(0) end function update(dt) for j=1,5 do if n<=30 then fire.display.line(n,0,n,239,1) n=n+1 end end end"
+    fixed="function init() fire.display.clear(0) end function update(dt) for j=1,5 do fire.display.line(j,0,j,239,1) end fire.display.circle(20,20,5,2016) end"
     result=await validate_release({"main_lua":fixed,"required_services":["display"]},store,"incremental-init")
-    assert all(p["max_callback_operations"]<=5 for p in result["profiles"])
+    assert all(p["max_callback_operations"]<=6 for p in result["profiles"])
 
 
 async def test_device_vm_failure_does_not_loop_into_another_app_rewrite(tmp_path):

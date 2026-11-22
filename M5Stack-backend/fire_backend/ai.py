@@ -8,6 +8,7 @@ from importlib.resources import files
 from openai import AsyncOpenAI
 
 from .models import DialogReply, GeneratedApp
+from .rendering import VISUAL_POLICY
 
 
 DIALOG_INSTRUCTIONS = """
@@ -149,7 +150,7 @@ class OpenAIProvider:
         request = {"confirmed_app": summary, "previous_code": previous, "validation_error": error}
         response = await self.api().responses.parse(
             model=self.settings.openai_code_model,
-            instructions=context + "\nGenerate a complete Lua app for this confirmed plan. "
+            instructions=context + ("" if VISUAL_POLICY in context else VISUAL_POLICY) + "\nGenerate a complete Lua app for this confirmed plan. "
             "Follow the prototype API exactly. Return name, main_lua, required_services. "
             "Naming is mandatory for EVERY app: a short understandable Norwegian app name, ideally 1-3 words, "
             "at most 32 characters, describing its actual purpose (e.g. Sprettsirkel, Snake, Helningsmaaler). "

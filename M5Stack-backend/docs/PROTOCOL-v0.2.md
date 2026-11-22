@@ -275,6 +275,12 @@ backend validates both. Package/Lua contract: `LUA_API.md` and FIRE_DEVICE_CONTE
 
 ## Lightweight lifecycle and audio diagnostics
 
+Firmware SD storage is an additive, capability-gated contract:
+[FIRMWARE_STORAGE_HANDOFF.md](FIRMWARE_STORAGE_HANDOFF.md). It uses
+firmware_store_request/firmware_store_result and device-scoped binary download.
+It never authorizes flashing, and stored files never establish installed firmware.
+PC authoring and version deletion: [DESKTOP_APPS.md](DESKTOP_APPS.md).
+
 Existing install/start/healthy/stop/failure events and app_diagnostic may include
 optional diagnostics. Allowed phase values: load, init, update, on_button,
 install, start, stop, audio_download, audio_playback. Optional strict integer

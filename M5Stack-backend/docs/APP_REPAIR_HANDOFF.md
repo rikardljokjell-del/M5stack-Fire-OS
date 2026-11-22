@@ -1,5 +1,12 @@
 # Automatisk feilsøking, kvalitetsport og applevetid
 
+Nyeste leveringsport er **release-v3** med obligatorisk skjermregel for ALLE
+genereringer/reparasjoner. Se [DISPLAY_QUALITY.md](DISPLAY_QUALITY.md).
+Eldre omtale av release-v2 under beskriver forrige port. Synlig tegning må ikke
+fordeles over frames når firmware tømmer sprite før hver update; forenkle en
+komplett scene. De nye kontrollene avviser den lagrede Slangespill 0.1.3-pakkens
+tomme update. Ny bygging/reparasjon kreves; installerte filer endres ikke her.
+
 Backendendring, 22. november 2026. Device-kilde er lest til 7787ed0; ingen firmware er endret eller flashet av backend-agenten. Bruk dette som tillegg til samtale- og applivssykluskontrakten.
 
 ## Hvorfor gamle apper kunne slippe gjennom

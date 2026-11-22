@@ -8,6 +8,7 @@ import unicodedata
 from difflib import SequenceMatcher
 
 from .storage import new_id
+from .rendering import VISUAL_POLICY
 
 
 class RepairChoiceNeeded(ValueError):
@@ -26,9 +27,10 @@ def name_words(text):
     return {stem(w) for w in words if w not in {"app", "appen", "program", "programmet"}}
 
 RULES = {
+    "rendering": VISUAL_POLICY,
     "bounds": "Clamp display coordinates and RGB values; use finite integers and keep moving objects within screen bounds.",
     "nil": "Initialize state before callbacks. Check table indices, empty lists and missing values, including after reset and collisions.",
-    "budget": "Keep callbacks short and bounded. Every init/update/button callback must stay below24 display operations and120000 display-work units, including initial grid drawing. Spread initialization over updates; cap tables/loops. Compile/top-level timing and a null Lua VM are firmware issues, not fixes achievable by cosmetic app rewrites.",
+    "budget": "Keep callbacks short and bounded: at most 24 output operations and 120000 display-work units per callback. Simplify a complete visible scene instead of splitting its drawing across updates; nonvisual preparation may be spread over updates. Cap tables/loops. Compile/top-level timing and a null Lua VM are firmware issues, not fixes achievable by cosmetic app rewrites.",
     "api": "Use only declared fire APIs and the restricted base/math functions. Do not assume standard Lua libraries exist.",
     "text": "Display strings must fit 80 UTF-8 bytes. Format numbers safely without relying on unavailable string APIs.",
     "runtime": "Exercise init, update, reset, each button held and rapid input across the full advertised runtime. Inspect all branches.",
@@ -37,6 +39,7 @@ RULES = {
 
 def failure_class(message):
     text = message.lower()
+    if "visual frame" in text or any(word in text for word in ("flimr", "flimmer", "flicker", "blank frame")): return "rendering"
     if any(word in text for word in ("bounds", "integer", "range", "coordinate")): return "bounds"
     if any(word in text for word in ("nil", "index", "length")): return "nil"
     if any(word in text for word in ("memory", "budget", "timeout", "instruction")): return "budget"
@@ -99,7 +102,7 @@ class Quality:
             raise ValueError("Generated source is identical to a version reported broken. Make a substantive repair before release.")
 
     def repair_target(self, service, session, text, *, source="text", continuing_repair=False):
-        owner = session.device_id if session.target == "device" else None
+        owner = session.device_id if session.target == "device" else session.desktop_device_id
         projects = [p for p in self.store.list("projects") if p.get("owner_device_id") == owner and service.app_versions(p)]
         words = name_words(text)
         selected = next((p for p in projects if p["id"] == session.project_id and
@@ -235,7 +238,7 @@ class Quality:
 def require_deliverable(package):
     if package.get("quality",{}).get("blocked"):
         raise ValueError("Denne appversjonen er sperret etter en feil. Velg appen og be om reparasjon for en ny testet versjon.")
-    if package.get("validation",{}).get("suite") != "release-v2":
+    if package.get("validation",{}).get("suite") != "release-v3":
         raise ValueError("Denne eldre pakken mangler utvidet kjøretidstest. Velg appen og be om reparasjon/ny bygging før levering.")
 
 

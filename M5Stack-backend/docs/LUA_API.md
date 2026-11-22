@@ -12,6 +12,13 @@ profiles remain supported. Neither conversation flag grants Lua audio access.
 
 ## Lifecycle and budgets
 
+Display lifecycle: the reviewed FireOS::drawLuaApp clears the offscreen sprite
+BEFORE every update; it is NOT a retained canvas. Render the complete scene on
+EVERY update, even when simulation does not advance. Init-only graphics and
+early returns before drawing disappear. on_button changes state only. Presenting
+the finished sprite is OS-owned. See DISPLAY_QUALITY.md for mandatory release-v3
+visual checks and physical verification limits.
+
 Define `init()` and `update(dt_ms)`, optionally `on_button(button, action)`.
 Call top-level initialization, then init, then updates; every callback must
 return. OS owns scheduling, display, audio, input, SD and stop/navigation.

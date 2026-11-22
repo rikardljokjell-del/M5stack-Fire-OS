@@ -1,5 +1,20 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
+## Nyeste PC-leveranse
+
+254 tester bestått. Windows-UI er visuelt kontrollert: én rad per app, valg av
+Slangespill 0.1.3/0.1.2/0.1.1, separat PC-dialog samtidig med tilkoblet FIRE og
+egen firmwaremeny med rapportert kjørende versjon. Ingen brukerpakke er slettet.
+Lokal helsesjekk svarte 200 etter omstart. Ingen fysisk firmwarelagring er
+forsøkt: device annonserer ikke mottak til /firmware ennå. Instruks:
+[FIRMWARE_STORAGE_HANDOFF.md](FIRMWARE_STORAGE_HANDOFF.md).
+
+Release-v3 har fast tegneregel og sjekker for alle apper. Den lagrede
+Slangespill 0.1.3 avvises nå for tom update, som forklarer blanke mellomrammer
+med dagens sprite-host. Ny isolert ekte OpenAI-app passerte alle sju profiler.
+Fysisk jevn skjerm er ikke bevist av PC-testen; se
+[DISPLAY_QUALITY.md](DISPLAY_QUALITY.md). Eldre målinger nedenfor er historikk.
+
 ## Siste måling: runtime og lydkvittering
 
 231 backendtester bestått. Isolert ekte OpenAI-reparasjon passerte release-v2

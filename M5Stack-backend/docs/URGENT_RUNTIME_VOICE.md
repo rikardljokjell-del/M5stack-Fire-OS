@@ -1,5 +1,10 @@
 # Haster: målt oppstartsfeil, ødelagt retry og lydfeedback
 
+Nyere tegnemodell-funn og release-v3: [DISPLAY_QUALITY.md](DISPLAY_QUALITY.md).
+Dagens host tømmer sprite før hver update. Fordel derfor bare ikke-synlig
+forarbeid over updates, ikke tegning som forutsetter bevart canvas. Ny
+firmwarefilmeny/SD-kontrakt: [FIRMWARE_STORAGE_HANDOFF.md](FIRMWARE_STORAGE_HANDOFF.md).
+
 Device-agent: les dette før flere appomskrivinger. Kilde kontrollert mot 7787ed0 og fysisk backendkvittering 22. november 2026. Backend-agent endrer ikke firmware.
 
 ## Bekreftede hendelser

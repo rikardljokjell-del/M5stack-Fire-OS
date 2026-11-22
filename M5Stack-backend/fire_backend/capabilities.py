@@ -62,7 +62,7 @@ def status(settings, session):
 
 
 def generation_policy(settings, session):
-    effective = policy(settings, session.target, session.capabilities)
+    effective = policy(settings, "device" if session.desktop_device_id else session.target, session.capabilities)
     disabled = sorted((PROTOTYPE_SERVICES - set(effective["lua_services"])) | {"mic", "speaker", "wifi", "bluetooth", "sd"})
     return (
         "\nAuthoritative capability policy for THIS session (overrides PC example availability):\n"
@@ -72,7 +72,7 @@ def generation_policy(settings, session):
         "App lifetime: max_runtime_ms=0 means until user exit, NOT a zero-duration app. "
         "Keep callback/instruction/memory protection; never implement an app auto-close timer. "
         "Keep every init/update/button callback below24 display operations and120000 estimated display-work units. "
-        "Split initial grid/background work across updates. A legacy ten-second lifetime note is not a requested ten-second game round. "
+        "Simplify the complete scene; never split its visible rendering across updates. A legacy ten-second lifetime note is not a requested ten-second game round. "
         "Do not propose an unavailable feature; explain the limitation and ask for a supported alternative. "
         "Source presence and advertised budgets are not proof of physical testing or firmware enforcement."
     )

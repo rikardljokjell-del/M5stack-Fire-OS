@@ -8,7 +8,7 @@ from importlib.resources import files
 from .ai import MockProvider, OpenAIProvider
 from .builds import Builder, simulate, verify_archive
 from openai import APIStatusError
-from .models import State
+from .models import State, Capabilities
 from .devices import DeviceLifecycle
 from .app_lifecycle import AppLifecycle
 from .capabilities import generation_policy, policy, status as capability_status
@@ -75,6 +75,7 @@ class Session:
     retired_turns: list = field(default_factory=list)
     repair_context: dict | None = None
     resume_project_aliases: list = field(default_factory=list)
+    desktop_device_id: str | None = None
 
 
 class Backend(DeviceLifecycle, AppLifecycle):
@@ -97,6 +98,8 @@ class Backend(DeviceLifecycle, AppLifecycle):
         self.active_build_id = None
         self.active_downloads = {}
         self.store.recover()
+        from .firmware import Firmware
+        self.firmware=Firmware(self)
         for command in self.store.list("commands"):
             if command["status"] in {"pending", "started", "healthy"}:
                 self.unknown_command(command)
@@ -106,6 +109,37 @@ class Backend(DeviceLifecycle, AppLifecycle):
         session = self.sessions.get(session_id)
         if session is None or session.stopped:
             raise KeyError("Session not found")
+        return session
+
+    async def desktop_conversation(self, device_id, project_id=None, base_package_id=None):
+        """PC authoring for a configured device, without impersonating a device session."""
+        if device_id not in self.settings.device_tokens():
+            raise ValueError("Velg en konfigurert FIRE-enhet.")
+        project = self.app_project(device_id, project_id) if project_id else None
+        base = None
+        if project:
+            versions = self.app_versions(project)
+            base = next((p for p in versions if p["id"] == (base_package_id or project.get("latest_package"))),None)
+            if not base:raise ValueError("Velg en lagret basisversjon i denne appen.")
+        elif base_package_id:
+            raise ValueError("Basisversjon krever valgt app.")
+        peers=[s for s in self.sessions.values() if not s.stopped and s.desktop_device_id==device_id]
+        for peer in peers:
+            if peer.lock.locked() or peer.operation_task or (peer.task and not peer.task.done()):
+                raise Conflict("FullfÃ¸r eller avbryt PC-samtalen fÃ¸r du bytter app.")
+        if len(self.sessions)-len(peers)>=self.settings.fire_max_sessions:
+            raise Conflict("Maximum active sessions reached")
+        for peer in peers:await self.stop(peer)
+        project=project or self.new_project(device_id,"device")
+        session=Session(new_id("session"),new_id("pc"),project["id"],state=State.idle,desktop_device_id=device_id)
+        session.app_mode="update" if base else "new"
+        session.base_package_id=base["id"] if base else None
+        try:caps=self.store.get("devices",device_id).get("capabilities")
+        except FileNotFoundError:caps=None
+        session.capabilities=caps or {"services":["display","buttons","rgb","imu","time"],"max_memory":131072,"max_runtime_ms":10000}
+        if base:self.verify_package(session,base["id"])
+        self.sessions[session.id]=session
+        self.persist(session)
         return session
 
     def app_library(self):
@@ -148,21 +182,21 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 or session.activity in {"listening", "processing", "speaking"}
                 or session.state in {State.building, State.testing, State.processing, State.running,
                                      State.starting, State.stopping, State.rollback_pending}):
-            raise Conflict("FIRE må være tilkoblet og ledig før installasjon.")
+            raise Conflict("FIRE mÃ¥ vÃ¦re tilkoblet og ledig fÃ¸r installasjon.")
         device = self.device_record(session)
         if device.get("active_run_id") or device.get("pending_run_id"):
-            raise Conflict("Stopp forrige app før ny installasjon.")
+            raise Conflict("Stopp forrige app fÃ¸r ny installasjon.")
         package = self.store.get("packages", package_id)
         project = self.store.get("projects", package["project_id"])
         if project.get("owner_device_id") != session.device_id:
-            raise PermissionError("Pakken tilhører en annen enhet.")
+            raise PermissionError("Pakken tilhÃ¸rer en annen enhet.")
         self.verify_package(replace(session, project_id=project["id"]), package_id)
         # Reserve before the first await so concurrent confirmations/text cannot
         # race a project switch. Existing install offers are superseded below.
         async with session.lock:
             await self.close_dialog(session)
             if session.stopped or not session.sockets:
-                raise Conflict("FIRE ble frakoblet før installasjonen.")
+                raise Conflict("FIRE ble frakoblet fÃ¸r installasjonen.")
             if hasattr(self, "audio"):
                 self.audio.cancel(session)
             prior = [s for s in self.store.list("sessions") if s["project_id"] == project["id"]]
@@ -188,6 +222,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 "build_id": session.build_id, "mode": self.settings.fire_ai_mode,
                 "protocol_version": session.protocol_version, "target": session.target,
                 "boot_id": session.boot_id, "capabilities": session.capabilities,
+                "desktop_device_id": session.desktop_device_id,
                 "activity": session.activity, "turn_id": session.turn_id, "server_time": int(time.time()),
                 "last_error": session.last_error,
                 "app_mode": session.app_mode, "base_package_id": session.base_package_id,
@@ -298,7 +333,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
             project = self.app_project(request.device_id, request.project_id, request.app_id)
             request = request.model_copy(update={"project_id": project["id"]})
             if request.base_package_id and not any(p["id"] == request.base_package_id for p in self.app_versions(project)):
-                raise ValueError("Basisversjonen tilhører ikke den valgte appen.")
+                raise ValueError("Basisversjonen tilhÃ¸rer ikke den valgte appen.")
         if request.resume_session_id:
             return await self.resume(request, socket, principal)
         # A replacement socket may arrive before TCP notices the old peer left.
@@ -401,7 +436,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
             if session.state in {State.building, State.testing, State.processing, State.starting, State.stopping, State.rollback_pending}:
                 session.state, session.proposal_id = State.failed, None
         if (session.stopped or session.device_id != request.device_id or session.target != request.target
-                or session.boot_id != request.boot_id or session.capabilities != (self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None)
+                or session.boot_id != request.boot_id or (Capabilities.model_validate(session.capabilities).model_dump() if session.capabilities else None) != (self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None)
                 or (request.project_id and request.project_id != session.project_id and not
                     (request.app_mode is None and request.resume_session_id == session.id and request.project_id in session.resume_project_aliases))
                 or (request.base_package_id and request.base_package_id != session.base_package_id)
@@ -606,7 +641,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         from .quality import repair_requested, RepairChoiceNeeded
         repair_intent = bool(text and session.conversation_mode == "develop" and repair_requested(text))
         if not session.install_permitted and session.conversation_mode != "chat" and not repair_intent:
-            raise Conflict("Appen er borte fra FIRE. Velg Ny app eller Endre app før en ny bestilling.")
+            raise Conflict("Appen er borte fra FIRE. Velg Ny app eller Endre app fÃ¸r en ny bestilling.")
         if session.stopped or session.lock.locked() or session.state in {State.building, State.testing, State.running}:
             raise Conflict("Session is busy")
         if not text or not text.strip():
@@ -633,18 +668,18 @@ class Backend(DeviceLifecycle, AppLifecycle):
                             repair_choice = str(choice)
                         else:
                             await self.emit(session, {"type":"assistant_message","turn_id":session.turn_id,
-                                "text":"Jeg undersøker «" + target["manifest"]["name"] + "» og feilhistorikken automatisk."})
+                                "text":"Jeg undersÃ¸ker Â«" + target["manifest"]["name"] + "Â» og feilhistorikken automatisk."})
                             session.repair_context = await self.quality.diagnose(self, session, text)
                     if session.repair_context and session.repair_context.get("blocked_device_runtime"):
-                        reply = DialogReply(message="FIRE klarer ikke å starte Lua-miljøet etter forrige feil. Dette må rettes i firmware. Appen og feilloggen er bevart; en ny omskriving av appen løser ikke denne oppstartsfeilen.",
+                        reply = DialogReply(message="FIRE klarer ikke Ã¥ starte Lua-miljÃ¸et etter forrige feil. Dette mÃ¥ rettes i firmware. Appen og feilloggen er bevart; en ny omskriving av appen lÃ¸ser ikke denne oppstartsfeilen.",
                             clarification_needed=False,build_summary="")
                     elif session.repair_context:
                         package = self.store.get("packages", session.repair_context["package_id"])
                         original = self.store.get("builds", package["build_id"]).get("summary", "")
-                        reply = DialogReply(message="Jeg har analysert «"+package["manifest"]["name"]+"». Jeg retter denne appen med kildekoden og feilhistorikken. Trykk A BUILD.",
-                            clarification_needed=False, build_summary="Reparer eksisterende app. Behold funksjoner og kontroller, rett rotårsaken og test alle knapp-/tidsprofiler. Opprinnelige krav: " + original[:700])
+                        reply = DialogReply(message="Jeg har analysert Â«"+package["manifest"]["name"]+"Â». Jeg retter denne appen med kildekoden og feilhistorikken. Trykk A BUILD.",
+                            clarification_needed=False, build_summary="Reparer eksisterende app. Behold funksjoner og kontroller, rett rotÃ¥rsaken og test alle knapp-/tidsprofiler. Opprinnelige krav: " + original[:700])
                     elif repair_intent:
-                        reply = DialogReply(message=repair_choice or "Jeg finner ingen lagret app å reparere på denne enheten.",
+                        reply = DialogReply(message=repair_choice or "Jeg finner ingen lagret app Ã¥ reparere pÃ¥ denne enheten.",
                             clarification_needed=True,build_summary="")
                     else:
                         if session.dialog_connection is None:
@@ -705,7 +740,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
 
     async def confirm_build(self, session, proposal_id):
         if session.conversation_mode == "chat":
-            raise Conflict("Velg Lag/endre app før du bygger en app.")
+            raise Conflict("Velg Lag/endre app fÃ¸r du bygger en app.")
         if (session.stopped or not session.install_permitted or session.lock.locked() or self.build_lock.locked()
                 or session.state != State.awaiting_build_confirmation
                 or not proposal_id or proposal_id != session.proposal_id):
@@ -775,7 +810,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
             session.base_package_id = package["id"]
             build.update(status="ready", package_id=package["id"])
             await progress("ready", 100, "Pakken er testet. Sender til FIRE for installasjon." if session.target == "device"
-                           else "Pakken er testet. Venter på eksplisitt kjørebekreftelse.")
+                           else "Pakken er testet. Venter pÃ¥ eksplisitt kjÃ¸rebekreftelse.")
             await self.state(session, State.ready_to_run)
             build_completed = True
             await self.emit(session, {"type": "package_ready", "package_id": package["id"],
@@ -816,7 +851,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
 
     async def confirm_run(self, session, package_id):
         if session.conversation_mode == "chat":
-            raise Conflict("Velg Lag/endre app før du kjører en app.")
+            raise Conflict("Velg Lag/endre app fÃ¸r du kjÃ¸rer en app.")
         task = asyncio.current_task()
         if session.operation_task and session.operation_task is not task:
             raise Conflict("Session is busy")
