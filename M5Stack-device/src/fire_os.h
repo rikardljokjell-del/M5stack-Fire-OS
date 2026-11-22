@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <SD.h>
+#include <SPI.h>
 #include <esp_ota_ops.h>
 #include "fire_lua_runtime.h"
 #include "fire_backend_client.h"
@@ -318,8 +319,20 @@ class FireOS {
   uint8_t luaAppCount_ = 0;
   bool fileExplorerScanPending_ = false;
 
-  enum class LuaJobKind : uint8_t { None, I2cScan, I2cRead, I2cWrite,
-                                    UartRead, UartWrite };
+  enum class LuaJobKind : uint8_t {
+    None,
+    I2cScan,
+    I2cRead,
+    I2cWrite,
+    UartRead,
+    UartWrite,
+    SpiTransfer,
+    SdList,
+    SdRead,
+    SdWrite,
+    SdRemove,
+    PowerSleep
+  };
   struct LuaHardwareJob {
     uint16_t id = 0;
     LuaJobKind kind = LuaJobKind::None;
@@ -331,7 +344,7 @@ class FireOS {
     int16_t reg = -1;
     uint16_t count = 0;
     uint16_t step = 0;
-    uint8_t payload[128] = {};
+    uint8_t payload[512] = {};
     uint16_t payloadCount = 0;
     uint8_t bytes[512] = {};
     uint16_t byteCount = 0;
@@ -340,6 +353,13 @@ class FireOS {
     uint32_t written = 0;
     String text;
     String errorCode;
+    String path;
+    uint32_t offset = 0;
+    bool append = false;
+    uint16_t entryCount = 0;
+    String entryNames[32];
+    uint32_t entrySizes[32] = {};
+    bool entryDirectories[32] = {};
   };
   static constexpr uint8_t kMaxLuaJobs = 4;
   LuaHardwareJob luaJobs_[kMaxLuaJobs];
@@ -352,6 +372,11 @@ class FireOS {
   bool luaUartOpen_ = false;
   int luaUartRxPin_ = -1;
   int luaUartTxPin_ = -1;
+  int8_t luaDacPin_ = -1;
+  SPIClass* luaSpi_ = nullptr;
+  int luaSpiBus_ = -1;
+  uint32_t luaSpiFrequency_ = 1000000;
+  uint8_t luaSpiMode_ = 0;
 
   FireLuaRuntime* luaRuntime_ = nullptr;
   bool luaRuntimeReady_ = false;
@@ -543,6 +568,8 @@ class FireOS {
   bool luaI2cAllowed(uint8_t bus, uint8_t address, bool write) const;
   bool luaGpioAllowed(int pin, bool write) const;
   bool luaPwmAllowed(int pin) const;
+  bool luaPrivateAppPath(const char* relative, String& result,
+                         const char** error) const;
   static bool luaGpioModeCallback(void*, int, const char*, const char**);
   static bool luaGpioReadCallback(void*, int, int*, const char**);
   static bool luaGpioWriteCallback(void*, int, int, const char**);
@@ -557,6 +584,27 @@ class FireOS {
   static uint16_t luaI2cScanCallback(void*, int, const char**);
   static uint16_t luaI2cReadCallback(void*, int, int, int, int, const char**);
   static uint16_t luaI2cWriteCallback(void*, int, int, const uint8_t*, size_t, const char**);
+  static bool luaAdcReadCallback(void*, int, int*, const char**);
+  static bool luaDacWriteCallback(void*, int, int, const char**);
+  static bool luaDacStopCallback(void*, int, const char**);
+  static bool luaSpiOpenCallback(void*, int, int, int, int, int, int, int,
+                                 const char**);
+  static uint16_t luaSpiTransferCallback(void*, int, const uint8_t*, size_t,
+                                         const char**);
+  static bool luaSpiCloseCallback(void*, int, const char**);
+  static uint16_t luaSdListCallback(void*, const char*, const char**);
+  static uint16_t luaSdReadCallback(void*, const char*, uint32_t, uint16_t,
+                                    const char**);
+  static uint16_t luaSdWriteCallback(void*, const char*, const char*, size_t,
+                                     bool, const char**);
+  static uint16_t luaSdRemoveCallback(void*, const char*, const char**);
+  static bool luaSdMkdirCallback(void*, const char*, const char**);
+  static bool luaPowerStatusCallback(void*, float*, float*, bool*, bool*);
+  static bool luaPowerBrightnessCallback(void*, int, const char**);
+  static uint16_t luaPowerSleepCallback(void*, uint32_t, const char**);
+  static bool luaRtcNowCallback(void*, uint32_t*, int*, int*, int*, int*, int*,
+                                int*, const char**);
+  static bool luaRtcSetCallback(void*, uint32_t, const char**);
   static bool luaJobPollCallback(void*, uint16_t, FireLuaRuntime::JobSnapshot*);
   static bool luaJobResultCallback(void*, uint16_t, FireLuaRuntime::JobSnapshot*);
   static bool luaJobCloseCallback(void*, uint16_t);

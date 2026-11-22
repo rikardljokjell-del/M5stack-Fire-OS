@@ -406,3 +406,16 @@ testene for denne flyten. Backend-testene kunne ikke kjøres lokalt fordi
 `M5Stack-backend/.venv` mangler i dette miljøet. Device-build:
 `m5stack-fire-ble` bestått, RAM 1,4 %, flash 28,2 %. Fysisk App Manager-
 katalog/nedlasting/sletting må fortsatt verifiseres mot kjørende backend og SD.
+## fire-lua-0.2 adapter follow-up
+
+Register hash: `0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40`.
+
+The device now wires the register-backed display, jobs, GPIO, PWM, I2C, UART,
+ADC, DAC, SPI, SD and RTC adapters. `power.sleep`, Wi-Fi/BLE Lua adapters and
+Lua mic/speaker services remain unadvertised until their safe state machines
+and physical tests are complete.
+
+Build/flash verification: `m5stack-fire-ble` passed (RAM 1.4%, flash 28.7%),
+binary SHA-256 `00cf8e17b55dd056330ff64336be69d96e707dfa68d338dea72bf458ad2225ae`.
+The final image was flashed to COM3 and reached `FIRE OS started`; physical
+Lua I/O, loopback, SD-result and Tetris-soak tests remain outstanding.

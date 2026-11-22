@@ -59,6 +59,16 @@ constexpr uint32_t kLuaServiceGpio = 1u << 6;
 constexpr uint32_t kLuaServicePwm = 1u << 7;
 constexpr uint32_t kLuaServiceI2c = 1u << 8;
 constexpr uint32_t kLuaServiceUart = 1u << 9;
+constexpr uint32_t kLuaServiceAdc = 1u << 10;
+constexpr uint32_t kLuaServiceDac = 1u << 11;
+constexpr uint32_t kLuaServiceSpi = 1u << 12;
+constexpr uint32_t kLuaServiceWifi = 1u << 13;
+constexpr uint32_t kLuaServiceBluetooth = 1u << 14;
+constexpr uint32_t kLuaServiceMic = 1u << 15;
+constexpr uint32_t kLuaServiceSpeaker = 1u << 16;
+constexpr uint32_t kLuaServiceSd = 1u << 17;
+constexpr uint32_t kLuaServicePower = 1u << 18;
+constexpr uint32_t kLuaServiceRtc = 1u << 19;
 constexpr uint32_t kBootMelodySampleRate = 8000;
 constexpr size_t kBootMelodySampleCount = 3160;  // 395 ms at 8 kHz
 int8_t kBootMelodyPcm[kBootMelodySampleCount] = {};
@@ -412,25 +422,50 @@ bool jsonBoolField(const String& json, const char* key, bool fallback = false) {
   return fallback;
 }
 
-uint32_t luaManifestServiceMask(const String& manifest) {
+bool luaManifestServiceMask(const String& manifest, uint32_t& mask) {
   const int at = manifest.indexOf("\"required_services\"");
-  if (at < 0) return 0;
+  if (at < 0) return false;
   const int start = manifest.indexOf('[', at);
   const int end = start < 0 ? -1 : manifest.indexOf(']', start);
-  if (start < 0 || end < 0) return 0;
-  const String list = manifest.substring(start, end + 1);
-  uint32_t mask = 0;
-  if (list.indexOf("\"display\"") >= 0) mask |= kLuaServiceDisplay;
-  if (list.indexOf("\"buttons\"") >= 0) mask |= kLuaServiceButtons;
-  if (list.indexOf("\"rgb\"") >= 0) mask |= kLuaServiceRgb;
-  if (list.indexOf("\"imu\"") >= 0) mask |= kLuaServiceImu;
-  if (list.indexOf("\"time\"") >= 0) mask |= kLuaServiceTime;
-  if (list.indexOf("\"jobs\"") >= 0) mask |= kLuaServiceJobs;
-  if (list.indexOf("\"gpio\"") >= 0) mask |= kLuaServiceGpio;
-  if (list.indexOf("\"pwm\"") >= 0) mask |= kLuaServicePwm;
-  if (list.indexOf("\"i2c\"") >= 0) mask |= kLuaServiceI2c;
-  if (list.indexOf("\"uart\"") >= 0) mask |= kLuaServiceUart;
-  return mask;
+  if (start < 0 || end < 0) return false;
+  mask = 0;
+  int cursor = start + 1;
+  while (cursor < end) {
+    while (cursor < end && (manifest[cursor] == ' ' ||
+                            manifest[cursor] == '\t' ||
+                            manifest[cursor] == '\r' ||
+                            manifest[cursor] == '\n' ||
+                            manifest[cursor] == ',')) {
+      ++cursor;
+    }
+    if (cursor >= end) break;
+    if (manifest[cursor] != '"') return false;
+    const int valueStart = cursor + 1;
+    const int valueEnd = manifest.indexOf('"', valueStart);
+    if (valueEnd < 0 || valueEnd > end) return false;
+    const String service = manifest.substring(valueStart, valueEnd);
+    uint32_t bit = 0;
+    if (service == "display") bit = kLuaServiceDisplay;
+    else if (service == "buttons") bit = kLuaServiceButtons;
+    else if (service == "rgb") bit = kLuaServiceRgb;
+    else if (service == "imu") bit = kLuaServiceImu;
+    else if (service == "time") bit = kLuaServiceTime;
+    else if (service == "jobs") bit = kLuaServiceJobs;
+    else if (service == "gpio") bit = kLuaServiceGpio;
+    else if (service == "pwm") bit = kLuaServicePwm;
+    else if (service == "i2c") bit = kLuaServiceI2c;
+    else if (service == "uart") bit = kLuaServiceUart;
+    else if (service == "adc") bit = kLuaServiceAdc;
+    else if (service == "dac") bit = kLuaServiceDac;
+    else if (service == "spi") bit = kLuaServiceSpi;
+    else if (service == "sd") bit = kLuaServiceSd;
+    else if (service == "rtc") bit = kLuaServiceRtc;
+    else return false;
+    if ((mask & bit) != 0) return false;
+    mask |= bit;
+    cursor = valueEnd + 1;
+  }
+  return true;
 }
 
 const char* luaFailureCode(const String& error) {
@@ -2102,8 +2137,20 @@ uint16_t FireOS::createLuaJob(LuaJobKind kind, const char** error) {
   for (LuaHardwareJob& job : luaJobs_) {
     if (job.id != 0) continue;
     job = LuaHardwareJob();
-    job.id = nextLuaJobId_++;
-    if (nextLuaJobId_ == 0) nextLuaJobId_ = 1;
+    // IDs are app-scoped but must not collide with a still-live slot after
+    // the 16-bit counter wraps.  Four slots make this bounded and cheap.
+    for (uint32_t attempt = 0; attempt < 65535; ++attempt) {
+      const uint16_t candidate = nextLuaJobId_++;
+      if (nextLuaJobId_ == 0) nextLuaJobId_ = 1;
+      if (candidate != 0 && !findLuaJob(candidate)) {
+        job.id = candidate;
+        break;
+      }
+    }
+    if (job.id == 0) {
+      setLuaError(error, "busy");
+      return 0;
+    }
     job.kind = kind;
     job.startedAt = millis();
     job.lastProgressAt = job.startedAt;
@@ -2139,6 +2186,19 @@ void FireOS::releaseLuaHardware() {
     ledcDetachPin(luaPwmPin_);
     luaPwmPin_ = -1;
   }
+  if (luaDacPin_ >= 0) {
+    dacWrite(luaDacPin_, 0);
+    pinMode(luaDacPin_, INPUT);
+    luaDacPin_ = -1;
+  }
+  if (luaSpi_) {
+    luaSpi_->end();
+    delete luaSpi_;
+    luaSpi_ = nullptr;
+    luaSpiBus_ = -1;
+    luaSpiFrequency_ = 1000000;
+    luaSpiMode_ = 0;
+  }
   if (luaUartOpen_) {
     Serial2.end();
     luaUartOpen_ = false;
@@ -2155,7 +2215,8 @@ bool FireOS::luaGpioModeCallback(void* context, int pin, const char* mode,
   }
   if (os->luaGpioClaimed_[pin] ||
       (os->luaUartOpen_ &&
-       (pin == os->luaUartRxPin_ || pin == os->luaUartTxPin_))) {
+       (pin == os->luaUartRxPin_ || pin == os->luaUartTxPin_)) ||
+      (pin == 26 && (os->luaPwmPin_ >= 0 || os->luaDacPin_ >= 0))) {
     setLuaError(error, "busy");
     return false;
   }
@@ -2234,6 +2295,7 @@ bool FireOS::luaPwmConfigureCallback(void* context, int pin, int frequency,
     return false;
   }
   if (os->luaGpioClaimed_[pin] || os->luaUartOpen_ ||
+      os->luaDacPin_ >= 0 ||
       (os->luaPwmPin_ >= 0 && os->luaPwmPin_ != pin)) {
     setLuaError(error, "busy");
     return false;
@@ -2364,6 +2426,9 @@ uint16_t FireOS::luaI2cScanCallback(void* context, int bus,
     os->luaI2cStarted_ = true;
   }
   const uint16_t jobId = os->createLuaJob(LuaJobKind::I2cScan, error);
+  if (jobId) {
+    if (LuaHardwareJob* job = os->findLuaJob(jobId)) job->step = 1;
+  }
   return jobId;
 }
 
@@ -2408,6 +2473,300 @@ uint16_t FireOS::luaI2cWriteCallback(void* context, int bus, int address,
   return jobId;
 }
 
+bool FireOS::luaAdcReadCallback(void* context, int pin, int* value,
+                                const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  // GPIO36 is ADC1 and is the only ADC resource exposed by the FIRE profile.
+  // It is also the fixed UART2 RX pin, so never sample it while UART owns it.
+  if (!os || !value || pin != 36 || os->luaUartOpen_ ||
+      os->luaGpioClaimed_[pin] || os->aiAudioCaptureActive_) {
+    setLuaError(error, os && os->aiAudioCaptureActive_ ? "busy" : "unavailable");
+    return false;
+  }
+  analogReadResolution(12);
+  *value = analogRead(pin);
+  return *value >= 0;
+}
+
+bool FireOS::luaDacWriteCallback(void* context, int pin, int value,
+                                 const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  // GPIO25 drives the FIRE speaker and is never handed to an app. GPIO26 is
+  // the safe Grove-B output and the only DAC resource in the device profile.
+  if (!os || pin != 26 || os->luaGpioClaimed_[pin] || os->luaUartOpen_ ||
+      os->luaPwmPin_ >= 0 || (os->luaDacPin_ >= 0 && os->luaDacPin_ != pin)) {
+    setLuaError(error, "busy");
+    return false;
+  }
+  dacWrite(pin, static_cast<uint8_t>(value));
+  os->luaDacPin_ = pin;
+  return true;
+}
+
+bool FireOS::luaDacStopCallback(void* context, int pin, const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || os->luaDacPin_ != pin) {
+    setLuaError(error, "invalid_handle");
+    return false;
+  }
+  dacWrite(pin, 0);
+  pinMode(pin, INPUT);
+  os->luaDacPin_ = -1;
+  return true;
+}
+
+bool FireOS::luaSpiOpenCallback(void* context, int bus, int sclk, int miso,
+                                int mosi, int cs, int frequency, int mode,
+                                const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  // FIRE's SD card owns VSPI (18/19/23). The SPI adapter is therefore only
+  // available when SD is absent, with a fixed, validated CS on GPIO27. This
+  // prevents an app from corrupting SD traffic or selecting flash/PSRAM pins.
+  if (!os || bus != 2 || sclk != 18 || miso != 19 || mosi != 23 || cs != 27) {
+    setLuaError(error, "unavailable");
+    return false;
+  }
+  if (os->sdReady_ || os->luaSpi_ || os->luaUartOpen_ ||
+      os->luaGpioClaimed_[cs] || os->luaPwmPin_ >= 0 || os->luaDacPin_ >= 0) {
+    setLuaError(error, "busy");
+    return false;
+  }
+  auto* spi = new SPIClass(VSPI);
+  if (!spi) {
+    setLuaError(error, "memory");
+    return false;
+  }
+  spi->begin(sclk, miso, mosi, cs);
+  os->luaSpi_ = spi;
+  os->luaSpiBus_ = bus;
+  os->luaSpiFrequency_ = static_cast<uint32_t>(frequency);
+  os->luaSpiMode_ = static_cast<uint8_t>(mode);
+  return true;
+}
+
+uint16_t FireOS::luaSpiTransferCallback(void* context, int bus,
+                                        const uint8_t* bytes, size_t length,
+                                        const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || !os->luaSpi_ || os->luaSpiBus_ != bus || !bytes || length == 0 ||
+      length > 512) {
+    setLuaError(error, "not_configured");
+    return 0;
+  }
+  const uint16_t jobId = os->createLuaJob(LuaJobKind::SpiTransfer, error);
+  if (!jobId) return 0;
+  LuaHardwareJob* job = os->findLuaJob(jobId);
+  job->bus = static_cast<uint8_t>(bus);
+  job->payloadCount = static_cast<uint16_t>(length);
+  memcpy(job->payload, bytes, length);
+  return jobId;
+}
+
+bool FireOS::luaSpiCloseCallback(void* context, int bus, const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || !os->luaSpi_ || os->luaSpiBus_ != bus) {
+    setLuaError(error, "invalid_handle");
+    return false;
+  }
+  os->luaSpi_->end();
+  delete os->luaSpi_;
+  os->luaSpi_ = nullptr;
+  os->luaSpiBus_ = -1;
+  os->luaSpiFrequency_ = 1000000;
+  os->luaSpiMode_ = 0;
+  return true;
+}
+
+bool FireOS::luaPrivateAppPath(const char* relative, String& result,
+                               const char** error) const {
+  if (!relative || luaAppId_.length() == 0) {
+    setLuaError(error, "unavailable");
+    return false;
+  }
+  const String path(relative);
+  if (path.length() > 96 || path.startsWith("/") || path.indexOf('\\') >= 0 ||
+      path.indexOf(':') >= 0 || path.indexOf('\0') >= 0 ||
+      path.indexOf("..") >= 0) {
+    setLuaError(error, "invalid_path");
+    return false;
+  }
+  result = "/apps/" + luaAppId_ + "/appdata";
+  if (path.length() > 0) result += "/" + path;
+  return true;
+}
+
+uint16_t FireOS::luaSdListCallback(void* context, const char* path,
+                                   const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  String resolved;
+  if (!os || !os->luaPrivateAppPath(path, resolved, error)) return 0;
+  if (!os->sdReady_) {
+    setLuaError(error, "unavailable");
+    return 0;
+  }
+  const uint16_t jobId = os->createLuaJob(LuaJobKind::SdList, error);
+  if (!jobId) return 0;
+  os->findLuaJob(jobId)->path = resolved;
+  return jobId;
+}
+
+uint16_t FireOS::luaSdReadCallback(void* context, const char* path,
+                                   uint32_t offset, uint16_t count,
+                                   const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  String resolved;
+  if (!os || !os->luaPrivateAppPath(path, resolved, error)) return 0;
+  if (!os->sdReady_) {
+    setLuaError(error, "unavailable");
+    return 0;
+  }
+  const uint16_t jobId = os->createLuaJob(LuaJobKind::SdRead, error);
+  if (!jobId) return 0;
+  LuaHardwareJob* job = os->findLuaJob(jobId);
+  job->path = resolved;
+  job->offset = offset;
+  job->count = count;
+  return jobId;
+}
+
+uint16_t FireOS::luaSdWriteCallback(void* context, const char* path,
+                                    const char* text, size_t length, bool append,
+                                    const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  String resolved;
+  if (!os || !os->luaPrivateAppPath(path, resolved, error)) return 0;
+  if (!text || length > 512) {
+    setLuaError(error, "payload_too_large");
+    return 0;
+  }
+  if (!os->sdReady_) {
+    setLuaError(error, "unavailable");
+    return 0;
+  }
+  const uint16_t jobId = os->createLuaJob(LuaJobKind::SdWrite, error);
+  if (!jobId) return 0;
+  LuaHardwareJob* job = os->findLuaJob(jobId);
+  job->path = resolved;
+  job->append = append;
+  job->payloadCount = static_cast<uint16_t>(length);
+  memcpy(job->payload, text, length);
+  return jobId;
+}
+
+uint16_t FireOS::luaSdRemoveCallback(void* context, const char* path,
+                                     const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  String resolved;
+  if (!os || !os->luaPrivateAppPath(path, resolved, error)) return 0;
+  if (!os->sdReady_) {
+    setLuaError(error, "unavailable");
+    return 0;
+  }
+  const uint16_t jobId = os->createLuaJob(LuaJobKind::SdRemove, error);
+  if (!jobId) return 0;
+  os->findLuaJob(jobId)->path = resolved;
+  return jobId;
+}
+
+bool FireOS::luaSdMkdirCallback(void* context, const char* path,
+                                const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  String resolved;
+  if (!os || !os->luaPrivateAppPath(path, resolved, error)) return false;
+  if (!os->sdReady_) {
+    setLuaError(error, "unavailable");
+    return false;
+  }
+  if (SD.exists(resolved)) {
+    setLuaError(error, "already_exists");
+    return false;
+  }
+  if (!SD.mkdir(resolved)) {
+    setLuaError(error, "mkdir_failed");
+    return false;
+  }
+  return true;
+}
+
+bool FireOS::luaPowerStatusCallback(void* context, float* battery,
+                                    float* voltage, bool* charging, bool* usb) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || !battery || !voltage || !charging || !usb) return false;
+  os->refreshBatteryStatus();
+  *battery = static_cast<float>(os->batteryLevel());
+  *voltage = max<int16_t>(0, M5.Power.getBatteryVoltage()) / 1000.0f;
+  *charging = os->batteryCharging();
+  *usb = *charging || M5.Power.getVBUSVoltage() > 0;
+  return true;
+}
+
+bool FireOS::luaPowerBrightnessCallback(void* context, int brightness,
+                                        const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os) {
+    setLuaError(error, "unavailable");
+    return false;
+  }
+  M5.Display.setBrightness(static_cast<uint8_t>(brightness));
+  os->brightness_ = static_cast<uint8_t>(brightness);
+  os->brightnessStep_ = nearestBrightnessStep(os->brightness_);
+  os->saveSettings();
+  return true;
+}
+
+uint16_t FireOS::luaPowerSleepCallback(void* context, uint32_t duration,
+                                       const char** error) {
+  // Deep/light sleep changes the boot lifecycle and cannot be safely invoked
+  // by a Lua callback without a dedicated OS wake/resume state machine.
+  // Keep the method unavailable until that state machine exists rather than
+  // pretending that a queued job is a sleep operation.
+  (void)context;
+  (void)duration;
+  setLuaError(error, "unavailable");
+  return 0;
+}
+
+bool FireOS::luaRtcNowCallback(void* context, uint32_t* epoch, int* year,
+                               int* month, int* day, int* hour, int* minute,
+                               int* second, const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || !epoch || !year || !month || !day || !hour || !minute || !second) {
+    setLuaError(error, "unavailable");
+    return false;
+  }
+  const time_t now = time(nullptr);
+  tm utc{};
+  if (gmtime_r(&now, &utc) == nullptr) {
+    setLuaError(error, "clock_unavailable");
+    return false;
+  }
+  *epoch = static_cast<uint32_t>(now);
+  *year = utc.tm_year + 1900;
+  *month = utc.tm_mon + 1;
+  *day = utc.tm_mday;
+  *hour = utc.tm_hour;
+  *minute = utc.tm_min;
+  *second = utc.tm_sec;
+  return true;
+}
+
+bool FireOS::luaRtcSetCallback(void* context, uint32_t epoch,
+                               const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os) {
+    setLuaError(error, "unavailable");
+    return false;
+  }
+  timeval tv{};
+  tv.tv_sec = static_cast<time_t>(epoch);
+  if (settimeofday(&tv, nullptr) != 0) {
+    setLuaError(error, "clock_set_failed");
+    return false;
+  }
+  os->dateTime_.save();
+  return true;
+}
+
 bool FireOS::luaJobPollCallback(void* context, uint16_t id,
                                 FireLuaRuntime::JobSnapshot* snapshot) {
   auto* os = static_cast<FireOS*>(context);
@@ -2432,12 +2791,24 @@ bool FireOS::luaJobResultCallback(void* context, uint16_t id,
   memcpy(snapshot->bytes, job->bytes, job->byteCount);
   snapshot->text = job->text;
   snapshot->written = job->written;
+  snapshot->entryCount = job->entryCount;
+  for (uint16_t index = 0; index < job->entryCount && index < 32; ++index) {
+    snapshot->entries[index].name = job->entryNames[index];
+    snapshot->entries[index].sizeBytes = job->entrySizes[index];
+    snapshot->entries[index].directory = job->entryDirectories[index];
+  }
+  snapshot->path = job->path;
   snapshot->resultKind = job->kind == LuaJobKind::I2cScan
                              ? FireLuaRuntime::JobSnapshot::I2cScan
                          : job->kind == LuaJobKind::UartRead
                              ? FireLuaRuntime::JobSnapshot::Uart
                          : job->kind == LuaJobKind::I2cRead
                              ? FireLuaRuntime::JobSnapshot::Bytes
+                         : job->kind == LuaJobKind::SpiTransfer ||
+                                   job->kind == LuaJobKind::SdRead
+                             ? FireLuaRuntime::JobSnapshot::Bytes
+                         : job->kind == LuaJobKind::SdList
+                             ? FireLuaRuntime::JobSnapshot::Files
                          : FireLuaRuntime::JobSnapshot::Write;
   return true;
 }
@@ -2470,7 +2841,7 @@ void FireOS::serviceLuaHardwareJobs() {
     }
     if (job.kind == LuaJobKind::I2cScan) {
       uint8_t processed = 0;
-      while (job.step < 127 && processed++ < 16) {
+      while (job.step < 127 && processed++ < 4) {
         const uint8_t address = static_cast<uint8_t>(job.step++);
         Wire.beginTransmission(address);
         if (Wire.endTransmission() == 0 && job.addressCount < 126)
@@ -2523,6 +2894,88 @@ void FireOS::serviceLuaHardwareJobs() {
             job.text += static_cast<char>(job.bytes[index]);
         job.state = 1;
       }
+    } else if (job.kind == LuaJobKind::SpiTransfer) {
+      if (!luaSpi_ || luaSpiBus_ != job.bus) {
+        job.state = 2;
+        job.errorCode = "spi_closed";
+        continue;
+      }
+      const uint16_t remaining = job.payloadCount - job.step;
+      const uint16_t chunk = min<uint16_t>(remaining, 64);
+      luaSpi_->beginTransaction(
+          SPISettings(luaSpiFrequency_, MSBFIRST, luaSpiMode_));
+      for (uint16_t index = 0; index < chunk; ++index) {
+        job.bytes[job.step + index] =
+            luaSpi_->transfer(job.payload[job.step + index]);
+      }
+      luaSpi_->endTransaction();
+      job.step = static_cast<uint16_t>(job.step + chunk);
+      job.byteCount = job.step;
+      if (job.step >= job.payloadCount) {
+        job.written = job.payloadCount;
+        job.state = 1;
+      }
+    } else if (job.kind == LuaJobKind::SdList) {
+      File directory = SD.open(job.path, FILE_READ);
+      if (!directory || !directory.isDirectory()) {
+        if (directory) directory.close();
+        job.state = 2;
+        job.errorCode = "not_found";
+        continue;
+      }
+      File entry = directory.openNextFile();
+      while (entry && job.entryCount < 32) {
+        String name = entry.name();
+        const int slash = name.lastIndexOf('/');
+        if (slash >= 0) name = name.substring(slash + 1);
+        job.entryNames[job.entryCount] = name;
+        job.entrySizes[job.entryCount] = entry.isDirectory() ? 0 : entry.size();
+        job.entryDirectories[job.entryCount] = entry.isDirectory();
+        ++job.entryCount;
+        entry.close();
+        entry = directory.openNextFile();
+      }
+      if (entry) entry.close();
+      directory.close();
+      job.state = 1;
+    } else if (job.kind == LuaJobKind::SdRead) {
+      File file = SD.open(job.path, FILE_READ);
+      if (!file || file.isDirectory() || !file.seek(job.offset)) {
+        if (file) file.close();
+        job.state = 2;
+        job.errorCode = "read_failed";
+        continue;
+      }
+      const size_t amount = file.read(job.bytes, job.count);
+      file.close();
+      if (amount == 0 && job.count > 0) {
+        job.state = 2;
+        job.errorCode = "read_failed";
+        continue;
+      }
+      job.byteCount = static_cast<uint16_t>(amount);
+      job.state = 1;
+    } else if (job.kind == LuaJobKind::SdWrite) {
+      File file = SD.open(job.path, job.append ? FILE_APPEND : FILE_WRITE);
+      if (!file) {
+        job.state = 2;
+        job.errorCode = "open_failed";
+        continue;
+      }
+      const size_t amount = file.write(job.payload, job.payloadCount);
+      file.close();
+      job.written = static_cast<uint32_t>(amount);
+      job.state = amount == job.payloadCount ? 1 : 2;
+      if (job.state == 2) job.errorCode = "write_failed";
+    } else if (job.kind == LuaJobKind::SdRemove) {
+      if (!SD.exists(job.path)) {
+        job.state = 2;
+        job.errorCode = "not_found";
+        continue;
+      }
+      const bool ok = SD.remove(job.path) || SD.rmdir(job.path);
+      job.state = ok ? 1 : 2;
+      if (!ok) job.errorCode = "remove_failed";
     }
   }
 }
@@ -4420,17 +4873,35 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaAppError_ = "App manifest does not match source";
     return false;
   }
-  uint32_t serviceMask = hardwareApi
-                             ? luaManifestServiceMask(manifest)
-                             : (kLuaServiceDisplay | kLuaServiceButtons |
-                                kLuaServiceRgb | kLuaServiceImu |
-                                kLuaServiceTime);
-  if (hardwareApi && (serviceMask == 0 ||
+  uint32_t serviceMask = 0;
+  const bool servicesValid = hardwareApi
+                                 ? luaManifestServiceMask(manifest, serviceMask)
+                                 : (serviceMask = kLuaServiceDisplay |
+                                                kLuaServiceButtons |
+                                                kLuaServiceRgb | kLuaServiceImu |
+                                                kLuaServiceTime,
+                                    true);
+  if (hardwareApi && (!servicesValid || serviceMask == 0 ||
                       (serviceMask & kLuaServiceI2c &&
                        !(serviceMask & kLuaServiceJobs)) ||
                       (serviceMask & kLuaServiceUart &&
+                       !(serviceMask & kLuaServiceJobs)) ||
+                      (serviceMask & kLuaServiceSpi &&
+                       !(serviceMask & kLuaServiceJobs)) ||
+                      (serviceMask & kLuaServiceSd &&
                        !(serviceMask & kLuaServiceJobs)))) {
     luaAppError_ = "Hardware service dependencies invalid";
+    return false;
+  }
+  if (hardwareApi && (serviceMask & kLuaServiceSd) && sdReady_) {
+    const String appDataPath = "/apps/" + manifestId + "/appdata";
+    if (!SD.exists(appDataPath) && !SD.mkdir(appDataPath)) {
+      luaAppError_ = "App data directory unavailable";
+      return false;
+    }
+  }
+  if (hardwareApi && (serviceMask & kLuaServiceSd) && !sdReady_) {
+    luaAppError_ = "SD card unavailable";
     return false;
   }
   if (!luaRuntimeReady_) {
@@ -4465,6 +4936,22 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaHost.i2cScan = luaI2cScanCallback;
     luaHost.i2cRead = luaI2cReadCallback;
     luaHost.i2cWrite = luaI2cWriteCallback;
+    luaHost.adcRead = luaAdcReadCallback;
+    luaHost.dacWrite = luaDacWriteCallback;
+    luaHost.dacStop = luaDacStopCallback;
+    luaHost.spiOpen = luaSpiOpenCallback;
+    luaHost.spiTransfer = luaSpiTransferCallback;
+    luaHost.spiClose = luaSpiCloseCallback;
+    luaHost.sdList = luaSdListCallback;
+    luaHost.sdRead = luaSdReadCallback;
+    luaHost.sdWrite = luaSdWriteCallback;
+    luaHost.sdRemove = luaSdRemoveCallback;
+    luaHost.sdMkdir = luaSdMkdirCallback;
+    luaHost.powerStatus = luaPowerStatusCallback;
+    luaHost.powerBrightness = luaPowerBrightnessCallback;
+    luaHost.powerSleep = luaPowerSleepCallback;
+    luaHost.rtcNow = luaRtcNowCallback;
+    luaHost.rtcSet = luaRtcSetCallback;
     luaHost.jobPoll = luaJobPollCallback;
     luaHost.jobResult = luaJobResultCallback;
     luaHost.jobClose = luaJobCloseCallback;

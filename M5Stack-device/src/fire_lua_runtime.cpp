@@ -3,6 +3,7 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <math.h>
+#include <string.h>
 extern "C" {
 #include <lauxlib.h>
 }
@@ -20,10 +21,34 @@ constexpr uint32_t kServiceGpio = 1u << 6;
 constexpr uint32_t kServicePwm = 1u << 7;
 constexpr uint32_t kServiceI2c = 1u << 8;
 constexpr uint32_t kServiceUart = 1u << 9;
+// Register-backed service bits. Services are only placed in the advertised
+// capability set when their OS callbacks are wired into the runtime.
+constexpr uint32_t kServiceAdc = 1u << 10;
+constexpr uint32_t kServiceDac = 1u << 11;
+constexpr uint32_t kServiceSpi = 1u << 12;
+constexpr uint32_t kServiceWifi = 1u << 13;
+constexpr uint32_t kServiceBluetooth = 1u << 14;
+constexpr uint32_t kServiceMic = 1u << 15;
+constexpr uint32_t kServiceSpeaker = 1u << 16;
+constexpr uint32_t kServiceSd = 1u << 17;
+constexpr uint32_t kServicePower = 1u << 18;
+constexpr uint32_t kServiceRtc = 1u << 19;
 
 int boundedInt(lua_State* state, int index, int minimum, int maximum) {
   const lua_Integer value = luaL_checkinteger(state, index);
   return static_cast<int>(constrain(static_cast<long>(value), minimum, maximum));
+}
+
+// Hardware API arguments are contract values, not UI sliders.  Clamping an
+// invalid value would silently address a different pin/register and makes the
+// generated-app contract impossible to reason about.  Keep boundedInt() for
+// Lua helper semantics, but reject out-of-range hardware arguments explicitly.
+int strictInt(lua_State* state, int index, int minimum, int maximum) {
+  const lua_Integer value = luaL_checkinteger(state, index);
+  if (value < minimum || value > maximum) {
+    luaL_argerror(state, index, "value outside contract range");
+  }
+  return static_cast<int>(value);
 }
 
 const char* checkedString(lua_State* state, int index) {
@@ -194,6 +219,39 @@ void FireLuaRuntime::registerApi(lua_State* state) {
     setFunction(state, "write", uartWrite);
     setFunction(state, "close", uartClose);
     lua_setfield(state, -2, "uart");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceAdc)) {
+    lua_newtable(state);
+    setFunction(state, "read", adcRead);
+    lua_setfield(state, -2, "adc");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceDac)) {
+    lua_newtable(state);
+    setFunction(state, "write", dacWrite);
+    setFunction(state, "stop", dacStop);
+    lua_setfield(state, -2, "dac");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceSpi)) {
+    lua_newtable(state);
+    setFunction(state, "open", spiOpen);
+    setFunction(state, "transfer", spiTransfer);
+    setFunction(state, "close", spiClose);
+    lua_setfield(state, -2, "spi");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceSd)) {
+    lua_newtable(state);
+    setFunction(state, "list", sdList);
+    setFunction(state, "read", sdRead);
+    setFunction(state, "write", sdWrite);
+    setFunction(state, "remove", sdRemove);
+    setFunction(state, "mkdir", sdMkdir);
+    lua_setfield(state, -2, "sd");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceRtc)) {
+    lua_newtable(state);
+    setFunction(state, "now", rtcNow);
+    setFunction(state, "set", rtcSet);
+    lua_setfield(state, -2, "rtc");
   }
 
   lua_setglobal(state, "fire");
@@ -684,7 +742,7 @@ bool FireLuaRuntime::checkColor(lua_State* state, int index) {
 
 int FireLuaRuntime::displayClear(lua_State* state) {
   auto* runtime = self(state);
-  const int color = boundedInt(state, 1, 0, 65535);
+  const int color = strictInt(state, 1, 0, 65535);
   if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   if (runtime->host_.displayClear) runtime->host_.displayClear(runtime->host_.context, color);
   return 0;
@@ -692,9 +750,9 @@ int FireLuaRuntime::displayClear(lua_State* state) {
 
 int FireLuaRuntime::displayCircle(lua_State* state) {
   auto* runtime = self(state);
-  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
-  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
-  const int radius = boundedInt(state, 3, 0, kDisplayWidth);
+  const int x = strictInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = strictInt(state, 2, 0, kDisplayHeight - 1);
+  const int radius = strictInt(state, 3, 0, 160);
   if (!checkColor(state, 4)) return luaL_error(state, "invalid color");
   if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   const int color = static_cast<int>(lua_tointeger(state, 4));
@@ -704,10 +762,10 @@ int FireLuaRuntime::displayCircle(lua_State* state) {
 
 int FireLuaRuntime::displayRect(lua_State* state) {
   auto* runtime = self(state);
-  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
-  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
-  const int width = boundedInt(state, 3, 0, kDisplayWidth);
-  const int height = boundedInt(state, 4, 0, kDisplayHeight);
+  const int x = strictInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = strictInt(state, 2, 0, kDisplayHeight - 1);
+  const int width = strictInt(state, 3, 0, kDisplayWidth);
+  const int height = strictInt(state, 4, 0, kDisplayHeight);
   if (!checkColor(state, 5)) return luaL_error(state, "invalid color");
   if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   const int color = static_cast<int>(lua_tointeger(state, 5));
@@ -717,10 +775,10 @@ int FireLuaRuntime::displayRect(lua_State* state) {
 
 int FireLuaRuntime::displayLine(lua_State* state) {
   auto* runtime = self(state);
-  const int x1 = boundedInt(state, 1, 0, kDisplayWidth - 1);
-  const int y1 = boundedInt(state, 2, 0, kDisplayHeight - 1);
-  const int x2 = boundedInt(state, 3, 0, kDisplayWidth - 1);
-  const int y2 = boundedInt(state, 4, 0, kDisplayHeight - 1);
+  const int x1 = strictInt(state, 1, 0, kDisplayWidth - 1);
+  const int y1 = strictInt(state, 2, 0, kDisplayHeight - 1);
+  const int x2 = strictInt(state, 3, 0, kDisplayWidth - 1);
+  const int y2 = strictInt(state, 4, 0, kDisplayHeight - 1);
   if (!checkColor(state, 5)) return luaL_error(state, "invalid color");
   if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   const int color = static_cast<int>(lua_tointeger(state, 5));
@@ -730,11 +788,12 @@ int FireLuaRuntime::displayLine(lua_State* state) {
 
 int FireLuaRuntime::displayText(lua_State* state) {
   auto* runtime = self(state);
-  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
-  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
-  const char* text = checkedString(state, 3);
-  if (strlen(text) > 80) return luaL_error(state, "text too long");
-  if (!runtime->chargeIo(strlen(text), true))
+  const int x = strictInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = strictInt(state, 2, 0, kDisplayHeight - 1);
+  size_t textLength = 0;
+  const char* text = luaL_checklstring(state, 3, &textLength);
+  if (textLength > 80) return luaL_error(state, "text too long");
+  if (!runtime->chargeIo(textLength, true))
     return luaL_error(state, "display io budget exceeded");
   if (!checkColor(state, 4)) return luaL_error(state, "invalid color");
   if (runtime->host_.displayText) runtime->host_.displayText(runtime->host_.context, x, y, text, static_cast<int>(lua_tointeger(state, 4)));
@@ -743,10 +802,10 @@ int FireLuaRuntime::displayText(lua_State* state) {
 
 int FireLuaRuntime::displayFillRect(lua_State* state) {
   auto* runtime = self(state);
-  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
-  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
-  const int width = boundedInt(state, 3, 1, kDisplayWidth);
-  const int height = boundedInt(state, 4, 1, kDisplayHeight);
+  const int x = strictInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = strictInt(state, 2, 0, kDisplayHeight - 1);
+  const int width = strictInt(state, 3, 1, kDisplayWidth);
+  const int height = strictInt(state, 4, 1, kDisplayHeight);
   if (!checkColor(state, 5)) return luaL_error(state, "invalid color");
   if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   if (runtime->host_.displayFillRect)
@@ -757,9 +816,9 @@ int FireLuaRuntime::displayFillRect(lua_State* state) {
 
 int FireLuaRuntime::displayFillCircle(lua_State* state) {
   auto* runtime = self(state);
-  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
-  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
-  const int radius = boundedInt(state, 3, 0, 160);
+  const int x = strictInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = strictInt(state, 2, 0, kDisplayHeight - 1);
+  const int radius = strictInt(state, 3, 0, 160);
   if (!checkColor(state, 4)) return luaL_error(state, "invalid color");
   if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   if (runtime->host_.displayFillCircle)
@@ -770,8 +829,8 @@ int FireLuaRuntime::displayFillCircle(lua_State* state) {
 
 int FireLuaRuntime::displayPixel(lua_State* state) {
   auto* runtime = self(state);
-  const int x = boundedInt(state, 1, 0, kDisplayWidth - 1);
-  const int y = boundedInt(state, 2, 0, kDisplayHeight - 1);
+  const int x = strictInt(state, 1, 0, kDisplayWidth - 1);
+  const int y = strictInt(state, 2, 0, kDisplayHeight - 1);
   if (!checkColor(state, 3)) return luaL_error(state, "invalid color");
   if (!runtime->chargeIo(1)) return luaL_error(state, "display io budget exceeded");
   if (runtime->host_.displayPixel)
@@ -782,16 +841,16 @@ int FireLuaRuntime::displayPixel(lua_State* state) {
 
 int FireLuaRuntime::displayGrid(lua_State* state) {
   auto* runtime = self(state);
-  const int x = boundedInt(state, 1, 0, 319);
-  const int y = boundedInt(state, 2, 0, 239);
-  const int cellWidth = boundedInt(state, 3, 1, 32);
-  const int cellHeight = boundedInt(state, 4, 1, 32);
-  const int columns = boundedInt(state, 5, 1, 32);
-  const int rows = boundedInt(state, 6, 1, 32);
+  const int x = strictInt(state, 1, 0, 319);
+  const int y = strictInt(state, 2, 0, 239);
+  const int cellWidth = strictInt(state, 3, 1, 32);
+  const int cellHeight = strictInt(state, 4, 1, 32);
+  const int columns = strictInt(state, 5, 1, 32);
+  const int rows = strictInt(state, 6, 1, 32);
   luaL_checktype(state, 7, LUA_TTABLE);
   luaL_checktype(state, 8, LUA_TTABLE);
   const size_t cellCount = static_cast<size_t>(columns) * rows;
-  if (cellCount > 384 || !runtime->chargeIo(cellCount, false))
+  if (cellCount > 384 || !runtime->chargeIo(1, false))
     return luaL_error(state, "display grid budget exceeded");
   uint8_t cells[384] = {};
   uint16_t palette[16] = {};
@@ -824,22 +883,28 @@ int FireLuaRuntime::displayGrid(lua_State* state) {
 int FireLuaRuntime::buttonPressed(lua_State* state) {
   auto* runtime = self(state);
   const char* name = checkedString(state, 1);
+  if (strcmp(name, "A") != 0 && strcmp(name, "B") != 0 &&
+      strcmp(name, "C") != 0)
+    return luaL_argerror(state, 1, "button must be A, B or C");
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   lua_pushboolean(state, runtime->host_.buttonPressed && runtime->host_.buttonPressed(runtime->host_.context, name));
   return 1;
 }
 
 int FireLuaRuntime::rgbSet(lua_State* state) {
   auto* runtime = self(state);
-  const int index = boundedInt(state, 1, 0, 9);
-  const int red = boundedInt(state, 2, 0, 255);
-  const int green = boundedInt(state, 3, 0, 255);
-  const int blue = boundedInt(state, 4, 0, 255);
+  const int index = strictInt(state, 1, 0, 9);
+  const int red = strictInt(state, 2, 0, 255);
+  const int green = strictInt(state, 3, 0, 255);
+  const int blue = strictInt(state, 4, 0, 255);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (runtime->host_.rgbSet) runtime->host_.rgbSet(runtime->host_.context, index, red, green, blue);
   return 0;
 }
 
 int FireLuaRuntime::imuAccel(lua_State* state) {
   auto* runtime = self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   float x = 0.0f, y = 0.0f, z = 0.0f;
   if (runtime->host_.imuAccel) runtime->host_.imuAccel(runtime->host_.context, &x, &y, &z);
   lua_newtable(state);
@@ -854,6 +919,7 @@ int FireLuaRuntime::imuAccel(lua_State* state) {
 
 int FireLuaRuntime::imuGyro(lua_State* state) {
   auto* runtime = self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   float x = 0.0f, y = 0.0f, z = 0.0f;
   if (!runtime->host_.imuGyro ||
       !runtime->host_.imuGyro(runtime->host_.context, &x, &y, &z))
@@ -870,6 +936,7 @@ int FireLuaRuntime::imuGyro(lua_State* state) {
 
 int FireLuaRuntime::imuTemperature(lua_State* state) {
   auto* runtime = self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   float value = 0.0f;
   if (!runtime->host_.imuTemperature ||
       !runtime->host_.imuTemperature(runtime->host_.context, &value))
@@ -880,14 +947,16 @@ int FireLuaRuntime::imuTemperature(lua_State* state) {
 
 int FireLuaRuntime::timeMillis(lua_State* state) {
   auto* runtime = self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   lua_pushinteger(state, runtime->host_.timeMillis ? runtime->host_.timeMillis(runtime->host_.context) : millis());
   return 1;
 }
 
 int FireLuaRuntime::gpioMode(lua_State* state) {
   auto* runtime = self(state);
-  const int pin = boundedInt(state, 1, 0, 39);
+  const int pin = strictInt(state, 1, 0, 39);
   const char* mode = checkedString(state, 2);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   const char* error = nullptr;
   if (!runtime->host_.gpioMode ||
       !runtime->host_.gpioMode(runtime->host_.context, pin, mode, &error))
@@ -898,9 +967,10 @@ int FireLuaRuntime::gpioMode(lua_State* state) {
 
 int FireLuaRuntime::gpioRead(lua_State* state) {
   auto* runtime = self(state);
-  const int pin = boundedInt(state, 1, 0, 39);
+  const int pin = strictInt(state, 1, 0, 39);
   const char* error = nullptr;
   int value = 0;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (!runtime->host_.gpioRead ||
       !runtime->host_.gpioRead(runtime->host_.context, pin, &value, &error))
     return pushError(state, error ? error : "unavailable");
@@ -910,9 +980,10 @@ int FireLuaRuntime::gpioRead(lua_State* state) {
 
 int FireLuaRuntime::gpioWrite(lua_State* state) {
   auto* runtime = self(state);
-  const int pin = boundedInt(state, 1, 0, 33);
-  const int value = boundedInt(state, 2, 0, 1);
+  const int pin = strictInt(state, 1, 0, 33);
+  const int value = strictInt(state, 2, 0, 1);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (!runtime->host_.gpioWrite ||
       !runtime->host_.gpioWrite(runtime->host_.context, pin, value, &error))
     return pushError(state, error ? error : "unavailable");
@@ -922,8 +993,9 @@ int FireLuaRuntime::gpioWrite(lua_State* state) {
 
 int FireLuaRuntime::gpioRelease(lua_State* state) {
   auto* runtime = self(state);
-  const int pin = boundedInt(state, 1, 0, 39);
+  const int pin = strictInt(state, 1, 0, 39);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (!runtime->host_.gpioRelease ||
       !runtime->host_.gpioRelease(runtime->host_.context, pin, &error))
     return pushError(state, error ? error : "unavailable");
@@ -933,10 +1005,11 @@ int FireLuaRuntime::gpioRelease(lua_State* state) {
 
 int FireLuaRuntime::pwmConfigure(lua_State* state) {
   auto* runtime = self(state);
-  const int pin = boundedInt(state, 1, 0, 33);
-  const int frequency = boundedInt(state, 2, 1, 20000);
-  const int resolution = boundedInt(state, 3, 1, 12);
+  const int pin = strictInt(state, 1, 0, 33);
+  const int frequency = strictInt(state, 2, 1, 20000);
+  const int resolution = strictInt(state, 3, 1, 12);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (!runtime->host_.pwmConfigure ||
       !runtime->host_.pwmConfigure(runtime->host_.context, pin, frequency,
                                     resolution, &error))
@@ -947,9 +1020,10 @@ int FireLuaRuntime::pwmConfigure(lua_State* state) {
 
 int FireLuaRuntime::pwmWrite(lua_State* state) {
   auto* runtime = self(state);
-  const int pin = boundedInt(state, 1, 0, 33);
-  const int duty = boundedInt(state, 2, 0, 4095);
+  const int pin = strictInt(state, 1, 0, 33);
+  const int duty = strictInt(state, 2, 0, 4095);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (!runtime->host_.pwmWrite ||
       !runtime->host_.pwmWrite(runtime->host_.context, pin, duty, &error))
     return pushError(state, error ? error : "unavailable");
@@ -959,8 +1033,9 @@ int FireLuaRuntime::pwmWrite(lua_State* state) {
 
 int FireLuaRuntime::pwmStop(lua_State* state) {
   auto* runtime = self(state);
-  const int pin = boundedInt(state, 1, 0, 33);
+  const int pin = strictInt(state, 1, 0, 33);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (!runtime->host_.pwmStop ||
       !runtime->host_.pwmStop(runtime->host_.context, pin, &error))
     return pushError(state, error ? error : "unavailable");
@@ -970,12 +1045,13 @@ int FireLuaRuntime::pwmStop(lua_State* state) {
 
 int FireLuaRuntime::uartOpen(lua_State* state) {
   auto* runtime = self(state);
-  const int port = boundedInt(state, 1, 1, 2);
-  const int baud = boundedInt(state, 2, 300, 1000000);
-  const int rx = boundedInt(state, 3, 0, 39);
-  const int tx = boundedInt(state, 4, 0, 33);
+  const int port = strictInt(state, 1, 1, 2);
+  const int baud = strictInt(state, 2, 300, 1000000);
+  const int rx = strictInt(state, 3, 0, 39);
+  const int tx = strictInt(state, 4, 0, 33);
   const char* format = checkedString(state, 5);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (!runtime->host_.uartOpen ||
       !runtime->host_.uartOpen(runtime->host_.context, port, baud, rx, tx,
                                format, &error))
@@ -986,9 +1062,10 @@ int FireLuaRuntime::uartOpen(lua_State* state) {
 
 int FireLuaRuntime::uartRead(lua_State* state) {
   auto* runtime = self(state);
-  const int port = boundedInt(state, 1, 1, 2);
-  const int maxBytes = boundedInt(state, 2, 1, 512);
+  const int port = strictInt(state, 1, 1, 2);
+  const int maxBytes = strictInt(state, 2, 1, 512);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   const uint16_t job = runtime->host_.uartRead
                            ? runtime->host_.uartRead(runtime->host_.context,
                                                      port, maxBytes, &error)
@@ -1000,10 +1077,11 @@ int FireLuaRuntime::uartRead(lua_State* state) {
 
 int FireLuaRuntime::uartWrite(lua_State* state) {
   auto* runtime = self(state);
-  const int port = boundedInt(state, 1, 1, 2);
+  const int port = strictInt(state, 1, 1, 2);
   size_t length = 0;
   const char* text = luaL_checklstring(state, 2, &length);
   if (length > 512) return pushError(state, "payload_too_large");
+  if (!runtime->chargeIo(length)) return luaL_error(state, "hardware io budget exceeded");
   const char* error = nullptr;
   const uint16_t job = runtime->host_.uartWrite
                            ? runtime->host_.uartWrite(runtime->host_.context,
@@ -1016,8 +1094,9 @@ int FireLuaRuntime::uartWrite(lua_State* state) {
 
 int FireLuaRuntime::uartClose(lua_State* state) {
   auto* runtime = self(state);
-  const int port = boundedInt(state, 1, 1, 2);
+  const int port = strictInt(state, 1, 1, 2);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   if (!runtime->host_.uartClose ||
       !runtime->host_.uartClose(runtime->host_.context, port, &error))
     return pushError(state, error ? error : "unavailable");
@@ -1027,8 +1106,9 @@ int FireLuaRuntime::uartClose(lua_State* state) {
 
 int FireLuaRuntime::i2cScan(lua_State* state) {
   auto* runtime = self(state);
-  const int bus = boundedInt(state, 1, 0, 1);
+  const int bus = strictInt(state, 1, 0, 1);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   const uint16_t job = runtime->host_.i2cScan
                            ? runtime->host_.i2cScan(runtime->host_.context, bus,
                                                     &error)
@@ -1040,11 +1120,12 @@ int FireLuaRuntime::i2cScan(lua_State* state) {
 
 int FireLuaRuntime::i2cRead(lua_State* state) {
   auto* runtime = self(state);
-  const int bus = boundedInt(state, 1, 0, 1);
-  const int address = boundedInt(state, 2, 1, 126);
-  const int reg = boundedInt(state, 3, -1, 255);
-  const int count = boundedInt(state, 4, 1, 128);
+  const int bus = strictInt(state, 1, 0, 1);
+  const int address = strictInt(state, 2, 1, 126);
+  const int reg = strictInt(state, 3, -1, 255);
+  const int count = strictInt(state, 4, 1, 128);
   const char* error = nullptr;
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   const uint16_t job = runtime->host_.i2cRead
                            ? runtime->host_.i2cRead(runtime->host_.context, bus,
                                                     address, reg, count, &error)
@@ -1056,16 +1137,18 @@ int FireLuaRuntime::i2cRead(lua_State* state) {
 
 int FireLuaRuntime::i2cWrite(lua_State* state) {
   auto* runtime = self(state);
-  const int bus = boundedInt(state, 1, 0, 1);
-  const int address = boundedInt(state, 2, 1, 126);
+  const int bus = strictInt(state, 1, 0, 1);
+  const int address = strictInt(state, 2, 1, 126);
   luaL_checktype(state, 3, LUA_TTABLE);
   const int count = static_cast<int>(lua_rawlen(state, 3));
   if (count < 1 || count > 128) return pushError(state, "invalid_payload");
+  if (!runtime->chargeIo(static_cast<size_t>(count)))
+    return luaL_error(state, "hardware io budget exceeded");
   uint8_t bytes[128] = {};
   for (int index = 1; index <= count; ++index) {
     lua_geti(state, 3, index);
     if (!lua_isinteger(state, -1)) return pushError(state, "invalid_payload");
-    bytes[index - 1] = static_cast<uint8_t>(boundedInt(state, -1, 0, 255));
+    bytes[index - 1] = static_cast<uint8_t>(strictInt(state, -1, 0, 255));
     lua_pop(state, 1);
   }
   const char* error = nullptr;
@@ -1075,6 +1158,285 @@ int FireLuaRuntime::i2cWrite(lua_State* state) {
                            : 0;
   if (job == 0) return pushError(state, error ? error : "busy");
   lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::adcRead(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = strictInt(state, 1, 0, 39);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  int value = 0;
+  if (!runtime->host_.adcRead ||
+      !runtime->host_.adcRead(runtime->host_.context, pin, &value, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushinteger(state, value);
+  return 1;
+}
+
+int FireLuaRuntime::dacWrite(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = strictInt(state, 1, 25, 26);
+  const int value = strictInt(state, 2, 0, 255);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  if (!runtime->host_.dacWrite ||
+      !runtime->host_.dacWrite(runtime->host_.context, pin, value, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::dacStop(lua_State* state) {
+  auto* runtime = self(state);
+  const int pin = strictInt(state, 1, 0, 39);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  if (!runtime->host_.dacStop ||
+      !runtime->host_.dacStop(runtime->host_.context, pin, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::spiOpen(lua_State* state) {
+  auto* runtime = self(state);
+  const int bus = strictInt(state, 1, 1, 2);
+  const int sclk = strictInt(state, 2, 0, 33);
+  const int miso = strictInt(state, 3, 0, 39);
+  const int mosi = strictInt(state, 4, 0, 33);
+  const int cs = strictInt(state, 5, 0, 33);
+  const int frequency = strictInt(state, 6, 100000, 10000000);
+  const int mode = strictInt(state, 7, 0, 3);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  if (!runtime->host_.spiOpen ||
+      !runtime->host_.spiOpen(runtime->host_.context, bus, sclk, miso, mosi,
+                               cs, frequency, mode, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::spiTransfer(lua_State* state) {
+  auto* runtime = self(state);
+  const int bus = strictInt(state, 1, 1, 2);
+  luaL_checktype(state, 2, LUA_TTABLE);
+  const int count = static_cast<int>(lua_rawlen(state, 2));
+  if (count < 1 || count > 512) return pushError(state, "invalid_payload");
+  if (!runtime->chargeIo(static_cast<size_t>(count)))
+    return luaL_error(state, "hardware io budget exceeded");
+  uint8_t bytes[512] = {};
+  for (int index = 1; index <= count; ++index) {
+    lua_geti(state, 2, index);
+    if (!lua_isinteger(state, -1)) return pushError(state, "invalid_payload");
+    bytes[index - 1] = static_cast<uint8_t>(strictInt(state, -1, 0, 255));
+    lua_pop(state, 1);
+  }
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.spiTransfer
+                           ? runtime->host_.spiTransfer(runtime->host_.context,
+                                                        bus, bytes, count,
+                                                        &error)
+                           : 0;
+  if (!job) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::spiClose(lua_State* state) {
+  auto* runtime = self(state);
+  const int bus = strictInt(state, 1, 1, 2);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  if (!runtime->host_.spiClose ||
+      !runtime->host_.spiClose(runtime->host_.context, bus, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+static const char* checkedPath(lua_State* state, int index, size_t* length) {
+  const char* path = luaL_checklstring(state, index, length);
+  if (*length > 96) luaL_argerror(state, index, "path too long");
+  if (memchr(path, '\0', *length) != nullptr)
+    luaL_argerror(state, index, "path contains NUL");
+  return path;
+}
+
+int FireLuaRuntime::sdList(lua_State* state) {
+  auto* runtime = self(state);
+  size_t length = 0;
+  const char* path = checkedPath(state, 1, &length);
+  if (!runtime->chargeIo(length, true)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.sdList
+                           ? runtime->host_.sdList(runtime->host_.context, path,
+                                                   &error)
+                           : 0;
+  if (!job) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::sdRead(lua_State* state) {
+  auto* runtime = self(state);
+  size_t length = 0;
+  const char* path = checkedPath(state, 1, &length);
+  const int offset = strictInt(state, 2, 0, 1048576);
+  const int count = strictInt(state, 3, 1, 512);
+  if (!runtime->chargeIo(length, true)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.sdRead
+                           ? runtime->host_.sdRead(runtime->host_.context, path,
+                                                   static_cast<uint32_t>(offset),
+                                                   static_cast<uint16_t>(count),
+                                                   &error)
+                           : 0;
+  if (!job) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::sdWrite(lua_State* state) {
+  auto* runtime = self(state);
+  size_t pathLength = 0;
+  const char* path = checkedPath(state, 1, &pathLength);
+  size_t textLength = 0;
+  const char* text = luaL_checklstring(state, 2, &textLength);
+  if (textLength > 512) return pushError(state, "payload_too_large");
+  luaL_checktype(state, 3, LUA_TBOOLEAN);
+  if (!runtime->chargeIo(pathLength + textLength, true))
+    return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.sdWrite
+                           ? runtime->host_.sdWrite(runtime->host_.context, path,
+                                                    text, textLength,
+                                                    lua_toboolean(state, 3),
+                                                    &error)
+                           : 0;
+  if (!job) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::sdRemove(lua_State* state) {
+  auto* runtime = self(state);
+  size_t length = 0;
+  const char* path = checkedPath(state, 1, &length);
+  if (!runtime->chargeIo(length, true)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.sdRemove
+                           ? runtime->host_.sdRemove(runtime->host_.context,
+                                                     path, &error)
+                           : 0;
+  if (!job) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::sdMkdir(lua_State* state) {
+  auto* runtime = self(state);
+  size_t length = 0;
+  const char* path = checkedPath(state, 1, &length);
+  if (!runtime->chargeIo(length, true)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  if (!runtime->host_.sdMkdir ||
+      !runtime->host_.sdMkdir(runtime->host_.context, path, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::powerStatus(lua_State* state) {
+  auto* runtime = self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  float battery = 0.0f;
+  float voltage = 0.0f;
+  bool charging = false;
+  bool usb = false;
+  if (!runtime->host_.powerStatus ||
+      !runtime->host_.powerStatus(runtime->host_.context, &battery, &voltage,
+                                   &charging, &usb))
+    return pushError(state, "unavailable");
+  lua_newtable(state);
+  lua_pushnumber(state, battery);
+  lua_setfield(state, -2, "battery_percent");
+  lua_pushnumber(state, voltage);
+  lua_setfield(state, -2, "voltage");
+  lua_pushboolean(state, charging);
+  lua_setfield(state, -2, "charging");
+  lua_pushboolean(state, usb);
+  lua_setfield(state, -2, "usb");
+  return 1;
+}
+
+int FireLuaRuntime::powerBrightness(lua_State* state) {
+  auto* runtime = self(state);
+  const int brightness = strictInt(state, 1, 0, 255);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  if (!runtime->host_.powerBrightness ||
+      !runtime->host_.powerBrightness(runtime->host_.context, brightness,
+                                      &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::powerSleep(lua_State* state) {
+  auto* runtime = self(state);
+  const int duration = strictInt(state, 1, 1, 3600000);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.powerSleep
+                           ? runtime->host_.powerSleep(runtime->host_.context,
+                                                       static_cast<uint32_t>(duration),
+                                                       &error)
+                           : 0;
+  if (!job) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::rtcNow(lua_State* state) {
+  auto* runtime = self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  uint32_t epoch = 0;
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  const char* error = nullptr;
+  if (!runtime->host_.rtcNow ||
+      !runtime->host_.rtcNow(runtime->host_.context, &epoch, &year, &month,
+                              &day, &hour, &minute, &second, &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_newtable(state);
+  lua_pushinteger(state, epoch);
+  lua_setfield(state, -2, "epoch");
+  lua_pushinteger(state, year);
+  lua_setfield(state, -2, "year");
+  lua_pushinteger(state, month);
+  lua_setfield(state, -2, "month");
+  lua_pushinteger(state, day);
+  lua_setfield(state, -2, "day");
+  lua_pushinteger(state, hour);
+  lua_setfield(state, -2, "hour");
+  lua_pushinteger(state, minute);
+  lua_setfield(state, -2, "minute");
+  lua_pushinteger(state, second);
+  lua_setfield(state, -2, "second");
+  return 1;
+}
+
+int FireLuaRuntime::rtcSet(lua_State* state) {
+  auto* runtime = self(state);
+  const int epoch = strictInt(state, 1, 0, 2147483647);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  if (!runtime->host_.rtcSet ||
+      !runtime->host_.rtcSet(runtime->host_.context,
+                             static_cast<uint32_t>(epoch), &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
   return 1;
 }
 
@@ -1090,10 +1452,8 @@ static void pushJobState(lua_State* state,
   lua_setfield(state, -2, "state");
   lua_pushboolean(state, snapshot.state != 0);
   lua_setfield(state, -2, "done");
-  if (snapshot.errorCode.length() > 0) {
-    lua_pushlstring(state, snapshot.errorCode.c_str(), snapshot.errorCode.length());
-    lua_setfield(state, -2, "error_code");
-  }
+  lua_pushlstring(state, snapshot.errorCode.c_str(), snapshot.errorCode.length());
+  lua_setfield(state, -2, "error_code");
 }
 
 static void pushJobResult(lua_State* state,
@@ -1134,6 +1494,20 @@ static void pushJobResult(lua_State* state,
     lua_setfield(state, -2, "bytes");
     lua_pushlstring(state, snapshot.text.c_str(), snapshot.text.length());
     lua_setfield(state, -2, "text");
+  } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::Files) {
+    lua_newtable(state);
+    for (uint16_t index = 0; index < snapshot.entryCount; ++index) {
+      lua_newtable(state);
+      lua_pushlstring(state, snapshot.entries[index].name.c_str(),
+                      snapshot.entries[index].name.length());
+      lua_setfield(state, -2, "name");
+      lua_pushinteger(state, snapshot.entries[index].sizeBytes);
+      lua_setfield(state, -2, "size_bytes");
+      lua_pushboolean(state, snapshot.entries[index].directory);
+      lua_setfield(state, -2, "is_directory");
+      lua_seti(state, -2, index + 1);
+    }
+    lua_setfield(state, -2, "entries");
   } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::Write) {
     lua_pushinteger(state, snapshot.written);
     lua_setfield(state, -2, "written");
@@ -1142,7 +1516,8 @@ static void pushJobResult(lua_State* state,
 
 int FireLuaRuntime::jobsPoll(lua_State* state) {
   auto* runtime = self(state);
-  const uint16_t id = static_cast<uint16_t>(boundedInt(state, 1, 1, 65535));
+  const uint16_t id = static_cast<uint16_t>(strictInt(state, 1, 1, 65535));
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   JobSnapshot snapshot;
   if (!runtime->host_.jobPoll ||
       !runtime->host_.jobPoll(runtime->host_.context, id, &snapshot))
@@ -1153,7 +1528,8 @@ int FireLuaRuntime::jobsPoll(lua_State* state) {
 
 int FireLuaRuntime::jobsResult(lua_State* state) {
   auto* runtime = self(state);
-  const uint16_t id = static_cast<uint16_t>(boundedInt(state, 1, 1, 65535));
+  const uint16_t id = static_cast<uint16_t>(strictInt(state, 1, 1, 65535));
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   JobSnapshot snapshot;
   if (!runtime->host_.jobResult ||
       !runtime->host_.jobResult(runtime->host_.context, id, &snapshot))
@@ -1164,7 +1540,8 @@ int FireLuaRuntime::jobsResult(lua_State* state) {
 
 int FireLuaRuntime::jobsClose(lua_State* state) {
   auto* runtime = self(state);
-  const uint16_t id = static_cast<uint16_t>(boundedInt(state, 1, 1, 65535));
+  const uint16_t id = static_cast<uint16_t>(strictInt(state, 1, 1, 65535));
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   lua_pushboolean(state, runtime->host_.jobClose &&
                               runtime->host_.jobClose(runtime->host_.context, id));
   return 1;
@@ -1172,7 +1549,8 @@ int FireLuaRuntime::jobsClose(lua_State* state) {
 
 int FireLuaRuntime::jobsCancel(lua_State* state) {
   auto* runtime = self(state);
-  const uint16_t id = static_cast<uint16_t>(boundedInt(state, 1, 1, 65535));
+  const uint16_t id = static_cast<uint16_t>(strictInt(state, 1, 1, 65535));
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
   lua_pushboolean(state, runtime->host_.jobCancel &&
                               runtime->host_.jobCancel(runtime->host_.context, id));
   return 1;

@@ -12,7 +12,25 @@ extern "C" {
 class FireLuaRuntime {
  public:
   struct JobSnapshot {
-    enum ResultKind : uint8_t { None, I2cScan, Bytes, Write, Uart };
+    struct FileEntry {
+      String name;
+      uint32_t sizeBytes = 0;
+      bool directory = false;
+    };
+    enum ResultKind : uint8_t {
+      None,
+      I2cScan,
+      Bytes,
+      Write,
+      Uart,
+      Files,
+      WifiStatus,
+      WifiScan,
+      BluetoothScan,
+      Handle,
+      Recording,
+      Http
+    };
     uint8_t state = 0;  // 0=pending, 1=ready, 2=failed, 3=cancelled
     ResultKind resultKind = None;
     String errorCode;
@@ -22,6 +40,17 @@ class FireLuaRuntime {
     uint16_t byteCount = 0;
     String text;
     uint32_t written = 0;
+    uint16_t handle = 0;
+    uint16_t entryCount = 0;
+    FileEntry entries[32];
+    String ssid;
+    String ip;
+    int16_t rssi = 0;
+    bool connected = false;
+    uint32_t sizeBytes = 0;
+    uint32_t sampleRate = 0;
+    String path;
+    int statusCode = 0;
   };
 
   struct Host {
@@ -57,6 +86,27 @@ class FireLuaRuntime {
     uint16_t (*i2cRead)(void*, int, int, int, int, const char**) = nullptr;
     uint16_t (*i2cWrite)(void*, int, int, const uint8_t*, size_t,
                          const char**) = nullptr;
+    bool (*adcRead)(void*, int, int*, const char**) = nullptr;
+    bool (*dacWrite)(void*, int, int, const char**) = nullptr;
+    bool (*dacStop)(void*, int, const char**) = nullptr;
+    bool (*spiOpen)(void*, int, int, int, int, int, int, int,
+                    const char**) = nullptr;
+    uint16_t (*spiTransfer)(void*, int, const uint8_t*, size_t,
+                            const char**) = nullptr;
+    bool (*spiClose)(void*, int, const char**) = nullptr;
+    uint16_t (*sdList)(void*, const char*, const char**) = nullptr;
+    uint16_t (*sdRead)(void*, const char*, uint32_t, uint16_t,
+                       const char**) = nullptr;
+    uint16_t (*sdWrite)(void*, const char*, const char*, size_t, bool,
+                        const char**) = nullptr;
+    uint16_t (*sdRemove)(void*, const char*, const char**) = nullptr;
+    bool (*sdMkdir)(void*, const char*, const char**) = nullptr;
+    bool (*powerStatus)(void*, float*, float*, bool*, bool*) = nullptr;
+    bool (*powerBrightness)(void*, int, const char**) = nullptr;
+    uint16_t (*powerSleep)(void*, uint32_t, const char**) = nullptr;
+    bool (*rtcNow)(void*, uint32_t*, int*, int*, int*, int*, int*, int*,
+                   const char**) = nullptr;
+    bool (*rtcSet)(void*, uint32_t, const char**) = nullptr;
     bool (*jobPoll)(void*, uint16_t, JobSnapshot*) = nullptr;
     bool (*jobResult)(void*, uint16_t, JobSnapshot*) = nullptr;
     bool (*jobClose)(void*, uint16_t) = nullptr;
@@ -155,6 +205,22 @@ class FireLuaRuntime {
   static int i2cScan(lua_State* state);
   static int i2cRead(lua_State* state);
   static int i2cWrite(lua_State* state);
+  static int adcRead(lua_State* state);
+  static int dacWrite(lua_State* state);
+  static int dacStop(lua_State* state);
+  static int spiOpen(lua_State* state);
+  static int spiTransfer(lua_State* state);
+  static int spiClose(lua_State* state);
+  static int sdList(lua_State* state);
+  static int sdRead(lua_State* state);
+  static int sdWrite(lua_State* state);
+  static int sdRemove(lua_State* state);
+  static int sdMkdir(lua_State* state);
+  static int powerStatus(lua_State* state);
+  static int powerBrightness(lua_State* state);
+  static int powerSleep(lua_State* state);
+  static int rtcNow(lua_State* state);
+  static int rtcSet(lua_State* state);
   static int jobsPoll(lua_State* state);
   static int jobsResult(lua_State* state);
   static int jobsClose(lua_State* state);
