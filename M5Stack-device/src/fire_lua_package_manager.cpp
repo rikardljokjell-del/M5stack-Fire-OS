@@ -100,7 +100,8 @@ void FireLuaPackageManager::service(bool wifiConnected) {
     if (reverseTransport_) reverseClient_ = reverseTransport_->acquire();
     WiFiClient* client = activeClient();
     if (!reverseClient_) {
-      if (!client_.connect(host_.c_str(), port_)) {
+      client_.setTimeout(1200);
+      if (!client_.connect(host_.c_str(), port_, 1200)) {
         fail("Backend download connection failed");
         return;
       }
@@ -148,7 +149,10 @@ void FireLuaPackageManager::service(bool wifiConnected) {
     const String body = headerBuffer_.substring(end + 4);
     for (uint16_t index = 0; index < body.length(); ++index) {
       const uint8_t value = static_cast<uint8_t>(body[index]);
-      archive_.write(&value, 1);
+      if (archive_.write(&value, 1) != 1) {
+        fail("SD write failed");
+        return;
+      }
       mbedtls_sha256_update_ret(&sha256_, &value, 1);
       ++received_;
     }
@@ -159,7 +163,8 @@ void FireLuaPackageManager::service(bool wifiConnected) {
   if (state_ == State::Downloading) {
     WiFiClient* client = activeClient();
     uint8_t buffer[kChunkSize];
-    while (client->available() && received_ < contentLength_) {
+    size_t budget = 4096;
+    while (client->available() && received_ < contentLength_ && budget > 0) {
       const size_t amount = client->read(buffer, min<size_t>(sizeof(buffer), contentLength_ - received_));
       if (amount == 0) break;
       if (archive_.write(buffer, amount) != amount) {
@@ -168,6 +173,7 @@ void FireLuaPackageManager::service(bool wifiConnected) {
       }
       mbedtls_sha256_update_ret(&sha256_, buffer, amount);
       received_ += amount;
+      budget -= min<size_t>(budget, amount);
       lastDataAt_ = millis();
     }
     emitStatus("Downloading " + String(received_) + "/" + String(contentLength_));

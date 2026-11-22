@@ -255,6 +255,39 @@ String formatBytes(uint32_t bytes) {
   return String(bytes / 1024UL) + " KB";
 }
 
+String sha256File(const String& path) {
+  File file = SD.open(path, FILE_READ);
+  if (!file || file.isDirectory()) {
+    if (file) file.close();
+    return "";
+  }
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts_ret(&sha, 0);
+  uint8_t buffer[512] = {};
+  while (file.available()) {
+    const size_t amount = file.read(buffer, sizeof(buffer));
+    if (amount == 0) {
+      file.close();
+      mbedtls_sha256_free(&sha);
+      return "";
+    }
+    mbedtls_sha256_update_ret(&sha, buffer, amount);
+  }
+  file.close();
+  uint8_t digest[32] = {};
+  mbedtls_sha256_finish_ret(&sha, digest);
+  mbedtls_sha256_free(&sha);
+  const char* digits = "0123456789abcdef";
+  String result;
+  result.reserve(64);
+  for (uint8_t value : digest) {
+    result += digits[value >> 4];
+    result += digits[value & 0x0F];
+  }
+  return result;
+}
+
 String compactPreferenceKey(const char* prefix, const String& value) {
   // ESP32 Preferences/NVS keys are limited to 15 characters. Keep the full
   // package/run ID in the value and use a stable short FNV-1a key.
@@ -2780,6 +2813,10 @@ bool FireOS::startAiRecording() {
   aiAudioCaptureActive_ = true;
   aiAudioCapturedSamples_ = 0;
   aiAudioWavLength_ = 0;
+  aiAudioCaptureStartedAt_ = millis();
+  aiAudioCaptureElapsedMs_ = 0;
+  aiAudioCaptureRms_ = 0;
+  aiAudioCapturePeak_ = 0;
   aiAudioError_ = "";
   if (!backendClient_->listenStart(aiTurnId_)) {
     cancelConversationTurn("Could not start backend recording", false);
@@ -2881,11 +2918,21 @@ void FireOS::updateAiAudio() {
         const uint32_t payloadBytes =
             aiAudioCapturedSamples_ * sizeof(int16_t);
         int32_t peak = 0;
+        uint64_t squareSum = 0;
         const auto* pcm = reinterpret_cast<const int16_t*>(aiAudioBuffer_ + 44);
         for (size_t index = 0; index < aiAudioCapturedSamples_; ++index) {
           const int32_t value = pcm[index];
           peak = max<int32_t>(peak, value < 0 ? -value : value);
+          squareSum += static_cast<uint64_t>(value) * static_cast<uint64_t>(value);
         }
+        aiAudioCapturePeak_ = peak;
+        aiAudioCaptureRms_ = aiAudioCapturedSamples_ == 0
+                                 ? 0
+                                 : static_cast<uint32_t>(sqrt(
+                                       static_cast<double>(squareSum) /
+                                       aiAudioCapturedSamples_));
+        aiAudioCaptureElapsedMs_ =
+            millis() - aiAudioCaptureStartedAt_;
         Serial.printf("FIRE audio capture: samples=%u peak=%ld wav=%u\n",
                       static_cast<unsigned>(aiAudioCapturedSamples_),
                       static_cast<long>(peak),
@@ -3523,17 +3570,54 @@ void FireOS::handleBackendMessage(const String& message) {
     const String packageId = jsonStringField(message, "package_id");
     const String commandBoot = jsonStringField(message, "boot_id");
     const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
-    const String path = preferences.getString(
+    String path = preferences.getString(
         compactPreferenceKey("lp_", packageId).c_str(), "");
     const bool bootOk = backendCommandUnexpired(expiresAt) &&
                         (!backendClient_ || commandBoot.length() == 0 ||
                          commandBoot == backendClient_->bootId());
-    const bool available = bootOk && path.length() > 0 && SD.exists(path);
+    bool available = bootOk && path.length() > 0 && SD.exists(path);
+    bool restored = false;
+    if (available) {
+      const String targetHash = preferences.getString(
+          compactPreferenceKey("lh_", packageId).c_str(), "");
+      const String currentHash = sha256File(path);
+      if (!validSha256Hex(targetHash)) {
+        available = false;
+      } else if (!currentHash.equalsIgnoreCase(targetHash)) {
+        const int slash = path.lastIndexOf('/');
+        const String folder = slash > 0 ? path.substring(0, slash) : "";
+        const String appId = sdBaseName(folder);
+        const String previous = "/apps/.previous-" + appId;
+        const String previousMain = previous + "/main.lua";
+        if (SD.exists(previousMain) &&
+            sha256File(previousMain).equalsIgnoreCase(targetHash)) {
+          const String backup = "/apps/.rollback-" + appId;
+          const bool cleared = !SD.exists(backup) || removeSdTree(backup);
+          bool swapped = cleared && SD.rename(folder, backup) &&
+                         SD.rename(previous, folder);
+          if (!swapped) {
+            if (SD.exists(folder) && !SD.exists(previous)) SD.rename(folder, previous);
+            if (SD.exists(backup) && !SD.exists(folder)) SD.rename(backup, folder);
+          } else {
+            removeSdTree(backup);
+            path = folder + "/main.lua";
+            preferences.putString(compactPreferenceKey("lp_", packageId).c_str(), path);
+            preferences.putString(compactPreferenceKey("lh_", packageId).c_str(), targetHash);
+            saveSettings();
+            restored = true;
+            available = true;
+          }
+        } else {
+          available = false;
+        }
+      }
+    }
     if (luaAppActive_) stopLuaApp("rollback");
     if (backendClient_)
       backendClient_->rollbackResult(
           rollbackId, packageId, available,
-          available ? "Validated package selected for rollback"
+          available ? (restored ? "Previous package restored and hash verified"
+                                 : "Validated package already active")
                     : "Validated package is not available on SD");
     aiWorkflowState_ = available ? 5 : 0;
     aiWorkflowText_ = available ? "ROLLBACK READY" : "ROLLBACK FAILED";
@@ -5969,6 +6053,10 @@ void FireOS::drawAiDeveloper() {
   String workflowLabel = aiWorkflowText_.length() > 0
                              ? aiWorkflowText_
                              : workflowLabels[min<uint8_t>(aiWorkflowState_, 6)];
+  if (aiWorkflowState_ == 1 && aiAudioCaptureStartedAt_ > 0) {
+    workflowLabel = "REC " + String((millis() - aiAudioCaptureStartedAt_) / 1000.0f, 1) +
+                    "s - SPEAK NEAR MIC";
+  }
   if (aiConversationMode_ == 1 && aiWorkflowState_ == 0 &&
       aiWorkflowText_.length() == 0)
     workflowLabel = "CHAT - PRESS B TO SPEAK";

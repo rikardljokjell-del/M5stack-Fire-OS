@@ -22,15 +22,18 @@ struct CaptureState {
 CaptureState capture;
 
 void micCaptureTask(void*) {
-  const uint32_t intervalUs = max<uint32_t>(1, 1000000UL / capture.sampleRate);
-  int32_t baseline = 2048;
-  int64_t nextSampleUs = esp_timer_get_time();
+  const uint64_t intervalQ32 =
+      (1000000ULL << 32) / capture.sampleRate;
+  int64_t baselineQ16 = 2048LL << 16;
+  uint64_t nextSampleQ32 =
+      static_cast<uint64_t>(esp_timer_get_time()) << 32;
 
   while (!capture.stopRequested.load(std::memory_order_acquire) &&
          capture.capturedSamples.load(std::memory_order_acquire) <
              capture.maxSamples) {
     for (;;) {
-      const int64_t waitUs = nextSampleUs - esp_timer_get_time();
+      const int64_t waitUs = static_cast<int64_t>(nextSampleQ32 >> 32) -
+                             esp_timer_get_time();
       if (waitUs <= 0) break;
       if (waitUs > 1000) {
         vTaskDelay(1);
@@ -44,15 +47,15 @@ void micCaptureTask(void*) {
       capture.failed.store(true, std::memory_order_release);
       break;
     }
-    baseline += (raw - baseline) >> 8;
-    const int32_t centered = raw - baseline;
+    baselineQ16 += ((static_cast<int64_t>(raw) << 16) - baselineQ16) >> 10;
+    const int32_t centered = raw - static_cast<int32_t>(baselineQ16 >> 16);
     const int32_t amplified = centered * 32;
     const size_t sampleIndex =
         capture.capturedSamples.fetch_add(1, std::memory_order_acq_rel);
     capture.target[sampleIndex] = static_cast<int16_t>(constrain(
         amplified, static_cast<int32_t>(INT16_MIN),
         static_cast<int32_t>(INT16_MAX)));
-    nextSampleUs += intervalUs;
+    nextSampleQ32 += intervalQ32;
 
     // Let the core-0 idle/watchdog task run without giving up the 16 kHz
     // timing model. The sampler catches up against nextSampleUs afterwards.
@@ -61,7 +64,10 @@ void micCaptureTask(void*) {
     // If Wi-Fi/BLE temporarily preempted the sampler, restart the clock
     // instead of trying to catch up with a burst of late samples.
     const int64_t nowUs = esp_timer_get_time();
-    if (nextSampleUs + 100000 < nowUs) nextSampleUs = nowUs;
+    if ((nextSampleQ32 >> 32) + 100000ULL <
+        static_cast<uint64_t>(nowUs)) {
+      nextSampleQ32 = static_cast<uint64_t>(nowUs) << 32;
+    }
   }
 
   capture.running.store(false, std::memory_order_release);

@@ -275,6 +275,10 @@ class FireOS {
   bool aiAudioCaptureActive_ = false;
   size_t aiAudioCapturedSamples_ = 0;
   size_t aiAudioWavLength_ = 0;
+  uint32_t aiAudioCaptureStartedAt_ = 0;
+  uint32_t aiAudioCaptureElapsedMs_ = 0;
+  uint32_t aiAudioCaptureRms_ = 0;
+  int32_t aiAudioCapturePeak_ = 0;
   String aiAudioError_;
   uint8_t* aiAudioOutputBuffer_ = nullptr;
   size_t aiAudioOutputLength_ = 0;
