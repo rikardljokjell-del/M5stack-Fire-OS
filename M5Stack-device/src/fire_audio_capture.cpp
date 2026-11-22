@@ -46,6 +46,10 @@ void micCaptureTask(void*) {
         static_cast<int32_t>(INT16_MAX)));
     nextSampleUs += intervalUs;
 
+    // Let the core-0 idle/watchdog task run without giving up the 16 kHz
+    // timing model. The sampler catches up against nextSampleUs afterwards.
+    if ((capture.capturedSamples & 0x03FFu) == 0) vTaskDelay(1);
+
     // If Wi-Fi/BLE temporarily preempted the sampler, restart the clock
     // instead of trying to catch up with a burst of late samples.
     const int64_t nowUs = esp_timer_get_time();
