@@ -8,4 +8,4 @@ bool fireMicCaptureRunning();
 size_t fireMicCapturedSamples();
 bool fireMicCaptureFailed();
 void fireStopMicCapture();
-void fireReleaseMicCapture();
+bool fireReleaseMicCapture();

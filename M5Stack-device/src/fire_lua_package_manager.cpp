@@ -280,7 +280,12 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
   }
   bool mainFound = false;
   bool manifestFound = false;
+  uint8_t entryCount = 0;
   while (archive.available()) {
+    if (++entryCount > 24) {
+      reason = "Too many ZIP entries";
+      return false;
+    }
     const uint32_t signature = read32(archive);
     if (signature != 0x04034b50) break;
     archive.seek(archive.position() + 2);  // version needed
@@ -295,7 +300,8 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
     String name;
     for (uint16_t index = 0; index < nameLength; ++index) name += static_cast<char>(archive.read());
     archive.seek(archive.position() + extraLength);
-    if (!validZipPath(name) || (flags & 0x08) || method != 0 || compressed != uncompressed || compressed > 100000) {
+    if (!validZipPath(name) || (flags & ~0x0800u) || method != 0 ||
+        compressed != uncompressed || compressed > 100000) {
       reason = "Unsupported or unsafe ZIP entry";
       return false;
     }
@@ -314,9 +320,17 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
     const String relative = name.substring(secondSlash + 1);
     String destination;
     if (relative == "main.lua") {
+      if (mainFound) {
+        reason = "Duplicate main.lua entry";
+        return false;
+      }
       destination = staging + "/main.lua";
       mainFound = true;
     } else if (relative == "manifest.json") {
+      if (manifestFound) {
+        reason = "Duplicate manifest.json entry";
+        return false;
+      }
       destination = staging + "/manifest.json";
       manifestFound = true;
     } else if (relative == "assets/") {

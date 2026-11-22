@@ -36,6 +36,8 @@ class FireBackendClient {
   bool listenStart(const String& turnId);
   bool listenStop(const String& turnId);
   bool cancelTurn(const String& turnId = String());
+  bool appDeleted(const String& appId);
+  bool appInventory(const String& appsJson, bool storageReady, bool complete);
   bool confirmBuild(const String& proposalId);
   bool confirmRun(const String& packageId);
   bool appStop();

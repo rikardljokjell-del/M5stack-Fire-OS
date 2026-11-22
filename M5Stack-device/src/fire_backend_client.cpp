@@ -352,6 +352,19 @@ bool FireBackendClient::cancelTurn(const String& turnId) {
                                     : String());
 }
 
+bool FireBackendClient::appDeleted(const String& appId) {
+  return sendEvent("app_deleted", ",\"app_id\":\"" + jsonEscape(appId) + "\"");
+}
+
+bool FireBackendClient::appInventory(const String& appsJson, bool storageReady,
+                                     bool complete) {
+  return sendEvent("app_inventory", ",\"storage_ready\":" +
+                                  String(storageReady ? "true" : "false") +
+                                  ",\"complete\":" +
+                                  String(complete ? "true" : "false") +
+                                  ",\"apps\":" + appsJson);
+}
+
 bool FireBackendClient::confirmBuild(const String& proposalId) {
   return sendEvent("build_confirm", ",\"proposal_id\":\"" +
                    jsonEscape(proposalId) + "\"");

@@ -292,6 +292,41 @@ String jsonStringField(const String& json, const char* key) {
   return value;
 }
 
+String jsonEscapeField(const String& input) {
+  String output;
+  output.reserve(input.length() + 4);
+  for (size_t index = 0; index < input.length(); ++index) {
+    const char c = input[index];
+    if (c == '\\' || c == '"') output += '\\';
+    if (c == '\n') output += "\\n";
+    else if (c == '\r') output += "\\r";
+    else output += c;
+  }
+  return output;
+}
+
+bool removeSdTree(const String& path) {
+  File entry = SD.open(path);
+  if (!entry) return true;
+  if (!entry.isDirectory()) {
+    entry.close();
+    return SD.remove(path);
+  }
+  File child = entry.openNextFile();
+  while (child) {
+    String childPath = child.name();
+    if (!childPath.startsWith("/")) childPath = path + "/" + childPath;
+    child.close();
+    if (!removeSdTree(childPath)) {
+      entry.close();
+      return false;
+    }
+    child = entry.openNextFile();
+  }
+  entry.close();
+  return SD.rmdir(path);
+}
+
 bool validSha256Hex(const String& value) {
   if (value.length() != 64) return false;
   for (size_t index = 0; index < value.length(); ++index) {
@@ -1626,6 +1661,37 @@ void FireOS::scanLuaApps() {
   }
 }
 
+void FireOS::sendAppInventory() {
+  if (!backendClient_ || !backendClient_->sessionReady()) return;
+  if (!sdReady_) {
+    backendClient_->appInventory("[]", false, false);
+    return;
+  }
+  String appsJson = "[";
+  for (uint8_t index = 0; index < luaAppCount_; ++index) {
+    const String source = luaAppPaths_[index];
+    const int slash = source.lastIndexOf('/');
+    const String folder = slash > 0 ? source.substring(0, slash) : source;
+    const String appId = sdBaseName(folder);
+    String version;
+    String checksum;
+    File manifest = SD.open(sdJoinPath(folder, "manifest.json"), FILE_READ);
+    if (manifest && manifest.size() <= 8192) {
+      String body;
+      while (manifest.available()) body += static_cast<char>(manifest.read());
+      version = jsonStringField(body, "version");
+      checksum = jsonStringField(body, "checksum");
+    }
+    if (manifest) manifest.close();
+    if (index > 0) appsJson += ',';
+    appsJson += "{\"app_id\":\"" + jsonEscapeField(appId) +
+                "\",\"version\":\"" + jsonEscapeField(version) +
+                "\",\"checksum\":\"" + jsonEscapeField(checksum) + "\"}";
+  }
+  appsJson += ']';
+  backendClient_->appInventory(appsJson, true, true);
+}
+
 bool FireOS::deleteExternalApp(const String& path) {
   if (path.length() == 0 || (!sdReady_ && !initSdCard())) return false;
   const bool deleted = SD.remove(path);
@@ -1642,16 +1708,14 @@ bool FireOS::deleteLuaApp(const String& path) {
   const int slash = folder.lastIndexOf('/');
   if (slash <= 0) return false;
   folder = folder.substring(0, slash);
-  bool ok = true;
-  const String manifest = sdJoinPath(folder, "manifest.json");
-  const String source = sdJoinPath(folder, "main.lua");
-  if (SD.exists(manifest)) ok = SD.remove(manifest) && ok;
-  if (SD.exists(source)) ok = SD.remove(source) && ok;
-  const String assets = sdJoinPath(folder, "assets");
-  const String appdata = sdJoinPath(folder, "appdata");
-  if (SD.exists(assets)) SD.rmdir(assets);
-  if (SD.exists(appdata)) SD.rmdir(appdata);
-  if (SD.exists(folder)) ok = SD.rmdir(folder) && ok;
+  const bool ok = removeSdTree(folder);
+  if (ok) {
+    const String appId = sdBaseName(folder);
+    if (backendClient_ && backendClient_->sessionReady())
+      backendClient_->appDeleted(appId);
+    scanLuaApps();
+    sendAppInventory();
+  }
   return ok;
 }
 
@@ -1888,7 +1952,9 @@ void FireOS::pollButtons() {
 
 void FireOS::onButton(uint8_t index, bool longPress) {
   redrawRequested_ = true;
-  playButtonSound(index, longPress);
+  const bool conversationAudio = screen_ == Screen::AiDeveloper && index == 1;
+  if (!conversationAudio && !aiAudioOutputActive_)
+    playButtonSound(index, longPress);
   if (longPress) {
     if (screen_ == Screen::FileExplorer && index == 1 && !sdPreview_ &&
         !sdNameEditor_ && !sdDeleteConfirm_) {
@@ -2613,11 +2679,15 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     }
   } else if (index == 0 && aiWorkflowState_ == 3) {
     if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
-      backendClient_->confirmBuild(aiProposalId_);
-      aiWorkflowState_ = 4;
-      aiDeveloperMode_ = 2;
-      aiBuildProgress_ = 0;
-      aiWorkflowStarted_ = millis();
+      if (backendClient_->confirmBuild(aiProposalId_)) {
+        aiWorkflowText_ = "SENDING BUILD";
+        aiWorkflowState_ = 4;
+        aiDeveloperMode_ = 2;
+        aiBuildProgress_ = 0;
+        aiWorkflowStarted_ = millis();
+      } else {
+        aiWorkflowText_ = "BUILD SEND FAILED - TRY AGAIN";
+      }
     } else if (!backendClient_ || !backendClient_->configured()) {
       aiWorkflowState_ = 4;
       aiDeveloperMode_ = 2;
@@ -2632,10 +2702,14 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     aiWorkflowStarted_ = millis();
   } else if (index == 0 && aiWorkflowState_ == 5) {
     if (backendClient_ && backendClient_->connected() && aiPackageId_.length() > 0) {
-      backendClient_->confirmRun(aiPackageId_);
-      aiWorkflowState_ = 6;
-      aiDeveloperMode_ = 3;
-      aiWorkflowStarted_ = millis();
+      if (backendClient_->confirmRun(aiPackageId_)) {
+        aiWorkflowText_ = "SENDING RUN";
+        aiWorkflowState_ = 6;
+        aiDeveloperMode_ = 3;
+        aiWorkflowStarted_ = millis();
+      } else {
+        aiWorkflowText_ = "RUN SEND FAILED - TRY AGAIN";
+      }
     } else if (!backendClient_ || !backendClient_->configured()) {
       aiWorkflowState_ = 6;
       aiDeveloperMode_ = 3;
@@ -2694,7 +2768,7 @@ bool FireOS::startAiRecording() {
   aiAudioWavLength_ = 0;
   aiAudioError_ = "";
   if (!backendClient_->listenStart(aiTurnId_)) {
-    fireReleaseMicCapture();
+    cancelConversationTurn("Could not start backend recording", false);
     aiAudioError_ = "Could not start backend recording";
     return false;
   }
@@ -2772,16 +2846,18 @@ void FireOS::updateAiAudio() {
     const bool captureRunning = false;
 #endif
     if (captureFailed) {
+      cancelConversationTurn("MIC CAPTURE FAILED", false);
       aiAudioError_ = "MIC CAPTURE FAILED";
-      fireReleaseMicCapture();
-      aiAudioCaptureActive_ = false;
-      aiAudioCaptureFinished_ = true;
       aiWorkflowText_ = aiAudioError_;
-      aiWorkflowState_ = 0;
-      aiDeveloperMode_ = 0;
     } else if (!captureRunning) {
         aiAudioCapturedSamples_ = fireMicCapturedSamples();
-        fireReleaseMicCapture();
+        if (!fireReleaseMicCapture()) {
+          aiAudioError_ = "MIC STOP TIMEOUT";
+          aiWorkflowText_ = aiAudioError_;
+          aiWorkflowState_ = 0;
+          aiDeveloperMode_ = 0;
+          return;
+        }
         aiAudioCaptureActive_ = false;
         const uint32_t payloadBytes =
             aiAudioCapturedSamples_ * sizeof(int16_t);
@@ -2864,6 +2940,32 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
     luaAppError_ = "SD card unavailable";
     return false;
   }
+  const int appSlash = path.lastIndexOf('/');
+  const String appFolder = appSlash > 0 ? path.substring(0, appSlash) : "";
+  const String manifestPath = appFolder.length() > 0
+                                  ? sdJoinPath(appFolder, "manifest.json")
+                                  : String();
+  if (appFolder.length() == 0 || !SD.exists(manifestPath)) {
+    luaAppError_ = "App manifest missing";
+    return false;
+  }
+  File manifestFile = SD.open(manifestPath, FILE_READ);
+  if (!manifestFile || manifestFile.size() > 8192) {
+    luaAppError_ = "App manifest invalid";
+    if (manifestFile) manifestFile.close();
+    return false;
+  }
+  String manifest;
+  while (manifestFile.available()) manifest += static_cast<char>(manifestFile.read());
+  manifestFile.close();
+  const String manifestId = jsonStringField(manifest, "id");
+  const String manifestApi = jsonStringField(manifest, "api_version");
+  const String manifestHash = jsonStringField(manifest, "checksum");
+  if (manifestId != sdBaseName(appFolder) || manifestApi != "fire-lua-0.1" ||
+      !validSha256Hex(manifestHash)) {
+    luaAppError_ = "App manifest does not match source";
+    return false;
+  }
   File sourceFile = SD.open(path, FILE_READ);
   if (!sourceFile || sourceFile.isDirectory()) {
     luaAppError_ = "Cannot open app source";
@@ -2885,6 +2987,25 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
   }
   const size_t readBytes = sourceFile.read(buffer, length);
   sourceFile.close();
+  uint8_t sourceDigest[32] = {};
+  mbedtls_sha256_context sourceSha;
+  mbedtls_sha256_init(&sourceSha);
+  mbedtls_sha256_starts_ret(&sourceSha, 0);
+  mbedtls_sha256_update_ret(&sourceSha, buffer, readBytes);
+  mbedtls_sha256_finish_ret(&sourceSha, sourceDigest);
+  mbedtls_sha256_free(&sourceSha);
+  String sourceHash;
+  sourceHash.reserve(64);
+  const char* hex = "0123456789abcdef";
+  for (uint8_t value : sourceDigest) {
+    sourceHash += hex[value >> 4];
+    sourceHash += hex[value & 0x0F];
+  }
+  if (readBytes != length || !sourceHash.equalsIgnoreCase(manifestHash)) {
+    free(buffer);
+    luaAppError_ = "App source checksum mismatch";
+    return false;
+  }
   const bool loaded = readBytes == length && luaRuntime_->loadSource(buffer, length);
   free(buffer);
   if (!loaded) {
@@ -3048,6 +3169,11 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowState_ = 2;
     }
     aiWorkflowText_ = "CONNECTED - STATE RESTORED";
+    return;
+  }
+  if (type == "app_inventory_request") {
+    scanLuaApps();
+    sendAppInventory();
     return;
   }
   if (type == "assistant_message" || type == "transcript") {
@@ -5758,6 +5884,9 @@ void FireOS::drawAiDeveloper() {
   String workflowLabel = aiWorkflowText_.length() > 0
                              ? aiWorkflowText_
                              : workflowLabels[min<uint8_t>(aiWorkflowState_, 6)];
+  if (aiConversationMode_ == 1 && aiWorkflowState_ == 0 &&
+      aiWorkflowText_.length() == 0)
+    workflowLabel = "CHAT - PRESS B TO SPEAK";
   if (workflowLabel.length() > 28) workflowLabel = workflowLabel.substring(0, 28);
   drawText(cx, 207, workflowLabel, kMuted, 1, TFT_BLACK);
   if (aiAssistantText_.length() > 0) {
@@ -5777,10 +5906,11 @@ void FireOS::drawAiDeveloper() {
   if (aiWorkflowState_ == 1) {
     centerHint = "FINISH";
   } else if (aiWorkflowState_ == 2) {
-    centerHint = "WAIT";
+    centerHint = "NEW TALK";
+    rightHint = "CANCEL";
   } else if (aiWorkflowState_ == 3) {
     leftHint = "BUILD";
-    centerHint = "QUICK";
+    centerHint = "ADD TALK";
     rightHint = "CANCEL";
   } else if (aiWorkflowState_ == 4) {
     leftHint = "WAIT";

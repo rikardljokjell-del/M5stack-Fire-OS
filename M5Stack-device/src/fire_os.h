@@ -178,7 +178,7 @@ class FireOS {
   static constexpr uint8_t kMaxFileEntries = 40;
   static constexpr uint8_t kFileVisibleRows = 6;
   static constexpr uint8_t kMaxExternalApps = 16;
-  static constexpr uint8_t kMaxLuaApps = 16;
+  static constexpr uint8_t kMaxLuaApps = 32;
   bool sdReady_ = false;
   uint32_t sdLastProbe_ = 0;
   String sdPath_ = "/";
@@ -379,6 +379,7 @@ class FireOS {
   void releaseSdImageBuffer();
   void scanExternalApps();
   void scanLuaApps();
+  void sendAppInventory();
   bool deleteExternalApp(const String& path);
   bool deleteLuaApp(const String& path);
   bool inspectExternalImage(File& file, uint32_t& imageOffset,
