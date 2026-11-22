@@ -54,16 +54,29 @@ class FireBackendClient {
   bool deviceInstallResult(const String& installId, const String& packageId,
                            bool ok, const String& archiveHash,
                            const String& message);
-  bool appStarted(const String& runId, const String& packageId);
-  bool appHealthy(const String& runId, const String& packageId);
+  bool appStarted(const String& runId, const String& packageId,
+                  const String& diagnostics = String());
+  bool appHealthy(const String& runId, const String& packageId,
+                  const String& diagnostics = String());
   bool appFailed(const String& runId, const String& packageId,
-                 const String& errorCode, const String& message);
+                 const String& errorCode, const String& message,
+                 const String& diagnostics = String());
+  bool appDiagnostic(const String& appId, const String& packageId,
+                    const String& errorCode, const String& message,
+                    const String& diagnostics = String());
   bool appStopped(const String& runId, const String& packageId,
-                  const String& stopId, const String& reason);
+                  const String& stopId, const String& reason,
+                  const String& diagnostics = String());
   bool rollbackResult(const String& rollbackId, const String& packageId,
                       bool ok, const String& message);
+  bool firmwareStoreResult(const String& transferId, const String& firmwareId,
+                           bool ok, const String& sha256,
+                           const String& errorCode, const String& message);
   bool audioPlaybackStarted(const String& audioId, const String& turnId);
   bool audioPlaybackFinished(const String& audioId, const String& turnId);
+  bool audioPlaybackFailed(const String& audioId, const String& turnId,
+                           const String& errorCode, const String& message,
+                           const String& diagnostics = String());
   bool ping();
 
  private:

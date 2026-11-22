@@ -497,35 +497,60 @@ bool FireBackendClient::deviceInstallResult(const String& installId,
                    jsonEscape(message.substring(0, 240)) + "\"");
 }
 
-bool FireBackendClient::appStarted(const String& runId, const String& packageId) {
-  return sendEvent("app_started", ",\"run_id\":\"" + jsonEscape(runId) +
-                   "\",\"package_id\":\"" + jsonEscape(packageId) + "\"");
+bool FireBackendClient::appStarted(const String& runId, const String& packageId,
+                                   const String& diagnostics) {
+  String fields = ",\"run_id\":\"" + jsonEscape(runId) +
+                  "\",\"package_id\":\"" + jsonEscape(packageId) + "\"";
+  if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
+  return sendEvent("app_started", fields);
 }
 
-bool FireBackendClient::appHealthy(const String& runId, const String& packageId) {
-  return sendEvent("app_healthy", ",\"run_id\":\"" + jsonEscape(runId) +
-                   "\",\"package_id\":\"" + jsonEscape(packageId) + "\"");
+bool FireBackendClient::appHealthy(const String& runId, const String& packageId,
+                                   const String& diagnostics) {
+  String fields = ",\"run_id\":\"" + jsonEscape(runId) +
+                  "\",\"package_id\":\"" + jsonEscape(packageId) + "\"";
+  if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
+  return sendEvent("app_healthy", fields);
 }
 
 bool FireBackendClient::appFailed(const String& runId, const String& packageId,
                                   const String& errorCode,
-                                  const String& message) {
-  return sendEvent("app_failed", ",\"run_id\":\"" + jsonEscape(runId) +
-                   "\",\"package_id\":\"" + jsonEscape(packageId) +
-                   "\",\"error_code\":\"" + jsonEscape(errorCode) +
-                   "\",\"message\":\"" + jsonEscape(message.substring(0, 240)) +
-                   "\"");
+                                  const String& message,
+                                  const String& diagnostics) {
+  String fields = ",\"run_id\":\"" + jsonEscape(runId) +
+                  "\",\"package_id\":\"" + jsonEscape(packageId) +
+                  "\",\"error_code\":\"" + jsonEscape(errorCode) +
+                  "\",\"message\":\"" + jsonEscape(message.substring(0, 240)) +
+                  "\"";
+  if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
+  return sendEvent("app_failed", fields);
+}
+
+bool FireBackendClient::appDiagnostic(const String& appId,
+                                      const String& packageId,
+                                      const String& errorCode,
+                                      const String& message,
+                                      const String& diagnostics) {
+  String fields = ",\"app_id\":\"" + jsonEscape(appId) +
+                  "\",\"package_id\":\"" + jsonEscape(packageId) +
+                  "\",\"error_code\":\"" + jsonEscape(errorCode) +
+                  "\",\"message\":\"" + jsonEscape(message.substring(0, 240)) +
+                  "\"";
+  if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
+  return sendEvent("app_diagnostic", fields);
 }
 
 bool FireBackendClient::appStopped(const String& runId,
                                    const String& packageId,
                                    const String& stopId,
-                                   const String& reason) {
+                                   const String& reason,
+                                   const String& diagnostics) {
   String fields = ",\"run_id\":\"" + jsonEscape(runId) +
                   "\",\"package_id\":\"" + jsonEscape(packageId);
   if (stopId.length() > 0)
     fields += "\",\"stop_id\":\"" + jsonEscape(stopId);
   fields += "\",\"reason\":\"" + jsonEscape(reason) + "\"";
+  if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
   return sendEvent("app_stopped", fields);
 }
 
@@ -537,6 +562,22 @@ bool FireBackendClient::rollbackResult(const String& rollbackId,
                    jsonEscape(packageId) + "\",\"status\":\"" +
                    (ok ? "ok" : "failed") + "\",\"message\":\"" +
                    jsonEscape(message.substring(0, 240)) + "\"");
+}
+
+bool FireBackendClient::firmwareStoreResult(
+    const String& transferId, const String& firmwareId, bool ok,
+    const String& sha256, const String& errorCode, const String& message) {
+  String fields = ",\"transfer_id\":\"" + jsonEscape(transferId) +
+                  "\",\"firmware_id\":\"" + jsonEscape(firmwareId) +
+                  "\",\"status\":\"" + (ok ? "ok" : "failed") + "\"";
+  if (ok) {
+    fields += ",\"sha256\":\"" + jsonEscape(sha256) + "\"";
+  } else {
+    fields += ",\"error_code\":\"" + jsonEscape(errorCode) +
+              "\",\"message\":\"" +
+              jsonEscape(message.substring(0, 240)) + "\"";
+  }
+  return sendEvent("firmware_store_result", fields);
 }
 
 bool FireBackendClient::audioPlaybackStarted(const String& audioId,
@@ -551,6 +592,20 @@ bool FireBackendClient::audioPlaybackFinished(const String& audioId,
   return sendEvent("audio_playback_finished", ",\"audio_id\":\"" +
                    jsonEscape(audioId) + "\",\"turn_id\":\"" +
                    jsonEscape(turnId) + "\"");
+}
+
+bool FireBackendClient::audioPlaybackFailed(const String& audioId,
+                                            const String& turnId,
+                                            const String& errorCode,
+                                            const String& message,
+                                            const String& diagnostics) {
+  String fields = ",\"audio_id\":\"" + jsonEscape(audioId) +
+                  "\",\"turn_id\":\"" + jsonEscape(turnId) +
+                  "\",\"error_code\":\"" + jsonEscape(errorCode) +
+                  "\",\"message\":\"" + jsonEscape(message.substring(0, 240)) +
+                  "\"";
+  if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
+  return sendEvent("audio_playback_failed", fields);
 }
 
 bool FireBackendClient::ping() { return sendEvent("ping"); }
@@ -649,7 +704,7 @@ void FireBackendClient::handleHandshake() {
   setState(State::Connected, "Waiting for backend session");
   const String fields = ",\"target\":\"device\",\"boot_id\":\"" +
                         jsonEscape(bootId_) +
-                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":10000,\"audio_input\":true,\"audio_output\":true,\"firmware_version\":\"" +
+                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":true,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
                         jsonEscape(firmwareVersion_) + "\"}";
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +

@@ -1,4 +1,5 @@
 #include "fire_lua_package_manager.h"
+#include "fire_lua_runtime.h"
 
 #include <esp_system.h>
 
@@ -24,6 +25,21 @@ String manifestField(const String& json, const char* key) {
   const int quote = json.indexOf('"', colon + 1);
   const int end = json.indexOf('"', quote + 1);
   return quote >= 0 && end > quote ? json.substring(quote + 1, end) : "";
+}
+
+int manifestIntField(const String& json, const char* key, int fallback) {
+  const String marker = String("\"") + key + "\"";
+  const int keyAt = json.indexOf(marker);
+  if (keyAt < 0) return fallback;
+  const int colon = json.indexOf(':', keyAt + marker.length());
+  if (colon < 0) return fallback;
+  int start = colon + 1;
+  while (start < json.length() &&
+         (json[start] == ' ' || json[start] == '\t' || json[start] == '\r' ||
+          json[start] == '\n')) {
+    ++start;
+  }
+  return json.substring(start).toInt();
 }
 
 bool removeTree(const String& path) {
@@ -404,11 +420,22 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
   uint8_t payloadDigest[32] = {};
   mbedtls_sha256_finish_ret(&payloadSha, payloadDigest);
   mbedtls_sha256_free(&payloadSha);
+  const int maxMemory =
+      manifestIntField(manifest, "max_memory", FireLuaRuntime::kMaxMemoryBytes);
+  const int maxRuntime = manifestIntField(
+      manifest, "max_runtime_ms", FireLuaRuntime::kDefaultRuntimeMs);
   if (manifestField(manifest, "id") != appId ||
       manifestField(manifest, "api_version") != "fire-lua-0.1" ||
       !manifestField(manifest, "checksum").equalsIgnoreCase(
           hexDigest(payloadDigest, sizeof(payloadDigest)))) {
     reason = "Manifest or Lua checksum mismatch";
+    return false;
+  }
+  if (maxMemory < 65536 ||
+      maxMemory > static_cast<int>(FireLuaRuntime::kMaxMemoryBytes) ||
+      maxRuntime < 0 ||
+      maxRuntime > static_cast<int>(FireLuaRuntime::kMaxRuntimeMs)) {
+    reason = "Manifest resource limits invalid";
     return false;
   }
   const String finalPath = "/apps/" + appId;

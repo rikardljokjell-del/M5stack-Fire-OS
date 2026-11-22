@@ -29,8 +29,10 @@ class FireLuaRuntime {
   static constexpr uint32_t kMaxInstructionsPerCallback = 200000;
   static constexpr uint32_t kMaxCallbackMs = 12;
   static constexpr uint32_t kMaxRuntimeMs = 10000;
+  static constexpr uint32_t kDefaultRuntimeMs = kMaxRuntimeMs;
 
   bool begin(const Host& host);
+  void setMaxRuntimeMs(uint32_t maxRuntimeMs);
   bool loadSource(const uint8_t* source, size_t length);
   void stop();
   bool update(uint32_t dtMs);
@@ -40,6 +42,11 @@ class FireLuaRuntime {
   const String& lastError() const { return error_; }
   uint32_t instructionCount() const { return instructions_; }
   size_t memoryUsed() const { return memoryUsed_; }
+  uint32_t elapsedMs() const;
+  uint32_t lastCallbackUs() const { return lastCallbackUs_; }
+  uint32_t frameCount() const { return frames_; }
+  size_t sourceBytes() const { return sourceBytes_; }
+  const char* lastPhase() const;
 
  private:
   enum class State : uint8_t { Stopped, Running, Failed };
@@ -51,6 +58,14 @@ class FireLuaRuntime {
   uint32_t instructions_ = 0;
   uint32_t frameStarted_ = 0;
   uint32_t startedAt_ = 0;
+  uint32_t maxRuntimeMs_ = kDefaultRuntimeMs;
+  uint32_t callbackBudgetMs_ = kMaxCallbackMs;
+  uint64_t callbackStartedUs_ = 0;
+  uint32_t lastCallbackUs_ = 0;
+  uint32_t frames_ = 0;
+  size_t sourceBytes_ = 0;
+  enum class CallbackPhase : uint8_t { None, Load, Init, Update, OnButton };
+  CallbackPhase callbackPhase_ = CallbackPhase::None;
   size_t memoryUsed_ = 0;
 
   static void* allocator(void* user, void* pointer, size_t oldSize,
@@ -74,6 +89,8 @@ class FireLuaRuntime {
   static void setFunction(lua_State* state, const char* name, lua_CFunction fn);
 
   bool callVoid(const char* function, int argumentCount = 0);
+  void beginCallback(CallbackPhase phase, uint32_t budgetMs);
+  void finishCallback();
   bool fail(const String& message);
   void clearState();
 };

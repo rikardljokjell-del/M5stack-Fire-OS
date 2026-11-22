@@ -46,6 +46,8 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
+constexpr char kFirmwareVersion[] = "fire-os-0.2+storage-dev";
+constexpr uint32_t kFirmwareBootGuardMs = 15000;
 constexpr uint32_t kBootMelodySampleRate = 8000;
 constexpr size_t kBootMelodySampleCount = 3160;  // 395 ms at 8 kHz
 int8_t kBootMelodyPcm[kBootMelodySampleCount] = {};
@@ -383,6 +385,22 @@ int jsonIntField(const String& json, const char* key, int fallback = 0) {
   return json.substring(end).toInt();
 }
 
+const char* luaFailureCode(const String& error) {
+  if (error == "vm_not_initialized") return "vm_not_initialized";
+  if (error == "source_empty") return "source_empty";
+  if (error == "source_size") return "source_size";
+  if (error == "source_hash" || error.startsWith("App source checksum"))
+    return "source_hash";
+  if (error.startsWith("Lua syntax")) return "source_syntax";
+  if (error.startsWith("Lua init")) return "init_error";
+  if (error.startsWith("Lua on_button") || error.startsWith("Lua update"))
+    return "runtime_error";
+  if (error.startsWith("Lua memory") || error == "memory_error")
+    return "memory_error";
+  if (error == "runtime_limit") return "runtime_limit";
+  return "load_error";
+}
+
 String durationLabel(uint8_t option) {
   const uint16_t minutes = kDurationMinutes[min<uint8_t>(option, 20)];
   return minutes == 0 ? "Always on" : String(minutes) + " min";
@@ -428,6 +446,14 @@ uint8_t nearestBrightnessStep(uint8_t brightness) {
 
 uint8_t volumeValue(uint8_t step) {
   return static_cast<uint8_t>(step * 100 / (kVolumeStepCount - 1));
+}
+
+// FIRE OS presents volume as 0..100 in the UI, while M5Unified expects the
+// speaker master volume in its full 0..255 range. Keep mute exact and map the
+// remaining UI levels to the complete hardware range.
+uint8_t speakerVolumeValue(uint8_t uiVolume) {
+  if (uiVolume == 0) return 0;
+  return static_cast<uint8_t>(min<uint16_t>(255, uiVolume * 255U / 100U));
 }
 
 uint8_t nearestVolumeStep(uint8_t volume) {
@@ -607,6 +633,52 @@ void writeWavHeader(uint8_t* data, uint32_t payloadBytes,
   memcpy(data + 36, "data", 4);
   memcpy(data + 40, &payloadBytes, 4);
 }
+
+// Keep a defensive duration check for a future capture backend, but do not
+// resample a correctly timed DMA stream. Resampling even a small amount adds
+// avoidable interpolation to speech.
+size_t normalizePcmDuration(int16_t* pcm, size_t inputSamples,
+                            uint32_t elapsedMs, uint32_t sampleRate,
+                            size_t maxSamples) {
+  if (!pcm || inputSamples == 0 || elapsedMs == 0) return inputSamples;
+  const uint64_t expected64 =
+      (static_cast<uint64_t>(elapsedMs) * sampleRate + 500) / 1000;
+  const size_t outputSamples = static_cast<size_t>(min<uint64_t>(
+      maxSamples, max<uint64_t>(1, expected64)));
+  const uint64_t sampleDelta = outputSamples > inputSamples
+                                   ? outputSamples - inputSamples
+                                   : inputSamples - outputSamples;
+  if (sampleDelta * 100ULL <= inputSamples * 2ULL)
+    return inputSamples;
+  if (outputSamples == inputSamples || inputSamples == 1) return inputSamples;
+
+  const uint64_t inputSpan = inputSamples - 1;
+  const uint64_t outputSpan = outputSamples - 1;
+  if (outputSamples > inputSamples) {
+    for (size_t output = outputSamples; output-- > 0;) {
+      const uint64_t scaled = static_cast<uint64_t>(output) * inputSpan;
+      const size_t left = static_cast<size_t>(scaled / outputSpan);
+      const uint64_t fraction = scaled % outputSpan;
+      const int64_t a = pcm[left];
+      const int64_t b = pcm[min(left + 1, inputSamples - 1)];
+      pcm[output] = static_cast<int16_t>(
+          a + ((b - a) * static_cast<int64_t>(fraction)) /
+                  static_cast<int64_t>(outputSpan));
+    }
+  } else {
+    for (size_t output = 0; output < outputSamples; ++output) {
+      const uint64_t scaled = static_cast<uint64_t>(output) * inputSpan;
+      const size_t left = static_cast<size_t>(scaled / outputSpan);
+      const uint64_t fraction = scaled % outputSpan;
+      const int64_t a = pcm[left];
+      const int64_t b = pcm[min(left + 1, inputSamples - 1)];
+      pcm[output] = static_cast<int16_t>(
+          a + ((b - a) * static_cast<int64_t>(fraction)) /
+                  static_cast<int64_t>(outputSpan));
+    }
+  }
+  return outputSamples;
+}
 }  // namespace
 
 void DateTimeService::begin() {
@@ -774,8 +846,8 @@ void FireOS::begin() {
   config.internal_imu = true;
   config.internal_rtc = true;
   config.internal_spk = true;
-  // FIRE OS owns the FIRE GPIO34 ADC-DMA path. Leaving M5Unified's automatic
-  // microphone driver enabled would install a competing I2S0 driver.
+  // M5Unified's official FIRE profile owns the analog mic through I2S ADC DMA;
+  // it is started lazily by the capture service after the speaker is stopped.
   config.internal_mic = false;
   config.led_brightness = 80;
   M5.begin(config);
@@ -784,7 +856,13 @@ void FireOS::begin() {
   micConfig.pin_data_in = GPIO_NUM_34;
   micConfig.use_adc = true;
   micConfig.i2s_port = I2S_NUM_0;
-  micConfig.over_sampling = 1;
+  // Match M5Unified's documented M5Stack/FIRE analog-mic profile. Four ADC
+  // samples are averaged into each 16 kHz output sample. Keep the filter off
+  // here: the audio is sent to speech recognition and should retain the
+  // consonant/high-frequency detail needed for intelligible speech.
+  micConfig.over_sampling = 4;
+  micConfig.magnification = 16;
+  micConfig.noise_filter_level = 0;
   M5.Mic.config(micConfig);
   firePreferences = new Preferences();
   fireWifiSetupServer = new WebServer(80);
@@ -797,6 +875,8 @@ void FireOS::begin() {
     return;
   }
   backendClient_ = new FireBackendClient();
+  firmwareStorage_ = new FireFirmwareStorage();
+  githubFirmware_ = new FireGithubFirmwareManager();
   luaRuntime_ = new FireLuaRuntime();
   packageManager_ = new FireLuaPackageManager();
   configureFireRgbStrip();
@@ -815,14 +895,22 @@ void FireOS::begin() {
   Serial.println("FIRE boot: DateTime OK");
   loadSettings();
   Serial.println("FIRE boot: settings OK");
+  if (handlePendingFirmwareBoot()) return;
   if (backendClient_) {
     backendClient_->setReverseTransport(&reverseTransport_);
     backendClient_->setCallbacks(this, backendMessage, backendState);
     backendClient_->configure(backendHost_, backendPort_, backendToken_,
-                              backendDeviceId_, "fire-os-0.2");
+                              backendDeviceId_, kFirmwareVersion);
     backendStatus_ = backendClient_->status();
   }
   reverseTransport_.configure(backendDeviceId_, backendToken_);
+  if (firmwareStorage_) {
+    firmwareStorage_->setReverseTransport(&reverseTransport_);
+    firmwareStorage_->setCallbacks(this, firmwareStatus, firmwareResult);
+  }
+  if (githubFirmware_)
+    githubFirmware_->setCallbacks(this, githubFirmwareStatus,
+                                  githubFirmwareResult);
   packageManager_->setReverseTransport(&reverseTransport_);
   packageManager_->setCallbacks(this, packageStatus, packageResult);
   if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
@@ -864,7 +952,7 @@ void FireOS::begin() {
 
   M5.Display.setRotation(0);
   M5.Display.setBrightness(brightness_);
-  M5.Speaker.setVolume(volume_);
+  M5.Speaker.setVolume(speakerVolumeValue(volume_));
   // Keep boot non-blocking. The previous synchronous LED animation could
   // stall before the first FIRE OS frame on some M5Unified/RMT combinations.
   // Boot feedback is handled after the UI is alive.
@@ -909,6 +997,7 @@ void FireOS::update() {
   }
 #endif
   updateBootFeedback();
+  updateFirmwareBootGuard();
   if (screen_ == Screen::AiDeveloper &&
       (!backendClient_ || !backendClient_->configured()))
     updateAiDeveloperMock();
@@ -952,6 +1041,20 @@ void FireOS::update() {
       redrawRequested_ = true;
     }
   }
+  if (firmwareScanPending_) {
+    firmwareScanPending_ = false;
+    if (screen_ == Screen::Firmware) {
+      scanFirmwareFiles();
+      redrawRequested_ = true;
+    }
+  }
+  if (firmwareInstallPending_) {
+    firmwareInstallPending_ = false;
+    String path;
+    if (firmwareSelection_ < firmwareCount_)
+      path = firmwarePaths_[firmwareSelection_];
+    if (path.length() == 0 || !installFirmwareFile(path)) redrawRequested_ = true;
+  }
   if (wifiSetupActive_) wifiSetupServer.handleClient();
   updateWifiState();
   updateBluetoothScan();
@@ -961,6 +1064,10 @@ void FireOS::update() {
   updateAiAudio();
   updateAiAudioOutput();
   if (packageManager_) packageManager_->service(WiFi.status() == WL_CONNECTED);
+  if (firmwareStorage_)
+    firmwareStorage_->service(WiFi.status() == WL_CONNECTED, sdReady_);
+  if (githubFirmware_)
+    githubFirmware_->service(WiFi.status() == WL_CONNECTED, sdReady_);
   updateTimeSync();
   manageDisplayPower();
   if (carouselAnimating_) {
@@ -1007,6 +1114,12 @@ void FireOS::updateBootFeedback() {
   const uint32_t elapsed = millis() - bootFeedbackStarted_;
   constexpr uint32_t kDurationMs = 2400;
   if (elapsed >= kDurationMs) {
+    // Keep the startup melody at the pre-volume-scaling level. Speech uses
+    // the full M5Unified 0..255 range, but the existing boot sound level was
+    // intentionally softer and should not change with that correction.
+    if (bootMelodyStarted_) {
+      M5.Speaker.setVolume(speakerVolumeValue(volume_));
+    }
     if (bootRgbPulse_) {
 #ifdef FIRE_OS_BLE
       writeFireRgbRaw(0, 0, 0, 0);
@@ -1023,6 +1136,7 @@ void FireOS::updateBootFeedback() {
   if (bootMelody_ && M5.Speaker.isEnabled()) {
     if (!bootMelodyStarted_) {
       prepareBootMelody();
+      M5.Speaker.setVolume(volume_);
       bootMelodyStarted_ = M5.Speaker.playRaw(
           kBootMelodyPcm, kBootMelodySampleCount, kBootMelodySampleRate,
           false, 1, 0, true);
@@ -1098,6 +1212,21 @@ void FireOS::loadSettings() {
   backendPort_ = preferences.getUShort("backend_port", 8765);
   backendToken_ = preferences.getString("backend_token", "");
   backendDeviceId_ = preferences.getString("backend_device", "m5stack-fire-01");
+  pendingDiagnosticAppId_ = preferences.isKey("diag_app")
+                                ? preferences.getString("diag_app", "")
+                                : String();
+  pendingDiagnosticPackageId_ = preferences.isKey("diag_pkg")
+                                    ? preferences.getString("diag_pkg", "")
+                                    : String();
+  pendingDiagnosticErrorCode_ = preferences.isKey("diag_code")
+                                    ? preferences.getString("diag_code", "")
+                                    : String();
+  pendingDiagnosticMessage_ = preferences.isKey("diag_msg")
+                                  ? preferences.getString("diag_msg", "")
+                                  : String();
+  pendingDiagnosticJson_ = preferences.isKey("diag_meta")
+                               ? preferences.getString("diag_meta", "")
+                               : String();
   loadSavedWifiNetworks();
   bluetoothEnabled_ = false;
   bluetoothMode_ = 0;
@@ -1239,6 +1368,215 @@ bool FireOS::initSdCard() {
   sdReady_ = SD.begin(kSdCsPin);
   if (!sdReady_) sdMessage_ = "SD card not detected";
   return sdReady_;
+}
+
+void FireOS::scanFirmwareFiles() {
+  firmwareCount_ = 0;
+  if (!sdReady_ && !initSdCard()) {
+    firmwareMessage_ = "SD card not detected";
+    firmwareSelection_ = 0;
+    firmwareOffset_ = 0;
+    return;
+  }
+  File directory = SD.open("/firmware");
+  if (!directory || !directory.isDirectory()) {
+    if (directory) directory.close();
+    firmwareMessage_ = "No /firmware folder yet";
+    firmwareSelection_ = 0;
+    firmwareOffset_ = 0;
+    return;
+  }
+  File entry = directory.openNextFile();
+  while (entry && firmwareCount_ < kMaxFirmwareFiles) {
+    if (!entry.isDirectory()) {
+      String rawName = entry.name();
+      while (rawName.endsWith("/") && rawName.length() > 1)
+        rawName.remove(rawName.length() - 1);
+      String name = sdBaseName(rawName);
+      String lower = name;
+      lower.toLowerCase();
+      if (lower.endsWith(".bin") && !lower.endsWith(".part")) {
+        const uint8_t index = firmwareCount_++;
+        firmwareNames_[index] = name;
+        firmwarePaths_[index] = "/firmware/" + name;
+        firmwareSizes_[index] = entry.size();
+      }
+    }
+    entry.close();
+    entry = directory.openNextFile();
+  }
+  directory.close();
+  for (uint8_t i = 0; i < firmwareCount_; ++i) {
+    for (uint8_t j = i + 1; j < firmwareCount_; ++j) {
+      if (firmwareNames_[j].compareTo(firmwareNames_[i]) >= 0) continue;
+      String name = firmwareNames_[i];
+      firmwareNames_[i] = firmwareNames_[j];
+      firmwareNames_[j] = name;
+      String path = firmwarePaths_[i];
+      firmwarePaths_[i] = firmwarePaths_[j];
+      firmwarePaths_[j] = path;
+      const uint32_t size = firmwareSizes_[i];
+      firmwareSizes_[i] = firmwareSizes_[j];
+      firmwareSizes_[j] = size;
+    }
+  }
+  const uint8_t itemCount = firmwareCount_ + 3;  // Refresh + GitHub + Back.
+  if (firmwareSelection_ >= itemCount) firmwareSelection_ = itemCount - 1;
+  if (firmwareSelection_ < firmwareOffset_) firmwareOffset_ = firmwareSelection_;
+  if (firmwareSelection_ >= firmwareOffset_ + 5)
+    firmwareOffset_ = firmwareSelection_ - 4;
+  if (firmwareCount_ > 0)
+    firmwareMessage_ = String(firmwareCount_) + " firmware file" +
+                       (firmwareCount_ == 1 ? "" : "s") + " on SD";
+  else
+    firmwareMessage_ = "No firmware files on SD";
+}
+
+bool FireOS::handlePendingFirmwareBoot() {
+  if (!preferences.getBool("fw_pending", false)) return false;
+  if (safeMode_) {
+    preferences.putBool("fw_pending", false);
+    preferences.remove("fw_attempts");
+    preferences.remove("fw_target");
+    saveSettings();
+    return false;
+  }
+
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const String target = preferences.getString("fw_target", "");
+  if (!running || target.length() == 0 || target != running->label) {
+    // A normal USB flash or an unrelated boot invalidates the pending marker.
+    preferences.putBool("fw_pending", false);
+    preferences.remove("fw_attempts");
+    preferences.remove("fw_target");
+    saveSettings();
+    return false;
+  }
+
+  const uint8_t attempts = preferences.getUChar("fw_attempts", 0);
+  if (attempts >= 1) {
+    const esp_partition_t* previous =
+        esp_ota_get_next_update_partition(nullptr);
+    if (previous && previous != running &&
+        esp_ota_set_boot_partition(previous) == ESP_OK) {
+      preferences.putBool("fw_pending", false);
+      preferences.remove("fw_attempts");
+      preferences.remove("fw_target");
+      saveSettings();
+      Serial.println("FIRE firmware boot guard: reverting to previous slot");
+      delay(250);
+      ESP.restart();
+      return true;
+    }
+    // Do not trap the device in a rollback loop if the partition table cannot
+    // provide a previous slot. Continue with the image and clear the marker.
+    preferences.putBool("fw_pending", false);
+    preferences.remove("fw_attempts");
+    preferences.remove("fw_target");
+    saveSettings();
+    return false;
+  }
+
+  preferences.putUChar("fw_attempts", 1);
+  saveSettings();
+  firmwareBootGuardActive_ = true;
+  firmwareBootGuardStarted_ = millis();
+  Serial.println("FIRE firmware boot guard: validation window started");
+  return false;
+}
+
+void FireOS::updateFirmwareBootGuard() {
+  if (!firmwareBootGuardActive_ ||
+      millis() - firmwareBootGuardStarted_ < kFirmwareBootGuardMs)
+    return;
+  preferences.putBool("fw_pending", false);
+  preferences.remove("fw_attempts");
+  preferences.remove("fw_target");
+  saveSettings();
+  firmwareBootGuardActive_ = false;
+  Serial.println("FIRE firmware boot guard: image accepted");
+}
+
+bool FireOS::installFirmwareFile(const String& path) {
+  if (!sdReady_ && !initSdCard()) {
+    firmwareMessage_ = "SD card not detected";
+    return false;
+  }
+  if (!path.startsWith("/firmware/") || path.indexOf("..") >= 0 ||
+      path.indexOf('\\') >= 0 || path.length() > 80 ||
+      (firmwareStorage_ && firmwareStorage_->busy())) {
+    firmwareMessage_ = "Firmware install unavailable";
+    return false;
+  }
+
+  const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
+  File source = SD.open(path, FILE_READ);
+  uint32_t imageOffset = 0;
+  uint32_t imageSize = 0;
+  const bool validImage = source &&
+                          inspectExternalImage(source, imageOffset, imageSize,
+                                               true);
+  if (!source || !target || !validImage || imageSize > target->size) {
+    source.close();
+    firmwareMessage_ = !target ? "No OTA slot available"
+                               : validImage ? "Firmware is too large"
+                                            : "Invalid FIRE firmware image";
+    return false;
+  }
+  if (!source.seek(imageOffset)) {
+    source.close();
+    firmwareMessage_ = "Cannot read firmware image";
+    return false;
+  }
+
+  esp_ota_handle_t handle = 0;
+  if (esp_ota_begin(target, imageSize, &handle) != ESP_OK) {
+    source.close();
+    firmwareMessage_ = "OTA install could not start";
+    return false;
+  }
+  uint8_t buffer[4096];
+  uint32_t remaining = imageSize;
+  bool ok = true;
+  while (remaining > 0) {
+    const size_t request = min<size_t>(sizeof(buffer), remaining);
+    const size_t amount = source.read(buffer, request);
+    if (amount == 0 || esp_ota_write(handle, buffer, amount) != ESP_OK) {
+      ok = false;
+      break;
+    }
+    remaining -= amount;
+    if ((remaining & 0xFFFFU) == 0) {
+      firmwareMessage_ = "Flashing " +
+                         String((imageSize - remaining) * 100UL / imageSize) +
+                         "%";
+      redrawRequested_ = true;
+      delay(1);
+    }
+  }
+  source.close();
+  if (!ok) {
+    esp_ota_abort(handle);
+    firmwareMessage_ = "Flash failed; current OS retained";
+    return false;
+  }
+  if (esp_ota_end(handle) != ESP_OK || remaining != 0) {
+    firmwareMessage_ = "Firmware verification failed";
+    return false;
+  }
+  if (esp_ota_set_boot_partition(target) != ESP_OK) {
+    firmwareMessage_ = "Could not select new firmware";
+    return false;
+  }
+
+  preferences.putBool("fw_pending", true);
+  preferences.putUChar("fw_attempts", 0);
+  preferences.putString("fw_target", target->label);
+  saveSettings();
+  firmwareMessage_ = "Firmware installed; restarting";
+  delay(350);
+  ESP.restart();
+  return true;
 }
 
 String FireOS::sdParentPath(const String& path) const {
@@ -1716,9 +2054,13 @@ void FireOS::sendAppInventory() {
       checksum = jsonStringField(body, "checksum");
     }
     if (manifest) manifest.close();
+    const String packageId = preferences.getString(
+        compactPreferenceKey("ap_", appId).c_str(), "");
     if (index > 0) appsJson += ',';
-    appsJson += "{\"app_id\":\"" + jsonEscapeField(appId) +
-                "\",\"version\":\"" + jsonEscapeField(version) +
+    appsJson += "{\"app_id\":\"" + jsonEscapeField(appId);
+    if (packageId.length() > 0)
+      appsJson += "\",\"package_id\":\"" + jsonEscapeField(packageId);
+    appsJson += "\",\"version\":\"" + jsonEscapeField(version) +
                 "\",\"checksum\":\"" + jsonEscapeField(checksum) + "\"}";
   }
   appsJson += ']';
@@ -1744,6 +2086,7 @@ bool FireOS::deleteLuaApp(const String& path) {
   const bool ok = removeSdTree(folder);
   if (ok) {
     const String appId = sdBaseName(folder);
+    preferences.remove(compactPreferenceKey("ap_", appId).c_str());
     if (backendClient_ && backendClient_->sessionReady())
       backendClient_->appDeleted(appId);
     scanLuaApps();
@@ -2058,7 +2401,8 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   if (screen_ == Screen::LuaApp) {
     const char* buttonName = index == 0 ? "A" : index == 1 ? "B" : "C";
     if (luaAppActive_ && luaRuntime_ && !luaRuntime_->button(buttonName, "pressed")) {
-      stopLuaApp(luaRuntime_->lastError());
+      const String error = luaRuntime_->lastError();
+      stopLuaApp(error);
     }
     return;
   }
@@ -2084,6 +2428,10 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   }
   if (screen_ == Screen::FileExplorer) {
     handleFileExplorerButton(index);
+    return;
+  }
+  if (screen_ == Screen::Firmware) {
+    handleFirmwareButton(index);
     return;
   }
   if (screen_ == Screen::MainMenuSettings || screen_ == Screen::Shortcuts) {
@@ -2168,30 +2516,36 @@ void FireOS::onButton(uint8_t index, bool longPress) {
         detailEditing_ = false;
         open(Screen::Boot);
       } else if (settingsIndex_ == 6) {
-        detailIndex_ = 0;
-        open(Screen::MainMenuSettings);
+        firmwareSelection_ = 0;
+        firmwareOffset_ = 0;
+        firmwareMessage_ = "Scanning /firmware...";
+        firmwareScanPending_ = true;
+        open(Screen::Firmware);
       } else if (settingsIndex_ == 7) {
         detailIndex_ = 0;
-        open(Screen::Shortcuts);
+        open(Screen::MainMenuSettings);
       } else if (settingsIndex_ == 8) {
         detailIndex_ = 0;
-        open(Screen::AppsSettings);
+        open(Screen::Shortcuts);
       } else if (settingsIndex_ == 9) {
-        open(Screen::Debug);
+        detailIndex_ = 0;
+        open(Screen::AppsSettings);
       } else if (settingsIndex_ == 10) {
-        open(Screen::SystemInfo);
+        open(Screen::Debug);
       } else if (settingsIndex_ == 11) {
+        open(Screen::SystemInfo);
+      } else if (settingsIndex_ == 12) {
         helpPage_ = 0;
         open(Screen::Help);
-      } else if (settingsIndex_ == 13) {
-        open(Screen::AiApi);
       } else if (settingsIndex_ == 14) {
+        open(Screen::AiApi);
+      } else if (settingsIndex_ == 15) {
         powerIndex_ = 0;
         powerEditing_ = false;
         open(Screen::Power);
-      } else if (settingsIndex_ == 15) {
+      } else if (settingsIndex_ == 16) {
         back();
-      } else if (settingsIndex_ == 12) {
+      } else if (settingsIndex_ == 13) {
         factoryResetArmed_ = false;
         open(Screen::FactoryReset);
       } else {
@@ -2295,6 +2649,8 @@ void FireOS::open(Screen screen) {
     aiProjectPickerActive_ = true;
     aiProjectSelection_ = 0;
     aiProjectOffset_ = 0;
+    aiVoiceTestMode_ = false;
+    aiVoiceTestPlaybackActive_ = false;
     aiProjectId_ = "";
     aiProjectName_ = "New app";
     scanLuaApps();
@@ -2331,6 +2687,18 @@ void FireOS::open(Screen screen) {
     sdEntryCount_ = 0;
     sdMessage_ = "Opening SD...";
     fileExplorerScanPending_ = true;
+  }
+  if (screen == Screen::Firmware) {
+    firmwareSelection_ = 0;
+    firmwareOffset_ = 0;
+    firmwareCount_ = 0;
+    firmwareGithubDialog_ = false;
+    firmwareGithubSelection_ = 0;
+    firmwareGithubOffset_ = 0;
+    firmwareInstallConfirm_ = false;
+    firmwareInstallPending_ = false;
+    firmwareMessage_ = "Scanning /firmware...";
+    firmwareScanPending_ = true;
   }
 }
 
@@ -2383,12 +2751,22 @@ void FireOS::startMainSlide(uint8_t nextIndex, int8_t direction) {
 
 void FireOS::back() {
   if (screen_ == Screen::Main) return;
+  if (screen_ == Screen::AiDeveloper &&
+      (aiAudioCaptureActive_ || aiAudioOutputActive_ ||
+       aiVoiceTestPlaybackActive_)) {
+    cancelConversationTurn("READY", false);
+  }
   if (screen_ == Screen::LuaApp) stopLuaApp("back");
   if (screen_ == Screen::Bluetooth) closeBluetoothSettings();
   screen_ = previousScreen_;
 }
 
 void FireOS::home() {
+  if (screen_ == Screen::AiDeveloper &&
+      (aiAudioCaptureActive_ || aiAudioOutputActive_ ||
+       aiVoiceTestPlaybackActive_)) {
+    cancelConversationTurn("READY", false);
+  }
   if (screen_ == Screen::LuaApp) stopLuaApp("home");
   goToBootApp();
 }
@@ -2483,7 +2861,7 @@ void FireOS::handleDisplaySoundButton(uint8_t index) {
         volumeStep_ = (volumeStep_ + kVolumeStepCount + direction) %
                       kVolumeStepCount;
         volume_ = volumeValue(volumeStep_);
-        M5.Speaker.setVolume(volume_);
+        M5.Speaker.setVolume(speakerVolumeValue(volume_));
       } else if (detailIndex_ == 2) {
         dimOption_ = (dimOption_ + kDurationCount + direction) % kDurationCount;
       } else if (detailIndex_ == 3) {
@@ -2561,6 +2939,75 @@ void FireOS::handleBootButton(uint8_t index) {
   }
 }
 
+void FireOS::handleFirmwareButton(uint8_t index) {
+  if (firmwareGithubDialog_) {
+    const uint8_t remoteCount = githubFirmware_ ? githubFirmware_->entryCount() : 0;
+    const uint8_t itemCount = remoteCount + 1;
+    if (index == 0) {
+      firmwareGithubSelection_ =
+          (firmwareGithubSelection_ + itemCount - 1) % itemCount;
+    } else if (index == 2) {
+      firmwareGithubSelection_ =
+          (firmwareGithubSelection_ + 1) % itemCount;
+    } else if (firmwareGithubSelection_ < remoteCount) {
+      if (githubFirmware_ &&
+          githubFirmware_->startDownload(firmwareGithubSelection_)) {
+        firmwareGithubDialog_ = false;
+        firmwareMessage_ = "Downloading from GitHub...";
+      } else {
+        firmwareMessage_ = "GitHub download unavailable";
+      }
+    } else {
+      firmwareGithubDialog_ = false;
+      firmwareMessage_ = "GitHub list closed";
+    }
+    if (firmwareGithubSelection_ < firmwareGithubOffset_)
+      firmwareGithubOffset_ = firmwareGithubSelection_;
+    if (firmwareGithubSelection_ >= firmwareGithubOffset_ + 5)
+      firmwareGithubOffset_ = firmwareGithubSelection_ - 4;
+    return;
+  }
+  if (firmwareInstallConfirm_) {
+    if (index == 0 || index == 2) {
+      firmwareInstallConfirm_ = false;
+      firmwareMessage_ = "Flash cancelled";
+    } else {
+      firmwareInstallConfirm_ = false;
+      firmwareInstallPending_ = true;
+      firmwareMessage_ = "Flashing selected firmware...";
+    }
+    return;
+  }
+  const uint8_t itemCount = firmwareCount_ + 3;  // Refresh + GitHub + Back.
+  if (index == 0) {
+    firmwareSelection_ = (firmwareSelection_ + itemCount - 1) % itemCount;
+  } else if (index == 2) {
+    firmwareSelection_ = (firmwareSelection_ + 1) % itemCount;
+  } else if (firmwareSelection_ < firmwareCount_) {
+    if (firmwareStorage_ && firmwareStorage_->busy()) {
+      firmwareMessage_ = "Wait for firmware download";
+    } else {
+      firmwareInstallConfirm_ = true;
+      firmwareMessage_ = "Confirm firmware flash";
+    }
+  } else if (firmwareSelection_ == firmwareCount_) {
+    firmwareMessage_ = "Scanning /firmware...";
+    firmwareScanPending_ = true;
+  } else if (firmwareSelection_ == firmwareCount_ + 1) {
+    firmwareMessage_ = "GitHub list: press B to load";
+    firmwareGithubDialog_ = true;
+    firmwareGithubSelection_ = 0;
+    firmwareGithubOffset_ = 0;
+    if (githubFirmware_) githubFirmware_->startManifest();
+  } else {
+    back();
+  }
+  if (firmwareSelection_ < firmwareOffset_)
+    firmwareOffset_ = firmwareSelection_;
+  if (firmwareSelection_ >= firmwareOffset_ + 5)
+    firmwareOffset_ = firmwareSelection_ - 4;
+}
+
 void FireOS::playBootRgbPulse() {
   struct BootColor {
     uint8_t red;
@@ -2627,7 +3074,8 @@ void FireOS::handleHelpButton(uint8_t index) {
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
   if (aiProjectPickerActive_) {
-    const uint8_t itemCount = luaAppCount_ + 3;  // Chat + New + apps + Back.
+    const uint8_t itemCount =
+        luaAppCount_ + 4;  // Chat + Voice test + New + apps + Back.
     if (index == 0) {
       aiProjectSelection_ =
           (aiProjectSelection_ + itemCount - 1) % itemCount;
@@ -2638,6 +3086,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     } else {
       aiProjectPickerActive_ = false;
       if (aiProjectSelection_ == 0) {
+        aiVoiceTestMode_ = false;
         aiConversationMode_ = 1;
         aiProjectId_ = "";
         aiProjectName_ = "Chat";
@@ -2646,6 +3095,16 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
           backendClient_->setProjectId("");
         }
       } else if (aiProjectSelection_ == 1) {
+        aiVoiceTestMode_ = true;
+        aiConversationMode_ = 1;
+        aiProjectId_ = "";
+        aiProjectName_ = "Voice test";
+        if (backendClient_) {
+          backendClient_->setProjectId("");
+          backendClient_->setConversationMode("chat");
+        }
+      } else if (aiProjectSelection_ == 2) {
+        aiVoiceTestMode_ = false;
         aiConversationMode_ = 0;
         aiProjectId_ = "";
         aiProjectName_ = "New app";
@@ -2655,8 +3114,9 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
           backendClient_->setAppMode("new");
         }
       } else {
+        aiVoiceTestMode_ = false;
         aiConversationMode_ = 0;
-        const uint8_t selected = aiProjectSelection_ - 2;
+        const uint8_t selected = aiProjectSelection_ - 3;
         const String source = luaAppPaths_[selected];
         const int slash = source.lastIndexOf('/');
         const String appFolder = slash > 0 ? source.substring(0, slash) : source;
@@ -2672,7 +3132,9 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
           backendClient_->setAppMode("update");
         }
       }
-      aiWorkflowText_ = aiProjectId_.length() > 0
+      aiWorkflowText_ = aiVoiceTestMode_
+                            ? "VOICE TEST - PRESS B TO RECORD"
+                        : aiProjectId_.length() > 0
                             ? "EDIT " + aiProjectName_
                             : "NEW APP";
       aiDeveloperMode_ = 0;
@@ -2688,7 +3150,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
   }
   if (index == 1) {
     if (aiWorkflowState_ == 0) {
-      if (backendClient_ && backendClient_->sessionReady()) {
+      if (aiVoiceTestMode_ || (backendClient_ && backendClient_->sessionReady())) {
         if (!startAiRecording()) {
           aiWorkflowText_ = aiAudioError_.length() > 0
                                 ? aiAudioError_
@@ -2707,7 +3169,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
         aiDeveloperMode_ = 2;
       }
     } else if (aiWorkflowState_ == 1) {
-      if (backendClient_ && backendClient_->sessionReady()) {
+      if (aiVoiceTestMode_ || (backendClient_ && backendClient_->sessionReady())) {
         finishAiRecording();
       } else if (!backendClient_ || !backendClient_->configured()) {
         aiWorkflowState_ = 2;
@@ -2721,7 +3183,8 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     } else if (aiWorkflowState_ == 2 || aiWorkflowState_ == 3 ||
                aiWorkflowState_ == 5) {
       cancelConversationTurn("READY - ADDING CONTEXT", true);
-      if (backendClient_ && backendClient_->sessionReady()) startAiRecording();
+      if (aiVoiceTestMode_ || (backendClient_ && backendClient_->sessionReady()))
+        startAiRecording();
     }
   } else if (index == 0 && aiWorkflowState_ == 3) {
     if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
@@ -2780,7 +3243,9 @@ bool FireOS::startAiRecording() {
   aiAudioError_ = "Audio capture unavailable in this build";
   return false;
 #else
-  if (!backendClient_ || !backendClient_->sessionReady() ||
+  const bool localVoiceTest = aiVoiceTestMode_;
+  if ((!localVoiceTest &&
+       (!backendClient_ || !backendClient_->sessionReady())) ||
       !M5.Mic.isEnabled() || aiAudioCaptureActive_) {
     aiAudioError_ = aiAudioCaptureActive_ ? "Recording already active"
                                  : "Microphone or backend unavailable";
@@ -2790,21 +3255,27 @@ bool FireOS::startAiRecording() {
     aiAudioError_ = "Audio is still playing";
     return false;
   }
+  if (localVoiceTest) suspendVoiceTestRadio();
   if (!aiAudioBuffer_) {
     aiAudioBuffer_ = static_cast<uint8_t*>(ps_malloc(kAiAudioWavBytes));
     if (!aiAudioBuffer_) aiAudioBuffer_ = static_cast<uint8_t*>(malloc(kAiAudioWavBytes));
   }
   if (!aiAudioBuffer_) {
     aiAudioError_ = "Not enough memory for recording";
+    if (localVoiceTest) restoreVoiceTestRadio();
     return false;
   }
   if (!fireStartMicCapture(
           reinterpret_cast<int16_t*>(aiAudioBuffer_ + 44), kAiAudioSamples,
           kAiAudioSampleRate)) {
     aiAudioError_ = "Microphone capture unavailable";
+    if (localVoiceTest) restoreVoiceTestRadio();
     return false;
   }
-  aiTurnId_ = "turn-" + String(millis(), HEX) + "-" + String(esp_random(), HEX);
+  aiTurnId_ = localVoiceTest
+                  ? ""
+                  : "turn-" + String(millis(), HEX) + "-" +
+                        String(esp_random(), HEX);
   aiAudioCaptureFinished_ = false;
   aiAudioStopSent_ = false;
   aiAudioUploadFinished_ = false;
@@ -2818,21 +3289,50 @@ bool FireOS::startAiRecording() {
   aiAudioCaptureRms_ = 0;
   aiAudioCapturePeak_ = 0;
   aiAudioError_ = "";
-  if (!backendClient_->listenStart(aiTurnId_)) {
+  aiVoiceTestPlaybackActive_ = false;
+  if (!localVoiceTest &&
+      (!backendClient_ || !backendClient_->listenStart(aiTurnId_))) {
     cancelConversationTurn("Could not start backend recording", false);
     aiAudioError_ = "Could not start backend recording";
     return false;
   }
   aiWorkflowState_ = 1;
   aiDeveloperMode_ = 1;
-  aiWorkflowText_ = "LISTENING (15 SEC MAX)";
+  aiWorkflowText_ = localVoiceTest ? "VOICE TEST - LISTENING"
+                                   : "LISTENING (15 SEC MAX)";
   aiWorkflowStarted_ = millis();
   return true;
 #endif
 }
 
+void FireOS::suspendVoiceTestRadio() {
+  if (aiVoiceTestRadioSuspended_) return;
+  aiVoiceTestWifiWasEnabled_ = WiFi.getMode() != WIFI_OFF;
+  if (aiVoiceTestWifiWasEnabled_) {
+    WiFi.disconnect(false, false);
+    WiFi.mode(WIFI_OFF);
+    wifiConnectActive_ = false;
+    wifiEnabled_ = false;
+    wifiStatus_ = "Wi-Fi paused for Voice Test";
+  }
+  aiVoiceTestRadioSuspended_ = true;
+}
+
+void FireOS::restoreVoiceTestRadio() {
+  if (!aiVoiceTestRadioSuspended_) return;
+  const bool restoreWifi = aiVoiceTestWifiWasEnabled_ && wifiMode_ != 2;
+  aiVoiceTestRadioSuspended_ = false;
+  aiVoiceTestWifiWasEnabled_ = false;
+  if (restoreWifi) {
+    wifiEnabled_ = true;
+    beginWifiConnection();
+  }
+}
+
 bool FireOS::stopAiAudioOutput() {
-  if (!aiAudioOutputActive_ && !aiAudioOutputBuffer_) return true;
+  if (!aiAudioOutputActive_ && !aiAudioOutputBuffer_ &&
+      !aiVoiceTestPlaybackActive_)
+    return true;
   if (backendClient_) backendClient_->cancelAudioTransfer();
   M5.Speaker.stop();
   if (M5.Speaker.isPlaying()) return false;
@@ -2843,6 +3343,9 @@ bool FireOS::stopAiAudioOutput() {
   aiAudioOutputId_ = "";
   aiAudioOutputTurnId_ = "";
   aiAudioDownloadPending_ = false;
+  aiAudioDownloadStarted_ = false;
+  aiAudioDownloadUrl_ = "";
+  aiVoiceTestPlaybackActive_ = false;
   return true;
 }
 
@@ -2857,7 +3360,10 @@ void FireOS::cancelConversationTurn(const String& reason, bool startNew) {
   aiAudioUploadOk_ = false;
   aiAudioUploadStarted_ = false;
   aiAudioDownloadPending_ = false;
+  aiAudioDownloadStarted_ = false;
+  aiAudioDownloadUrl_ = "";
   stopAiAudioOutput();
+  if (aiVoiceTestMode_) restoreVoiceTestRadio();
   if (backendClient_ && backendClient_->sessionReady() && oldTurn.length() > 0)
     backendClient_->cancelTurn(oldTurn);
   aiTurnId_ = "";
@@ -2879,6 +3385,12 @@ void FireOS::finishAiRecording() {
   if (aiAudioStopSent_) return;
   aiAudioStopSent_ = true;
   fireStopMicCapture();
+  if (aiVoiceTestMode_) {
+    aiWorkflowState_ = 2;
+    aiDeveloperMode_ = 2;
+    aiWorkflowText_ = "PREPARING RECORDING";
+    return;
+  }
   if (!backendClient_ || !backendClient_->listenStop(aiTurnId_)) {
     aiAudioError_ = "Backend session not ready";
     aiWorkflowText_ = "SESSION LOST - TRY AGAIN";
@@ -2906,15 +3418,21 @@ void FireOS::updateAiAudio() {
       aiAudioError_ = "MIC CAPTURE FAILED";
       aiWorkflowText_ = aiAudioError_;
     } else if (!captureRunning) {
-        aiAudioCapturedSamples_ = fireMicCapturedSamples();
+        const size_t rawCapturedSamples = fireMicCapturedSamples();
         if (!fireReleaseMicCapture()) {
           aiAudioError_ = "MIC STOP TIMEOUT";
           aiWorkflowText_ = aiAudioError_;
           aiWorkflowState_ = 0;
           aiDeveloperMode_ = 0;
+          restoreVoiceTestRadio();
           return;
         }
         aiAudioCaptureActive_ = false;
+        aiAudioCaptureElapsedMs_ = millis() - aiAudioCaptureStartedAt_;
+        aiAudioCapturedSamples_ = normalizePcmDuration(
+            reinterpret_cast<int16_t*>(aiAudioBuffer_ + 44),
+            rawCapturedSamples, aiAudioCaptureElapsedMs_, kAiAudioSampleRate,
+            kAiAudioSamples);
         const uint32_t payloadBytes =
             aiAudioCapturedSamples_ * sizeof(int16_t);
         int32_t peak = 0;
@@ -2931,23 +3449,46 @@ void FireOS::updateAiAudio() {
                                  : static_cast<uint32_t>(sqrt(
                                        static_cast<double>(squareSum) /
                                        aiAudioCapturedSamples_));
-        aiAudioCaptureElapsedMs_ =
-            millis() - aiAudioCaptureStartedAt_;
-        Serial.printf("FIRE audio capture: samples=%u peak=%ld wav=%u\n",
+        Serial.printf(
+            "FIRE audio capture: raw=%u samples=%u elapsed=%ums peak=%ld wav=%u\n",
+                      static_cast<unsigned>(rawCapturedSamples),
                       static_cast<unsigned>(aiAudioCapturedSamples_),
+                      static_cast<unsigned>(aiAudioCaptureElapsedMs_),
                       static_cast<long>(peak),
                       static_cast<unsigned>(44 + payloadBytes));
         writeWavHeader(aiAudioBuffer_, payloadBytes, kAiAudioSampleRate);
         aiAudioWavLength_ = 44 + payloadBytes;
         aiAudioCaptureFinished_ = true;
         if (!aiAudioStopSent_) finishAiRecording();
-        aiWorkflowText_ = "SENDING AUDIO";
-        aiAudioUploadStarted_ = backendClient_ && backendClient_->beginAudioUpload(
-            aiTurnId_, aiAudioBuffer_, aiAudioWavLength_);
-        if (!aiAudioUploadStarted_) {
-          aiAudioUploadOk_ = false;
-          aiAudioUploadFinished_ = true;
-          aiAudioError_ = "Backend audio upload failed";
+        if (aiVoiceTestMode_) {
+          const bool played =
+              aiAudioCapturedSamples_ > 0 && M5.Speaker.isEnabled() &&
+              M5.Speaker.playRaw(
+                  reinterpret_cast<const int16_t*>(aiAudioBuffer_ + 44),
+                  aiAudioCapturedSamples_, kAiAudioSampleRate, false, 1, 0,
+                  true);
+          if (played) {
+            aiVoiceTestPlaybackActive_ = true;
+            aiDeveloperMode_ = 3;
+            aiWorkflowState_ = 2;
+            aiWorkflowText_ = "PLAYING RECORDING";
+          } else {
+            aiAudioError_ = "VOICE PLAYBACK FAILED";
+            aiWorkflowText_ = aiAudioError_;
+            aiWorkflowState_ = 0;
+            aiDeveloperMode_ = 0;
+            restoreVoiceTestRadio();
+          }
+        } else {
+          aiWorkflowText_ = "SENDING AUDIO";
+          aiAudioUploadStarted_ =
+              backendClient_ && backendClient_->beginAudioUpload(
+                  aiTurnId_, aiAudioBuffer_, aiAudioWavLength_);
+          if (!aiAudioUploadStarted_) {
+            aiAudioUploadOk_ = false;
+            aiAudioUploadFinished_ = true;
+            aiAudioError_ = "Backend audio upload failed";
+          }
         }
     }
   }
@@ -2971,43 +3512,127 @@ void FireOS::updateAiAudio() {
   }
 }
 
+void FireOS::failAiAudioPlayback(const String& audioId, const String& turnId,
+                                  const String& errorCode,
+                                  const String& message, const char* phase,
+                                  bool releaseBuffer) {
+  if (backendClient_ && audioId.length() > 0 && turnId.length() > 0) {
+    backendClient_->audioPlaybackFailed(audioId, turnId, errorCode, message,
+                                        audioDiagnosticsJson(phase));
+  }
+  if (releaseBuffer) {
+    free(aiAudioOutputBuffer_);
+    aiAudioOutputBuffer_ = nullptr;
+    aiAudioOutputLength_ = 0;
+    aiAudioDownloadPending_ = false;
+    aiAudioDownloadStarted_ = false;
+    aiAudioDownloadUrl_ = "";
+    aiAudioOutputActive_ = false;
+    aiAudioOutputId_ = "";
+    aiAudioOutputTurnId_ = "";
+  }
+  aiAudioError_ = message;
+  // Preserve the proposal/build confirmation state. Without a proposal the
+  // user is returned to the normal B-to-speak state instead of being trapped
+  // in workflowState=2 after an audio-only failure.
+  aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 0;
+  aiDeveloperMode_ = aiProposalId_.length() > 0 ? 2 : 0;
+  aiWorkflowText_ = aiProposalId_.length() > 0
+                        ? "A BUILD / B SPEAK"
+                        : "AUDIO ERROR - B SPEAK AGAIN";
+}
+
 void FireOS::updateAiAudioOutput() {
+  if (aiVoiceTestPlaybackActive_) {
+    if (M5.Speaker.isPlaying()) return;
+    aiVoiceTestPlaybackActive_ = false;
+    aiAudioCaptureFinished_ = false;
+    aiWorkflowState_ = 0;
+    aiDeveloperMode_ = 0;
+    aiWorkflowText_ = "VOICE TEST - PRESS B TO RECORD";
+    restoreVoiceTestRadio();
+    return;
+  }
   if (aiAudioDownloadPending_) {
-    if (!backendClient_ || !backendClient_->audioTransferFinished()) return;
+    if (!backendClient_) {
+      failAiAudioPlayback(aiAudioDownloadId_, aiAudioDownloadTurnId_,
+                          "backend_unavailable", "Backend unavailable",
+                          "audio_download");
+      return;
+    }
+    if (!aiAudioDownloadStarted_) {
+      // A WAV upload and a response download use separate HTTP tasks, but
+      // share the bounded audio transport. Wait for the upload to retire
+      // instead of turning a normal overlap into a generic playback error.
+      if (backendClient_->audioTransferActive()) return;
+      if (!backendClient_->beginAudioDownload(
+              aiAudioDownloadUrl_, aiAudioOutputBuffer_,
+              aiAudioDownloadSize_)) {
+        failAiAudioPlayback(aiAudioDownloadId_, aiAudioDownloadTurnId_,
+                            "download_start_failed",
+                            "Audio download could not start", "audio_download");
+        return;
+      }
+      aiAudioDownloadStarted_ = true;
+      aiWorkflowText_ = "DOWNLOADING AI VOICE";
+      return;
+    }
+    if (!backendClient_->audioTransferFinished()) return;
     const bool transferOk = backendClient_->audioTransferOk() &&
                             backendClient_->audioTransferLength() ==
                                 aiAudioDownloadSize_;
-    bool hashOk = false;
-    if (transferOk) {
-      uint8_t digest[32] = {};
-      mbedtls_sha256_context sha;
-      mbedtls_sha256_init(&sha);
-      mbedtls_sha256_starts_ret(&sha, 0);
-      mbedtls_sha256_update_ret(&sha, aiAudioOutputBuffer_,
-                                aiAudioDownloadSize_);
-      mbedtls_sha256_finish_ret(&sha, digest);
-      mbedtls_sha256_free(&sha);
-      const char* digits = "0123456789abcdef";
-      String actual;
-      actual.reserve(64);
-      for (uint8_t value : digest) {
-        actual += digits[value >> 4];
-        actual += digits[value & 0x0F];
-      }
-      hashOk = actual.equalsIgnoreCase(aiAudioDownloadHash_);
+    if (!transferOk) {
+      const String code = backendClient_->audioTransferOk()
+                              ? "audio_length_mismatch"
+                              : "http_error";
+      const String message =
+          String("Audio download failed; bytes=") +
+          String(static_cast<unsigned long>(backendClient_->audioTransferLength())) +
+          "/" + String(static_cast<unsigned long>(aiAudioDownloadSize_));
+      failAiAudioPlayback(aiAudioDownloadId_, aiAudioDownloadTurnId_, code,
+                          message, "audio_download");
+      return;
     }
-    const bool played = transferOk && hashOk && M5.Speaker.isEnabled() &&
+    bool hashOk = false;
+    uint8_t digest[32] = {};
+    mbedtls_sha256_context sha;
+    mbedtls_sha256_init(&sha);
+    mbedtls_sha256_starts_ret(&sha, 0);
+    mbedtls_sha256_update_ret(&sha, aiAudioOutputBuffer_,
+                              aiAudioDownloadSize_);
+    mbedtls_sha256_finish_ret(&sha, digest);
+    mbedtls_sha256_free(&sha);
+    const char* digits = "0123456789abcdef";
+    String actual;
+    actual.reserve(64);
+    for (uint8_t value : digest) {
+      actual += digits[value >> 4];
+      actual += digits[value & 0x0F];
+    }
+    hashOk = actual.equalsIgnoreCase(aiAudioDownloadHash_);
+    if (!hashOk) {
+      failAiAudioPlayback(aiAudioDownloadId_, aiAudioDownloadTurnId_,
+                          "sha256_mismatch", "Audio hash mismatch",
+                          "audio_download");
+      return;
+    }
+    if (!M5.Speaker.isEnabled()) {
+      failAiAudioPlayback(aiAudioDownloadId_, aiAudioDownloadTurnId_,
+                          "speaker_disabled", "Speaker unavailable",
+                          "audio_playback");
+      return;
+    }
+    const bool played =
                         M5.Speaker.playRaw(
                             reinterpret_cast<const int16_t*>(aiAudioOutputBuffer_),
                             aiAudioDownloadSize_ / sizeof(int16_t), 24000, false,
                             1, 0, true);
     aiAudioDownloadPending_ = false;
+    aiAudioDownloadStarted_ = false;
     if (!played) {
-      free(aiAudioOutputBuffer_);
-      aiAudioOutputBuffer_ = nullptr;
-      aiAudioOutputLength_ = 0;
-      aiWorkflowText_ = "VOICE RESPONSE FAILED";
-      aiDeveloperMode_ = 2;
+      failAiAudioPlayback(aiAudioDownloadId_, aiAudioDownloadTurnId_,
+                          "play_raw_rejected", "Speaker rejected audio",
+                          "audio_playback");
       return;
     }
     aiAudioOutputLength_ = aiAudioDownloadSize_;
@@ -3031,12 +3656,14 @@ void FireOS::updateAiAudioOutput() {
   aiAudioOutputActive_ = false;
   aiAudioOutputId_ = "";
   aiAudioOutputTurnId_ = "";
+  aiAudioDownloadUrl_ = "";
   aiDeveloperMode_ = 0;
   aiWorkflowState_ = 0;
   aiWorkflowText_ = "ANSWER - SPEAK AGAIN";
 }
 
-bool FireOS::startLuaApp(const String& path, const String& name) {
+bool FireOS::startLuaApp(const String& path, const String& name,
+                         const String& launchPackageId) {
   if (!luaRuntime_) {
     luaAppError_ = "Lua runtime unavailable";
     return false;
@@ -3055,6 +3682,7 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
     luaHost.timeMillis = luaTimeMillis;
     luaRuntimeReady_ = luaRuntime_->begin(luaHost);
     if (!luaRuntimeReady_) {
+      luaRuntimeReady_ = false;
       luaAppError_ = luaRuntime_->lastError();
       return false;
     }
@@ -3084,21 +3712,48 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
   const String manifestId = jsonStringField(manifest, "id");
   const String manifestApi = jsonStringField(manifest, "api_version");
   const String manifestHash = jsonStringField(manifest, "checksum");
+  const int manifestMemory =
+      jsonIntField(manifest, "max_memory", FireLuaRuntime::kMaxMemoryBytes);
+  const int manifestRuntime = jsonIntField(manifest, "max_runtime_ms", -1);
   if (manifestId != sdBaseName(appFolder) || manifestApi != "fire-lua-0.1" ||
-      !validSha256Hex(manifestHash)) {
+      !validSha256Hex(manifestHash) || manifestRuntime < -1 ||
+      manifestMemory < 65536 ||
+      manifestMemory > static_cast<int>(FireLuaRuntime::kMaxMemoryBytes) ||
+      manifestRuntime > static_cast<int>(FireLuaRuntime::kMaxRuntimeMs)) {
     luaAppError_ = "App manifest does not match source";
     return false;
   }
+  const uint32_t maxRuntimeMs =
+      manifestRuntime < 0 ? FireLuaRuntime::kDefaultRuntimeMs
+                          : static_cast<uint32_t>(manifestRuntime);
+  String packageId = launchPackageId;
+  if (packageId.length() == 0) {
+    packageId = jsonStringField(manifest, "package_id");
+  }
+  if (packageId.length() == 0) {
+    packageId = preferences.getString(
+        compactPreferenceKey("ap_", manifestId).c_str(), "");
+  }
+  auto reportLocalLoadFailure = [&](const char* code, const String& message) {
+    if (launchPackageId.length() == 0 && packageId.length() > 0) {
+      queueLuaDiagnostic(manifestId, packageId, code, message,
+                         luaDiagnosticsJson("load"));
+      flushLuaDiagnostic();
+    }
+  };
   File sourceFile = SD.open(path, FILE_READ);
   if (!sourceFile || sourceFile.isDirectory()) {
     luaAppError_ = "Cannot open app source";
     if (sourceFile) sourceFile.close();
+    reportLocalLoadFailure("source_empty", luaAppError_);
     return false;
   }
   const size_t length = sourceFile.size();
   if (length == 0 || length > FireLuaRuntime::kMaxSourceBytes) {
     sourceFile.close();
-    luaAppError_ = "App source is too large";
+    luaAppError_ = length == 0 ? "App source is empty" : "App source is too large";
+    reportLocalLoadFailure(length == 0 ? "source_empty" : "source_size",
+                           luaAppError_);
     return false;
   }
   uint8_t* buffer = static_cast<uint8_t*>(
@@ -3106,6 +3761,7 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
   if (!buffer) {
     sourceFile.close();
     luaAppError_ = "Not enough memory for app";
+    reportLocalLoadFailure("memory_error", luaAppError_);
     return false;
   }
   const size_t readBytes = sourceFile.read(buffer, length);
@@ -3127,17 +3783,35 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
   if (readBytes != length || !sourceHash.equalsIgnoreCase(manifestHash)) {
     free(buffer);
     luaAppError_ = "App source checksum mismatch";
+    reportLocalLoadFailure("source_hash", luaAppError_);
     return false;
   }
+  luaRuntime_->setMaxRuntimeMs(maxRuntimeMs);
   const bool loaded = readBytes == length && luaRuntime_->loadSource(buffer, length);
   free(buffer);
   if (!loaded) {
     luaAppError_ = luaRuntime_->lastError();
+    const char* failureCode = luaFailureCode(luaAppError_);
+    const String diagnostics = luaDiagnosticsJson(
+        String(failureCode) == "init_error" ? "init" : "load");
     luaRuntime_->stop();
+    luaRuntimeReady_ = false;
+    if (launchPackageId.length() == 0 && packageId.length() > 0) {
+      queueLuaDiagnostic(manifestId, packageId, failureCode, luaAppError_,
+                         diagnostics);
+      flushLuaDiagnostic();
+    }
     return false;
   }
   luaAppPath_ = path;
   luaAppName_ = name.length() > 0 ? name : sdBaseName(path);
+  luaAppId_ = manifestId;
+  luaPackageId_ = packageId;
+  luaMaxRuntimeMs_ = maxRuntimeMs;
+  if (launchPackageId.length() > 0) {
+    preferences.putString(compactPreferenceKey("ap_", manifestId).c_str(),
+                          launchPackageId);
+  }
   luaAppError_ = "";
   luaAppActive_ = true;
   luaRunId_ = "";
@@ -3150,9 +3824,26 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
 
 void FireOS::stopLuaApp(const String& reason) {
   const String stoppedRunId = luaRunId_;
-  const String stoppedPackageId = aiPackageId_;
+  const String stoppedAppId = luaAppId_;
+  const String stoppedPackageId = luaPackageId_.length() > 0
+                                      ? luaPackageId_
+                                      : aiPackageId_;
+  const bool userExit = reason == "back" || reason == "home" ||
+                        reason == "user_exit";
+  const bool requestedStop = reason == "remote_stop" || reason == "rollback";
+  const String stoppedDiagnostics = luaDiagnosticsJson(
+      reason == "runtime_limit" ? "stop"
+                                 : (userExit ? "stop" : "update"));
   if (luaAppActive_ && reason.length() > 0) {
     Serial.printf("Lua app stopped: %s\n", reason.c_str());
+  }
+  if (stoppedRunId.length() == 0 && stoppedAppId.length() > 0 &&
+      stoppedPackageId.length() > 0 && reason.length() > 0 && !userExit &&
+      !requestedStop) {
+    const String errorCode = reason == "runtime_limit" ? "runtime_limit"
+                                                         : "runtime_error";
+    queueLuaDiagnostic(stoppedAppId, stoppedPackageId, errorCode, reason,
+                       stoppedDiagnostics);
   }
   luaAppActive_ = false;
   if (luaRuntime_) luaRuntime_->stop();
@@ -3166,16 +3857,95 @@ void FireOS::stopLuaApp(const String& reason) {
   M5.Led.display();
 #endif
   luaRunId_ = "";
+  luaAppId_ = "";
+  luaPackageId_ = "";
+  luaMaxRuntimeMs_ = FireLuaRuntime::kDefaultRuntimeMs;
   luaHealthySent_ = false;
+  flushLuaDiagnostic();
   if (stoppedRunId.length() > 0 && backendClient_) {
-    if (reason == "back" || reason == "home" || reason == "user_exit")
-      backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "user_exit");
+    if (userExit)
+      backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "user_exit",
+                                 stoppedDiagnostics);
     else if (reason == "runtime_limit")
-      backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "runtime_limit");
+      backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "runtime_limit",
+                                 stoppedDiagnostics);
+    else if (reason.length() > 0 && !requestedStop)
+      backendClient_->appFailed(stoppedRunId, stoppedPackageId, "runtime_error",
+                                reason, stoppedDiagnostics);
   }
   if (reason.length() > 0 && reason != "back" && reason != "home") {
     luaAppError_ = reason;
   }
+}
+
+String FireOS::luaDiagnosticsJson(const char* phase) const {
+  String json = "{\"phase\":\"" + String(phase ? phase : "stop") +
+                "\",\"elapsed_ms\":" +
+                String(luaRuntime_ ? luaRuntime_->elapsedMs() : 0) +
+                ",\"callback_us\":" +
+                String(luaRuntime_ ? luaRuntime_->lastCallbackUs() : 0) +
+                ",\"free_heap\":" + String(ESP.getFreeHeap()) +
+                ",\"min_free_heap\":" + String(ESP.getMinFreeHeap()) +
+                ",\"lua_bytes\":" +
+                String(luaRuntime_ ? luaRuntime_->memoryUsed() : 0) +
+                ",\"source_bytes\":" +
+                String(luaRuntime_ ? luaRuntime_->sourceBytes() : 0) +
+                ",\"frames\":" +
+                String(luaRuntime_ ? luaRuntime_->frameCount() : 0) + "}";
+  return json;
+}
+
+String FireOS::audioDiagnosticsJson(const char* phase) const {
+  return "{\"phase\":\"" + String(phase ? phase : "audio_playback") +
+         "\",\"free_heap\":" + String(ESP.getFreeHeap()) +
+         ",\"min_free_heap\":" + String(ESP.getMinFreeHeap()) + "}";
+}
+
+void FireOS::queueLuaDiagnostic(const String& appId, const String& packageId,
+                                const String& errorCode,
+                                const String& message,
+                                const String& diagnostics) {
+  // Never fabricate a package identity. The backend scopes diagnostics to an
+  // installed package owned by this device, so an unknown local package is
+  // reported only to the serial log until it has a real install mapping.
+  if (appId.length() == 0 || packageId.length() == 0 ||
+      errorCode.length() == 0) {
+    Serial.println("Lua diagnostic deferred: package identity unavailable");
+    return;
+  }
+  pendingDiagnosticAppId_ = appId;
+  pendingDiagnosticPackageId_ = packageId;
+  pendingDiagnosticErrorCode_ = errorCode;
+  pendingDiagnosticMessage_ = message.substring(0, 240);
+  pendingDiagnosticJson_ = diagnostics;
+  preferences.putString("diag_app", pendingDiagnosticAppId_);
+  preferences.putString("diag_pkg", pendingDiagnosticPackageId_);
+  preferences.putString("diag_code", pendingDiagnosticErrorCode_);
+  preferences.putString("diag_msg", pendingDiagnosticMessage_);
+  preferences.putString("diag_meta", pendingDiagnosticJson_);
+}
+
+void FireOS::flushLuaDiagnostic() {
+  if (pendingDiagnosticAppId_.length() == 0 || !backendClient_ ||
+      !backendClient_->sessionReady()) {
+    return;
+  }
+  if (!backendClient_->appDiagnostic(
+          pendingDiagnosticAppId_, pendingDiagnosticPackageId_,
+          pendingDiagnosticErrorCode_, pendingDiagnosticMessage_,
+          pendingDiagnosticJson_)) {
+    return;
+  }
+  preferences.remove("diag_app");
+  preferences.remove("diag_pkg");
+  preferences.remove("diag_code");
+  preferences.remove("diag_msg");
+  preferences.remove("diag_meta");
+  pendingDiagnosticAppId_ = "";
+  pendingDiagnosticPackageId_ = "";
+  pendingDiagnosticErrorCode_ = "";
+  pendingDiagnosticMessage_ = "";
+  pendingDiagnosticJson_ = "";
 }
 
 void FireOS::updateLuaApp() {
@@ -3187,22 +3957,26 @@ void FireOS::updateLuaApp() {
     const String error = luaRuntime_ ? luaRuntime_->lastError()
                                      : String("runtime unavailable");
     const bool runtimeLimit = error == "Lua app runtime limit exceeded";
-    if (!runtimeLimit && luaRunId_.length() > 0 && backendClient_)
-      backendClient_->appFailed(luaRunId_, aiPackageId_, "runtime_error", error);
     stopLuaApp(runtimeLimit ? "runtime_limit" : error);
   } else if (luaRunId_.length() > 0 && !luaHealthySent_) {
-    if (backendClient_) backendClient_->appHealthy(luaRunId_, aiPackageId_);
+    if (backendClient_)
+      backendClient_->appHealthy(luaRunId_, luaPackageId_,
+                                 luaDiagnosticsJson("update"));
     luaHealthySent_ = true;
   }
 }
 
 void FireOS::updateBackend() {
   if (!backendClient_) return;
-  const bool backendDemand = (screen_ == Screen::AiDeveloper &&
-                              !aiProjectPickerActive_) ||
+  const bool backendDemand = screen_ == Screen::AiDeveloper ||
                               screen_ == Screen::AiApi ||
                               screen_ == Screen::LuaApp ||
-                              (packageManager_ && packageManager_->busy());
+                              screen_ == Screen::Settings ||
+                              screen_ == Screen::Firmware ||
+                              (packageManager_ && packageManager_->busy()) ||
+                              (firmwareStorage_ && firmwareStorage_->busy()) ||
+                              (githubFirmware_ && githubFirmware_->busy()) ||
+                              pendingDiagnosticAppId_.length() > 0;
   if (!backendDemand) {
     // Do not let a failed PC connection stall normal FIRE OS navigation.
     if (backendClient_->active()) backendClient_->disconnect();
@@ -3215,6 +3989,7 @@ void FireOS::updateBackend() {
     requestWifi(true);
   }
   backendClient_->service(WiFi.status() == WL_CONNECTED);
+  flushLuaDiagnostic();
 }
 
 void FireOS::backendState(void* context, bool connected, const String& status) {
@@ -3242,11 +4017,26 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
   os->aiPackageId_ = packageId;
   os->aiWorkflowText_ = ok ? "INSTALLED" : message;
   if (ok) {
+    const String installedPath = os->packageManager_
+                                     ? os->packageManager_->installedPath()
+                                     : String();
+    const int sourceSlash = installedPath.lastIndexOf('/');
+    const String appFolder = sourceSlash > 0
+                                 ? installedPath.substring(0, sourceSlash)
+                                 : String();
+    const String appId = appFolder.length() > 0 ? os->sdBaseName(appFolder)
+                                                : String();
     preferences.putString(compactPreferenceKey("lp_", packageId).c_str(),
-                          os->packageManager_ ? os->packageManager_->installedPath()
-                                               : String());
+                          installedPath);
     preferences.putString(compactPreferenceKey("lh_", packageId).c_str(),
                           archiveHash);
+    if (appId.length() > 0) {
+      // Apps opened locally do not have a run_id. Preserve the real backend
+      // package identity from installation so a later local crash can emit
+      // app_diagnostic without inventing a run or package ID.
+      preferences.putString(compactPreferenceKey("ap_", appId).c_str(),
+                            packageId);
+    }
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
         os->aiInstallId_, packageId, true, archiveHash, "installed");
     os->aiWorkflowState_ = 5;
@@ -3255,6 +4045,44 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
         os->aiInstallId_, packageId, false, archiveHash, message);
     os->aiWorkflowState_ = 0;
   }
+}
+
+void FireOS::firmwareStatus(void* context, const String& status) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os) return;
+  os->firmwareMessage_ = status;
+  os->redrawRequested_ = true;
+}
+
+void FireOS::firmwareResult(void* context, const String& transferId,
+                            const String& firmwareId, bool ok,
+                            const String& sha256, const String& errorCode,
+                            const String& message) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os) return;
+  os->firmwareMessage_ = ok ? "Stored on SD" : "Transfer failed: " + errorCode;
+  if (os->sdReady_) os->scanFirmwareFiles();
+  if (os->backendClient_)
+    os->backendClient_->firmwareStoreResult(transferId, firmwareId, ok,
+                                            sha256, errorCode, message);
+  os->redrawRequested_ = true;
+}
+
+void FireOS::githubFirmwareStatus(void* context, const String& status) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os) return;
+  os->firmwareMessage_ = status;
+  os->redrawRequested_ = true;
+}
+
+void FireOS::githubFirmwareResult(void* context, bool manifest, bool ok,
+                                  const String& message) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os) return;
+  os->firmwareMessage_ = ok ? (manifest ? "GitHub list ready" : "Saved on SD")
+                            : message;
+  if (!manifest && ok) os->scanFirmwareFiles();
+  os->redrawRequested_ = true;
 }
 
 void FireOS::backendMessage(void* context, const String& message) {
@@ -3388,8 +4216,9 @@ void FireOS::handleBackendMessage(const String& message) {
         format != "pcm_s16le" || !validSha256Hex(expectedHash) ||
         sampleRate != 24000 || channels != 1 || size == 0 ||
         size > kMaxPcmBytes || (size & 1U) != 0) {
-      aiWorkflowText_ = "VOICE RESPONSE INVALID";
-      aiDeveloperMode_ = 2;
+      failAiAudioPlayback(audioId, turnId, "invalid_audio_metadata",
+                          "Invalid audio response", "audio_download",
+                          !aiAudioOutputActive_ && !M5.Speaker.isPlaying());
       return;
     }
     // Never release a buffer while Speaker may still be reading it. A newer
@@ -3398,6 +4227,10 @@ void FireOS::handleBackendMessage(const String& message) {
     if (aiAudioOutputActive_ || aiAudioOutputBuffer_) {
       M5.Speaker.stop();
       if (M5.Speaker.isPlaying()) {
+        if (backendClient_ && audioId.length() > 0 && turnId.length() > 0)
+          backendClient_->audioPlaybackFailed(
+              audioId, turnId, "speaker_busy", "Speaker is busy",
+              audioDiagnosticsJson("audio_playback"));
         aiWorkflowText_ = "VOICE BUSY - TRY AGAIN";
         aiDeveloperMode_ = 3;
         return;
@@ -3410,23 +4243,67 @@ void FireOS::handleBackendMessage(const String& message) {
     aiAudioOutputBuffer_ = static_cast<uint8_t*>(ps_malloc(size));
     if (!aiAudioOutputBuffer_)
       aiAudioOutputBuffer_ = static_cast<uint8_t*>(malloc(size));
-    if (!aiAudioOutputBuffer_ ||
-        !backendClient_->beginAudioDownload(url, aiAudioOutputBuffer_, size)) {
-      free(aiAudioOutputBuffer_);
-      aiAudioOutputBuffer_ = nullptr;
-      aiAudioOutputLength_ = 0;
-      aiWorkflowText_ = "VOICE RESPONSE FAILED";
-      aiDeveloperMode_ = 2;
-      return;
-    }
-    aiAudioDownloadPending_ = true;
     aiAudioDownloadId_ = audioId;
     aiAudioDownloadTurnId_ = turnId;
+    aiAudioDownloadUrl_ = url;
     aiAudioDownloadHash_ = expectedHash;
     aiAudioDownloadSize_ = size;
+    aiAudioDownloadPending_ = true;
+    aiAudioDownloadStarted_ = false;
+    if (!aiAudioOutputBuffer_) {
+      failAiAudioPlayback(audioId, turnId, "buffer_unavailable",
+                          "Audio buffer unavailable", "audio_download");
+      return;
+    }
     aiDeveloperMode_ = 3;
     aiWorkflowState_ = 2;
-    aiWorkflowText_ = "DOWNLOADING AI VOICE";
+    aiWorkflowText_ = "QUEUED AI VOICE";
+    return;
+  }
+  if (type == "firmware_store_request") {
+    const String transferId = jsonStringField(message, "transfer_id");
+    const String firmwareId = jsonStringField(message, "firmware_id");
+    const String filename = jsonStringField(message, "filename");
+    const String sdPath = jsonStringField(message, "sd_path");
+    const String url = jsonStringField(message, "download_url");
+    const String expectedHash = jsonStringField(message, "sha256");
+    const uint32_t expectedSize =
+        static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
+    const uint32_t expiresAt =
+        static_cast<uint32_t>(jsonIntField(message, "expires_at"));
+    const String commandBoot = jsonStringField(message, "boot_id");
+    firmwareMessage_ = "Firmware request received";
+    if (commandBoot.length() > 0 && backendClient_ &&
+        commandBoot != backendClient_->bootId()) {
+      firmwareMessage_ = "Firmware request is stale";
+      return;
+    }
+    if (!backendCommandUnexpired(expiresAt)) {
+      firmwareMessage_ = "Firmware request expired";
+      if (backendClient_ && transferId.length() > 0 && firmwareId.length() > 0)
+        backendClient_->firmwareStoreResult(
+            transferId, firmwareId, false, "", "expired", "Request expired");
+      return;
+    }
+    const bool accepted =
+        firmwareStorage_ && backendClient_ && backendClient_->sessionReady() &&
+        firmwareStorage_->startRequest(
+            backendHost_, backendPort_, backendToken_, url, transferId,
+            firmwareId, filename, sdPath, expectedHash, expectedSize,
+            expiresAt);
+    if (!accepted) {
+      firmwareMessage_ = firmwareStorage_
+                             ? firmwareStorage_->errorMessage()
+                             : String("Firmware storage unavailable");
+      if (backendClient_ && transferId.length() > 0 && firmwareId.length() > 0)
+        backendClient_->firmwareStoreResult(
+            transferId, firmwareId, false, "",
+            firmwareStorage_ && firmwareStorage_->errorCode().length() > 0
+                ? firmwareStorage_->errorCode()
+                : "storage_unavailable",
+            firmwareMessage_);
+    }
+    redrawRequested_ = true;
     return;
   }
   if (type == "package_ready") {
@@ -3526,20 +4403,32 @@ void FireOS::handleBackendMessage(const String& message) {
     }
     preferences.putString(consumedKey.c_str(), "starting");
     saveSettings();
-    if (path.length() > 0 && startLuaApp(path, sdBaseName(path))) {
+    if (path.length() > 0 &&
+        startLuaApp(path, sdBaseName(path), packageId)) {
       luaRunId_ = runId;
+      luaPackageId_ = packageId;
       luaHealthySent_ = false;
       aiWorkflowState_ = 6;
       aiDeveloperMode_ = 3;
       aiWorkflowText_ = "RUNNING";
       preferences.putString(consumedKey.c_str(), "started");
       saveSettings();
-      if (backendClient_) backendClient_->appStarted(runId, packageId);
+      if (backendClient_)
+        backendClient_->appStarted(runId, packageId,
+                                   luaDiagnosticsJson("start"));
     } else {
       preferences.putString(consumedKey.c_str(), "failed");
       saveSettings();
-      if (backendClient_) backendClient_->appFailed(runId, packageId, "not_installed",
-                                                    "Package is not installed on FIRE");
+      const String failure = path.length() > 0 && luaAppError_.length() > 0
+                                 ? luaAppError_
+                                 : String("Package is not installed on FIRE");
+      const String errorCode = path.length() > 0 && luaAppError_.startsWith("Lua init")
+                                   ? "init_error"
+                                   : path.length() > 0 && luaAppError_.startsWith("Lua syntax")
+                                         ? "load_error"
+                                         : "not_installed";
+      if (backendClient_)
+        backendClient_->appFailed(runId, packageId, errorCode, failure);
       aiWorkflowText_ = "APP NOT INSTALLED";
     }
     return;
@@ -4380,7 +5269,7 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
   if (backendClient_) {
     reverseTransport_.configure(backendDeviceId_, backendToken_);
     backendClient_->configure(backendHost_, backendPort_, backendToken_,
-                              backendDeviceId_, "fire-os-0.2");
+                              backendDeviceId_, kFirmwareVersion);
     backendStatus_ = backendClient_->status();
   }
   if (wifiMode_ != 2 && backendHost_.length() > 0 &&
@@ -4840,7 +5729,7 @@ void FireOS::handleQuickButton(uint8_t index) {
         volumeStep_ = (volumeStep_ + kVolumeStepCount + direction) %
                       kVolumeStepCount;
         volume_ = volumeValue(volumeStep_);
-        M5.Speaker.setVolume(volume_);
+        M5.Speaker.setVolume(speakerVolumeValue(volume_));
       }
       saveSettings();
     } else if (index == 1) {
@@ -5112,6 +6001,11 @@ void FireOS::resetSettings() {
   wifiSsid_ = "";
   wifiPassword_ = "";
   aiApiKey_ = "";
+  pendingDiagnosticAppId_ = "";
+  pendingDiagnosticPackageId_ = "";
+  pendingDiagnosticErrorCode_ = "";
+  pendingDiagnosticMessage_ = "";
+  pendingDiagnosticJson_ = "";
   wifiSavedCount_ = 0;
   wifiSavedSelection_ = 0;
   wifiSavedTarget_ = 0;
@@ -5139,7 +6033,7 @@ void FireOS::resetSettings() {
   bluetoothPeripheralConnected = false;
 #endif
   M5.Display.setBrightness(brightness_);
-  M5.Speaker.setVolume(volume_);
+  M5.Speaker.setVolume(speakerVolumeValue(volume_));
   displayPowerState_ = 0;
   lastActivity_ = millis();
   dateTime_.reset();
@@ -5235,6 +6129,9 @@ void FireOS::drawScreen(Screen screen) {
       break;
     case Screen::Boot:
       drawBoot();
+      break;
+    case Screen::Firmware:
+      drawFirmware();
       break;
     case Screen::MainMenuSettings:
       drawMainMenuSettings();
@@ -5497,12 +6394,26 @@ void FireOS::drawApps() {
 void FireOS::drawSettings() {
   static const char* labels[kSettingsCount] = {
       "Date / Time",       "Display & Sound", "Wi-Fi",       "Bluetooth",
-      "File Explorer",     "Boot",             "Menu Layout",  "Shortcuts",
-      "App Manager",       "Debug",            "System Info",   "Help",
-      "Factory Reset",     "AI settings",      "Power",         "Back",
+      "File Explorer",     "Boot",             "Firmware",      "Menu Layout",
+      "Shortcuts",         "App Manager",      "Debug",         "System Info",
+      "Help",              "Factory Reset",    "AI settings",   "Power",
+      "Back",
   };
   drawStatusBar("Settings");
   drawText(16, 37, "System settings", kMuted, 1);
+  String backend = "Backend: ";
+  if (backendClient_ && backendClient_->sessionReady()) {
+    backend += "connected";
+  } else if (!backendClient_ || !backendClient_->configured()) {
+    backend += "not configured";
+  } else {
+    backend += backendStatus_.length() > 21 ? backendStatus_.substring(0, 21)
+                                            : backendStatus_;
+  }
+  if (backend.length() > 35) backend = backend.substring(0, 35);
+  drawText(16, 49, backend,
+           backendClient_ && backendClient_->sessionReady() ? kGreen : kMuted,
+           1);
   const uint8_t first = settingsIndex_ < 5 ? 0 : settingsIndex_ - 4;
   for (uint8_t row = 0; row < 6; ++row) {
     const uint8_t item = first + row;
@@ -5820,6 +6731,107 @@ void FireOS::drawBoot() {
   drawFooter("Previous", "Select", "Next");
 }
 
+void FireOS::drawFirmware() {
+  drawStatusBar("Firmware");
+  if (firmwareGithubDialog_) {
+    drawGithubFirmwareDialog();
+    return;
+  }
+  if (firmwareInstallConfirm_) {
+    ui.fillRoundRect(14, 40, 292, 150, 12, kPanel);
+    drawText(28, 52, "Flash firmware?", kOrange, 2, kPanel);
+    String name = firmwareSelection_ < firmwareCount_
+                      ? firmwareNames_[firmwareSelection_]
+                      : String();
+    if (name.length() > 28) name = name.substring(0, 25) + "...";
+    drawText(28, 88, name, TFT_WHITE, 1, kPanel);
+    drawText(28, 114, "Writes inactive OTA slot", kMuted, 1, kPanel);
+    drawText(28, 132, "Reboots FIRE OS", kMuted, 1, kPanel);
+    drawText(28, 158, "B flash   A/C cancel", kCyan, 1, kPanel);
+    drawFooter("Cancel", "Flash", "Cancel");
+    return;
+  }
+  drawText(16, 34, "Running: FIRE OS", kMuted, 1);
+  drawText(16, 48, kFirmwareVersion, TFT_WHITE, 1);
+
+  const uint8_t itemCount = firmwareCount_ + 3;
+  const uint8_t visible = min<uint8_t>(5, itemCount - firmwareOffset_);
+  for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = firmwareOffset_ + row;
+    const bool selected = item == firmwareSelection_;
+    const int y = 70 + row * 22;
+    if (selected) ui.fillRoundRect(10, y - 3, 300, 19, 4, kCyan);
+    if (item < firmwareCount_) {
+      String name = firmwareNames_[item];
+      if (name.length() > 24) name = name.substring(0, 21) + "...";
+      drawText(20, y, name, selected ? kBg : kText, 1,
+               selected ? kCyan : kBg);
+      ui.setTextDatum(MR_DATUM);
+      drawText(300, y, formatBytes(firmwareSizes_[item]),
+               selected ? kBg : kMuted, 1, selected ? kCyan : kBg);
+      ui.setTextDatum(TL_DATUM);
+    } else if (item == firmwareCount_) {
+      drawText(20, y, "Refresh SD files", selected ? kBg : kText, 1,
+               selected ? kCyan : kBg);
+    } else if (item == firmwareCount_ + 1) {
+      drawText(20, y, "GitHub firmware", selected ? kBg : kText, 1,
+               selected ? kCyan : kBg);
+    } else {
+      drawText(20, y, "Back", selected ? kBg : kText, 1,
+               selected ? kCyan : kBg);
+    }
+  }
+
+  String status = firmwareStorage_ && firmwareStorage_->busy()
+                      ? firmwareStorage_->status()
+                      : firmwareMessage_;
+  if (status.length() > 38) status = status.substring(0, 38);
+  ui.setTextDatum(MC_DATUM);
+  drawText(160, 190, status, kMuted, 1, kBg);
+  ui.setTextDatum(TL_DATUM);
+  drawFooter("A  UP", "B  SELECT", "DOWN  C");
+}
+
+void FireOS::drawGithubFirmwareDialog() {
+  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
+  ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
+  drawText(18, 39, "GitHub firmware", TFT_WHITE, 2, kPanel);
+  const uint8_t remoteCount = githubFirmware_ ? githubFirmware_->entryCount() : 0;
+  const uint8_t itemCount = remoteCount + 1;
+  const uint8_t visible = min<uint8_t>(5, itemCount - firmwareGithubOffset_);
+  if (remoteCount == 0 && githubFirmware_ && githubFirmware_->busy()) {
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 105, "Loading catalog...", kCyan, 1, kPanel);
+    ui.setTextDatum(TL_DATUM);
+  } else {
+    for (uint8_t row = 0; row < visible; ++row) {
+      const uint8_t item = firmwareGithubOffset_ + row;
+      const bool selected = item == firmwareGithubSelection_;
+      const int y = 68 + row * 25;
+      if (selected) ui.fillRoundRect(15, y - 3, 290, 21, 4, kCyan);
+      if (item < remoteCount) {
+        String name = githubFirmware_->entryName(item);
+        if (name.length() > 22) name = name.substring(0, 19) + "...";
+        drawText(22, y, name, selected ? kBg : kText, 1,
+                 selected ? kCyan : kPanel);
+        ui.setTextDatum(MR_DATUM);
+        drawText(300, y, formatBytes(githubFirmware_->entrySize(item)),
+                 selected ? kBg : kMuted, 1, selected ? kCyan : kPanel);
+        ui.setTextDatum(TL_DATUM);
+      } else {
+        drawText(22, y, "Back", selected ? kBg : kText, 1,
+                 selected ? kCyan : kPanel);
+      }
+    }
+  }
+  String status = firmwareMessage_;
+  if (status.length() > 35) status = status.substring(0, 35);
+  ui.setTextDatum(MC_DATUM);
+  drawText(160, 190, status, kMuted, 1, kPanel);
+  ui.setTextDatum(TL_DATUM);
+  drawFooter("A  UP", "B  DOWNLOAD", "DOWN  C");
+}
+
 void FireOS::drawMainMenuSettings() {
   drawStatusBar("Menu Layout");
   drawText(16, 38, "System menu layout", kMuted, 1);
@@ -5885,7 +6897,29 @@ void FireOS::drawAiDeveloper() {
     ui.fillRoundRect(12, 28, 296, 188, 12, kPanel);
     ui.setTextDatum(MC_DATUM);
     drawText(160, 45, "AI DEVELOPER", TFT_WHITE, 2, kPanel);
-    const uint8_t itemCount = luaAppCount_ + 3;
+    String backendLabel = "BACKEND: ";
+    uint16_t backendColor = kMuted;
+    if (!backendClient_ || !backendClient_->configured()) {
+      backendLabel += "NOT CONFIGURED";
+      backendColor = kOrange;
+    } else if (backendClient_->sessionReady()) {
+      backendLabel += "CONNECTED";
+      backendColor = kGreen;
+    } else if (WiFi.status() != WL_CONNECTED) {
+      backendLabel += "WAITING FOR WI-FI";
+      backendColor = kOrange;
+    } else if (backendStatus_.indexOf("failed") >= 0 ||
+               backendStatus_.indexOf("timeout") >= 0 ||
+               backendStatus_.indexOf("rejected") >= 0 ||
+               backendStatus_.indexOf("disconnected") >= 0) {
+      backendLabel += "DISCONNECTED";
+      backendColor = kOrange;
+    } else {
+      backendLabel += "CONNECTING";
+      backendColor = kCyan;
+    }
+    drawText(160, 59, backendLabel, backendColor, 1, kPanel);
+    const uint8_t itemCount = luaAppCount_ + 4;
     const uint8_t visible = min<uint8_t>(6, itemCount - aiProjectOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = aiProjectOffset_ + row;
@@ -5895,10 +6929,12 @@ void FireOS::drawAiDeveloper() {
       String label = item == 0
                          ? "Chat only"
                          : item == 1
-                             ? "New app"
-                             : item == itemCount - 1
-                                 ? "Back"
-                                 : luaAppNames_[item - 2];
+                             ? "Voice test"
+                             : item == 2
+                                 ? "New app"
+                                 : item == itemCount - 1
+                                     ? "Back"
+                                     : luaAppNames_[item - 3];
       if (label.length() > 28) label = label.substring(0, 25) + "...";
       drawText(160, y, label, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);
@@ -6044,7 +7080,12 @@ void FireOS::drawAiDeveloper() {
     ui.drawLine(right, mouthY, right + 6, mouthY - cornerTilt, line);
   }
 
-  const char* stateLabel = states[aiDeveloperMode_];
+  const char* stateLabel =
+      aiVoiceTestMode_
+          ? (aiDeveloperMode_ == 1
+                 ? "LISTEN"
+                 : aiDeveloperMode_ == 3 ? "PLAYBACK" : "VOICE TEST")
+          : states[aiDeveloperMode_];
   static const char* const workflowLabels[] = {
       "PRESS CENTER TO LISTEN", "LISTENING", "UNDERSTANDING...",
       "READY TO BUILD", "BUILDING...", "READY TO RUN", "RUNNING"};
@@ -6095,6 +7136,12 @@ void FireOS::drawAiDeveloper() {
     rightHint = "CANCEL";
   } else if (aiWorkflowState_ == 6) {
     centerHint = "QUICK";
+  }
+  if (aiVoiceTestMode_) {
+    centerHint = aiAudioCaptureActive_
+                     ? "FINISH"
+                     : aiVoiceTestPlaybackActive_ ? "NEW TEST" : "RECORD";
+    rightHint = aiVoiceTestPlaybackActive_ ? "CANCEL" : "HOLD BACK";
   }
   ui.setTextDatum(MC_DATUM);
   drawText(46, 232, leftHint, kMuted, 1, TFT_BLACK);

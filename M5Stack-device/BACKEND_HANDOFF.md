@@ -32,9 +32,12 @@ Første device-handshake skal annonsere kun faktisk tilgjengelige tjenester:
   "api_version": "fire-lua-0.1",
   "services": ["display", "buttons", "rgb", "imu", "time"],
   "max_memory": 131072,
-  "max_runtime_ms": 10000,
+  "max_runtime_ms": 0,
   "audio_input": true,
-  "audio_output": true
+  "audio_output": true,
+  "firmware_storage": true,
+  "firmware_max_bytes": 4194304,
+  "firmware_version": "fire-os-0.2+storage-dev"
 }
 ```
 
@@ -201,6 +204,78 @@ standardbygget går rent med BLE/Wi-Fi/Lua aktivt. Device annonserer
 
 ## Samordnet conversation-audit status
 
+## App repair / unlimited app lifetime update
+
+Implementert mot backend `main` `d7d3811` og
+`M5Stack-backend/docs/APP_REPAIR_HANDOFF.md`.
+
+- Device handshake annonserer nå `capabilities.max_runtime_ms=0`.
+- `manifest.max_runtime_ms=0` betyr kjør til brukerens Home/Back-exit.
+- Positive runtimeverdier beholdes som eksplisitte legacygrenser opptil 10000 ms.
+- Manglende runtimefelt behandles konservativt som legacy 10000 ms.
+- Callbackbudsjett på 12 ms, instruksjonsgrense på 200000 og Lua-minnegrense på
+  131072 byte er beholdt. Ingen auto-close-timer brukes for unlimited-profilen.
+- Manifestkontrollen godtar 0, men avviser minne-/runtimeverdier utenfor
+  devicegrensene.
+- Backend-installerte apper får en persistent app-ID → package-ID-mapping.
+  `app_inventory` inkluderer package-ID når den er kjent.
+- Lokal start fra Apps bruker mappingen og sender `app_diagnostic` ved
+  load/init/update/on_button-feil. Meldingen sendes etter cleanup og lagres i
+  en begrenset én-post outbox ved offline backend. Ingen falsk `run_id` brukes.
+- Backend-startede apper beholder `app_started`, `app_healthy`, `app_failed` og
+  `app_stopped` med faktisk run/package-korrelasjon.
+- Home/Back og backend-requested stop sender normal stop-status; de rapporteres
+  ikke som diagnostikkfeil.
+
+### Verification
+
+- Source base: `d7d3811` plus uncommitted device changes in this handoff.
+- Firmware environment: `m5stack-fire-ble`.
+- Build: passed; RAM 1.4% (62836 / 4521984), flash 25.4%
+  (1663837 / 6553600).
+- Firmware binary SHA256:
+  `b8be7027cef82392d5bdd6d39f4ddaa8e3452b6fcf1d4c6fcd2d893b8c4b3b93`.
+- `git diff --check`: passed.
+- Not yet physically verified: five-minute unlimited run, Home/Back restart,
+  held-button profiles, callback/instruction/memory fault injection, local
+  diagnostic delivery through the running Windows backend, and reconnect/outbox
+  recovery. These remain required acceptance tests.
+
+## Urgent runtime / voice follow-up
+
+Implemented against the latest GitHub handoff revision `5b7d6ee`.
+
+- A failed `startLuaApp` load now resets `luaRuntimeReady_` after closing the
+  Lua VM. A retry or another app can start without reboot.
+- Lua load errors are separated into `vm_not_initialized`, `source_empty`,
+  `source_size`, `source_hash`, `source_syntax`, `init_error`,
+  `memory_error` and `load_error` where applicable.
+- Runtime phases are separated: source load (1000 ms guard), top-level/init
+  (250 ms guard per phase), and update/on_button (12 ms callback guard).
+  The 200000-instruction hook and 131072-byte Lua allocator cap remain active.
+  `max_runtime_ms=0` remains independent and still means user exit only.
+- Lifecycle diagnostics now include bounded phase, elapsed time, callback
+  duration, free/minimum heap, Lua bytes, source bytes and frame count. They are
+  sent only at lifecycle/error transitions, never once per frame.
+- `audio_playback_failed` is implemented with correlated audio/turn IDs,
+  bounded error messages and phase diagnostics. Download waits for an active
+  upload to finish, verifies length/hash, reports speaker/playRaw failures and
+  returns the UI to BUILD or new-speech state without leaking the PCM buffer.
+- Existing text/proposal/build controls remain available after audio failure.
+
+### Latest build
+
+- Source base: local `d7d3811`; latest handoff read from GitHub `5b7d6ee`.
+- Environment: `m5stack-fire-ble`.
+- Build passed: RAM 1.4% (62836 / 4521984), flash 25.5%
+  (1671673 / 6553600).
+- Firmware binary SHA256:
+  `afce75420556233d45c576f3d7e65f015ac53974084df2778db1623d197b9e48`.
+- Firmware flashed to COM3; boot log reached `FIRE OS started` without reset.
+- Physical verification still required: measured init-failure retry, forced
+  playback failure with BUILD/B recovery, five-minute unlimited run, Home/Back
+  restart, fast upload/download overlap and backend receipt inspection.
+
 Dette er en device-agent handoff, ikke en pÃ¥stand om at alle fysiske matriser er
 bestÃ¥tt.
 
@@ -211,6 +286,55 @@ bestÃ¥tt.
   cancel, fragmenterte tekstframes, command-expiry, app-inventory/app_deleted,
   manifestkontroll, Lua-restart/runtime-limit, installasjonsbeskyttelse og
   per-pixel RGB-rendering er lagt inn i device-koden.
+
+## Firmware storage handoff
+
+Implementert i `src/fire_firmware_storage.h/.cpp` mot
+`M5Stack-backend/docs/FIRMWARE_STORAGE_HANDOFF.md` og den avtalte
+display-kontrakten. Device:
+
+- annonserer `firmware_storage=true`, `firmware_max_bytes=4194304` og
+  `fire-os-0.2+storage-dev` som kjørende firmwareprofil;
+- godtar kun `firmware_store_request` med trygg hash-avledet
+  `fire-<16-hex>.bin`, eksakt `/firmware/`-bane, backend-relativ URL, gyldig
+  SHA-256 og størrelse på maksimalt 4 MiB;
+- strømmer HTTP-svaret til `/firmware/<filename>.bin.part` med 2 KiB-blokker,
+  beregner SHA-256 fortløpende og aktiverer endelig `.bin` først etter eksakt
+  størrelses- og hashkontroll;
+- overskriver aldri eksisterende ferdig fil, sletter bare egen uferdig `.part`,
+  bruker direkte eller reverse-TCP HTTP, logger ikke token/headers/rådata og
+  bruker ingen firmwarestor RAM-buffer;
+- sender `firmware_store_result` etter lagring og behandler samme
+  `transfer_id` idempotent i samme boot;
+- har `Settings -> Firmware` som viser kjørende firmware separat fra `.bin`
+  kandidater i `/firmware`. Overføringen flasher, rebooter eller endrer aldri
+  bootvalg/Lua-versjoner. Dette gjelder backendens lagringsrequest; lokal
+  OTA-installasjon skjer kun etter brukerens eksplisitte bekreftelse.
+
+PC-backendens Firmware-side er fortsatt push-handlingen: velg kandidat og
+bruk “Send valgt fil til /firmware”. “Refresh SD files” på enheten oppdaterer
+bare den lokale filoversikten; protokoll 0.2 har ingen device-initiert
+firmwarekatalogkommando.
+
+Firmware-menyen har nÃ¥ ogsÃ¥ eksplisitt OTA-installasjon av lokale og GitHub-
+bygg. Device validerer image, checksum og inaktiv OTA-slot fÃ¸r reboot. En
+boot-vakt prÃ¸ver Ã¥ gÃ¥ tilbake til forrige OTA-slot etter gjentatt reset i et
+15 sekunders stabilitetsvindu. GitHub-katalogen hentes fra repoets faste
+`firmware/index.json` over HTTPS.
+
+### Verifikasjon av firmwarelagring
+
+- `m5stack-fire-ble`: bygg bestått. RAM 1,4 % (62 836 / 4 521 984), flash
+  25,8 % (1 689 933 / 6 553 600).
+- Firmware-binær SHA-256:
+  `cc3c4e1d9c3a9d30cd6a2a6f0a5482bf14d547cdb65727d9e24bba7696fb653c`.
+- `git diff --check`: bestått.
+- Direkte/reverse fysisk overføring, korrekt/feil hash, duplikat, timeout,
+  manglende/fjernet/full SD og reconnect etter overføring er ikke fysisk
+  verifisert ennå. Byggresultat er ikke fysisk integrasjonstest.
+- Legacy-miljøet `m5stack-fire` er ikke produksjonsbygget; det mangler allerede
+  Lua-flagget `LUA_32BITS` og bruker nyere, inkompatibel ESP-IDF/mbedTLS-API.
+  Produksjonsmiljøet er `m5stack-fire-ble`.
 
 Backendens siste GitHub-handoff rapporterer to fysiske direkte-ADC-opptak:
 72 717 / 72 940 samples, omtrent 4,55 s av 4,81 s eventintervall, ASR-tekst

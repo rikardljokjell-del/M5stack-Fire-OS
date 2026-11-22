@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "repository": "rikardljokjell-del/M5stack-Fire-OS",
+  "target": "m5stack-fire",
+  "files": [
+    {
+      "name": "fire-os-0.2-storage-dev.bin",
+      "version": "fire-os-0.2+storage-dev",
+      "size_bytes": 1836160,
+      "sha256": "f13163c2148a0c67482873997550c194b1fc2bc5d7c2ecb8485b39cb076c4551"
+    }
+  ]
+}

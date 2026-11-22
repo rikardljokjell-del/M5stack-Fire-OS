@@ -5,6 +5,8 @@
 #include <esp_ota_ops.h>
 #include "fire_lua_runtime.h"
 #include "fire_backend_client.h"
+#include "fire_firmware_storage.h"
+#include "fire_github_firmware.h"
 #include "fire_lua_package_manager.h"
 #include "fire_reverse_transport.h"
 
@@ -67,6 +69,7 @@ class FireOS {
     Wifi,
     Bluetooth,
     Boot,
+    Firmware,
     MainMenuSettings,
     Shortcuts,
     AppsSettings,
@@ -97,7 +100,7 @@ class FireOS {
 
   static constexpr uint8_t kButtonCount = 3;
   static constexpr uint8_t kMainCount = 5;
-  static constexpr uint8_t kSettingsCount = 16;
+  static constexpr uint8_t kSettingsCount = 17;
   static constexpr uint8_t kQuickCount = 8;
   static constexpr uint8_t kPowerCount = 6;
   static constexpr uint8_t kPowerActionCount = 4;
@@ -179,6 +182,7 @@ class FireOS {
   static constexpr uint8_t kFileVisibleRows = 6;
   static constexpr uint8_t kMaxExternalApps = 16;
   static constexpr uint8_t kMaxLuaApps = 32;
+  static constexpr uint8_t kMaxFirmwareFiles = 24;
   bool sdReady_ = false;
   uint32_t sdLastProbe_ = 0;
   String sdPath_ = "/";
@@ -207,6 +211,21 @@ class FireOS {
   bool sdImageRendered_ = false;
   String sdPreviewLines_[8];
   uint8_t sdPreviewLineCount_ = 0;
+  String firmwarePaths_[kMaxFirmwareFiles];
+  String firmwareNames_[kMaxFirmwareFiles];
+  uint32_t firmwareSizes_[kMaxFirmwareFiles] = {};
+  uint8_t firmwareCount_ = 0;
+  uint8_t firmwareSelection_ = 0;
+  uint8_t firmwareOffset_ = 0;
+  bool firmwareScanPending_ = false;
+  bool firmwareInstallConfirm_ = false;
+  bool firmwareInstallPending_ = false;
+  bool firmwareGithubDialog_ = false;
+  uint8_t firmwareGithubSelection_ = 0;
+  uint8_t firmwareGithubOffset_ = 0;
+  bool firmwareBootGuardActive_ = false;
+  uint32_t firmwareBootGuardStarted_ = 0;
+  String firmwareMessage_;
   bool shortcutPicker_ = false;
   uint8_t shortcutPickerButton_ = 0;
   uint8_t shortcutPickerAction_ = 0;
@@ -238,16 +257,25 @@ class FireOS {
   bool luaAppActive_ = false;
   String luaAppPath_;
   String luaAppName_;
+  String luaAppId_;
+  String luaPackageId_;
   String luaAppError_;
+  uint32_t luaMaxRuntimeMs_ = FireLuaRuntime::kDefaultRuntimeMs;
   uint32_t luaLastFrameAt_ = 0;
   uint8_t luaRgbValues_[10][3] = {};
   FireBackendClient* backendClient_ = nullptr;
+  FireFirmwareStorage* firmwareStorage_ = nullptr;
+  FireGithubFirmwareManager* githubFirmware_ = nullptr;
   FireLuaPackageManager* packageManager_ = nullptr;
   FireReverseTransport reverseTransport_;
   String backendStatus_;
   String aiTurnId_;
   String aiTranscriptText_;
   uint8_t aiConversationMode_ = 0;  // 0=develop, 1=chat
+  bool aiVoiceTestMode_ = false;    // Local microphone/WAV playback diagnostic
+  bool aiVoiceTestPlaybackActive_ = false;
+  bool aiVoiceTestRadioSuspended_ = false;
+  bool aiVoiceTestWifiWasEnabled_ = false;
   String aiBasePackageId_;
   bool aiProjectPickerActive_ = false;
   uint8_t aiProjectSelection_ = 0;
@@ -290,9 +318,19 @@ class FireOS {
   bool aiAudioDownloadPending_ = false;
   String aiAudioDownloadId_;
   String aiAudioDownloadTurnId_;
+  String aiAudioDownloadUrl_;
   String aiAudioDownloadHash_;
   uint32_t aiAudioDownloadSize_ = 0;
+  bool aiAudioDownloadStarted_ = false;
   bool aiConversationCancelPending_ = false;
+
+  // One bounded diagnostic is retained across a temporary backend outage.
+  // It is only sent for a package identity known to belong to this device.
+  String pendingDiagnosticAppId_;
+  String pendingDiagnosticPackageId_;
+  String pendingDiagnosticErrorCode_;
+  String pendingDiagnosticMessage_;
+  String pendingDiagnosticJson_;
 
   // Date/time editor state. A/C select a field; B enters/leaves editing.
   uint8_t dateField_ = 0;
@@ -373,6 +411,10 @@ class FireOS {
   void saveSavedBluetoothDevices();
   bool initSdCard();
   void refreshSdDirectory();
+  void scanFirmwareFiles();
+  bool installFirmwareFile(const String& path);
+  bool handlePendingFirmwareBoot();
+  void updateFirmwareBootGuard();
   void handleFileExplorerButton(uint8_t index);
   void handleFileExplorerAction(uint8_t index);
   void openSelectedSdEntry();
@@ -424,6 +466,7 @@ class FireOS {
   void updateAiDeveloperMock();
   void handleHelpButton(uint8_t index);
   void handleAppsButton(uint8_t index);
+  void handleFirmwareButton(uint8_t index);
   void handleAppsSettingsButton(uint8_t index);
   void handleWifiButton(uint8_t index);
   void handleBluetoothButton(uint8_t index);
@@ -460,13 +503,25 @@ class FireOS {
   void cancelConversationTurn(const String& reason, bool startNew = false);
   bool stopAiAudioOutput();
   bool startAiRecording();
+  void suspendVoiceTestRadio();
+  void restoreVoiceTestRadio();
   void finishAiRecording();
   void updateAiAudio();
   void updateAiAudioOutput();
+  void failAiAudioPlayback(const String& audioId, const String& turnId,
+                           const String& errorCode, const String& message,
+                           const char* phase, bool releaseBuffer = true);
   void handleAiApiButton(uint8_t index);
-  bool startLuaApp(const String& path, const String& name = String());
+  bool startLuaApp(const String& path, const String& name = String(),
+                   const String& launchPackageId = String());
   void stopLuaApp(const String& reason = String());
   void updateLuaApp();
+  void queueLuaDiagnostic(const String& appId, const String& packageId,
+                          const String& errorCode, const String& message,
+                          const String& diagnostics = String());
+  void flushLuaDiagnostic();
+  String luaDiagnosticsJson(const char* phase) const;
+  String audioDiagnosticsJson(const char* phase) const;
   void updateBackend();
   void handleBackendMessage(const String& message);
   static void backendMessage(void* context, const String& message);
@@ -474,6 +529,14 @@ class FireOS {
   static void packageStatus(void* context, const String& status);
   static void packageResult(void* context, bool ok, const String& packageId,
                             const String& archiveHash, const String& message);
+  static void firmwareStatus(void* context, const String& status);
+  static void firmwareResult(void* context, const String& transferId,
+                             const String& firmwareId, bool ok,
+                             const String& sha256, const String& errorCode,
+                             const String& message);
+  static void githubFirmwareStatus(void* context, const String& status);
+  static void githubFirmwareResult(void* context, bool manifest, bool ok,
+                                   const String& message);
   void manageDisplayPower();
   void enterLightSleep();
   void wakeDisplay();
@@ -500,6 +563,8 @@ class FireOS {
   void drawBluetoothScanDialog();
   void drawBluetoothSavedDialog();
   void drawBoot();
+  void drawFirmware();
+  void drawGithubFirmwareDialog();
   void drawMainMenuSettings();
   void drawShortcuts();
   void drawAppsSettings();
