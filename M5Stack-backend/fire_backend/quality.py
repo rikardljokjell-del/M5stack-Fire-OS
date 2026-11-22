@@ -39,6 +39,7 @@ RULES = {
 
 def failure_class(message):
     text = message.lower()
+    if "design:" in text or "visual_quality_ok" in text:return "design"
     if "visual frame" in text or any(word in text for word in ("flimr", "flimmer", "flicker", "blank frame")): return "rendering"
     if any(word in text for word in ("bounds", "integer", "range", "coordinate")): return "bounds"
     if any(word in text for word in ("nil", "index", "length")): return "nil"
@@ -95,7 +96,9 @@ class Quality:
     def policy(self):
         # Only fixed, reviewed rules are promoted. No generated prompt/code from logs.
         categories={case["category"] for case in self.store.list("quality")}
-        return "\nLearned regression precautions (fixed rules from observed failures):\n"+"\n".join(RULES[k] for k in sorted(categories) if k in RULES) if categories else ""
+        from .app_quality import APP_QUALITY_POLICY
+        rules={**RULES,"design":APP_QUALITY_POLICY}
+        return "\nLearned regression precautions (fixed rules from observed failures):\n"+"\n".join(rules[k] for k in sorted(categories) if k in rules) if categories else ""
 
     def reject_known_failure(self, project_id, source_hash):
         if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id") for c in self.store.list("quality")):
@@ -240,6 +243,15 @@ def require_deliverable(package):
         raise ValueError("Denne appversjonen er sperret etter en feil. Velg appen og be om reparasjon for en ny testet versjon.")
     if package.get("validation",{}).get("suite") != "release-v4":
         raise ValueError("Denne eldre pakken mangler utvidet kjøretidstest. Velg appen og be om reparasjon/ny bygging før levering.")
+    validation=package.get("validation",{})
+    if validation.get("pre_delivery_review_required"):
+        review=validation.get("pre_delivery_review") or {}
+        from .app_quality import AppReview
+        try:checks_ok=AppReview.model_validate(review.get("checks",{})).approved
+        except ValueError:checks_ok=False
+        if (review.get("approved") is not True or review.get("source_sha256")!=package["manifest"]["checksum"]
+                or not checks_ok or package.get("mode")=="openai" and review.get("mode")!="openai_source_review"):
+            raise ValueError("Appversjonen mangler godkjent funksjons- og designkontroll for denne kildekoden.")
 
 
 def repair_requested(text):

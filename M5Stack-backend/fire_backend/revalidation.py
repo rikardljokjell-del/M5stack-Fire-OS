@@ -27,6 +27,9 @@ async def revalidate_package(store,package_id,*,apply=False):
                 build_id=package['build_id'],message=str(error),provenance='release_revalidation')
         return {'package_id':package_id,'status':'failed','error':store.redactor.text(str(error))[:600]}
     verify_archive(path,manifest,package['archive_sha256'])
+    # Retesting byte-identical code must never erase an independent review gate.
+    for field in ('pre_delivery_review_required','pre_delivery_review'):
+        if field in package.get('validation',{}):validation[field]=package['validation'][field]
     if apply:
         package['validation_history']=(package.get('validation_history',[])+[package.get('validation',{})])[-3:]
         package['validation']={**validation,'revalidated_at':time.time()}

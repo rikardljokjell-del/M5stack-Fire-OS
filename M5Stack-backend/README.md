@@ -1,5 +1,10 @@
 # FIRE OS AI Developer backend 0.2
 
+Fast standard for alle nye apper/oppdateringer: [fungerende første levering og
+gjennomført grafisk design](docs/FIRST_DELIVERY_QUALITY.md). Etter kjøretidstestene
+gjør AI en separat kontroll av krav, kode og utforming. Konkrete funn rettes
+automatisk før pakking; uavklarte feil gir ingen ny leverbar pakke.
+
 Backend har nå et versjonert [maskinvare-API med 20 tjenestegrupper](docs/HARDWARE_API_HANDOFF.md), ressurskontroll og PC-simulering. Bruk «Maskinvareutkast på PC» under Apper for å forberede slike apper. Den nåværende firmwaren må få tilsvarende adaptere før faktisk I²C/GPIO/PWM/UART/Wi-Fi/Bluetooth/lyd/SD kan brukes fra Lua. Appønsket beholdes når en adapter mangler; det erstattes ikke med en annen demo.
 
 [Analyse av den første Tetris-feilen og ny ytelsesport](docs/TETRIS_RUNTIME_REPORT.md).

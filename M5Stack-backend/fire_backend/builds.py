@@ -15,6 +15,7 @@ from .storage import canonical
 from .app_names import app_id_for
 from .rendering import VISUAL_POLICY
 from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT
+from .app_quality import APP_QUALITY_POLICY,AppReview
 
 
 def sha256(data):
@@ -141,6 +142,12 @@ class Builder:
         context = context or self.context
         if VISUAL_POLICY not in context:
             context += VISUAL_POLICY
+        if APP_QUALITY_POLICY not in context:
+            context += APP_QUALITY_POLICY
+        from .quality import Quality
+        # Also applies to direct Builder callers, new apps and the first attempt.
+        learned_policy=Quality(self.store).policy()
+        if learned_policy and learned_policy not in context:context+=learned_policy
         request = {
             "summary": build["summary"], "context": context, "capabilities": capabilities,
             "base_package_id": project.get("latest_package"),
@@ -182,7 +189,6 @@ class Builder:
                 await progress("compiling", 50, "Kontrollerer Lua 5.4; ingen firmwarekompilering")
                 await progress("testing", 65, "Tester hele kjøretiden med sju knapp-/tidsprofiler")
                 try:
-                    from .quality import Quality
                     Quality(self.store).reject_known_failure(project["id"], sha256(payload))
                     if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
                         raise ValueError("Generated app requests services absent from actual device capabilities")
@@ -190,10 +196,24 @@ class Builder:
                     api_version=(capabilities or {}).get("api_version",BASE_API)
                     result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
                         "hardware":(capabilities or {}).get("hardware") or {}}, self.store, build_id)
+                    await progress("testing",75,"Kontrollerer funksjoner, stabilitet og grafisk utforming før levering")
+                    reviewer=getattr(self.provider,"review",None)
+                    if reviewer is None:
+                        if self.settings.fire_ai_mode!="mock":
+                            raise ValueError("Pre-delivery review is required for live generation")
+                        from .ai import MockProvider
+                        reviewer=MockProvider().review
+                    review=await reviewer(build["summary"],context,generated,result)
+                    review=AppReview.model_validate(self.store.redactor.value(review.model_dump()))
+                    review_record={"source_sha256":sha256(payload),"approved":review.approved,
+                        "mode":"openai_source_review" if self.settings.fire_ai_mode=="openai" else "mock_fixture",
+                        "checks":review.model_dump(),"physical_verified":False}
+                    self.store.write(folder / f"review-{attempt+1}.json",review_record)
+                    if not review.approved:raise ValueError(review.correction())
+                    result.update(pre_delivery_review_required=True,pre_delivery_review=review_record)
                     break
                 except (ValueError, asyncio.TimeoutError) as error:
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
-                    from .quality import Quality
                     Quality(self.store).record_validation(build, generated.main_lua, last_error)
                     self.store.log(build_id, f"Attempt {attempt + 1} failed: {last_error}")
                     if attempt == 3:
