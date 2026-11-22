@@ -331,7 +331,9 @@ class FireOS {
     SdRead,
     SdWrite,
     SdRemove,
-    PowerSleep
+    PowerSleep,
+    SpeakerTone,
+    SpeakerPlay
   };
   struct LuaHardwareJob {
     uint16_t id = 0;
@@ -339,6 +341,7 @@ class FireOS {
     uint8_t state = 0;  // 0=pending, 1=ready, 2=failed, 3=cancelled
     uint32_t startedAt = 0;
     uint32_t lastProgressAt = 0;
+    uint32_t timeoutMs = 3000;
     uint8_t bus = 0;
     uint8_t address = 0;
     int16_t reg = -1;
@@ -360,6 +363,12 @@ class FireOS {
     String entryNames[32];
     uint32_t entrySizes[32] = {};
     bool entryDirectories[32] = {};
+    uint32_t frequency = 0;
+    uint32_t durationMs = 0;
+    uint8_t appVolume = 0;
+    uint32_t mediaSize = 0;
+    uint32_t mediaRead = 0;
+    bool started = false;
   };
   static constexpr uint8_t kMaxLuaJobs = 4;
   LuaHardwareJob luaJobs_[kMaxLuaJobs];
@@ -377,6 +386,14 @@ class FireOS {
   int luaSpiBus_ = -1;
   uint32_t luaSpiFrequency_ = 1000000;
   uint8_t luaSpiMode_ = 0;
+  static constexpr uint8_t kLuaSpeakerChannel = 6;
+  static constexpr size_t kMaxLuaWavBytes = 512 * 1024;
+  File luaSpeakerFile_;
+  uint8_t* luaSpeakerBuffer_ = nullptr;
+  size_t luaSpeakerBufferSize_ = 0;
+  volatile bool luaSpeakerBufferReleased_ = false;
+  uint16_t luaSpeakerJobId_ = 0;
+  bool luaSpeakerPlaying_ = false;
 
   FireLuaRuntime* luaRuntime_ = nullptr;
   bool luaRuntimeReady_ = false;
@@ -605,6 +622,12 @@ class FireOS {
   static bool luaRtcNowCallback(void*, uint32_t*, int*, int*, int*, int*, int*,
                                 int*, const char**);
   static bool luaRtcSetCallback(void*, uint32_t, const char**);
+  static uint16_t luaSpeakerToneCallback(void*, int, int, int, const char**);
+  static uint16_t luaSpeakerPlayCallback(void*, const char*, int, const char**);
+  static bool luaSpeakerStopCallback(void*, const char**);
+  static void luaSpeakerBufferReleaseCallback(void*, const void*, uint8_t);
+  bool validateLuaWav(const uint8_t*, size_t, uint32_t&, uint32_t&) const;
+  void releaseLuaSpeakerBufferIfReady();
   static bool luaJobPollCallback(void*, uint16_t, FireLuaRuntime::JobSnapshot*);
   static bool luaJobResultCallback(void*, uint16_t, FireLuaRuntime::JobSnapshot*);
   static bool luaJobCloseCallback(void*, uint16_t);

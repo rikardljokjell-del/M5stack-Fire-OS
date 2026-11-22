@@ -460,6 +460,7 @@ bool luaManifestServiceMask(const String& manifest, uint32_t& mask) {
     else if (service == "spi") bit = kLuaServiceSpi;
     else if (service == "sd") bit = kLuaServiceSd;
     else if (service == "rtc") bit = kLuaServiceRtc;
+    else if (service == "speaker") bit = kLuaServiceSpeaker;
     else return false;
     if ((mask & bit) != 0) return false;
     mask |= bit;
@@ -1036,6 +1037,7 @@ void FireOS::begin() {
   M5.Display.setRotation(0);
   M5.Display.setBrightness(brightness_);
   M5.Speaker.setVolume(speakerVolumeValue(volume_));
+  M5.Speaker.setBufferReleaseCallback(this, luaSpeakerBufferReleaseCallback);
   // Keep boot non-blocking. The previous synchronous LED animation could
   // stall before the first FIRE OS frame on some M5Unified/RMT combinations.
   // Boot feedback is handled after the UI is alive.
@@ -2174,6 +2176,17 @@ bool FireOS::luaI2cAllowed(uint8_t bus, uint8_t address, bool write) const {
 }
 
 void FireOS::releaseLuaHardware() {
+  if (M5.Speaker.isEnabled()) M5.Speaker.stop(kLuaSpeakerChannel);
+  luaSpeakerFile_.close();
+  if (luaSpeakerBuffer_ && (!luaSpeakerPlaying_ ||
+                            luaSpeakerBufferReleased_)) {
+    free(luaSpeakerBuffer_);
+    luaSpeakerBuffer_ = nullptr;
+    luaSpeakerBufferSize_ = 0;
+    luaSpeakerBufferReleased_ = false;
+    luaSpeakerPlaying_ = false;
+  }
+  luaSpeakerJobId_ = 0;
   for (LuaHardwareJob& job : luaJobs_) job = LuaHardwareJob();
   for (uint8_t pin = 0; pin < 40; ++pin) {
     if (!luaGpioClaimed_[pin]) continue;
@@ -2767,6 +2780,149 @@ bool FireOS::luaRtcSetCallback(void* context, uint32_t epoch,
   return true;
 }
 
+bool FireOS::validateLuaWav(const uint8_t* data, size_t length,
+                            uint32_t& sampleRate, uint32_t& dataBytes) const {
+  if (!data || length < 44 || length > kMaxLuaWavBytes ||
+      memcmp(data, "RIFF", 4) != 0 || memcmp(data + 8, "WAVE", 4) != 0)
+    return false;
+  bool formatFound = false;
+  bool dataFound = false;
+  uint16_t audioFormat = 0;
+  uint16_t channels = 0;
+  uint16_t bits = 0;
+  sampleRate = 0;
+  dataBytes = 0;
+  size_t cursor = 12;
+  while (cursor + 8 <= length) {
+    const uint32_t chunkSize = static_cast<uint32_t>(data[cursor + 4]) |
+                               (static_cast<uint32_t>(data[cursor + 5]) << 8) |
+                               (static_cast<uint32_t>(data[cursor + 6]) << 16) |
+                               (static_cast<uint32_t>(data[cursor + 7]) << 24);
+    const size_t payload = cursor + 8;
+    if (chunkSize > length - payload) return false;
+    if (memcmp(data + cursor, "fmt ", 4) == 0 && chunkSize >= 16) {
+      audioFormat = static_cast<uint16_t>(data[payload]) |
+                    (static_cast<uint16_t>(data[payload + 1]) << 8);
+      channels = static_cast<uint16_t>(data[payload + 2]) |
+                 (static_cast<uint16_t>(data[payload + 3]) << 8);
+      sampleRate = static_cast<uint32_t>(data[payload + 4]) |
+                   (static_cast<uint32_t>(data[payload + 5]) << 8) |
+                   (static_cast<uint32_t>(data[payload + 6]) << 16) |
+                   (static_cast<uint32_t>(data[payload + 7]) << 24);
+      bits = static_cast<uint16_t>(data[payload + 14]) |
+             (static_cast<uint16_t>(data[payload + 15]) << 8);
+      formatFound = true;
+    } else if (memcmp(data + cursor, "data", 4) == 0) {
+      dataBytes = chunkSize;
+      dataFound = true;
+    }
+    cursor = payload + chunkSize + (chunkSize & 1u);
+  }
+  return formatFound && dataFound && audioFormat == 1 && channels == 1 &&
+         bits == 16 && (sampleRate == 8000 || sampleRate == 16000 ||
+                        sampleRate == 24000) && dataBytes > 0;
+}
+
+void FireOS::releaseLuaSpeakerBufferIfReady() {
+  if (!luaSpeakerBuffer_ || !luaSpeakerBufferReleased_) return;
+  free(luaSpeakerBuffer_);
+  luaSpeakerBuffer_ = nullptr;
+  luaSpeakerBufferSize_ = 0;
+  luaSpeakerBufferReleased_ = false;
+  luaSpeakerPlaying_ = false;
+}
+
+void FireOS::luaSpeakerBufferReleaseCallback(void* context, const void* data,
+                                              uint8_t) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || !os->luaSpeakerBuffer_ || !data) return;
+  const uintptr_t start = reinterpret_cast<uintptr_t>(os->luaSpeakerBuffer_);
+  const uintptr_t end = start + os->luaSpeakerBufferSize_;
+  const uintptr_t released = reinterpret_cast<uintptr_t>(data);
+  if (released >= start && released < end)
+    os->luaSpeakerBufferReleased_ = true;
+}
+
+uint16_t FireOS::luaSpeakerToneCallback(void* context, int frequency,
+                                        int duration, int volume,
+                                        const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || !M5.Speaker.isEnabled()) {
+    setLuaError(error, "unavailable");
+    return 0;
+  }
+  if (os->aiAudioCaptureActive_ || os->aiAudioOutputActive_) {
+    setLuaError(error, "busy");
+    return 0;
+  }
+  if (os->luaSpeakerJobId_ != 0 || os->luaSpeakerPlaying_) {
+    setLuaError(error, "busy");
+    return 0;
+  }
+  const uint16_t jobId = os->createLuaJob(LuaJobKind::SpeakerTone, error);
+  if (!jobId) return 0;
+  LuaHardwareJob* job = os->findLuaJob(jobId);
+  job->frequency = static_cast<uint32_t>(frequency);
+  job->durationMs = static_cast<uint32_t>(duration);
+  job->appVolume = static_cast<uint8_t>(volume);
+  os->luaSpeakerJobId_ = jobId;
+  return jobId;
+}
+
+uint16_t FireOS::luaSpeakerPlayCallback(void* context, const char* path,
+                                        int volume, const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  String resolved;
+  if (!os || !os->luaPrivateAppPath(path, resolved, error)) return 0;
+  if (!os->sdReady_) {
+    setLuaError(error, "unavailable");
+    return 0;
+  }
+  if (!M5.Speaker.isEnabled()) {
+    setLuaError(error, "unavailable");
+    return 0;
+  }
+  if (os->aiAudioCaptureActive_ || os->aiAudioOutputActive_ ||
+      os->luaSpeakerJobId_ != 0 || os->luaSpeakerPlaying_) {
+    setLuaError(error, "busy");
+    return 0;
+  }
+  const uint16_t jobId = os->createLuaJob(LuaJobKind::SpeakerPlay, error);
+  if (!jobId) return 0;
+  LuaHardwareJob* job = os->findLuaJob(jobId);
+  job->path = resolved;
+  job->appVolume = static_cast<uint8_t>(volume);
+  os->luaSpeakerJobId_ = jobId;
+  return jobId;
+}
+
+bool FireOS::luaSpeakerStopCallback(void* context, const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || !M5.Speaker.isEnabled()) {
+    setLuaError(error, "unavailable");
+    return false;
+  }
+  M5.Speaker.stop(kLuaSpeakerChannel);
+  for (LuaHardwareJob& job : os->luaJobs_) {
+    if (job.kind == LuaJobKind::SpeakerTone ||
+        job.kind == LuaJobKind::SpeakerPlay) {
+      job.state = 3;
+      job.errorCode = "cancelled";
+    }
+  }
+  os->luaSpeakerJobId_ = 0;
+  os->luaSpeakerFile_.close();
+  if (!os->luaSpeakerPlaying_ && os->luaSpeakerBuffer_) {
+    free(os->luaSpeakerBuffer_);
+    os->luaSpeakerBuffer_ = nullptr;
+    os->luaSpeakerBufferSize_ = 0;
+    os->luaSpeakerBufferReleased_ = false;
+  } else {
+    os->releaseLuaSpeakerBufferIfReady();
+  }
+  return true;
+}
+
 bool FireOS::luaJobPollCallback(void* context, uint16_t id,
                                 FireLuaRuntime::JobSnapshot* snapshot) {
   auto* os = static_cast<FireOS*>(context);
@@ -2817,6 +2973,13 @@ bool FireOS::luaJobCloseCallback(void* context, uint16_t id) {
   auto* os = static_cast<FireOS*>(context);
   LuaHardwareJob* job = os ? os->findLuaJob(id) : nullptr;
   if (!job) return false;
+  if (os && id == os->luaSpeakerJobId_) {
+    if (M5.Speaker.isEnabled()) M5.Speaker.stop(kLuaSpeakerChannel);
+    os->luaSpeakerFile_.close();
+    os->luaSpeakerJobId_ = 0;
+    if (!os->luaSpeakerPlaying_)
+      os->releaseLuaSpeakerBufferIfReady();
+  }
   *job = LuaHardwareJob();
   return true;
 }
@@ -2827,14 +2990,24 @@ bool FireOS::luaJobCancelCallback(void* context, uint16_t id) {
   if (!job || job->state != 0) return false;
   job->state = 3;
   job->errorCode = "cancelled";
+  if (os && id == os->luaSpeakerJobId_) {
+    if (M5.Speaker.isEnabled()) M5.Speaker.stop(kLuaSpeakerChannel);
+    os->luaSpeakerFile_.close();
+    os->luaSpeakerJobId_ = 0;
+    if (!os->luaSpeakerPlaying_)
+      os->releaseLuaSpeakerBufferIfReady();
+  }
   return true;
 }
 
 void FireOS::serviceLuaHardwareJobs() {
+  if (luaSpeakerJobId_ == 0) releaseLuaSpeakerBufferIfReady();
+  if (luaSpeakerPlaying_ && volume_ == 0 && M5.Speaker.isEnabled())
+    M5.Speaker.stop(kLuaSpeakerChannel);
   for (LuaHardwareJob& job : luaJobs_) {
     if (job.id == 0 || job.state != 0) continue;
     const uint32_t now = millis();
-    if (now - job.startedAt > 3000) {
+    if (now - job.startedAt > job.timeoutMs) {
       job.state = 2;
       job.errorCode = "timeout";
       continue;
@@ -2976,6 +3149,150 @@ void FireOS::serviceLuaHardwareJobs() {
       const bool ok = SD.remove(job.path) || SD.rmdir(job.path);
       job.state = ok ? 1 : 2;
       if (!ok) job.errorCode = "remove_failed";
+    } else if (job.kind == LuaJobKind::SpeakerTone) {
+      if (!job.started) {
+        if (aiAudioCaptureActive_ || aiAudioOutputActive_) {
+          job.state = 2;
+          job.errorCode = "busy";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        if (job.appVolume == 0 || volume_ == 0) {
+          job.state = 1;
+          job.written = 0;
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        M5.Speaker.setChannelVolume(kLuaSpeakerChannel, job.appVolume);
+        if (!M5.Speaker.tone(static_cast<float>(job.frequency),
+                             job.durationMs, kLuaSpeakerChannel, true)) {
+          job.state = 2;
+          job.errorCode = "speaker_rejected";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        job.started = true;
+        luaSpeakerPlaying_ = true;
+        job.timeoutMs = job.durationMs + 3000;
+      } else if (!M5.Speaker.isPlaying(kLuaSpeakerChannel)) {
+        job.state = 1;
+        job.written = 0;
+        luaSpeakerPlaying_ = false;
+        luaSpeakerJobId_ = 0;
+      }
+    } else if (job.kind == LuaJobKind::SpeakerPlay) {
+      if (!job.started && job.mediaSize == 0) {
+        if (!sdReady_ || !SD.exists(job.path)) {
+          job.state = 2;
+          job.errorCode = "not_found";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        luaSpeakerFile_ = SD.open(job.path, FILE_READ);
+        if (!luaSpeakerFile_ || luaSpeakerFile_.isDirectory()) {
+          luaSpeakerFile_.close();
+          job.state = 2;
+          job.errorCode = "open_failed";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        const size_t size = luaSpeakerFile_.size();
+        if (size == 0 || size > kMaxLuaWavBytes) {
+          luaSpeakerFile_.close();
+          job.state = 2;
+          job.errorCode = "audio_too_large";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        luaSpeakerBuffer_ = static_cast<uint8_t*>(
+            ESP.getPsramSize() > 0 ? ps_malloc(size) : malloc(size));
+        if (!luaSpeakerBuffer_) {
+          luaSpeakerFile_.close();
+          job.state = 2;
+          job.errorCode = "memory";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        luaSpeakerBufferSize_ = size;
+        luaSpeakerBufferReleased_ = false;
+        luaSpeakerPlaying_ = false;
+        job.mediaSize = static_cast<uint32_t>(size);
+        job.mediaRead = 0;
+      }
+      if (!job.started && job.mediaRead < job.mediaSize) {
+        const size_t remaining = job.mediaSize - job.mediaRead;
+        const size_t amount = luaSpeakerFile_.read(
+            luaSpeakerBuffer_ + job.mediaRead, min<size_t>(remaining, 2048));
+        if (amount == 0) {
+          luaSpeakerFile_.close();
+          free(luaSpeakerBuffer_);
+          luaSpeakerBuffer_ = nullptr;
+          luaSpeakerBufferSize_ = 0;
+          job.state = 2;
+          job.errorCode = "read_failed";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        job.mediaRead += amount;
+        if (job.mediaRead < job.mediaSize) continue;
+        luaSpeakerFile_.close();
+      }
+      if (!job.started && job.mediaRead >= job.mediaSize) {
+        uint32_t sampleRate = 0;
+        uint32_t dataBytes = 0;
+        if (!validateLuaWav(luaSpeakerBuffer_, luaSpeakerBufferSize_,
+                            sampleRate, dataBytes)) {
+          free(luaSpeakerBuffer_);
+          luaSpeakerBuffer_ = nullptr;
+          luaSpeakerBufferSize_ = 0;
+          job.state = 2;
+          job.errorCode = "invalid_wav";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        if (aiAudioCaptureActive_ || aiAudioOutputActive_) {
+          free(luaSpeakerBuffer_);
+          luaSpeakerBuffer_ = nullptr;
+          luaSpeakerBufferSize_ = 0;
+          job.state = 2;
+          job.errorCode = "busy";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        if (job.appVolume == 0 || volume_ == 0) {
+          free(luaSpeakerBuffer_);
+          luaSpeakerBuffer_ = nullptr;
+          luaSpeakerBufferSize_ = 0;
+          job.state = 1;
+          job.written = 0;
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        M5.Speaker.setChannelVolume(kLuaSpeakerChannel, job.appVolume);
+        if (!M5.Speaker.playWav(luaSpeakerBuffer_, luaSpeakerBufferSize_, 1,
+                                kLuaSpeakerChannel, true)) {
+          free(luaSpeakerBuffer_);
+          luaSpeakerBuffer_ = nullptr;
+          luaSpeakerBufferSize_ = 0;
+          job.state = 2;
+          job.errorCode = "speaker_rejected";
+          luaSpeakerJobId_ = 0;
+          continue;
+        }
+        job.started = true;
+        luaSpeakerPlaying_ = true;
+        const uint32_t duration =
+            static_cast<uint32_t>((static_cast<uint64_t>(dataBytes) * 1000) /
+                                  (sampleRate * 2));
+        job.timeoutMs = duration + 3000;
+      } else if (job.started && !M5.Speaker.isPlaying(kLuaSpeakerChannel) &&
+                 luaSpeakerBufferReleased_) {
+        job.state = 1;
+        job.written = 0;
+        luaSpeakerPlaying_ = false;
+        luaSpeakerJobId_ = 0;
+        releaseLuaSpeakerBufferIfReady();
+      }
     }
   }
 }
@@ -4889,7 +5206,10 @@ bool FireOS::startLuaApp(const String& path, const String& name,
                       (serviceMask & kLuaServiceSpi &&
                        !(serviceMask & kLuaServiceJobs)) ||
                       (serviceMask & kLuaServiceSd &&
-                       !(serviceMask & kLuaServiceJobs)))) {
+                       !(serviceMask & kLuaServiceJobs)) ||
+                      (serviceMask & kLuaServiceSpeaker &&
+                       (!(serviceMask & kLuaServiceJobs) ||
+                        !(serviceMask & kLuaServiceSd))))) {
     luaAppError_ = "Hardware service dependencies invalid";
     return false;
   }
@@ -4952,6 +5272,9 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaHost.powerSleep = luaPowerSleepCallback;
     luaHost.rtcNow = luaRtcNowCallback;
     luaHost.rtcSet = luaRtcSetCallback;
+    luaHost.speakerTone = luaSpeakerToneCallback;
+    luaHost.speakerPlay = luaSpeakerPlayCallback;
+    luaHost.speakerStop = luaSpeakerStopCallback;
     luaHost.jobPoll = luaJobPollCallback;
     luaHost.jobResult = luaJobResultCallback;
     luaHost.jobClose = luaJobCloseCallback;

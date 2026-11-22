@@ -107,6 +107,9 @@ class FireLuaRuntime {
     bool (*rtcNow)(void*, uint32_t*, int*, int*, int*, int*, int*, int*,
                    const char**) = nullptr;
     bool (*rtcSet)(void*, uint32_t, const char**) = nullptr;
+    uint16_t (*speakerTone)(void*, int, int, int, const char**) = nullptr;
+    uint16_t (*speakerPlay)(void*, const char*, int, const char**) = nullptr;
+    bool (*speakerStop)(void*, const char**) = nullptr;
     bool (*jobPoll)(void*, uint16_t, JobSnapshot*) = nullptr;
     bool (*jobResult)(void*, uint16_t, JobSnapshot*) = nullptr;
     bool (*jobClose)(void*, uint16_t) = nullptr;
@@ -221,6 +224,9 @@ class FireLuaRuntime {
   static int powerSleep(lua_State* state);
   static int rtcNow(lua_State* state);
   static int rtcSet(lua_State* state);
+  static int speakerTone(lua_State* state);
+  static int speakerPlay(lua_State* state);
+  static int speakerStop(lua_State* state);
   static int jobsPoll(lua_State* state);
   static int jobsResult(lua_State* state);
   static int jobsClose(lua_State* state);

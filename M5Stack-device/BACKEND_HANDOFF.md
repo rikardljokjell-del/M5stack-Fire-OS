@@ -412,10 +412,41 @@ Register hash: `0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40
 
 The device now wires the register-backed display, jobs, GPIO, PWM, I2C, UART,
 ADC, DAC, SPI, SD and RTC adapters. `power.sleep`, Wi-Fi/BLE Lua adapters and
-Lua mic/speaker services remain unadvertised until their safe state machines
-and physical tests are complete.
+Lua mic remains unadvertised. Speaker is implemented in the follow-up section
+below; its physical audio matrix is still outstanding.
 
 Build/flash verification: `m5stack-fire-ble` passed (RAM 1.4%, flash 28.7%),
 binary SHA-256 `00cf8e17b55dd056330ff64336be69d96e707dfa68d338dea72bf458ad2225ae`.
 The final image was flashed to COM3 and reached `FIRE OS started`; physical
 Lua I/O, loopback, SD-result and Tetris-soak tests remain outstanding.
+## Lua speaker / app-audio follow-up
+
+Implemented against `PRIKKJAKT_ANALYSIS.md` and the audio addition in
+`DEVICE_EXPERIENCE_HANDOFF.md`.
+
+- `fire-lua-0.2` now advertises `speaker` in addition to the existing `jobs`
+  and `sd` services. The API exposes the registry methods `speaker.tone`,
+  `speaker.play` and `speaker.stop`.
+- Tone and WAV playback are bounded asynchronous jobs. WAV files are restricted
+  to app-private SD storage, RIFF/WAVE PCM16 mono, 8/16/24 kHz and 512 KiB;
+  file loading is chunked outside Lua callbacks.
+- App gain is applied through the dedicated M5Unified speaker channel. The OS
+  master volume remains authoritative: OS volume 0 produces silence, volume
+  changes apply while a sound is playing, and app `speaker.stop` cannot stop
+  AI/system audio on other channels. Conversation capture/playback returns
+  `busy` to Lua.
+- Lua has no `power.brightness` service, and the speaker adapter never calls
+  `M5.Display.setBrightness`; OS background brightness therefore remains
+  unchanged by app audio.
+- Stop, close, cancel, Home/Back cleanup and buffer-release handling prevent
+  speaker buffers from being freed while M5Unified is still reading them.
+
+### Verification
+
+- `m5stack-fire-ble` build passed: RAM 1.4%, flash 28.8%
+  (`1887377 / 6553600`).
+- Physical audio matrix still needs to be run on FIRE with a real Lua package:
+  melody playback, app mute/stop, master volume 0 and live volume changes,
+  AI audio conflict, repeated start/stop and brightness preservation. Boot and
+  compile success are not reported as physical speaker verification.
+Final firmware binary SHA-256: `c3612cd607c74691b1d026483dee17f02dfcd27afd0b788400db4b8d4036c1f0`.

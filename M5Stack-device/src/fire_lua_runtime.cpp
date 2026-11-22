@@ -253,6 +253,13 @@ void FireLuaRuntime::registerApi(lua_State* state) {
     setFunction(state, "set", rtcSet);
     lua_setfield(state, -2, "rtc");
   }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceSpeaker)) {
+    lua_newtable(state);
+    setFunction(state, "tone", speakerTone);
+    setFunction(state, "play", speakerPlay);
+    setFunction(state, "stop", speakerStop);
+    lua_setfield(state, -2, "speaker");
+  }
 
   lua_setglobal(state, "fire");
 }
@@ -1435,6 +1442,51 @@ int FireLuaRuntime::rtcSet(lua_State* state) {
   if (!runtime->host_.rtcSet ||
       !runtime->host_.rtcSet(runtime->host_.context,
                              static_cast<uint32_t>(epoch), &error))
+    return pushError(state, error ? error : "unavailable");
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int FireLuaRuntime::speakerTone(lua_State* state) {
+  auto* runtime = self(state);
+  const int frequency = strictInt(state, 1, 20, 20000);
+  const int duration = strictInt(state, 2, 1, 5000);
+  const int volume = strictInt(state, 3, 0, 255);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.speakerTone
+                           ? runtime->host_.speakerTone(runtime->host_.context,
+                                                        frequency, duration,
+                                                        volume, &error)
+                           : 0;
+  if (!job) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::speakerPlay(lua_State* state) {
+  auto* runtime = self(state);
+  size_t pathLength = 0;
+  const char* path = checkedPath(state, 1, &pathLength);
+  const int volume = strictInt(state, 2, 0, 255);
+  if (!runtime->chargeIo(pathLength, true))
+    return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  const uint16_t job = runtime->host_.speakerPlay
+                           ? runtime->host_.speakerPlay(runtime->host_.context,
+                                                        path, volume, &error)
+                           : 0;
+  if (!job) return pushError(state, error ? error : "busy");
+  lua_pushinteger(state, job);
+  return 1;
+}
+
+int FireLuaRuntime::speakerStop(lua_State* state) {
+  auto* runtime = self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = nullptr;
+  if (!runtime->host_.speakerStop ||
+      !runtime->host_.speakerStop(runtime->host_.context, &error))
     return pushError(state, error ? error : "unavailable");
   lua_pushboolean(state, 1);
   return 1;
