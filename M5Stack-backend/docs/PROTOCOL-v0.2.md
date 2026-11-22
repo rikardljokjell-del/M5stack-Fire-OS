@@ -244,6 +244,15 @@ from the Lua app's restricted service permissions.
 
 ## App selection, versions and deletion
 
+Device App Manager supports app_download for an explicitly selected tested
+package and app_backend_delete_prepare/app_backend_delete_confirm for its own
+history. This additive extension keeps SD absence checks, revision/boot/session
+binding and event idempotency. Read-only app_list/app_versions include bounded
+downloadability and device deletion flags. See
+[DEVICE_APP_MANAGER_HANDOFF.md](DEVICE_APP_MANAGER_HANDOFF.md) for exact fields,
+confirmation TTL and device UI requirements. Direct DELETE routes retain their
+existing administrator restrictions.
+
 The additive 0.2 app lifecycle contract is [APP_LIFECYCLE.md](APP_LIFECYCLE.md).
 It covers app_list/app_versions/app_select, explicit new/update startup,
 device app_deleted/app_inventory and administrator-only backend deletion.

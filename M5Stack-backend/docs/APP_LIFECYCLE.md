@@ -79,6 +79,13 @@ Gjenoppretting fra PC er et eksplisitt valg og krever fortsatt separat RUN.
 
 ## Sletting fra backend
 
+Ny utvidelse: brukerens eksplisitte App Manager-handling på FIRE kan også
+slette den enhetens egen historikk via app_backend_delete_prepare/confirm.
+Den følger samme krav om bekreftet SD-fravær, men en ledig forespørrende sesjon
+kan flyttes bort fra valgt app ved bekreftelse. Andre aktive samtaler blokkerer.
+Direkte DELETE-ruter krever fortsatt PC/admin. Se
+[hele meny- og handlingskontrakten](DEVICE_APP_MANAGER_HANDOFF.md).
+
 Backend kan slette prosjektet og alle PC-versjoner med eksplisitt administratorhandling,
 men bare etter app_deleted eller en komplett, vellykket SD-skanning som
 bekrefter at appen mangler. Offline/ukjent/ufullstendig inventar gir aldri

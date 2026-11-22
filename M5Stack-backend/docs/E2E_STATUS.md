@@ -1,5 +1,19 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
+Seneste fysiske tillegg: ekte firmwarefil fra device-agentens f0ecdee/f1d884a
+ble sendt over reverse TCP. FIRE kvitterte stored med riktig SHA256 for
+1 836 160 bytes i /firmware/fire-f13163c2148a0c67.bin. Ingen flashing ble
+bestilt. Tidligere avsnitt om manglende device-kilde/binær er historikk;
+artefaktene er nå publisert. Se FIRMWARE_STORAGE_HANDOFF.md for målingen.
+
+Ny backendleveranse for device App Manager: 272 tester bestått. Katalog og
+versjoner har handlingsflagg; app_download gjenbruker validert ZIP/installasjon
+uten RUN. Device kan klargjøre og bekrefte sletting av egen backendhistorikk
+etter verifisert SD-fravær, med 90s frist og kontroll av boot/session/revisjon.
+Dette er testet med emulator/HTTP, ikke fysisk App Manager-UI. Device-kode er
+ikke endret av backend-agenten. Se DEVICE_APP_MANAGER_HANDOFF.md for tilkobling
+og menyhandlinger. Enhetens meny krever fortsatt implementasjon hos device-agenten.
+
 Senere observasjon: tilkoblet FIRE rapporterer nå fire-os-0.2+storage-dev og
 firmware_storage=true, 4 MiB filgrense. Håndtrykk og Windows-status virker.
 Ingen fysisk firmwarefiloverføring er gjort: ferdig firmware.bin mangler på

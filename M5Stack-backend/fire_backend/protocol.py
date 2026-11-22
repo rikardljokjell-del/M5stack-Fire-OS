@@ -129,7 +129,7 @@ async def handle(service, session, event):
     name = event.event
     if name == "firmware_store_result":
         return service.firmware.receipt(session,event)
-    if name in {"app_list", "app_versions", "app_select", "app_deleted", "app_inventory"}:
+    if name in {"app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm"}:
         if session.target != "device" or session.protocol_version != "0.2":
             raise ValueError("App lifecycle requires a protocol-0.2 device session")
         return await service.app_event(session, event)
