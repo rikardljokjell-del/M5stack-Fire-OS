@@ -10,7 +10,7 @@ import zipfile
 from importlib import metadata
 from pathlib import Path
 
-from .models import Manifest
+from .models import Manifest,AppTestSequence
 from .storage import canonical
 from .app_names import app_id_for
 from .rendering import VISUAL_POLICY
@@ -39,12 +39,33 @@ async def validate_release(app, store, build_id):
         except (ValueError, asyncio.TimeoutError) as error:
             raise ValueError(f"Release profile {profile}: {str(error) or 'worker timeout'}") from error
         results.append({"profile": profile, **{k:v for k,v in result.items() if k != "trace"}})
+    for raw in app.get("test_sequences",[]):
+        scenario=AppTestSequence.model_validate(raw)
+        for fault in ("idle","io_error","io_timeout","io_disconnect"):
+            try:
+                result=await simulate({**app,"profile":fault,"button_sequence":scenario.buttons,
+                    "interval_ms":scenario.interval_ms},store,build_id)
+            except (ValueError,asyncio.TimeoutError) as error:
+                raise ValueError(f"Scenario {scenario.name}/{fault}: {str(error) or 'worker timeout'}") from error
+            results.append({"profile":fault,"scenario":scenario.name,**{k:v for k,v in result.items() if k!="trace"}})
+    calls,jobs={},{}
+    for result in results:
+        for key,value in result.get("io_calls",{}).items():calls[key]=calls.get(key,0)+value
+        for key,value in result.get("jobs_started",{}).items():jobs[key]=jobs.get(key,0)+value
+    if app.get("require_io_coverage"):
+        asynchronous={"i2c","uart","spi","sd","mic","speaker","bluetooth"}
+        synchronous={"gpio","pwm","adc","dac","rtc","wifi","power"}
+        active={k.split('.')[0] for k in calls if k.split('.')[-1] not in {"close","stop","release"}}
+        active.update(k.split('.')[0] for k in jobs)
+        missing=(set(app['required_services'])&synchronous)-active
+        missing|=(set(app['required_services'])&asynchronous)-{k.split('.')[0] for k in jobs}
+        if missing:raise ValueError("I/O coverage missing for "+", ".join(sorted(missing))+". Add/correct test_sequences that navigate menus and START these operations; keep the app features.")
     if {"display", "rgb"}.intersection(app["required_services"]) and not sum(p["api_operations"] for p in results):
         raise ValueError("Release suite: app declares display/RGB but produces no visible output in any input profile")
     resources={}
     for result in results:
         for kind,values in result.get("resources_used",{}).items():resources[kind]=sorted(set(resources.get(kind,[]))|set(values))
-    return {**results[0], "profiles": results, "resources_used":resources,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
+    return {**results[0], "profiles": results, "resources_used":resources,"io_calls":calls,"jobs_started":jobs,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
             "native_numeric_parity": False}
 
 
@@ -190,6 +211,7 @@ class Builder:
                     raise ValueError("Per-build disk limit exceeded")
                 (work / "main.lua").write_bytes(payload)
                 (folder / f"attempt-{attempt + 1}.lua").write_bytes(payload)
+                self.store.write(folder / f"test-plan-{attempt+1}.json",[s.model_dump() for s in generated.test_sequences])
                 build["attempts"] = attempt + 1
                 self.store.put("builds", build_id, build)
                 await progress("validating", 35, "Validerer syntaks og tillatte API-er")
@@ -203,6 +225,7 @@ class Builder:
                     api_version=(capabilities or {}).get("api_version",BASE_API)
                     result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
                         "hardware":(capabilities or {}).get("hardware") or {},
+                        "require_io_coverage":self.settings.fire_ai_mode=="openai",
                         **({"experience_policy_version":UX_POLICY_VERSION} if self.settings.fire_ai_mode=="openai" else {})}, self.store, build_id)
                     await progress("testing",75,"Kontrollerer funksjoner, stabilitet og grafisk utforming før levering")
                     reviewer=getattr(self.provider,"review",None)
@@ -231,6 +254,8 @@ class Builder:
                     raise  # Regenerating Lua cannot implement a missing native driver.
                 except (ValueError, asyncio.TimeoutError) as error:
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
+                    build["last_validation_error"]=self.store.redactor.text(last_error)[:2400]
+                    self.store.put("builds",build_id,build)
                     Quality(self.store).record_validation(build, generated.main_lua, last_error)
                     self.store.log(build_id, f"Attempt {attempt + 1} failed: {last_error}")
                     if attempt == 3:

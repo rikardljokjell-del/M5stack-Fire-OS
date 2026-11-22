@@ -38,10 +38,17 @@ class DialogReply(StrictModel):
     build_summary: str = Field(max_length=1000)
 
 
+class AppTestSequence(StrictModel):
+    name: str = Field(pattern=ID_PATTERN)
+    buttons: list[Literal["A","B","C"]] = Field(min_length=1,max_length=32)
+    interval_ms: int = Field(default=250,ge=100,le=1000,strict=True)
+
+
 class GeneratedApp(StrictModel):
     name: str = Field(min_length=1, max_length=32)
     main_lua: str = Field(min_length=1, max_length=100_000)
     required_services: list[str] = Field(max_length=24)
+    test_sequences: list[AppTestSequence] = Field(default_factory=list,max_length=6)
 
     @field_validator("name")
     @classmethod

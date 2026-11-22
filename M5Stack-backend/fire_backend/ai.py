@@ -155,7 +155,15 @@ class OpenAIProvider:
         response = await self.api().responses.parse(
             model=self.settings.openai_code_model,
             instructions=context + ("" if VISUAL_POLICY in context else VISUAL_POLICY) + ("" if APP_QUALITY_POLICY in context else APP_QUALITY_POLICY) + "\nGenerate a complete Lua app for this confirmed plan. "
-            "Follow the prototype API exactly. Return name, main_lua, required_services. "
+            "Follow the prototype API exactly. Return name, main_lua, required_services and test_sequences. "
+            "For hardware tools provide up to six bounded A/B/C test_sequences that navigate real menus and START "
+            "each operation (I2C scan, PWM configure/write, UART open/read/write etc), not just display its page. "
+            "Each sequence runs in a fresh VM, one short button per interval_ms; choose 100..1000ms, max32buttons. "
+            "Include paths to stop/close and return to menu. Tests also run with I/O error/timeout/disconnect. "
+            "If only the test plan missed a feature, correct the button sequence rather than deleting the feature. "
+            "Precompute I2C display rows on result/page changes; preserve UART unsent suffix only in its current "
+            "connection, prompt before discarding it, distinguish requested PWM duty from last confirmed output, "
+            "and queue short button events without overwriting earlier accepted presses. "
             "Naming is mandatory for EVERY app: a short understandable Norwegian app name, ideally 1-3 words, "
             "at most 32 characters, describing its actual purpose (e.g. Sprettsirkel, Snake, Helningsmaaler). "
             "Never use technical IDs, random suffixes, version numbers or generic AI app labels as the name. "

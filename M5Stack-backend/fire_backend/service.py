@@ -807,6 +807,12 @@ class Backend(DeviceLifecycle, AppLifecycle):
 
     async def build_job(self, session, build):
         async def progress(phase, percent, message):
+            now=time.time()
+            if build.get('phase_started_at') is not None:
+                prior=build.get('phase','preparing')
+                timings=build.setdefault('phase_seconds',{})
+                timings[prior]=round(timings.get(prior,0)+max(0,now-build['phase_started_at']),3)
+            build['phase_started_at']=now
             session.progress = {"type": "build_progress", "build_id": build["id"], "phase": phase,
                                 "progress": percent, "message": message, "eta_seconds": None}
             build.update(phase=phase, progress=percent)
@@ -857,6 +863,10 @@ class Backend(DeviceLifecycle, AppLifecycle):
         except BaseException as error:
             if not isinstance(error, (Exception, asyncio.CancelledError)):
                 raise
+            if isinstance(error,TimeoutError):
+                build['timed_out_phase']=build.get('phase','unknown')
+                error=ValueError("Byggingen nådde tidsgrensen på "+str(self.settings.fire_build_timeout_seconds)+
+                    " sekunder under "+build['timed_out_phase']+". Forsøk og siste kontrollfunn er lagret; ingen utestet pakke er levert.")
             message = "Build cancelled" if isinstance(error, asyncio.CancelledError) else await self.failure(session, error)
             if build_completed:
                 # A delivery/connection failure cannot revoke an already tested,
