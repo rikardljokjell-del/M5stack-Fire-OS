@@ -2577,7 +2577,9 @@ bool FireOS::startAiRecording() {
     aiAudioError_ = "Not enough memory for recording";
     return false;
   }
-  if (!firePrepareMicCapture(kAiAudioSampleRate)) {
+  if (!fireStartMicCapture(
+          reinterpret_cast<int16_t*>(aiAudioBuffer_ + 44), kAiAudioSamples,
+          kAiAudioSampleRate)) {
     aiAudioError_ = "Microphone capture unavailable";
     return false;
   }
@@ -2606,6 +2608,7 @@ bool FireOS::startAiRecording() {
 void FireOS::finishAiRecording() {
   if (aiAudioStopSent_) return;
   aiAudioStopSent_ = true;
+  fireStopMicCapture();
   if (!backendClient_ || !backendClient_->listenStop(aiTurnId_)) {
     aiAudioError_ = "Backend session not ready";
     aiWorkflowText_ = "SESSION LOST - TRY AGAIN";
@@ -2621,18 +2624,14 @@ void FireOS::finishAiRecording() {
 
 void FireOS::updateAiAudio() {
   if (aiAudioCaptureActive_) {
-    constexpr size_t kChunkSamples = 256;
-    const size_t remaining = kAiAudioSamples - aiAudioCapturedSamples_;
-    const size_t chunk = min<size_t>(kChunkSamples, remaining);
 #if FIRE_AUDIO_CAPTURE_ENABLED
-    const bool recorded = fireRecordMic(
-        reinterpret_cast<int16_t*>(aiAudioBuffer_ + 44 +
-                                   aiAudioCapturedSamples_ * sizeof(int16_t)),
-        chunk, kAiAudioSampleRate);
+    const bool captureFailed = fireMicCaptureFailed();
+    const bool captureRunning = fireMicCaptureRunning();
 #else
-    const bool recorded = false;
+    const bool captureFailed = true;
+    const bool captureRunning = false;
 #endif
-    if (!recorded) {
+    if (captureFailed) {
       aiAudioError_ = "MIC CAPTURE FAILED";
       fireReleaseMicCapture();
       aiAudioCaptureActive_ = false;
@@ -2640,10 +2639,8 @@ void FireOS::updateAiAudio() {
       aiWorkflowText_ = aiAudioError_;
       aiWorkflowState_ = 0;
       aiDeveloperMode_ = 0;
-    } else {
-      aiAudioCapturedSamples_ += chunk;
-      if (aiAudioStopSent_ || aiAudioCapturedSamples_ >= kAiAudioSamples) {
-        aiAudioCaptureActive_ = false;
+    } else if (!captureRunning) {
+        aiAudioCapturedSamples_ = fireMicCapturedSamples();
         fireReleaseMicCapture();
         aiAudioCaptureActive_ = false;
         const uint32_t payloadBytes =
@@ -2668,7 +2665,6 @@ void FireOS::updateAiAudio() {
         if (!aiAudioUploadOk_)
           aiAudioError_ = "Backend audio upload failed";
         aiAudioUploadFinished_ = true;
-      }
     }
   }
   if (aiAudioCaptureFinished_ && !aiAudioStopSent_) finishAiRecording();

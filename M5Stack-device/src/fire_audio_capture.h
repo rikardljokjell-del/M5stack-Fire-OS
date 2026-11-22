@@ -2,6 +2,10 @@
 
 #include <Arduino.h>
 
-bool firePrepareMicCapture(uint32_t sampleRate);
+bool fireStartMicCapture(int16_t* target, size_t maxSamples,
+                         uint32_t sampleRate);
+bool fireMicCaptureRunning();
+size_t fireMicCapturedSamples();
+bool fireMicCaptureFailed();
+void fireStopMicCapture();
 void fireReleaseMicCapture();
-bool fireRecordMic(int16_t* samples, size_t sampleCount, uint32_t sampleRate);
