@@ -197,6 +197,9 @@ class OpenAIProvider:
             "If correcting a known failure, put a concise factual description of the source correction and "
             "its regression check in repair_summary; do not claim physical verification or proven root cause. "
             "An unimplemented sound toggle is not a pass. Missing sound service must be unavailable with no playback. "
+            "Check audio_level_ok explicitly: primary music/melody defaults to channel gain255/255 under OS master, "
+            "not a hidden low constant such as44. Lower gain must be an intentional labelled attenuation choice "
+            "or quieter secondary cue. Do not claim real loudness from synthetic job success. "
             "Approve only if EVERY named check passes with no concrete unresolved issues.",
             input=json.dumps({"confirmed_app":summary,"candidate":generated.model_dump(),"pc_validation":validation},ensure_ascii=False),
             text_format=FireAppReview,store=False,max_output_tokens=4000,

@@ -28,6 +28,7 @@ def name_words(text):
     return {stem(w) for w in words if w not in {"app", "appen", "program", "programmet"}}
 
 RULES = {
+    "audio_level":"Primary audio uses relative channel gain255/255 by default under OS master/mute. Do not mistake byte gain for percentage or hide near-muted defaults; exercise sound-enabled playback and immediate stop.",
     "rendering": VISUAL_POLICY,
     "bounds": "Clamp display coordinates and RGB values; use finite integers and keep moving objects within screen bounds.",
     "nil": "Initialize state before callbacks. Check table indices, empty lists and missing values, including after reset and collisions.",
@@ -41,6 +42,7 @@ RULES = {
 
 def failure_class(message):
     text = message.lower()
+    if any(word in text for word in ("audio_level_ok","audio gain","lydstyrke","inaudible")):return "audio_level"
     if "design:" in text or "visual_quality_ok" in text:return "design"
     if "visual frame" in text or any(word in text for word in ("flimr", "flimmer", "flicker", "blank frame")): return "rendering"
     if any(word in text for word in ("bounds", "integer", "range", "coordinate")): return "bounds"

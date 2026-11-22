@@ -1,5 +1,9 @@
 # FIRE OS AI Developer backend 0.2
 
+[Standard for hørbar lyd](docs/AUDIO_GAIN_STANDARD.md): primærlyd bruker kanal-gain
+255/255 under OS-mastervolumet. Skjult ekstra demping som44/255 skal ikke være
+standard. Lydnivå inngår i kontrollen før levering.
+
 [Melodiappens avhengighetsfeil](docs/MELODY_DEPENDENCIES_FIX.md) er rettet:
 speaker får automatisk jobs+sd i manifest og permissions, også for tone-only.
 Manglende avhengigheter stoppes før levering; samme kontrakt brukes ved generering

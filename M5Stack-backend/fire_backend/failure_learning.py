@@ -10,6 +10,7 @@ from difflib import SequenceMatcher
 
 
 REGRESSION_CHECKS = {
+    "audio_level":"Inspect primary channel gain255 under OS master, enable sound before playback tests, verify mute/stop and physically check audible output separately.",
     "rendering": "Exercise complete frames while waiting, paused and game-over; reject blank updates, clipped output and invalid clear order.",
     "bounds": "Exercise screen edges, empty/full collections, reset and extreme values; assert valid integer arguments and indices.",
     "nil": "Exercise initialization, empty/full data, collisions and repeated reset; never index absent state.",
