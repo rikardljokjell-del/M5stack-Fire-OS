@@ -23,6 +23,9 @@ const char* checkedString(lua_State* state, int index) {
 void* FireLuaRuntime::allocator(void* user, void* pointer, size_t oldSize,
                                 size_t newSize) {
   auto* runtime = static_cast<FireLuaRuntime*>(user);
+  // Lua passes a type tag in oldSize for a fresh allocation; it is not
+  // allocated-byte accounting until a real pointer exists.
+  if (!pointer) oldSize = 0;
   if (newSize == 0) {
     if (pointer) {
       heap_caps_free(pointer);
@@ -130,6 +133,7 @@ int luaBaseToString(lua_State* state) {
 
 int luaBaseNext(lua_State* state) {
   luaL_checktype(state, 1, LUA_TTABLE);
+  lua_settop(state, 2);  // next(table) has an implicit nil key.
   if (lua_next(state, 1) == 0) return 0;
   return 2;
 }

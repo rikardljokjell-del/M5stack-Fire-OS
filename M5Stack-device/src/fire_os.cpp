@@ -18,6 +18,7 @@
 #include <time.h>
 #include <esp_sntp.h>
 #include <math.h>
+#include <string.h>
 #include <mbedtls/sha256.h>
 #ifdef FIRE_OS_BLE
 #include <NimBLEDevice.h>
@@ -143,15 +144,14 @@ void configureFireRgbStrip() {
 }
 
 #ifdef FIRE_OS_BLE
-void writeFireRgbRaw(uint8_t red, uint8_t green, uint8_t blue,
-                     uint8_t brightness) {
+void writeFireRgbArray(const uint8_t values[10][3], uint8_t brightness) {
   static rmt_item32_t items[10 * 24 + 1];
-  const uint8_t r = static_cast<uint16_t>(red) * brightness / 255;
-  const uint8_t g = static_cast<uint16_t>(green) * brightness / 255;
-  const uint8_t b = static_cast<uint16_t>(blue) * brightness / 255;
-  const uint8_t bytes[] = {g, r, b};  // FIRE strip is GRB ordered.
   uint16_t item = 0;
   for (uint8_t pixel = 0; pixel < 10; ++pixel) {
+    const uint8_t bytes[] = {
+        static_cast<uint8_t>(static_cast<uint16_t>(values[pixel][1]) * brightness / 255),
+        static_cast<uint8_t>(static_cast<uint16_t>(values[pixel][0]) * brightness / 255),
+        static_cast<uint8_t>(static_cast<uint16_t>(values[pixel][2]) * brightness / 255)};
     for (uint8_t byte : bytes) {
       for (int8_t bit = 7; bit >= 0; --bit) {
         const bool one = (byte >> bit) & 1;
@@ -169,6 +169,17 @@ void writeFireRgbRaw(uint8_t red, uint8_t green, uint8_t blue,
   items[item].duration1 = 0;
   rmt_write_items(RMT_CHANNEL_0, items, item + 1, true);
 }
+
+void writeFireRgbRaw(uint8_t red, uint8_t green, uint8_t blue,
+                     uint8_t brightness) {
+  uint8_t values[10][3] = {};
+  for (uint8_t pixel = 0; pixel < 10; ++pixel) {
+    values[pixel][0] = red;
+    values[pixel][1] = green;
+    values[pixel][2] = blue;
+  }
+  writeFireRgbArray(values, brightness);
+}
 #endif
 
 
@@ -185,18 +196,34 @@ bool bluetoothPeripheralConnected = false;
 String* bluetoothPeripheralAddressPtr = nullptr;
 #define bluetoothPeripheralAddress (*bluetoothPeripheralAddressPtr)
 uint8_t bluetoothPeripheralAddressType = 0;
+portMUX_TYPE bluetoothStateMux = portMUX_INITIALIZER_UNLOCKED;
+volatile bool bluetoothPendingConnected = false;
+volatile bool bluetoothPendingUpdate = false;
+char bluetoothPendingAddress[32] = {};
+uint8_t bluetoothPendingAddressType = 0;
 
 class FireBluetoothServerCallbacks final : public NimBLEServerCallbacks {
  public:
   void onConnect(NimBLEServer*, NimBLEConnInfo& connInfo) override {
     bluetoothPeripheralConnected = true;
-    bluetoothPeripheralAddress = connInfo.getAddress().toString().c_str();
-    bluetoothPeripheralAddressType = connInfo.getAddress().getType();
+    const String address = connInfo.getAddress().toString().c_str();
+    portENTER_CRITICAL(&bluetoothStateMux);
+    strncpy(bluetoothPendingAddress, address.c_str(),
+            sizeof(bluetoothPendingAddress) - 1);
+    bluetoothPendingAddress[sizeof(bluetoothPendingAddress) - 1] = '\0';
+    bluetoothPendingAddressType = connInfo.getAddress().getType();
+    bluetoothPendingConnected = true;
+    bluetoothPendingUpdate = true;
+    portEXIT_CRITICAL(&bluetoothStateMux);
   }
 
   void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override {
     bluetoothPeripheralConnected = false;
-    bluetoothPeripheralAddress = "";
+    portENTER_CRITICAL(&bluetoothStateMux);
+    bluetoothPendingAddress[0] = '\0';
+    bluetoothPendingConnected = false;
+    bluetoothPendingUpdate = true;
+    portEXIT_CRITICAL(&bluetoothStateMux);
   }
 };
 
@@ -263,6 +290,18 @@ String jsonStringField(const String& json, const char* key) {
     }
   }
   return value;
+}
+
+bool validSha256Hex(const String& value) {
+  if (value.length() != 64) return false;
+  for (size_t index = 0; index < value.length(); ++index) {
+    const char c = value[index];
+    const bool digit = c >= '0' && c <= '9';
+    const bool lower = c >= 'a' && c <= 'f';
+    const bool upper = c >= 'A' && c <= 'F';
+    if (!digit && !lower && !upper) return false;
+  }
+  return true;
 }
 
 int jsonIntField(const String& json, const char* key, int fallback = 0) {
@@ -400,9 +439,13 @@ void handleWifiSetupSave() {
     return;
   }
   if (activeFireOs->aiApiSetupActive()) {
-    activeFireOs->saveBackendSetupFields(
+    const bool saved = activeFireOs->saveBackendSetupFields(
         wifiSetupServer.arg("host"), wifiSetupServer.arg("port"),
         wifiSetupServer.arg("backend_token"), wifiSetupServer.arg("device"));
+    if (!saved) {
+      wifiSetupServer.send(400, "text/plain", "Invalid backend configuration");
+      return;
+    }
   } else {
     const String ssid = wifiSetupServer.arg("ssid");
     const String password = wifiSetupServer.arg("password");
@@ -412,6 +455,7 @@ void handleWifiSetupSave() {
   wifiSetupServer.send(200, "text/html",
                        "<html><body><h2>Saved</h2><p>FIRE OS kept empty fields "
                        "unchanged. You can close this page.</p></body></html>");
+  if (activeFireOs->aiApiSetupActive()) activeFireOs->finishBackendSetup();
 }
 
 void handleWifiBackendProvision() {
@@ -466,7 +510,11 @@ void handleWifiBackendProvision() {
       "<p>FIRE OS saved the PC address, port, device ID and token.</p>"
       "<p>You can return to FIRE OS. It will connect to the backend when Wi-Fi "
       "is available.</p></body></html>");
-  activeFireOs->saveBackendSetupFields(host, port, backendToken, deviceId);
+  if (!activeFireOs->saveBackendSetupFields(host, port, backendToken, deviceId)) {
+    wifiSetupServer.send(400, "text/plain", "Invalid backend configuration");
+    return;
+  }
+  activeFireOs->finishBackendSetup();
 }
 
 void writeWavHeader(uint8_t* data, uint32_t payloadBytes,
@@ -770,6 +818,28 @@ void FireOS::begin() {
 
 void FireOS::update() {
   M5.update();
+#ifdef FIRE_OS_BLE
+  bool bluetoothUpdate = false;
+  bool bluetoothConnectedSnapshot = false;
+  uint8_t bluetoothTypeSnapshot = 0;
+  char bluetoothAddressSnapshot[32] = {};
+  portENTER_CRITICAL(&bluetoothStateMux);
+  if (bluetoothPendingUpdate) {
+    bluetoothUpdate = true;
+    bluetoothConnectedSnapshot = bluetoothPendingConnected;
+    bluetoothTypeSnapshot = bluetoothPendingAddressType;
+    strncpy(bluetoothAddressSnapshot, bluetoothPendingAddress,
+            sizeof(bluetoothAddressSnapshot) - 1);
+    bluetoothPendingUpdate = false;
+  }
+  portEXIT_CRITICAL(&bluetoothStateMux);
+  if (bluetoothUpdate) {
+    bluetoothPeripheralAddress = bluetoothConnectedSnapshot
+                                     ? String(bluetoothAddressSnapshot)
+                                     : String();
+    bluetoothPeripheralAddressType = bluetoothTypeSnapshot;
+  }
+#endif
   updateBootFeedback();
   if (screen_ == Screen::AiDeveloper &&
       (!backendClient_ || !backendClient_->configured()))
@@ -2065,6 +2135,9 @@ void FireOS::onDoubleClick(uint8_t index) {
 
 void FireOS::playButtonSound(uint8_t index, bool longPress) {
   if (!buttonSoundsEnabled_ || !M5.Speaker.isEnabled()) return;
+  if (screen_ == Screen::AiDeveloper &&
+      (aiAudioCaptureActive_ || aiAudioOutputActive_ || aiWorkflowState_ > 0))
+    return;
   const float frequency = index == 1 ? 740.0f : 560.0f;
   M5.Speaker.tone(frequency, longPress ? 28 : 18, 0, true);
 }
@@ -2442,7 +2515,7 @@ void FireOS::handleHelpButton(uint8_t index) {
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
   if (aiProjectPickerActive_) {
-    const uint8_t itemCount = luaAppCount_ + 2;  // New app + apps + Back.
+    const uint8_t itemCount = luaAppCount_ + 3;  // Chat + New + apps + Back.
     if (index == 0) {
       aiProjectSelection_ =
           (aiProjectSelection_ + itemCount - 1) % itemCount;
@@ -2453,10 +2526,25 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     } else {
       aiProjectPickerActive_ = false;
       if (aiProjectSelection_ == 0) {
+        aiConversationMode_ = 1;
+        aiProjectId_ = "";
+        aiProjectName_ = "Chat";
+        if (backendClient_) {
+          backendClient_->setConversationMode("chat");
+          backendClient_->setProjectId("");
+        }
+      } else if (aiProjectSelection_ == 1) {
+        aiConversationMode_ = 0;
         aiProjectId_ = "";
         aiProjectName_ = "New app";
+        if (backendClient_) {
+          backendClient_->setConversationMode("develop");
+          backendClient_->setProjectId("");
+          backendClient_->setAppMode("new");
+        }
       } else {
-        const uint8_t selected = aiProjectSelection_ - 1;
+        aiConversationMode_ = 0;
+        const uint8_t selected = aiProjectSelection_ - 2;
         const String source = luaAppPaths_[selected];
         const int slash = source.lastIndexOf('/');
         const String appFolder = slash > 0 ? source.substring(0, slash) : source;
@@ -2465,7 +2553,13 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
             compactPreferenceKey("pr_", appId).c_str(), appId);
         aiProjectName_ = luaAppNames_[selected];
       }
-      if (backendClient_) backendClient_->setProjectId(aiProjectId_);
+      if (backendClient_) {
+        backendClient_->setProjectId(aiProjectId_);
+        if (aiProjectId_.length() > 0) {
+          backendClient_->setConversationMode("develop");
+          backendClient_->setAppMode("update");
+        }
+      }
       aiWorkflowText_ = aiProjectId_.length() > 0
                             ? "EDIT " + aiProjectName_
                             : "NEW APP";
@@ -2512,6 +2606,10 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
         aiWorkflowState_ = 0;
         aiDeveloperMode_ = 0;
       }
+    } else if (aiWorkflowState_ == 2 || aiWorkflowState_ == 3 ||
+               aiWorkflowState_ == 5) {
+      cancelConversationTurn("READY - ADDING CONTEXT", true);
+      if (backendClient_ && backendClient_->sessionReady()) startAiRecording();
     }
   } else if (index == 0 && aiWorkflowState_ == 3) {
     if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
@@ -2527,10 +2625,9 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiWorkflowStarted_ = millis();
     }
   } else if (index == 2 &&
-             (aiWorkflowState_ == 3 || aiWorkflowState_ == 5)) {
-    if (backendClient_ && backendClient_->connected()) backendClient_->cancelTurn();
-    aiWorkflowState_ = 0;
-    aiDeveloperMode_ = 0;
+             (aiWorkflowState_ == 1 || aiWorkflowState_ == 2 ||
+              aiWorkflowState_ == 3 || aiWorkflowState_ == 5)) {
+    cancelConversationTurn("READY - PRESS B TO SPEAK", false);
     aiBuildProgress_ = 0;
     aiWorkflowStarted_ = millis();
   } else if (index == 0 && aiWorkflowState_ == 5) {
@@ -2569,6 +2666,10 @@ bool FireOS::startAiRecording() {
                                  : "Microphone or backend unavailable";
     return false;
   }
+  if (!stopAiAudioOutput()) {
+    aiAudioError_ = "Audio is still playing";
+    return false;
+  }
   if (!aiAudioBuffer_) {
     aiAudioBuffer_ = static_cast<uint8_t*>(ps_malloc(kAiAudioWavBytes));
     if (!aiAudioBuffer_) aiAudioBuffer_ = static_cast<uint8_t*>(malloc(kAiAudioWavBytes));
@@ -2603,6 +2704,45 @@ bool FireOS::startAiRecording() {
   aiWorkflowStarted_ = millis();
   return true;
 #endif
+}
+
+bool FireOS::stopAiAudioOutput() {
+  if (!aiAudioOutputActive_ && !aiAudioOutputBuffer_) return true;
+  M5.Speaker.stop();
+  if (M5.Speaker.isPlaying()) return false;
+  free(aiAudioOutputBuffer_);
+  aiAudioOutputBuffer_ = nullptr;
+  aiAudioOutputLength_ = 0;
+  aiAudioOutputActive_ = false;
+  aiAudioOutputId_ = "";
+  aiAudioOutputTurnId_ = "";
+  return true;
+}
+
+void FireOS::cancelConversationTurn(const String& reason, bool startNew) {
+  const String oldTurn = aiTurnId_;
+  fireStopMicCapture();
+  fireReleaseMicCapture();
+  aiAudioCaptureActive_ = false;
+  aiAudioCaptureFinished_ = false;
+  aiAudioUploadFinished_ = false;
+  aiAudioUploadOk_ = false;
+  stopAiAudioOutput();
+  if (backendClient_ && backendClient_->sessionReady() && oldTurn.length() > 0)
+    backendClient_->cancelTurn(oldTurn);
+  aiTurnId_ = "";
+  if (startNew) {
+    aiProposalId_ = "";
+    aiAssistantText_ = "";
+    aiTranscriptText_ = "";
+    aiWorkflowState_ = 0;
+    aiDeveloperMode_ = 0;
+    aiWorkflowText_ = "READY - PRESS B TO SPEAK";
+  } else {
+    aiWorkflowState_ = 0;
+    aiDeveloperMode_ = 0;
+    aiWorkflowText_ = reason.length() > 0 ? reason : "READY";
+  }
 }
 
 void FireOS::finishAiRecording() {
@@ -2765,13 +2905,30 @@ bool FireOS::startLuaApp(const String& path, const String& name) {
 }
 
 void FireOS::stopLuaApp(const String& reason) {
+  const String stoppedRunId = luaRunId_;
+  const String stoppedPackageId = aiPackageId_;
   if (luaAppActive_ && reason.length() > 0) {
     Serial.printf("Lua app stopped: %s\n", reason.c_str());
   }
   luaAppActive_ = false;
   if (luaRuntime_) luaRuntime_->stop();
+  luaRuntimeReady_ = false;
+  for (auto& pixel : luaRgbValues_)
+    pixel[0] = pixel[1] = pixel[2] = 0;
+#ifdef FIRE_OS_BLE
+  writeFireRgbRaw(0, 0, 0, 0);
+#else
+  M5.Led.setAllColor(0, 0, 0);
+  M5.Led.display();
+#endif
   luaRunId_ = "";
   luaHealthySent_ = false;
+  if (stoppedRunId.length() > 0 && backendClient_) {
+    if (reason == "back" || reason == "home" || reason == "user_exit")
+      backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "user_exit");
+    else if (reason == "runtime_limit")
+      backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "runtime_limit");
+  }
   if (reason.length() > 0 && reason != "back" && reason != "home") {
     luaAppError_ = reason;
   }
@@ -2783,11 +2940,12 @@ void FireOS::updateLuaApp() {
   const uint32_t elapsed = now - luaLastFrameAt_;
   luaLastFrameAt_ = now;
   if (!luaRuntime_ || !luaRuntime_->update(min<uint32_t>(elapsed, 100))) {
-    if (luaRunId_.length() > 0 && backendClient_)
-      backendClient_->appFailed(luaRunId_, aiPackageId_, "runtime_error",
-                                luaRuntime_ ? luaRuntime_->lastError()
-                                             : String("runtime unavailable"));
-    stopLuaApp(luaRuntime_ ? luaRuntime_->lastError() : String("runtime unavailable"));
+    const String error = luaRuntime_ ? luaRuntime_->lastError()
+                                     : String("runtime unavailable");
+    const bool runtimeLimit = error == "Lua app runtime limit exceeded";
+    if (!runtimeLimit && luaRunId_.length() > 0 && backendClient_)
+      backendClient_->appFailed(luaRunId_, aiPackageId_, "runtime_error", error);
+    stopLuaApp(runtimeLimit ? "runtime_limit" : error);
   } else if (luaRunId_.length() > 0 && !luaHealthySent_) {
     if (backendClient_) backendClient_->appHealthy(luaRunId_, aiPackageId_);
     luaHealthySent_ = true;
@@ -2864,11 +3022,42 @@ void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
   if (type == "session_started") {
+    const String mode = jsonStringField(message, "conversation_mode");
+    if (mode == "chat") aiConversationMode_ = 1;
+    else if (mode == "develop") aiConversationMode_ = 0;
     aiWorkflowText_ = "CONNECTED";
     return;
   }
+  if (type == "session_snapshot") {
+    const String mode = jsonStringField(message, "conversation_mode");
+    if (mode == "chat") aiConversationMode_ = 1;
+    else if (mode == "develop") aiConversationMode_ = 0;
+    const String proposal = jsonStringField(message, "proposal_id");
+    const String packageId = jsonStringField(message, "package_id");
+    if (proposal.length() > 0) aiProposalId_ = proposal;
+    if (packageId.length() > 0) aiPackageId_ = packageId;
+    const String activity = jsonStringField(message, "activity");
+    if (activity == "listening") {
+      aiWorkflowState_ = 1;
+      aiDeveloperMode_ = 1;
+    } else if (activity == "processing") {
+      aiWorkflowState_ = 2;
+      aiDeveloperMode_ = 2;
+    } else if (activity == "speaking") {
+      aiDeveloperMode_ = 3;
+      aiWorkflowState_ = 2;
+    }
+    aiWorkflowText_ = "CONNECTED - STATE RESTORED";
+    return;
+  }
   if (type == "assistant_message" || type == "transcript") {
-    aiAssistantText_ = jsonStringField(message, "text");
+    const String text = jsonStringField(message, "text");
+    if (type == "transcript") {
+      aiTranscriptText_ = text;
+      aiAssistantText_ = "Jeg hørte: " + text;
+    } else {
+      aiAssistantText_ = text;
+    }
     if (type == "assistant_message") {
       // A completed answer returns to the conversational idle state so B can
       // start another turn and add context before the user builds.
@@ -2880,6 +3069,23 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowState_ = 2;
       aiWorkflowText_ = "TRANSCRIBED - WAITING FOR AI";
     }
+    return;
+  }
+  if (type == "input_retry" ||
+      (type == "error" &&
+       (jsonStringField(message, "code") == "no_speech" ||
+        jsonStringField(message, "code") == "audio_upload_missing"))) {
+    const String turnId = jsonStringField(message, "turn_id");
+    if (turnId.length() == 0 || turnId == aiTurnId_) {
+      cancelConversationTurn("TRY AGAIN - PRESS B", false);
+      aiWorkflowText_ = "TRY AGAIN - PRESS B";
+    }
+    return;
+  }
+  if (type == "turn_cancelled") {
+    const String turnId = jsonStringField(message, "turn_id");
+    if (turnId.length() == 0 || turnId == aiTurnId_)
+      cancelConversationTurn("READY - PRESS B TO SPEAK", false);
     return;
   }
   if (type == "ui_event") {
@@ -2917,19 +3123,37 @@ void FireOS::handleBackendMessage(const String& message) {
     const String audioId = jsonStringField(message, "audio_id");
     const String turnId = jsonStringField(message, "turn_id");
     const String url = jsonStringField(message, "download_url");
+    const String format = jsonStringField(message, "format");
     const String expectedHash = jsonStringField(message, "sha256");
     const int sampleRate = jsonIntField(message, "sample_rate");
     const int channels = jsonIntField(message, "channels");
     const uint32_t size = static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
     constexpr uint32_t kMaxPcmBytes = 1440000;
     if (!backendClient_ || audioId.length() == 0 || turnId.length() == 0 ||
-        url.length() == 0 || sampleRate != 24000 || channels != 1 ||
-        size == 0 || size > kMaxPcmBytes || (size & 1U) != 0) {
+        (aiTurnId_.length() > 0 && turnId != aiTurnId_) ||
+        audioId == aiLastAudioId_ || url.length() == 0 ||
+        format != "pcm_s16le" || !validSha256Hex(expectedHash) ||
+        sampleRate != 24000 || channels != 1 || size == 0 ||
+        size > kMaxPcmBytes || (size & 1U) != 0) {
       aiWorkflowText_ = "VOICE RESPONSE INVALID";
       aiDeveloperMode_ = 2;
       return;
     }
-    free(aiAudioOutputBuffer_);
+    // Never release a buffer while Speaker may still be reading it. A newer
+    // answer can supersede the old one, but the old playback must be stopped
+    // and observed idle before its memory is reused.
+    if (aiAudioOutputActive_ || aiAudioOutputBuffer_) {
+      M5.Speaker.stop();
+      if (M5.Speaker.isPlaying()) {
+        aiWorkflowText_ = "VOICE BUSY - TRY AGAIN";
+        aiDeveloperMode_ = 3;
+        return;
+      }
+      free(aiAudioOutputBuffer_);
+      aiAudioOutputBuffer_ = nullptr;
+      aiAudioOutputLength_ = 0;
+      aiAudioOutputActive_ = false;
+    }
     aiAudioOutputBuffer_ = static_cast<uint8_t*>(ps_malloc(size));
     if (!aiAudioOutputBuffer_)
       aiAudioOutputBuffer_ = static_cast<uint8_t*>(malloc(size));
@@ -2937,7 +3161,7 @@ void FireOS::handleBackendMessage(const String& message) {
     bool ok = aiAudioOutputBuffer_ &&
               backendClient_->downloadAudio(url, aiAudioOutputBuffer_, size,
                                              downloaded);
-    if (ok && expectedHash.length() == 64) {
+    if (ok) {
       uint8_t digest[32] = {};
       mbedtls_sha256_context sha;
       mbedtls_sha256_init(&sha);
@@ -2969,6 +3193,8 @@ void FireOS::handleBackendMessage(const String& message) {
     aiAudioOutputActive_ = true;
     aiAudioOutputId_ = audioId;
     aiAudioOutputTurnId_ = turnId;
+    aiLastAudioId_ = audioId;
+    aiLastAudioTurnId_ = turnId;
     aiDeveloperMode_ = 3;
     aiWorkflowState_ = 2;
     aiWorkflowText_ = "AI SPEAKING";
@@ -3078,8 +3304,7 @@ void FireOS::handleBackendMessage(const String& message) {
     const bool activeRun = luaAppActive_ && luaRunId_ == runId;
     if (activeRun) stopLuaApp("remote_stop");
     if (backendClient_)
-      backendClient_->appStopped(runId, packageId, stopId,
-                                 activeRun ? "stopped" : "already_stopped");
+      backendClient_->appStopped(runId, packageId, stopId, "requested");
     aiWorkflowState_ = 5;
     aiWorkflowText_ = activeRun ? "STOPPED" : "ALREADY STOPPED";
     return;
@@ -3164,11 +3389,7 @@ void FireOS::luaRgbSet(void* context, int index, int red, int green,
   os->luaRgbValues_[index][1] = static_cast<uint8_t>(green);
   os->luaRgbValues_[index][2] = static_cast<uint8_t>(blue);
 #ifdef FIRE_OS_BLE
-  // The current strip driver exposes a single efficient FIRE update path.
-  // Keep the Lua API per-pixel while using the requested pixel's color as a
-  // safe fallback until the shared strip renderer is made per-pixel.
-  writeFireRgbRaw(static_cast<uint8_t>(red), static_cast<uint8_t>(green),
-                  static_cast<uint8_t>(blue), 180);
+  writeFireRgbArray(os->luaRgbValues_, 180);
 #else
   M5.Led.setBrightness(180);
   M5.Led.setAllColor(static_cast<uint8_t>(red), static_cast<uint8_t>(green),
@@ -3810,15 +4031,54 @@ void FireOS::saveMobileSetupFields(const String& ssid, const String& password,
   if (wifiSetupActive_) stopWifiSetup();
 }
 
-void FireOS::saveBackendSetupFields(const String& host, const String& port,
+bool FireOS::saveBackendSetupFields(const String& host, const String& port,
                                     const String& token, const String& deviceId) {
-  if (host.length() > 0) backendHost_ = host;
+  auto validText = [](const String& value, size_t maximum,
+                      bool allowColon) {
+    if (value.length() == 0 || value.length() > maximum) return false;
+    for (size_t index = 0; index < value.length(); ++index) {
+      const char c = value[index];
+      if (static_cast<uint8_t>(c) < 0x21 || c == '\r' || c == '\n' ||
+          c == '\0' || (!allowColon && c == ':'))
+        return false;
+    }
+    return true;
+  };
+  auto validDeviceId = [](const String& value) {
+    if (value.length() == 0 || value.length() > 64) return false;
+    for (size_t index = 0; index < value.length(); ++index) {
+      const char c = value[index];
+      const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                      c == '_' || c == '-';
+      if (!ok || (index == 0 && (c == '_' || c == '-'))) return false;
+    }
+    return true;
+  };
+
+  const String nextHost = host.length() > 0 ? host : backendHost_;
+  const String nextToken = token.length() > 0 ? token : backendToken_;
+  const String nextDevice = deviceId.length() > 0 ? deviceId : backendDeviceId_;
+  uint32_t nextPort = backendPort_;
   if (port.length() > 0) {
-    const uint16_t parsed = static_cast<uint16_t>(port.toInt());
-    if (parsed > 0 && parsed < 65536) backendPort_ = parsed;
+    if (port.length() > 5) return false;
+    uint32_t parsed = 0;
+    for (size_t index = 0; index < port.length(); ++index) {
+      if (port[index] < '0' || port[index] > '9') return false;
+      parsed = parsed * 10 + static_cast<uint32_t>(port[index] - '0');
+      if (parsed > 65535) return false;
+    }
+    if (parsed == 0) return false;
+    nextPort = parsed;
   }
-  if (token.length() > 0) backendToken_ = token;
-  if (deviceId.length() > 0) backendDeviceId_ = deviceId;
+  if (!validText(nextHost, 128, true) || !validText(nextToken, 128, false) ||
+      nextToken.length() < 24 || !validDeviceId(nextDevice))
+    return false;
+
+  // Commit all four values together only after every field is valid.
+  backendHost_ = nextHost;
+  backendPort_ = static_cast<uint16_t>(nextPort);
+  backendToken_ = nextToken;
+  backendDeviceId_ = nextDevice;
   aiApiKey_ = "";
   preferences.remove("openai_key");
   saveSettings();
@@ -3828,13 +4088,13 @@ void FireOS::saveBackendSetupFields(const String& host, const String& port,
                               backendDeviceId_, "fire-os-0.2");
     backendStatus_ = backendClient_->status();
   }
-  stopWifiSetup();
   if (wifiMode_ != 2 && backendHost_.length() > 0 &&
       backendToken_.length() >= 24) {
     // Backend configuration is an explicit app dependency. Auto mode may
     // keep Wi-Fi off at boot, so request it when the backend is configured.
     requestWifi(true);
   }
+  return true;
 }
 
 bool FireOS::wifiSetupTokenValid(const String& token) const {
@@ -4425,6 +4685,19 @@ void FireOS::handlePowerActionsButton(uint8_t index) {
 }
 
 void FireOS::manageDisplayPower() {
+  const bool activeWork = aiAudioCaptureActive_ || aiAudioOutputActive_ ||
+                          (packageManager_ && packageManager_->busy()) ||
+                          luaAppActive_ ||
+                          (screen_ == Screen::AiDeveloper &&
+                           aiWorkflowState_ > 0 &&
+                           aiWorkflowState_ < 5);
+  if (activeWork) {
+    // Conversation/audio/install work is a power-management wakelock. Do not
+    // let a short user-configured timer kill the operation mid-transaction.
+    lastActivity_ = millis();
+    if (displayPowerState_ != 0) wakeDisplay();
+    return;
+  }
   const uint32_t idleMs = millis() - lastActivity_;
   const uint32_t dimMs = static_cast<uint32_t>(kDurationMinutes[dimOption_]) * 60000UL;
   const uint32_t offMs = static_cast<uint32_t>(kDurationMinutes[screenOffOption_]) * 60000UL;
@@ -5317,7 +5590,7 @@ void FireOS::drawAiDeveloper() {
     ui.fillRoundRect(12, 28, 296, 188, 12, kPanel);
     ui.setTextDatum(MC_DATUM);
     drawText(160, 45, "AI DEVELOPER", TFT_WHITE, 2, kPanel);
-    const uint8_t itemCount = luaAppCount_ + 2;
+    const uint8_t itemCount = luaAppCount_ + 3;
     const uint8_t visible = min<uint8_t>(6, itemCount - aiProjectOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = aiProjectOffset_ + row;
@@ -5325,10 +5598,12 @@ void FireOS::drawAiDeveloper() {
       const int y = 72 + row * 22;
       if (selected) ui.fillRoundRect(20, y - 4, 280, 19, 4, kCyan);
       String label = item == 0
-                         ? "New app"
-                         : item == itemCount - 1
-                             ? "Back"
-                             : luaAppNames_[item - 1];
+                         ? "Chat only"
+                         : item == 1
+                             ? "New app"
+                             : item == itemCount - 1
+                                 ? "Back"
+                                 : luaAppNames_[item - 2];
       if (label.length() > 28) label = label.substring(0, 25) + "...";
       drawText(160, y, label, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);

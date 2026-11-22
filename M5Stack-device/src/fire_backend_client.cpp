@@ -22,6 +22,42 @@ String jsonEscape(const String& input) {
   }
   return output;
 }
+
+String jsonStringField(const String& json, const char* key) {
+  const String marker = String("\"") + key + "\"";
+  const int keyAt = json.indexOf(marker);
+  if (keyAt < 0) return "";
+  const int colon = json.indexOf(':', keyAt + marker.length());
+  const int quote = json.indexOf('"', colon + 1);
+  if (colon < 0 || quote < 0) return "";
+  String value;
+  bool escaped = false;
+  for (int index = quote + 1; index < json.length(); ++index) {
+    const char c = json[index];
+    if (escaped) {
+      value += c == 'n' ? '\n' : c == 'r' ? '\r' : c;
+      escaped = false;
+    } else if (c == '\\') {
+      escaped = true;
+    } else if (c == '"') {
+      break;
+    } else {
+      value += c;
+    }
+  }
+  return value;
+}
+
+uint32_t jsonUintField(const String& json, const char* key) {
+  const String marker = String("\"") + key + "\"";
+  const int keyAt = json.indexOf(marker);
+  if (keyAt < 0) return 0;
+  const int colon = json.indexOf(':', keyAt + marker.length());
+  if (colon < 0) return 0;
+  int start = colon + 1;
+  while (start < json.length() && (json[start] == ' ' || json[start] == '\t')) ++start;
+  return static_cast<uint32_t>(json.substring(start).toInt());
+}
 }  // namespace
 
 void FireBackendClient::configure(const String& host, uint16_t port,
@@ -33,9 +69,39 @@ void FireBackendClient::configure(const String& host, uint16_t port,
   token_ = token;
   if (deviceId.length() > 0) deviceId_ = deviceId;
   if (firmwareVersion.length() > 0) firmwareVersion_ = firmwareVersion;
+  resumeSessionId_ = "";
+  conversationMode_ = "";
+  pendingAppMode_ = "";
+  pendingBasePackageId_ = "";
+  lastServerSeq_ = 0;
   bootId_ = "boot-" + String(static_cast<uint32_t>(esp_random()), HEX) +
             String(millis(), HEX);
   status_ = configured() ? "Backend disconnected" : "Backend not configured";
+}
+
+void FireBackendClient::setConversationMode(const String& mode) {
+  if (mode != "chat" && mode != "develop") return;
+  conversationMode_ = mode;
+  if (sessionReady())
+    sendEvent("mode_select", ",\"conversation_mode\":\"" + jsonEscape(mode) + "\"");
+}
+
+void FireBackendClient::setAppMode(const String& mode,
+                                   const String& basePackageId) {
+  if (mode != "new" && mode != "update") return;
+  pendingAppMode_ = mode;
+  pendingBasePackageId_ = basePackageId;
+  if (sessionReady()) {
+    String fields = ",\"app_mode\":\"" + jsonEscape(mode) + "\"";
+    if (mode == "update" && projectId_.length() > 0)
+      fields += ",\"project_id\":\"" + jsonEscape(projectId_) + "\"";
+    if (mode == "update" && basePackageId.length() > 0)
+      fields += ",\"base_package_id\":\"" + jsonEscape(basePackageId) + "\"";
+    if (sendEvent("app_select", fields)) {
+      pendingAppMode_ = "";
+      pendingBasePackageId_ = "";
+    }
+  }
 }
 
 void FireBackendClient::setCallbacks(void* context, MessageCallback message,
@@ -69,7 +135,9 @@ void FireBackendClient::disconnect() {
   handshakeBuffer_ = "";
   frameBuffer_ = "";
   resetReceiveFrame();
+  if (sessionId_.length() > 0) resumeSessionId_ = sessionId_;
   sessionId_ = "";
+  sessionStarted_ = false;
   setState(configured() ? State::Offline : State::Offline,
            configured() ? "Backend disconnected" : "Backend not configured");
 }
@@ -278,7 +346,11 @@ bool FireBackendClient::listenStop(const String& turnId) {
   return sendEvent("listen_stop", ",\"turn_id\":\"" + jsonEscape(turnId) + "\"");
 }
 
-bool FireBackendClient::cancelTurn() { return sendEvent("cancel_turn"); }
+bool FireBackendClient::cancelTurn(const String& turnId) {
+  return sendEvent("cancel_turn", turnId.length() > 0
+                                    ? ",\"turn_id\":\"" + jsonEscape(turnId) + "\""
+                                    : String());
+}
 
 bool FireBackendClient::confirmBuild(const String& proposalId) {
   return sendEvent("build_confirm", ",\"proposal_id\":\"" +
@@ -328,10 +400,12 @@ bool FireBackendClient::appStopped(const String& runId,
                                    const String& packageId,
                                    const String& stopId,
                                    const String& reason) {
-  return sendEvent("app_stopped", ",\"run_id\":\"" + jsonEscape(runId) +
-                   "\",\"package_id\":\"" + jsonEscape(packageId) +
-                   "\",\"stop_id\":\"" + jsonEscape(stopId) +
-                   "\",\"reason\":\"" + jsonEscape(reason) + "\"");
+  String fields = ",\"run_id\":\"" + jsonEscape(runId) +
+                  "\",\"package_id\":\"" + jsonEscape(packageId);
+  if (stopId.length() > 0)
+    fields += "\",\"stop_id\":\"" + jsonEscape(stopId);
+  fields += "\",\"reason\":\"" + jsonEscape(reason) + "\"";
+  return sendEvent("app_stopped", fields);
 }
 
 bool FireBackendClient::rollbackResult(const String& rollbackId,
@@ -403,13 +477,30 @@ void FireBackendClient::service(bool wifiConnected) {
                   key + "\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer " +
                   token_ + "\r\n\r\n");
     handshakeBuffer_ = "";
+    handshakeStartedAt_ = millis();
     setState(State::Handshake, "Authenticating backend");
   }
   if (state_ == State::Handshake) {
+    if (millis() - handshakeStartedAt_ > 5000) {
+      disconnect();
+      setState(State::Offline, "Backend handshake timeout");
+      return;
+    }
     handleHandshake();
     return;
   }
-  if (state_ == State::Connected) readFrames();
+  if (state_ == State::Connected) {
+    readFrames();
+    const uint32_t now = millis();
+    if (now - lastPingAt_ >= 20000) {
+      sendFrame(0x9, nullptr, 0);
+      lastPingAt_ = now;
+    }
+    if (lastPongAt_ != 0 && now - lastPongAt_ >= 45000) {
+      disconnect();
+      setState(State::Offline, "Backend heartbeat timeout");
+    }
+  }
 }
 
 void FireBackendClient::handleHandshake() {
@@ -425,9 +516,10 @@ void FireBackendClient::handleHandshake() {
     setState(State::Offline, "Backend handshake rejected");
     return;
   }
-  setState(State::Connected, usingReverseTransport_
-                                ? "Backend connected (Reverse TCP)"
-                                : "Backend connected (Direct)");
+  sessionStarted_ = false;
+  lastReceiveAt_ = millis();
+  lastPongAt_ = millis();
+  setState(State::Connected, "Waiting for backend session");
   const String fields = ",\"target\":\"device\",\"boot_id\":\"" +
                         jsonEscape(bootId_) +
                         "\",\"capabilities\":{\"api_version\":\"fire-lua-0.1\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\"],\"max_memory\":131072,\"max_runtime_ms\":10000,\"audio_input\":true,\"audio_output\":true,\"firmware_version\":\"" +
@@ -435,12 +527,29 @@ void FireBackendClient::handleHandshake() {
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +
                    jsonEscape(deviceId_) + "\",\"event\":\"session_start\"" +
+                   (resumeSessionId_.length() > 0
+                        ? ",\"resume_session_id\":\"" + jsonEscape(resumeSessionId_) + "\""
+                        : String()) +
                    (projectId_.length() > 0
                         ? ",\"project_id\":\"" + jsonEscape(projectId_) + "\""
                         : String()) +
+                   (conversationMode_.length() > 0
+                        ? ",\"conversation_mode\":\"" + jsonEscape(conversationMode_) + "\""
+                        : String()) +
+                   (pendingAppMode_.length() > 0
+                        ? ",\"app_mode\":\"" + jsonEscape(pendingAppMode_) + "\"" +
+                              (pendingAppMode_ == "update" && pendingBasePackageId_.length() > 0
+                                   ? ",\"base_package_id\":\"" + jsonEscape(pendingBasePackageId_) + "\""
+                                   : String())
+                        : String()) +
                    fields + "}";
-  sendFrame(0x1, reinterpret_cast<const uint8_t*>(payload.c_str()),
-            payload.length());
+  if (sendFrame(0x1, reinterpret_cast<const uint8_t*>(payload.c_str()),
+                payload.length())) {
+    // Explicit app selection is one-shot. Reconnect must resume, not select a
+    // new app again.
+    pendingAppMode_ = "";
+    pendingBasePackageId_ = "";
+  }
 }
 
 void FireBackendClient::readFrames() {
@@ -544,21 +653,42 @@ void FireBackendClient::readFrames() {
 
 void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
                                     size_t length) {
+  lastReceiveAt_ = millis();
   if (opcode == 0x8) {
     disconnect();
     setState(State::Offline, "Backend closed connection");
   } else if (opcode == 0x9) {
     sendFrame(0xA, data, length);
+  } else if (opcode == 0xA) {
+    lastPongAt_ = millis();
   } else if (opcode == 0x1 && messageCallback_) {
     String message;
     message.reserve(length);
     for (size_t index = 0; index < length; ++index) message += static_cast<char>(data[index]);
-    const int sessionKey = message.indexOf("\"session_id\"");
-    if (sessionKey >= 0) {
-      const int colon = message.indexOf(':', sessionKey);
-      const int quote = message.indexOf('"', colon + 1);
-      const int end = message.indexOf('"', quote + 1);
-      if (quote >= 0 && end > quote) sessionId_ = message.substring(quote + 1, end);
+    const String type = jsonStringField(message, "type");
+    const uint32_t seq = jsonUintField(message, "seq");
+    if (seq > 0 && lastServerSeq_ > 0 && seq <= lastServerSeq_) return;
+    if (seq > 0) lastServerSeq_ = seq;
+    if (type == "session_started") {
+      const String newSession = jsonStringField(message, "session_id");
+      if (newSession.length() > 0) {
+        sessionId_ = newSession;
+        resumeSessionId_ = "";
+        sessionStarted_ = true;
+        setState(State::Connected, usingReverseTransport_
+                                      ? "Backend connected (Reverse TCP)"
+                                      : "Backend connected (Direct)");
+      }
+    } else if ((type == "session_snapshot" || type == "pong") &&
+               sessionId_.length() == 0) {
+      const String snapshotSession = jsonStringField(message, "session_id");
+      if (snapshotSession.length() > 0) {
+        sessionId_ = snapshotSession;
+        sessionStarted_ = true;
+        setState(State::Connected, usingReverseTransport_
+                                      ? "Backend connected (Reverse TCP)"
+                                      : "Backend connected (Direct)");
+      }
     }
     messageCallback_(callbackContext_, message);
   }

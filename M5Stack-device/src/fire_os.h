@@ -51,10 +51,11 @@ class FireOS {
   void saveWifiCredentials(const String& ssid, const String& password);
   void saveMobileSetupFields(const String& ssid, const String& password,
                              const String& apiKey);
-  void saveBackendSetupFields(const String& host, const String& port,
+  bool saveBackendSetupFields(const String& host, const String& port,
                               const String& token, const String& deviceId);
   bool wifiSetupTokenValid(const String& token) const;
   bool aiApiSetupActive() const { return aiApiSetupActive_; }
+  void finishBackendSetup() { stopWifiSetup(); }
 
  private:
   enum class Screen : uint8_t {
@@ -245,6 +246,9 @@ class FireOS {
   FireReverseTransport reverseTransport_;
   String backendStatus_;
   String aiTurnId_;
+  String aiTranscriptText_;
+  uint8_t aiConversationMode_ = 0;  // 0=develop, 1=chat
+  String aiBasePackageId_;
   bool aiProjectPickerActive_ = false;
   uint8_t aiProjectSelection_ = 0;
   uint8_t aiProjectOffset_ = 0;
@@ -276,6 +280,9 @@ class FireOS {
   bool aiAudioOutputActive_ = false;
   String aiAudioOutputId_;
   String aiAudioOutputTurnId_;
+  String aiLastAudioId_;
+  String aiLastAudioTurnId_;
+  bool aiConversationCancelPending_ = false;
 
   // Date/time editor state. A/C select a field; B enters/leaves editing.
   uint8_t dateField_ = 0;
@@ -437,6 +444,8 @@ class FireOS {
   void handlePowerButton(uint8_t index);
   void handlePowerActionsButton(uint8_t index);
   void handleAiDeveloperButton(uint8_t index);
+  void cancelConversationTurn(const String& reason, bool startNew = false);
+  bool stopAiAudioOutput();
   bool startAiRecording();
   void finishAiRecording();
   void updateAiAudio();

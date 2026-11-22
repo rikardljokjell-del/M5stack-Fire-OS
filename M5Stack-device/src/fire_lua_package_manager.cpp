@@ -409,7 +409,8 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
     const String newAppData = staging + "/appdata";
     if (SD.exists(oldAppData)) {
       if (SD.exists(newAppData) && !removeTree(newAppData)) {
-        removeTree(previousPath);
+        // The old version is the recovery copy. Never delete it because a
+        // failure while preparing new appdata is being handled.
         reason = "Cannot prepare appdata";
         return false;
       }
