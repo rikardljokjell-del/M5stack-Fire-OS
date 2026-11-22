@@ -1,6 +1,13 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
-## Nyeste PC-leveranse
+Senere observasjon: tilkoblet FIRE rapporterer nå fire-os-0.2+storage-dev og
+firmware_storage=true, 4 MiB filgrense. Håndtrykk og Windows-status virker.
+Ingen fysisk firmwarefiloverføring er gjort: ferdig firmware.bin mangler på
+backend-PC-en, og den nye device-kilden/handoff er ennå ikke pushet til main.
+Se observasjonen øverst i FIRMWARE_STORAGE_HANDOFF.md. Annonsert støtte er
+ikke bevis for lagring på SD eller fysisk jevn skjerm.
+
+## PC-leveranse før siste deviceoppdatering
 
 254 tester bestått. Windows-UI er visuelt kontrollert: én rad per app, valg av
 Slangespill 0.1.3/0.1.2/0.1.1, separat PC-dialog samtidig med tilkoblet FIRE og

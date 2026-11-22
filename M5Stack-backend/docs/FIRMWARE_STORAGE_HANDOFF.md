@@ -1,5 +1,20 @@
 # Device-agent: firmwarefiler til /firmware på SD
 
+## Observert på enheten, 22. november 2026
+
+FIRE har autentisert en ny sesjon med firmware_version=fire-os-0.2+storage-dev,
+firmware_storage=true, firmware_max_bytes=4194304 og max_runtime_ms=0.
+Backend godtar håndtrykket, forbindelsen forblir online, og Windows-menyen
+viser rapportert firmwareversjon og «Mottak til /firmware er tilgjengelig».
+Dette bekrefter annonsering/kompatibilitet, ikke at en fil er mottatt på SD.
+
+Ingen firmware.bin finnes tilgjengelig på backend-PC-en; lokal firmwarekatalog
+og overføringshistorikk er tomme. Ingen syntetisk/ugyldig testbinær er sendt til
+ekte FIRE. GitHub main er fortsatt backendleveransen 23c334b uten den nye
+device-kilden. Device-agenten må pushe kilde/handoff og gjøre den ekte bygde
+firmware.bin tilgjengelig for backend-PC-en før fysisk filoverføring/hash og
+ny skjermkontrakt kan verifiseres. Ingen ny firmware er flashet av backend-agenten.
+
 Brukeren har bedt om en firmwaremeny i PC-programmet, filopplasting til egen
 SD-mappe og visning av installert firmware. Backenddelen er implementert.
 Ingen firmwarekode er endret/bygget/flashet av backend-agenten.
@@ -18,8 +33,9 @@ følger [Espressifs bildeformat](https://docs.espressif.com/projects/esptool/en/
 
 Send-knappen krever en autentisert, tilkoblet og ledig FIRE som annonserer
 firmware_storage=true. Gjennomgått device-kilde på main 5b7d6ee har ingen slik
-mottaker. Derfor er SD-overføring sperret inntil device-agenten implementerer
-og annonserer kontrakten. Backend finner ikke på en vellykket overføring.
+mottaker. Den nyere kjørende enheten annonserer nå støtte, så backend tillater
+et eksplisitt sendeforsøk når en ekte fil er valgt. Lagring på SD markeres
+først etter korrekt enhetskvittering; en slik kvittering er ikke observert ennå.
 
 ## Håndtrykk, additive felt i protokoll 0.2
 
