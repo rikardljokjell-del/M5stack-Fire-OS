@@ -1,5 +1,7 @@
 """Permanent generation policy for the native, cleared-per-update sprite host."""
 
+NATIVE_HOST_POLICY = "fire-native-host-v1"
+
 VISUAL_POLICY = """
 Mandatory display quality for EVERY new app and repair, regardless of the user's request:
 The reviewed FIRE host clears its OFFSCREEN sprite to black before EACH update,
@@ -22,6 +24,16 @@ inside the screen, not merely their anchors. Never redraw only a changed object
 assuming the old canvas survives. Stay
 within callback budgets; choose a simpler complete scene over partial/blank frames.
 Each callback has a cumulative 256-byte text budget, including unchanged labels.
+Native host safety gate (also applies on the FIRST frame): at most ONE rgb.set
+call per callback, at most 128 total grid CELLS and 32768 grid pixels per callback.
+rgb.set currently transmits the whole ten-LED strip synchronously, not just one
+pixel. Queue desired colours and advance one changed pixel per update; do not
+rewrite unchanged LEDs. Both bars must settle over bounded successive frames.
+Native grid calls invoke fillRect once per cell INCLUDING black/empty cells;
+count cells as well as pixels. Precompute glyphs and cached display values;
+prefer compact large integer readouts plus precise native text where useful.
+These conservative limits reject known cost patterns; they do not measure ESP32
+wall time or prove that a synchronous firmware adapter is nonblocking.
 Cache labels and composed game rows when state changes, then redraw cached strings.
 For large game boards use the negotiated 0.2 display.grid batch API if available;
 on 0.1 use short cached rows instead of concatenating wide ASCII boards every frame.

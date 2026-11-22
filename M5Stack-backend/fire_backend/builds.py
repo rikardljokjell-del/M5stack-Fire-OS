@@ -13,7 +13,7 @@ from pathlib import Path
 from .models import Manifest,AppTestSequence
 from .storage import canonical
 from .app_names import app_id_for
-from .rendering import VISUAL_POLICY
+from .rendering import VISUAL_POLICY,NATIVE_HOST_POLICY
 from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT,service_closure
 from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VERSION,experience_contract
 from .capabilities import CapabilityError
@@ -35,6 +35,8 @@ def worker_timeout(app):
 async def validate_release(app, store, build_id):
     """Fresh isolated VM per input/timing profile; no 180-frame release gate."""
     results = []
+    if app.get("experience_policy_version")==UX_POLICY_VERSION:
+        app={**app,"native_host_policy":NATIVE_HOST_POLICY}
     profiles=RELEASE_PROFILES+(("io_error","io_timeout","io_disconnect") if app.get("api_version")==HARDWARE_API and set(app["required_services"])-BASE_SERVICES else ())
     if app.get("experience_policy_version")==UX_POLICY_VERSION:
         profiles+=("os_long_a","os_long_b","os_long_c","os_double","start_b_idle","play_directions","long_session")
@@ -75,6 +77,7 @@ async def validate_release(app, store, build_id):
     for result in results:
         for kind,values in result.get("resources_used",{}).items():resources[kind]=sorted(set(resources.get(kind,[]))|set(values))
     return {**results[0], "profiles": results, "resources_used":resources,"io_calls":calls,"jobs_started":jobs,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
+            "native_host_policy":app.get("native_host_policy"),
             "native_numeric_parity": False}
 
 

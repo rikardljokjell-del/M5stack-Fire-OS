@@ -61,7 +61,7 @@ def validate_api(source, services, api_version="fire-lua-0.1"):
 
 
 HARNESS = r'''
-local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms = ...
+local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms, native_guard = ...
 local sequence_index, next_input_ms = 1,16
 local compile, hook = load, debug.sethook
 local count, total, elapsed = 0, 0, 0
@@ -69,6 +69,7 @@ local callback_ops, callback_work, peak_ops, peak_work = 0,0,0,0
 local callback_phase, clear_count, visible_ops, background = "",0,0,0
 local text_bytes, peak_text_bytes = 0,0
 local grid_pixels, peak_grid_pixels = 0,0
+local grid_cells,peak_grid_cells,rgb_calls,peak_rgb_calls=0,0,0,0
 local min_update_draws, update_count, peak_clears = nil,0,0
 local frames_run = 0
 local os_suppressed, os_suspended, os_exited, os_navigation = 0,0,false,""
@@ -106,6 +107,10 @@ local function record(name, ...)
   total = total + 1
   callback_ops=callback_ops+1
   local a,b,c,d=...
+  if name=="rgb" then
+    rgb_calls=rgb_calls+1;peak_rgb_calls=math.max(peak_rgb_calls,rgb_calls)
+    if native_guard and rgb_calls>1 then error("Native host RGB budget exceeded: at most ONE rgb.set per callback; each call synchronously transmits the whole strip. Queue changes across updates.") end
+  end
   if scene and name=="text" and #scene.texts<12 then scene.texts[#scene.texts+1]=c end
   if scene and name=="fill_circle" and #scene.circles<4 then scene.circles[#scene.circles+1]={x=a,y=b,r=c} end
   if profile and has_display and callback_phase=="on_button" and name~="rgb" then
@@ -131,6 +136,8 @@ local function record(name, ...)
   elseif name=="circle" then work=math.ceil(7*c)
   elseif name=="fill_circle" then work=math.ceil(math.pi*c*c)
   elseif name=="grid" then
+    grid_cells=grid_cells+select(5,...)*select(6,...);peak_grid_cells=math.max(peak_grid_cells,grid_cells)
+    if native_guard and grid_cells>128 then error("Native host grid cell budget exceeded: at most 128 TOTAL cells per callback, including black cells. Compact cached glyphs/boards; a low pixel area alone is insufficient.") end
     work=c*d*select(5,...)*select(6,...)
     grid_pixels=grid_pixels+work;peak_grid_pixels=math.max(peak_grid_pixels,grid_pixels)
     if profile and grid_pixels>32768 then error("Native grid raster budget exceeded; compact the complete board and merge static/dynamic cells") end
@@ -259,6 +266,7 @@ local function call(fn, ...)
   callback_ops,callback_work=0,0
   text_bytes=0
   grid_pixels=0
+  grid_cells,rgb_calls=0,0
   if hardware then hardware.begin_callback() end
   clear_count,visible_ops,background=0,0,0
   hook(quota,"",1000)
@@ -372,7 +380,8 @@ return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,ma
         min_update_draws=min_update_draws or 0,update_count=update_count,max_callback_clears=peak_clears,max_callback_text_bytes=peak_text_bytes,
         hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,
         os_reserved_callbacks_suppressed=os_suppressed,os_updates_suspended=os_suspended,os_exited=os_exited,os_navigation=os_navigation,
-        max_callback_grid_pixels=peak_grid_pixels,imu_reads=imu_reads,imu_scenes=scenes}
+        max_callback_grid_pixels=peak_grid_pixels,max_callback_grid_cells=peak_grid_cells,max_callback_rgb_calls=peak_rgb_calls,
+        imu_reads=imu_reads,imu_scenes=scenes}
 '''
 
 
@@ -409,7 +418,8 @@ def simulate(request):
     factory=lua.execute((Path(__file__).parent/"data/hardware_sim.lua").read_text(encoding="utf-8")) if api_version=="fire-lua-0.2" else None
     result = lua.execute(HARNESS, source, ",".join(services), max_ms,
                          (max_ms+15)//16 if request.get("profile") else min(180, max_ms // 16), request.get("profile"),
-                         max(20000, max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory,lua.table_from(sequence),interval)
+                         max(20000, max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory,lua.table_from(sequence),interval,
+                         request.get("native_host_policy")=="fire-native-host-v1")
     trace = []
     for i in range(1, len(result["trace"]) + 1):
         command = result["trace"][i]
@@ -429,6 +439,7 @@ def simulate(request):
             "min_update_draws":result["min_update_draws"],"update_count":result["update_count"],"max_callback_clears":result["max_callback_clears"],
             "max_callback_text_bytes":result["max_callback_text_bytes"],"resources_used":resources_used,
             "max_callback_grid_pixels":result["max_callback_grid_pixels"],
+            "max_callback_grid_cells":result["max_callback_grid_cells"],"max_callback_rgb_calls":result["max_callback_rgb_calls"],
             "imu_reads":result["imu_reads"],"imu_scenes":unpack(result["imu_scenes"]),
             "hardware_simulated":api_version=="fire-lua-0.2","app_memory_peak":result["app_memory_peak"],"max_io_calls":hardware_metrics["max_io_calls"] if hardware_metrics else 0,
             "max_io_bytes":hardware_metrics["max_io_bytes"] if hardware_metrics else 0,"max_jobs":hardware_metrics["max_jobs"] if hardware_metrics else 0,

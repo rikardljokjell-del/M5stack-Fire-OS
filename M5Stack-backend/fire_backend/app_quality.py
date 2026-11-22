@@ -28,7 +28,7 @@ def experience_contract(capabilities=None):
         "audio_gain":{"default":255,"maximum":255,"meaning":"relative channel gain, NOT OS volume percent","master_zero":"silent"},
         "text":"fixed textSize1, black background; no font/size/transparent-text API; use supported geometry/grid for larger hierarchy",
         "limits":{"lua_bytes":caps.get("max_memory",131072),"callback_ms":12,"display_calls":24,
-                  "text_bytes":256,"display_work":120000},
+                  "text_bytes":256,"display_work":120000,"rgb_calls":1,"grid_cells":128,"grid_pixels":32768},
         "lifetime":"until user exits" if caps.get("max_runtime_ms")==0 else "legacy advertised positive lifetime only",
     }
 

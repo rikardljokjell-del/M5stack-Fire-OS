@@ -48,3 +48,18 @@ LED-er, toleranseendring og bevart referanse etter ugyldig nullstilling.
 Pakken er lagt i Windows-biblioteket, ikke automatisk installert eller startet
 på FIRE. Ti minutters test fullførte alle 37500 frames. Resultater og kilder
 beholdes lokalt under `%LOCALAPPDATA%\FIRE Backend\verification\vater-*`.
+
+## Fysisk feil i 0.1.1 og ny kandidat
+
+FIRE rapporterte deretter en reell tidsoverskridelse på første update:
+138226µs mot12ms-grensen, linje128. Tidligere PC-godkjenning var ikke fysisk
+kjørebevis. Den feilende pakken er sperret og feilsaken beholdes.
+
+0.1.2 reduserer grid-celler, viser store bufrede heltall med presise tideler
+under, og køer kun én endret LED per frame. Godkjent separat kildekontroll og
+21 PC-profiler, inkludert37500 frames. Maksimalt70 grid-celler og ett RGB-kall
+per callback i disse profilene.15 utdata-/budsjettkontroller bestod.
+Det nye obligatoriske live-budsjettet avviser både den opprinnelige kilden og
+en delvis rettelse som bare reduserer RGB-kall. Se
+[firmware-handoff med observasjoner og tiltak](DEVICE_NATIVE_CALLBACK_HANDOFF.md).
+Fysisk korrekt kjøring av0.1.2 er fortsatt ikke bekreftet.
