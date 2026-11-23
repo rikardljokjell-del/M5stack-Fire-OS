@@ -4040,6 +4040,25 @@ void FireOS::onButton(uint8_t index, bool longPress) {
     return;
   }
 
+  if (buildNoticeActive_) {
+    if (index == 0) {
+      const String noticeBuild = buildNoticeId_;
+      if (backendClient_ && noticeBuild.length() > 0)
+        backendClient_->buildNoticeAck(noticeBuild, "open");
+      buildNoticeActive_ = false;
+      open(Screen::AiDeveloper);
+      aiBuildId_ = noticeBuild;
+      backgroundBuildActive_ = true;
+      aiWorkflowState_ = 4;
+      aiWorkflowText_ = "Resume bygging";
+    } else if (index == 2) {
+      if (backendClient_ && buildNoticeId_.length() > 0)
+        backendClient_->buildNoticeAck(buildNoticeId_, "dismiss");
+      buildNoticeActive_ = false;
+    }
+    return;
+  }
+
   if (screen_ == Screen::DateTime) {
     handleDateTimeButton(index);
     return;
@@ -5011,6 +5030,13 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       if (aiVoiceTestMode_ || (backendClient_ && backendClient_->sessionReady()))
         startAiRecording();
     }
+  } else if (index == 0 && aiWorkflowState_ == 4 &&
+             backgroundBuildsSupported_ && aiBuildId_.length() > 0) {
+    if (backendClient_ && backendClient_->buildBackground(aiBuildId_)) {
+      backgroundBuildActive_ = true;
+      aiWorkflowText_ = "Bygger i bakgrunnen";
+      goToBootApp();
+    }
   } else if (index == 0 && aiWorkflowState_ == 3) {
     if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
       if (backendClient_->confirmBuild(aiProposalId_)) {
@@ -5027,6 +5053,12 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiDeveloperMode_ = 2;
       aiBuildProgress_ = 0;
       aiWorkflowStarted_ = millis();
+    }
+  } else if (index == 2 && aiWorkflowState_ == 4 &&
+             backgroundBuildsSupported_ && aiBuildId_.length() > 0) {
+    if (backendClient_ && backendClient_->buildCancel(aiBuildId_)) {
+      aiWorkflowText_ = "Avbryter bygging";
+      backgroundBuildActive_ = true;
     }
   } else if (index == 2 &&
              (aiWorkflowState_ == 1 || aiWorkflowState_ == 2 ||
@@ -6100,6 +6132,62 @@ void FireOS::handleLuaErrorButton(uint8_t index) {
   }
 }
 
+void FireOS::requestBackgroundBuildJobs() {
+  if (!backgroundBuildsSupported_ || buildJobsRequested_ || !backendClient_ ||
+      !backendClient_->sessionReady())
+    return;
+  if (backendClient_->buildJobs(0)) buildJobsRequested_ = true;
+}
+
+void FireOS::handleBackgroundBuildMessage(const String& message) {
+  const String type = jsonStringField(message, "type");
+  const String buildId = jsonStringField(message, "build_id");
+  if (buildId.length() > 0) aiBuildId_ = buildId;
+  if (type == "build_progress" || type == "build_job_status" ||
+      type == "build_resumed") {
+    buildProgress_ = static_cast<uint8_t>(
+        constrain(jsonIntField(message, "progress"), 0, 100));
+    buildPhase_ = jsonStringField(message, "phase");
+    buildStatusMessage_ = jsonStringField(message, "message");
+    aiBuildProgress_ = buildProgress_;
+    aiWorkflowText_ = buildStatusMessage_.length() > 0
+                          ? buildStatusMessage_
+                          : buildPhase_;
+    if (buildPhase_ == "ready" || jsonStringField(message, "status") == "ready") {
+      aiWorkflowState_ = 5;
+      backgroundBuildActive_ = false;
+    } else if (buildPhase_ == "failed" ||
+               jsonStringField(message, "status") == "failed") {
+      aiWorkflowState_ = 0;
+      backgroundBuildActive_ = false;
+    } else {
+      aiWorkflowState_ = 4;
+      backgroundBuildActive_ = true;
+    }
+  } else if (type == "build_ready_notice") {
+    buildNoticeActive_ = true;
+    buildNoticeId_ = buildId;
+    buildNoticeName_ = jsonStringField(message, "name");
+    buildNoticeMessage_ = jsonStringField(message, "message");
+    if (buildNoticeMessage_.length() == 0) buildNoticeMessage_ = "Appen er klar";
+  } else if (type == "build_backgrounded") {
+    backgroundBuildActive_ = true;
+    aiWorkflowText_ = "Bygger i bakgrunnen";
+    aiWorkflowState_ = 4;
+  } else if (type == "build_cancelled") {
+    backgroundBuildActive_ = false;
+    aiWorkflowState_ = 0;
+    aiWorkflowText_ = "Bygging avbrutt";
+  } else if (type == "event_ack") {
+    const String event = jsonStringField(message, "event");
+    if (event == "build_background") {
+      backgroundBuildActive_ = true;
+      aiWorkflowText_ = "Bygger i bakgrunnen";
+    }
+  }
+  redrawRequested_ = true;
+}
+
 void FireOS::updateLuaApp() {
   if (!luaAppActive_) return;
   const uint32_t now = millis();
@@ -6128,6 +6216,7 @@ void FireOS::updateBackend() {
                               screen_ == Screen::AppsSettings ||
                               screen_ == Screen::Firmware ||
                                luaRepairRequested_ || luaRepairId_.length() > 0 ||
+                               backgroundBuildActive_ || buildNoticeActive_ ||
                               (packageManager_ && packageManager_->busy()) ||
                               (firmwareStorage_ && firmwareStorage_->busy()) ||
                               (githubFirmware_ && githubFirmware_->busy()) ||
@@ -6157,6 +6246,8 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   os->backendStatus_ = status;
+  if (connected) os->buildJobsRequested_ = false;
+  else os->buildJobsRequested_ = false;
   if (connected && os->luaRepairId_.length() > 0)
     os->luaRepairStatusQueryPending_ = true;
   if (!connected && os->luaRepairPrepareSent_ &&
@@ -6289,6 +6380,8 @@ void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
   if (type == "session_started") {
+    backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
+    if (backgroundBuildsSupported_) requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
     const String mode = jsonStringField(message, "conversation_mode");
@@ -6298,6 +6391,8 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "session_snapshot") {
+    backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
+    if (backgroundBuildsSupported_) requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
     const String mode = jsonStringField(message, "conversation_mode");
@@ -6337,6 +6432,14 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "app_repair_status") {
     handleLuaRepairStatus(message);
+    return;
+  }
+  if (type == "build_progress" || type == "build_job_status" ||
+      type == "build_resumed" || type == "build_backgrounded" ||
+      type == "build_cancelled" || type == "build_ready_notice" ||
+      type == "build_jobs" || type == "build_notice_closed" ||
+      type == "event_ack") {
+    handleBackgroundBuildMessage(message);
     return;
   }
   if (type == "app_backend_delete_ready") {
@@ -8581,6 +8684,13 @@ void FireOS::drawStatusBar(const char* title) {
   drawWifiIcon(252, 6, wifiState);
   drawBluetoothIcon(276, 5, bluetoothEnabled_);
   drawBatteryIcon(298, 6, batteryLevel(), batteryCharging());
+  if (backgroundBuildActive_) {
+    ui.drawRoundRect(112, 23, 96, 3, 1, kMuted);
+    ui.fillRoundRect(113, 24,
+                     max<int>(2, 94 * buildProgress_ / 100), 1, 1, kCyan);
+  } else if (buildNoticeActive_) {
+    ui.fillCircle(160, 24, 2, kGreen);
+  }
 }
 
 void FireOS::drawFooter(const char* left, const char* middle, const char* right) {
@@ -8650,6 +8760,30 @@ void FireOS::drawMain() {
                           : kCyan;
     ui.fillCircle(firstDot + position * 10, 207, 3,
                   item == mainIndex_ ? color : kMuted);
+  }
+  if (buildNoticeActive_) {
+    ui.fillRoundRect(22, 48, 276, 112, 10, kPanel);
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
+    String notice = buildNoticeName_.length() > 0 ? buildNoticeName_ : "Ny versjon";
+    drawText(160, 88, notice, kText, 1, kPanel);
+    drawText(160, 108, compactStatusText(buildNoticeMessage_), kMuted, 1,
+             kPanel);
+    drawText(82, 140, "Åpne", kCyan, 1, kPanel);
+    drawText(238, 140, "Avbryt", kMuted, 1, kPanel);
+    ui.setTextDatum(TL_DATUM);
+  }
+  if (buildNoticeActive_) {
+    ui.fillRoundRect(22, 48, 276, 112, 10, kPanel);
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
+    String notice = buildNoticeName_.length() > 0 ? buildNoticeName_ : "Ny versjon";
+    drawText(160, 88, notice, kText, 1, kPanel);
+    drawText(160, 108, compactStatusText(buildNoticeMessage_), kMuted, 1,
+             kPanel);
+    drawText(82, 140, "Åpne", kCyan, 1, kPanel);
+    drawText(238, 140, "Avbryt", kMuted, 1, kPanel);
+    ui.setTextDatum(TL_DATUM);
   }
   drawFooter("Previous", "Open", "Next");
 }
@@ -9637,9 +9771,9 @@ void FireOS::drawAiDeveloper() {
     centerHint = "ADD TALK";
     rightHint = "CANCEL";
   } else if (aiWorkflowState_ == 4) {
-    leftHint = "WAIT";
-    centerHint = "QUICK";
-    rightHint = "CANCEL";
+    leftHint = backgroundBuildsSupported_ ? "BACKGROUND" : "WAIT";
+    centerHint = "SETTINGS";
+    rightHint = backgroundBuildsSupported_ ? "CANCEL" : "CANCEL";
   } else if (aiWorkflowState_ == 5) {
     leftHint = "RUN";
     centerHint = "QUICK";

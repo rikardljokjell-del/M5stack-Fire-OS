@@ -469,6 +469,17 @@ class FireOS {
   uint8_t aiProjectOffset_ = 0;
   String aiProjectId_;
   String aiProjectName_;
+  String aiBuildId_;
+  bool backgroundBuildsSupported_ = false;
+  bool backgroundBuildActive_ = false;
+  bool buildJobsRequested_ = false;
+  bool buildNoticeActive_ = false;
+  String buildNoticeId_;
+  String buildNoticeName_;
+  String buildNoticeMessage_ = "Appen er klar";
+  uint8_t buildProgress_ = 0;
+  String buildPhase_;
+  String buildStatusMessage_;
   String aiProposalId_;
   String aiPackageId_;
   String aiInstallId_;
@@ -802,6 +813,8 @@ class FireOS {
   String audioDiagnosticsJson(const char* phase) const;
   void updateBackend();
   void handleBackendMessage(const String& message);
+  void handleBackgroundBuildMessage(const String& message);
+  void requestBackgroundBuildJobs();
   static void backendMessage(void* context, const String& message);
   static void backendState(void* context, bool connected, const String& status);
   static void packageStatus(void* context, const String& status);

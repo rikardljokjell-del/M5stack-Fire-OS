@@ -573,6 +573,37 @@ bool FireBackendClient::appRepairStatus(const String& repairId,
   return sendEvent("app_repair_status", fields);
 }
 
+bool FireBackendClient::buildBackground(const String& buildId) {
+  if (buildId.length() == 0) return false;
+  return sendEvent("build_background", ",\"build_id\":\"" +
+                   jsonEscape(buildId) + "\"");
+}
+
+bool FireBackendClient::buildJobs(uint32_t offset) {
+  return sendEvent("build_jobs", ",\"offset\":" + String(offset));
+}
+
+bool FireBackendClient::buildResume(const String& buildId) {
+  if (buildId.length() == 0) return false;
+  return sendEvent("build_resume", ",\"build_id\":\"" +
+                   jsonEscape(buildId) + "\"");
+}
+
+bool FireBackendClient::buildCancel(const String& buildId) {
+  if (buildId.length() == 0) return false;
+  return sendEvent("build_cancel", ",\"build_id\":\"" +
+                   jsonEscape(buildId) + "\"");
+}
+
+bool FireBackendClient::buildNoticeAck(const String& buildId,
+                                       const String& action) {
+  if (buildId.length() == 0 || (action != "open" && action != "dismiss"))
+    return false;
+  return sendEvent("build_notice_ack", ",\"build_id\":\"" +
+                   jsonEscape(buildId) + "\",\"notification_action\":\"" +
+                   jsonEscape(action) + "\"");
+}
+
 bool FireBackendClient::appStop() { return sendEvent("app_stop"); }
 
 bool FireBackendClient::deviceInstallResult(const String& installId,
