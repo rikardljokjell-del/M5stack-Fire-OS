@@ -4063,6 +4063,12 @@ void FireOS::onButton(uint8_t index, bool longPress) {
     handlePowerActionsButton(index);
     return;
   }
+  if (screen_ == Screen::Debug) {
+    // Debug is a read-only two-page overview. A/C browse pages; B simply
+    // refreshes the live status values. Long C remains the global Back action.
+    if (index == 0 || index == 2) detailIndex_ = index == 0 ? 0 : 1;
+    return;
+  }
 
   if (index == 0) {
     if (screen_ == Screen::Main) {
@@ -4144,6 +4150,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
         detailIndex_ = 0;
         open(Screen::AppsSettings);
       } else if (settingsIndex_ == 10) {
+        detailIndex_ = 0;
         open(Screen::Debug);
       } else if (settingsIndex_ == 11) {
         open(Screen::SystemInfo);
@@ -9722,29 +9729,66 @@ void FireOS::drawPlaceholder() {
 
 void FireOS::drawDebug() {
   drawStatusBar("Debug");
-  drawText(16, 38, "Runtime diagnostics", kMuted, 1);
-  drawText(16, 58, "LCD", kMuted, 1);
-  drawText(140, 58, "READY", kGreen, 1);
-  drawText(16, 78, "Buttons", kMuted, 1);
-  drawText(140, 78, "3 inputs", kGreen, 1);
-  drawText(16, 98, "IMU", kMuted, 1);
-  drawText(140, 98, M5.Imu.isEnabled() ? "READY" : "N/A",
-           M5.Imu.isEnabled() ? kGreen : kOrange, 1);
-  drawText(16, 118, "Microphone", kMuted, 1);
-  drawText(140, 118, M5.Mic.isEnabled() ? "READY" : "N/A",
-           M5.Mic.isEnabled() ? kGreen : kOrange, 1);
-  drawText(16, 138, "SD card", kMuted, 1);
+  drawText(16, 38, detailIndex_ == 0 ? "Core hardware" : "Ports & services",
+           kMuted, 1);
   if (!sdReady_ && millis() - sdLastProbe_ > 2000) initSdCard();
-  drawText(140, 138, sdReady_ ? "READY" : "NOT PRESENT",
-           sdReady_ ? kGreen : kMuted, 1);
-  drawText(16, 158, "Wi-Fi", kMuted, 1);
-  drawText(140, 158, wifiEnabled_ ? "ENABLED" : "OFF",
-           wifiEnabled_ ? kCyan : kMuted, 1);
-  drawText(16, 178, "Battery", kMuted, 1);
-  String charge = batteryLevel() >= 0 ? String(batteryLevel()) + "%" : "N/A";
-  charge += batteryCharging() ? "  CHG" : "  BAT";
-  drawText(140, 178, charge, kText, 1);
-  drawFooter("", "", "BACK  C");
+  auto statusColor = [](const String& status) -> uint16_t {
+    if (status == "ENABLED") return kCyan;
+    if (status == "READY") return kGreen;
+    if (status == "DISABLED" || status == "NOT PRESENT" ||
+        status == "UNAVAILABLE")
+      return kMuted;
+    return kOrange;
+  };
+  auto drawStatusRow = [&](uint8_t row, const String& label,
+                           const String& status) {
+    const int y = 48 + row * 18;
+    drawText(16, y, label, kMuted, 1, kBg);
+    ui.setTextDatum(MR_DATUM);
+    drawText(307, y, status, statusColor(status), 1, kBg);
+    ui.setTextDatum(TL_DATUM);
+  };
+
+  if (detailIndex_ == 0) {
+    drawStatusRow(0, "LCD", "READY");
+    drawStatusRow(1, "Buttons", "READY");
+    drawStatusRow(2, "IMU", M5.Imu.isEnabled() ? "ENABLED" : "UNAVAILABLE");
+    drawStatusRow(3, "Microphone", M5.Mic.isEnabled() ? "ENABLED" : "READY");
+    drawStatusRow(4, "Speaker",
+                  M5.Speaker.isEnabled() ? "ENABLED" : "UNAVAILABLE");
+    drawStatusRow(5, "RGB", "READY");
+    drawStatusRow(6, "Wi-Fi", wifiMode_ == 2
+                                  ? "DISABLED"
+                                  : wifiEnabled_ ? "ENABLED" : "READY");
+#ifdef FIRE_OS_BLE
+    drawStatusRow(7, "Bluetooth", bluetoothMode_ == 2
+                                      ? "DISABLED"
+                                      : bluetoothEnabled_ ? "ENABLED" : "READY");
+#else
+    drawStatusRow(7, "Bluetooth", "UNAVAILABLE");
+#endif
+  } else {
+    const String sdStatus = sdReady_ ? "READY" : "NOT PRESENT";
+    const String spiStatus = sdReady_ ? "BUSY (SD)" : "READY";
+    drawStatusRow(0, "SD card", sdStatus);
+    drawStatusRow(1, "GPIO B G26", "READY");
+    drawStatusRow(2, "UART B G36/26", "READY");
+    drawStatusRow(3, "I2C/POGO A G21/22", "READY");
+    // G16/G17 are reserved by the FIRE's PSRAM and are not exposed to Lua.
+    drawStatusRow(4, "Port C G16/17", "DISABLED");
+    drawStatusRow(5, "SPI VSPI/SD", spiStatus);
+    int level = batteryLevel();
+    String battery = level >= 0 ? String(level) + "%" : "UNAVAILABLE";
+    if (level >= 0) battery += batteryCharging() ? " CHG" : " BAT";
+    drawStatusRow(6, "Battery", battery);
+    drawStatusRow(7, "Lua API", "READY");
+  }
+  ui.setTextDatum(MR_DATUM);
+  drawText(307, 190, "READY = FW/API", kMuted, 1, kBg);
+  ui.setTextDatum(TL_DATUM);
+  drawText(16, 190, String("Page ") + String(detailIndex_ + 1) + "/2",
+           kMuted, 1, kBg);
+  drawFooter("Previous", "Refresh", "Next");
 }
 
 void FireOS::drawSystemInfo() {
