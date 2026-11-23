@@ -366,6 +366,45 @@ String jsonStringField(const String& json, const char* key) {
   return value;
 }
 
+int jsonObjectEnd(const String& json, int start) {
+  if (start < 0 || start >= json.length() || json[start] != '{') return -1;
+  int depth = 0;
+  bool inString = false;
+  bool escaped = false;
+  for (int index = start; index < json.length(); ++index) {
+    const char character = json[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character == '\\') {
+        escaped = true;
+      } else if (character == '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character == '"') {
+      inString = true;
+    } else if (character == '{') {
+      ++depth;
+    } else if (character == '}' && --depth == 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+String clipUtf8(const String& input, size_t maxBytes) {
+  if (input.length() <= maxBytes) return input;
+  if (maxBytes <= 3) return input.substring(0, maxBytes);
+  size_t end = maxBytes - 3;
+  while (end > 0 &&
+         (static_cast<uint8_t>(input[end]) & 0xC0U) == 0x80U) {
+    --end;
+  }
+  return input.substring(0, end) + "...";
+}
+
 String jsonEscapeField(const String& input) {
   String output;
   output.reserve(input.length() + 4);
@@ -4938,9 +4977,21 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     } else if (aiResumeAvailable_ && aiProjectSelection_ == 0) {
       aiProjectPickerActive_ = false;
       aiBuildId_ = buildJobIds_[0];
-      backgroundBuildActive_ = true;
-      aiWorkflowState_ = 4;
-      aiWorkflowText_ = "Resume bygging";
+      aiBuildErrorCode_ = buildJobErrorCodes_[0];
+      aiBuildErrorStatus_ = buildJobErrors_[0];
+      aiBuildDiagnosticMessage_ = buildJobDiagnostics_[0];
+      aiBuildCanResume_ = buildJobCanResume_[0];
+      aiBuildCanRetry_ = buildJobCanRetry_[0];
+      aiBuildResumePending_ = buildJobStatuses_[0] == "failed";
+      aiBuildRetryPending_ = false;
+      const bool failedJob = buildJobStatuses_[0] == "failed";
+      backgroundBuildActive_ = !failedJob;
+      aiWorkflowState_ = failedJob ? 2 : 4;
+      aiDeveloperMode_ = 2;
+      aiWorkflowText_ = failedJob && aiBuildErrorStatus_.length() > 0
+                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            : "Resume bygging";
+      aiAssistantText_ = aiBuildErrorStatus_;
       if (backendClient_) backendClient_->buildResume(aiBuildId_);
     } else {
       aiProjectPickerActive_ = false;
@@ -5008,6 +5059,17 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiProjectOffset_ = aiProjectSelection_ - 4;
     return;
   }
+  if (aiBuildResumePending_ && index == 2 &&
+      (aiWorkflowState_ == 2 || aiWorkflowState_ == 3)) {
+    // Leave the preserved failure view without cancelling the backend job.
+    back();
+    return;
+  }
+  if (aiBuildResumePending_ && index == 1 && aiWorkflowState_ == 2) {
+    aiWorkflowText_ = "VENTER PÅ RETRY-PLAN";
+    redrawRequested_ = true;
+    return;
+  }
   if (index == 1) {
     if (aiWorkflowState_ == 0) {
       if (aiVoiceTestMode_ || (backendClient_ && backendClient_->sessionReady())) {
@@ -5056,6 +5118,10 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
   } else if (index == 0 && aiWorkflowState_ == 3) {
     if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
       if (backendClient_->confirmBuild(aiProposalId_)) {
+        aiBuildRetryPending_ = aiBuildResumePending_;
+        aiBuildResumePending_ = false;
+        aiBuildErrorStatus_ = "";
+        aiBuildDiagnosticMessage_ = "";
         aiWorkflowText_ = "SENDING BUILD";
         aiWorkflowState_ = 4;
         aiDeveloperMode_ = 2;
@@ -6149,7 +6215,8 @@ void FireOS::handleLuaErrorButton(uint8_t index) {
 }
 
 void FireOS::requestBackgroundBuildJobs() {
-  if (!backgroundBuildsSupported_ || buildJobsRequested_ || !backendClient_ ||
+  if ((!backgroundBuildsSupported_ && !failedBuildResumeSupported_) ||
+      buildJobsRequested_ || !backendClient_ ||
       !backendClient_->sessionReady())
     return;
   if (backendClient_->buildJobs(0)) buildJobsRequested_ = true;
@@ -6158,31 +6225,50 @@ void FireOS::requestBackgroundBuildJobs() {
 void FireOS::handleBackgroundBuildMessage(const String& message) {
   const String type = jsonStringField(message, "type");
   const String buildId = jsonStringField(message, "build_id");
-  if (buildId.length() > 0) aiBuildId_ = buildId;
   if (type == "build_jobs") {
     buildJobCount_ = 0;
     bool activeBuildFound = false;
     const int jobsAt = message.indexOf("\"jobs\"");
-    int cursor = jobsAt >= 0 ? message.indexOf('{', jobsAt) : -1;
+    const int jobsArray = jobsAt >= 0 ? message.indexOf('[', jobsAt) : -1;
+    int cursor = jobsArray >= 0 ? jobsArray + 1 : -1;
     while (cursor >= 0 && buildJobCount_ < 4) {
-      const int end = message.indexOf('}', cursor);
+      while (cursor < message.length() &&
+             (message[cursor] == ' ' || message[cursor] == '\t' ||
+              message[cursor] == '\r' || message[cursor] == '\n' ||
+              message[cursor] == ','))
+        ++cursor;
+      if (cursor >= message.length() || message[cursor] != '{') break;
+      const int end = jsonObjectEnd(message, cursor);
       if (end < 0) break;
       const String item = message.substring(cursor, end + 1);
-      buildJobIds_[buildJobCount_] = jsonStringField(item, "build_id");
-      buildJobNames_[buildJobCount_] = jsonStringField(item, "name");
-      buildJobStatuses_[buildJobCount_] = jsonStringField(item, "status");
+      const uint8_t jobIndex = buildJobCount_;
+      buildJobIds_[jobIndex] = jsonStringField(item, "build_id");
+      buildJobNames_[jobIndex] = jsonStringField(item, "name");
+      buildJobStatuses_[jobIndex] = jsonStringField(item, "status");
+      buildJobErrors_[jobIndex] = jsonStringField(item, "error_status");
+      if (buildJobErrors_[jobIndex].length() == 0)
+        buildJobErrors_[jobIndex] = jsonStringField(item, "message");
+      buildJobErrorCodes_[jobIndex] = jsonStringField(item, "error_code");
+      buildJobDiagnostics_[jobIndex] =
+          jsonStringField(item, "diagnostic_message");
+      buildJobCanResume_[jobIndex] =
+          jsonBoolField(item, "can_resume", false);
+      if (item.indexOf("\"can_resume\"") < 0)
+        buildJobCanResume_[jobIndex] =
+            jsonBoolField(item, "can_open", false);
+      buildJobCanRetry_[jobIndex] = jsonBoolField(item, "can_retry", false);
       const String phase = jsonStringField(item, "phase");
       const String messageText = jsonStringField(item, "message");
-      const bool finished = buildJobStatuses_[buildJobCount_] == "ready" ||
-                            buildJobStatuses_[buildJobCount_] == "failed" ||
-                            buildJobStatuses_[buildJobCount_] == "cancelled";
-      const bool active = buildJobIds_[buildJobCount_].length() > 0 &&
+      const bool finished = buildJobStatuses_[jobIndex] == "ready" ||
+                            buildJobStatuses_[jobIndex] == "failed" ||
+                            buildJobStatuses_[jobIndex] == "cancelled";
+      const bool active = buildJobIds_[jobIndex].length() > 0 &&
                           !finished &&
-                          (buildJobStatuses_[buildJobCount_].length() > 0 ||
+                          (buildJobStatuses_[jobIndex].length() > 0 ||
                            phase.length() > 0);
       if (active && !activeBuildFound) {
         activeBuildFound = true;
-        aiBuildId_ = buildJobIds_[buildJobCount_];
+        aiBuildId_ = buildJobIds_[jobIndex];
         buildProgress_ = static_cast<uint8_t>(
             constrain(jsonIntField(item, "progress"), 0, 100));
         aiBuildProgress_ = buildProgress_;
@@ -6194,9 +6280,11 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
         aiWorkflowState_ = 4;
         aiDeveloperMode_ = 2;
         backgroundBuildActive_ = true;
+        aiBuildResumePending_ = false;
+        aiBuildRetryPending_ = false;
       }
-      if (buildJobIds_[buildJobCount_].length() > 0) ++buildJobCount_;
-      cursor = message.indexOf('{', end + 1);
+      if (buildJobIds_[jobIndex].length() > 0) ++buildJobCount_;
+      cursor = end + 1;
     }
     if (!activeBuildFound && !buildNoticeActive_) {
       backgroundBuildActive_ = false;
@@ -6205,8 +6293,63 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     redrawRequested_ = true;
     return;
   }
+  const bool buildEvent = type == "build_progress" ||
+                          type == "build_job_status" ||
+                          type == "build_resumed" ||
+                          type == "build_ready_notice" ||
+                          type == "build_backgrounded" ||
+                          type == "build_cancelled";
+  if (buildEvent && buildId.length() > 0 && aiBuildId_.length() > 0 &&
+      buildId != aiBuildId_ && !aiBuildRetryPending_) {
+    // A delayed event from the previous failed job must not overwrite a
+    // newer retry job after reconnect.
+    return;
+  }
+  if (buildEvent && buildId.length() > 0 && buildId != aiBuildId_) {
+    aiBuildErrorCode_ = "";
+    aiBuildErrorStatus_ = "";
+    aiBuildDiagnosticMessage_ = "";
+    aiBuildResumePending_ = false;
+    aiBuildCanResume_ = false;
+    aiBuildCanRetry_ = false;
+    aiBuildId_ = buildId;
+    aiBuildRetryPending_ = false;
+  }
   if (type == "build_progress" || type == "build_job_status" ||
       type == "build_resumed") {
+    const String status = jsonStringField(message, "status");
+    const String state = jsonStringField(message, "state");
+    const String errorCode = jsonStringField(message, "error_code");
+    const String errorStatus = jsonStringField(message, "error_status");
+    const String diagnostic = jsonStringField(message, "diagnostic_message");
+    if (errorCode.length() > 0) aiBuildErrorCode_ = errorCode;
+    if (errorStatus.length() > 0) aiBuildErrorStatus_ = errorStatus;
+    else if (status == "failed") {
+      const String fallback = jsonStringField(message, "message");
+      if (fallback.length() > 0) aiBuildErrorStatus_ = fallback;
+    }
+    if (diagnostic.length() > 0) aiBuildDiagnosticMessage_ = diagnostic;
+    if (message.indexOf("\"can_resume\"") >= 0)
+      aiBuildCanResume_ = jsonBoolField(message, "can_resume", false);
+    if (message.indexOf("\"can_retry\"") >= 0)
+      aiBuildCanRetry_ = jsonBoolField(message, "can_retry", false);
+
+    if (type == "build_resumed" &&
+        (state == "awaiting_build_confirmation" ||
+         state == "awaiting_confirmation")) {
+      aiProposalId_ = jsonStringField(message, "proposal_id");
+      aiBuildResumePending_ = true;
+      aiBuildRetryPending_ = false;
+      backgroundBuildActive_ = false;
+      aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 2;
+      aiDeveloperMode_ = 2;
+      aiWorkflowText_ = aiBuildErrorStatus_.length() > 0
+                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            : "READY TO RETRY";
+      aiAssistantText_ = aiBuildErrorStatus_;
+      redrawRequested_ = true;
+      return;
+    }
     buildProgress_ = static_cast<uint8_t>(
         constrain(jsonIntField(message, "progress"), 0, 100));
     buildPhase_ = jsonStringField(message, "phase");
@@ -6215,15 +6358,22 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     aiWorkflowText_ = buildStatusMessage_.length() > 0
                           ? buildStatusMessage_
                           : buildPhase_;
-    if (buildPhase_ == "ready" || jsonStringField(message, "status") == "ready") {
+    if (buildPhase_ == "ready" || status == "ready") {
       aiWorkflowState_ = 5;
       backgroundBuildActive_ = false;
-    } else if (buildPhase_ == "failed" ||
-               jsonStringField(message, "status") == "failed") {
+      aiBuildResumePending_ = false;
+    } else if (buildPhase_ == "failed" || status == "failed") {
       aiWorkflowState_ = 0;
+      aiDeveloperMode_ = 2;
       backgroundBuildActive_ = false;
+      aiResumeAvailable_ = true;
+      aiBuildResumePending_ = false;
+      aiWorkflowText_ = aiBuildErrorStatus_.length() > 0
+                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            : "BUILD FAILED";
     } else {
       aiWorkflowState_ = 4;
+      aiDeveloperMode_ = 2;
       backgroundBuildActive_ = true;
     }
   } else if (type == "build_ready_notice") {
@@ -6239,6 +6389,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
   } else if (type == "build_cancelled") {
     backgroundBuildActive_ = false;
     aiWorkflowState_ = 0;
+    aiBuildRetryPending_ = false;
     aiWorkflowText_ = "Bygging avbrutt";
   } else if (type == "event_ack") {
     const String event = jsonStringField(message, "event");
@@ -6478,7 +6629,10 @@ void FireOS::handleBackendMessage(const String& message) {
   const String type = jsonStringField(message, "type");
   if (type == "session_started") {
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
-    if (backgroundBuildsSupported_) requestBackgroundBuildJobs();
+    failedBuildResumeSupported_ =
+        message.indexOf("failed_build_resume_v1") >= 0;
+    if (backgroundBuildsSupported_ || failedBuildResumeSupported_)
+      requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
     const String mode = jsonStringField(message, "conversation_mode");
@@ -6489,7 +6643,10 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "session_snapshot") {
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
-    if (backgroundBuildsSupported_) requestBackgroundBuildJobs();
+    failedBuildResumeSupported_ =
+        message.indexOf("failed_build_resume_v1") >= 0;
+    if (backgroundBuildsSupported_ || failedBuildResumeSupported_)
+      requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
     const String mode = jsonStringField(message, "conversation_mode");
@@ -6638,10 +6795,15 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "build_proposal") {
     aiProposalId_ = jsonStringField(message, "proposal_id");
-    aiAssistantText_ = jsonStringField(message, "summary");
+    const String summary = jsonStringField(message, "summary");
+    aiAssistantText_ = summary.length() > 0 ? summary : aiBuildErrorStatus_;
     aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 0;
     aiDeveloperMode_ = 2;
-    aiWorkflowText_ = "READY TO BUILD";
+    aiWorkflowText_ = aiBuildResumePending_
+                          ? (aiBuildErrorStatus_.length() > 0
+                                 ? clipUtf8(aiBuildErrorStatus_, 28)
+                                 : "READY TO RETRY")
+                          : "READY TO BUILD";
     return;
   }
   if (type == "build_progress") {
@@ -9723,6 +9885,21 @@ void FireOS::drawAiDeveloper() {
       drawText(160, y, label, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);
     }
+    if (aiResumeAvailable_ && aiProjectSelection_ == 0 &&
+        buildJobCount_ > 0) {
+      const bool failed = buildJobStatuses_[0] == "failed";
+      String reason = buildJobErrors_[0];
+      if (reason.length() == 0) reason = buildJobStatuses_[0];
+      ui.setTextDatum(MC_DATUM);
+      drawText(160, 202,
+               failed ? "FEIL: " + clipUtf8(reason, 25) :
+                        clipUtf8(reason, 30),
+               failed ? kOrange : kMuted, 1, kPanel);
+      String id = buildJobIds_[0];
+      if (id.length() > 14) id = id.substring(0, 14);
+      drawText(160, 216, "ID " + id, kMuted, 1, kPanel);
+      ui.setTextDatum(TL_DATUM);
+    }
     drawText(48, 232, "PREV", kMuted, 1, TFT_BLACK);
     drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
     drawText(272, 232, "NEXT", kMuted, 1, TFT_BLACK);
@@ -9873,8 +10050,10 @@ void FireOS::drawAiDeveloper() {
   static const char* const workflowLabels[] = {
       "PRESS CENTER TO LISTEN", "LISTENING", "UNDERSTANDING...",
       "READY TO BUILD", "BUILDING...", "READY TO RUN", "RUNNING"};
+  const bool failedBuildView = aiBuildResumePending_ &&
+                               aiBuildErrorStatus_.length() > 0;
   ui.setTextDatum(MC_DATUM);
-  drawText(cx, 190, stateLabel, kMuted, 1, TFT_BLACK);
+  if (!failedBuildView) drawText(cx, 190, stateLabel, kMuted, 1, TFT_BLACK);
   String workflowLabel = aiWorkflowText_.length() > 0
                              ? aiWorkflowText_
                              : workflowLabels[min<uint8_t>(aiWorkflowState_, 6)];
@@ -9887,7 +10066,13 @@ void FireOS::drawAiDeveloper() {
     workflowLabel = "CHAT - PRESS B TO SPEAK";
   workflowLabel = compactStatusText(workflowLabel);
   drawText(cx, 207, workflowLabel, kMuted, 1, TFT_BLACK);
-  if (aiAssistantText_.length() > 0) {
+  if (failedBuildView) {
+    drawText(cx, 174, clipUtf8(aiBuildErrorStatus_, 30), kOrange, 1,
+             TFT_BLACK);
+    if (aiBuildDiagnosticMessage_.length() > 0)
+      drawText(cx, 190, clipUtf8(aiBuildDiagnosticMessage_, 34), kMuted, 1,
+               TFT_BLACK);
+  } else if (aiAssistantText_.length() > 0) {
     String assistant = aiAssistantText_;
     if (assistant.length() > 34) assistant = assistant.substring(0, 31) + "...";
     drawText(cx, 174, assistant, 0xBDF7, 1, TFT_BLACK);
@@ -9904,12 +10089,23 @@ void FireOS::drawAiDeveloper() {
   if (aiWorkflowState_ == 1) {
     centerHint = "FINISH";
   } else if (aiWorkflowState_ == 2) {
-    centerHint = "NEW TALK";
-    rightHint = "CANCEL";
+    if (aiBuildResumePending_) {
+      centerHint = "VENTER...";
+      rightHint = "TILBAKE";
+    } else {
+      centerHint = "NEW TALK";
+      rightHint = "CANCEL";
+    }
   } else if (aiWorkflowState_ == 3) {
-    leftHint = "BUILD";
-    centerHint = "ADD TALK";
-    rightHint = "CANCEL";
+    if (aiBuildResumePending_) {
+      leftHint = "PRØV IGJEN";
+      centerHint = "ENDRE";
+      rightHint = "TILBAKE";
+    } else {
+      leftHint = "BUILD";
+      centerHint = "ADD TALK";
+      rightHint = "CANCEL";
+    }
   } else if (aiWorkflowState_ == 4) {
     leftHint = backgroundBuildsSupported_ ? "BACKGROUND" : "WAIT";
     centerHint = "SETTINGS";
