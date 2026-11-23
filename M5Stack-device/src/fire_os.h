@@ -159,6 +159,11 @@ class FireOS {
   bool backendBootPending_ = false;
   bool backendBootAttempted_ = false;
   uint32_t backendBootAttemptedAt_ = 0;
+  bool backendBootSyncWaiting_ = false;
+  bool backendBootJobsReceived_ = false;
+  uint32_t backendBootSyncStartedAt_ = 0;
+  uint8_t buildJobsRetryCount_ = 0;
+  uint32_t buildJobsRequestAt_ = 0;
   bool timeSyncPending_ = false;
   bool timeSyncConfigured_ = false;
   uint32_t timeSyncStarted_ = 0;
@@ -483,6 +488,7 @@ class FireOS {
   bool aiBuildRetryPending_ = false;
   bool aiBuildCanResume_ = false;
   bool aiBuildCanRetry_ = false;
+  int32_t aiBuildResumeCount_ = -1;
   uint8_t buildJobCount_ = 0;
   String buildJobIds_[4];
   String buildJobNames_[4];
@@ -497,6 +503,7 @@ class FireOS {
   String aiBuildDiagnosticMessage_;
   bool buildNoticeActive_ = false;
   String buildNoticeId_;
+  String buildNoticeAckedId_;
   String buildNoticeName_;
   String buildNoticeMessage_ = "Appen er klar";
   uint8_t buildProgress_ = 0;
@@ -867,6 +874,7 @@ class FireOS {
   void drawStatusBar(const char* title);
   void drawFooter(const char* left, const char* middle, const char* right);
   void drawMain();
+  void drawBuildNoticeOverlay();
   void drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size);
   void drawApps();
   void drawSettings();
