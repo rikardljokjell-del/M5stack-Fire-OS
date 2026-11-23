@@ -1,5 +1,10 @@
 # FIRE OS AI Developer backend 0.2
 
+[Device-handoff: bakgrunnsbygg og Resume](docs/DEVICE_BACKGROUND_BUILD_HANDOFF.md)
+samler knapper, status mellom tid/dato, ferdigvarsel, jobbavbrudd og hele
+appbiblioteket i AI Developer. Backend viderefører bekreftede bygg ved FIRE-reboot
+og nettbrudd. Device-skjermene implementeres og verifiseres av device-agenten.
+
 [Standard for hørbar lyd](docs/AUDIO_GAIN_STANDARD.md): primærlyd bruker kanal-gain
 255/255 under OS-mastervolumet. Skjult ekstra demping som44/255 skal ikke være
 standard. Lydnivå inngår i kontrollen før levering.

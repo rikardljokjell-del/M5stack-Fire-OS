@@ -14,6 +14,7 @@ from .auth import authorize_project, authorize_session, principal
 from .config import Settings
 from .capabilities import CapabilityError, FIRMWARE_SOURCE_REVISION, FIRMWARE_IMPLEMENTED_LUA_SERVICES, HANDOFF_PATH
 from .models import BuildConfirm, DeviceEvent, RunConfirm, SessionAction, SessionStart
+from .status_text import display_event
 from .protocol import begin_event, dispatch, finish_event
 from .storage import new_id
 from .security import SecretFilter
@@ -481,11 +482,11 @@ def create_app(settings=None, provider=None):
                     safe = "Ugyldig melding fra FIRE: " + ", ".join(fields)
                     logging.getLogger("uvicorn.error").warning(safe)
                     error_event = {"type": "error", "code": "invalid_event", "message": safe[:240]}
-                    await (service.emit(session, error_event) if session else socket.send_json(error_event))
+                    await (service.emit(session, error_event) if session else socket.send_json(display_event(error_event)))
                 except (ValueError, KeyError, PermissionError, FileNotFoundError) as error:
                     message = "Referenced item not found" if isinstance(error, FileNotFoundError) else service.redactor.text(str(error))[:240]
                     error_event = {"type": "error", "code": error.code if isinstance(error, CapabilityError) else "event_rejected", "message": message}
-                    await (service.emit(session, error_event) if session else socket.send_json(error_event))
+                    await (service.emit(session, error_event) if session else socket.send_json(display_event(error_event)))
         except WebSocketDisconnect:
             pass
         finally:

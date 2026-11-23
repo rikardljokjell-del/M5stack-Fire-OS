@@ -127,6 +127,8 @@ async def dispatch(service, session, event):
 
 async def handle(service, session, event):
     name = event.event
+    if name in {'build_background','build_jobs','build_notice_ack','build_resume','build_cancel'}:
+        return await service.build_event(session,event)
     if name=='app_repair_prepare':return await service.repairs.prepare(session,event)
     if name=='app_repair_status':return await service.repairs.status(session,event)
     if name=='build_confirm' and event.repair_id:return await service.repairs.confirm(session,event)
@@ -180,6 +182,7 @@ async def handle(service, session, event):
         await cancel_turn(service, session)
         return {"status": "cancelled"}
     if name == "mode_select":
+        await service.release_foreground(session)
         if session.state in {State.building, State.testing, State.running, State.starting, State.stopping, State.rollback_pending, State.awaiting_install}:
             raise ValueError("Fullfør eller stopp app-handlingen før du bytter samtalemodus.")
         await cancel_turn(service, session)
@@ -207,6 +210,8 @@ async def handle(service, session, event):
         await service.emit(session, {"type": "ui_event", "event": "button_received", "button": event.button, "action": event.action})
         return {"status": "received"}
     if name in {"text", "listen_start", "listen_stop"}:
+        if name in {'text','listen_start'}:
+            service.detach_device_build(session)
         from .quality import repair_requested
         if name == "text" and session.conversation_mode == "develop" and event.text and repair_requested(event.text) and session.state == State.running:
             await service.request_app_stop(session)

@@ -344,3 +344,50 @@ Diagnostic sha256/source_bytes inconsistent with the named package are retained
 as identity_conflict and trigger an inventory request. They do not create a
 known-bad source guard or block a different immutable source. Firmware must
 capture app/package/version/checksum at actual runtime start, before teardown.
+
+## Device-independent builds, Resume and one-line statuses
+
+See [DEVICE_BACKGROUND_BUILD_HANDOFF.md](DEVICE_BACKGROUND_BUILD_HANDOFF.md)
+for the device UI and verification matrix. `backend_features` in snapshots and
+session_started advertises `background_builds_v1` and `status_text_v1`.
+The Lua API fingerprint is unchanged.
+
+Confirmed device builds use private generation snapshots and a bounded queue
+(max8). Closing a page, session_stop, disconnect or a changed FIRE boot detaches
+the UI; generation/testing/package publication continue on the running PC.
+No detached job issues install/run commands. Reconnect/session snapshots publish
+background progress and pending ready notices. Completed jobs, notices and
+bounded dialogue/plan snapshots persist on disk. An actual PC backend shutdown
+interrupts unfinished work without silently replaying paid requests.
+
+Additive device events require the usual scoped v0.2 envelope:
+
+| Event | Additional required fields | Behavior |
+| --- | --- | --- |
+| build_background | build_id | Detach foreground; keep job running |
+| build_jobs | none (offset optional) | List scoped jobs, four per page, plus active_run |
+| build_resume | build_id | Restore project/dialogue and current progress/package |
+| build_cancel | build_id | Cancel only that active/queued job; preserve completed packages |
+| build_notice_ack | build_id, notification_action=open/dismiss | Open Resume or dismiss completed popup |
+
+Job views contain build_id, project_id, app_id, name, status, phase, progress,
+message, background, package_id/version, can_open, created_at and status_text_version.
+No source, dialogue history or credentials are included. `build_job_status`
+pushes progress; `build_ready_notice` announces ready packages. Notices repeat
+until acknowledgement; firmware deduplicates by build_id. Dismissal preserves
+Resume/library access. `build_resumed` includes state/progress/package identity
+and history_restored. Ready Resume uses normal install_request/receipt handling;
+only explicit run_confirm starts the app. A new boot never inherits old command
+authority. Native runs require app_stop and a matching receipt before switching.
+
+build_progress.message, app_repair_status.message, error.message/status_message
+and last_error_status are complete NFC Norwegian lines, at most28 characters AND
+28 UTF-8 bytes. status_text_version=fire-status-text-v1. error.diagnostic_message
+retains redacted PC detail. Assistant messages, transcripts and audio_ready text
+retain their full dialogue semantics. Firmware measures actual font width,
+renders æøå, and shows no DOWNLOADING AI VOICE transport status.
+
+Transient provider failures retry the same generation/review up to four times
+with bounded exponential backoff/jitter, respecting Retry-After. Quota/billing/auth
+errors are not replayed. Waiting shows Venter på AI-kapasitet and consumes no Lua
+correction. All compile/runtime/review/delivery gates remain authoritative.

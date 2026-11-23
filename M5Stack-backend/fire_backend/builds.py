@@ -3,17 +3,22 @@ import hashlib
 import json
 import os
 import platform
+import random
+import time
+from email.utils import parsedate_to_datetime
 import shutil
 import sys
 import tempfile
 import zipfile
 from importlib import metadata
 from pathlib import Path
+from openai import APIStatusError,APIConnectionError
 
 from .models import Manifest,AppTestSequence
 from .storage import canonical
 from .app_names import app_id_for
 from .rendering import VISUAL_POLICY,NATIVE_HOST_POLICY
+from .status_text import build_text
 from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT,service_closure
 from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VERSION,experience_contract
 from .capabilities import CapabilityError
@@ -171,6 +176,43 @@ class Builder:
     def __init__(self, settings, store, provider, context):
         self.settings, self.store, self.provider, self.context = settings, store, provider, context
 
+    async def provider_call(self,build,phase,progress,call,*args):
+        """Retry the SAME generation/review, without spending a Lua correction.
+
+        SDK retries are disabled in OpenAIProvider. Honor server delay hints;
+        never replay billing/auth/quota failures or log provider response bodies.
+        The enclosing build timeout and cancellation remain authoritative.
+        """
+        waited=0
+        for retry in range(5):
+            try:return await call(*args)
+            except (APIStatusError,APIConnectionError) as error:
+                code=getattr(error,'code',None)
+                if code in {'insufficient_quota','billing_hard_limit_reached','organization_usage_limit_exceeded','billing_not_active'}:raise
+                if isinstance(error,APIStatusError) and error.status_code not in {408,409,429,500,502,503,504}:raise
+                if retry==4:raise
+                headers=error.response.headers if isinstance(error,APIStatusError) else {}
+                delay=5*2**retry
+                hint=headers.get('retry-after')
+                if hint:
+                    try:delay=max(delay,float(hint))
+                    except ValueError:
+                        try:delay=max(delay,parsedate_to_datetime(hint).timestamp()-time.time())
+                        except (ValueError,TypeError,OverflowError):pass
+                if headers.get('retry-after-ms'):
+                    try:delay=max(delay,float(headers['retry-after-ms'])/1000)
+                    except ValueError:pass
+                if not 0<=delay<=180 or waited+delay+1>240:raise
+                delay+=random.uniform(.1,.5);waited+=delay
+                build.update(provider_retry=retry+1,provider_retry_phase=phase,retry_at=time.time()+delay)
+                self.store.put('builds',build['id'],build)
+                self.store.log(build['id'],f'AI temporary failure: {type(error).__name__}; retry {retry+1}/4 in {delay:.1f}s')
+                percent=build.get('progress',10 if phase=='generating' else 75)
+                await progress('api_wait',percent,build_text('api_wait'))
+                await asyncio.sleep(delay)
+                build.pop('retry_at',None)
+                await progress(phase,percent,build_text(phase,operation=build.get('operation','new'),attempt=build.get('generation_attempt',1),progress=percent))
+
     async def build(self, build, project, progress, capabilities=None, context=None):
         build_id = build["id"]
         folder = self.store.path("builds", build_id, "")
@@ -210,8 +252,10 @@ class Builder:
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
             for attempt in range(4):  # initial generation plus at most THREE corrections
-                await progress("generating", 10 + attempt * 3, f"Genererer Lua, forsøk {attempt + 1}")
-                generated = await self.provider.generate(build["summary"], context, last_error, previous)
+                build['generation_attempt']=attempt+1
+                operation='repair' if build.get('repair_of') or build.get('repair_job_id') else 'update' if project.get('latest_package') else 'new'
+                await progress("generating", 10 + attempt * 3, build_text('generating',operation=operation,attempt=attempt+1))
+                generated = await self.provider_call(build,'generating',progress,self.provider.generate,build["summary"], context, last_error, previous)
                 # Redact before persisting, validating or packaging any model output.
                 generated = type(generated).model_validate(self.store.redactor.value(generated.model_dump()))
                 api_version=(capabilities or {}).get("api_version",BASE_API)
@@ -227,9 +271,9 @@ class Builder:
                 self.store.write(folder / f"test-plan-{attempt+1}.json",[s.model_dump() for s in generated.test_sequences])
                 build["attempts"] = attempt + 1
                 self.store.put("builds", build_id, build)
-                await progress("validating", 35, "Validerer syntaks og tillatte API-er")
-                await progress("compiling", 50, "Kontrollerer Lua 5.4; ingen firmwarekompilering")
-                await progress("testing", 65, "Tester knapper, kjøretid og relevante maskinvareprofiler")
+                await progress("validating", 35, build_text('validating'))
+                await progress("compiling", 50, build_text('compiling'))
+                await progress("testing", 65, build_text('testing'))
                 try:
                     generated=generated.model_copy(update={'required_services':service_closure(generated.required_services,api_version)})
                     Quality(self.store).reject_known_failure(project["id"], sha256(payload))
@@ -247,14 +291,14 @@ class Builder:
                         "hardware":(capabilities or {}).get("hardware") or {},
                         "require_io_coverage":self.settings.fire_ai_mode=="openai",
                         **({"experience_policy_version":UX_POLICY_VERSION} if self.settings.fire_ai_mode=="openai" else {})}, self.store, build_id)
-                    await progress("testing",75,"Kontrollerer funksjoner, stabilitet og grafisk utforming før levering")
+                    await progress("testing",75,build_text('testing',progress=75))
                     reviewer=getattr(self.provider,"review",None)
                     if reviewer is None:
                         if self.settings.fire_ai_mode!="mock":
                             raise ValueError("Pre-delivery review is required for live generation")
                         from .ai import MockProvider
                         reviewer=MockProvider().review
-                    review=await reviewer(build["summary"],context,generated,result)
+                    review=await self.provider_call(build,'testing',progress,reviewer,build["summary"],context,generated,result)
                     review_data=self.store.redactor.value(review.model_dump())
                     if self.settings.fire_ai_mode=="mock" and not isinstance(review,FireAppReview):
                         # Limited offline fixtures are explicitly identified; no live UX claim.
@@ -280,7 +324,7 @@ class Builder:
                     self.store.log(build_id, f"Attempt {attempt + 1} failed: {last_error}")
                     if attempt == 3:
                         raise ValueError("Build failed after 3 corrections: " + last_error) from error
-            await progress("packaging", 85, "Pakker validert app med SHA256")
+            await progress("packaging", 85, build_text('packaging'))
             version = project.get("next_version", 1)
             manifest = Manifest(
                 id=app_id_for(generated.name, project, self.store), name=generated.name, version=f"0.1.{version}",

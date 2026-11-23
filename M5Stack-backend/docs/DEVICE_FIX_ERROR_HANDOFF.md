@@ -12,6 +12,9 @@ retter disse firmwarefeilene.
 
 ## Brukerflyt
 
+Tillegg: [Bakgrunn, Resume og korte statuser](DEVICE_BACKGROUND_BUILD_HANDOFF.md)
+gjelder også reparasjoner. Bruk build_id fra app_repair_status etter byggstart.
+
 1. APP ERROR viser appnavn/versjon, kort feil og **Fix error**. Behold hele
    feilidentiteten når runtime stoppes og UI/state ryddes.
 2. Ett kort knappetrykk på Fix starter forberedelse og automatisk bekreftelse

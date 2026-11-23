@@ -68,6 +68,8 @@ class AppLifecycle(AppManager):
         return next((p for candidate in candidates for p in versions if p["id"] == candidate), versions[0])
 
     def backend_delete_check(self, project, *, ignore_session_id=None):
+        if any(item['build']['project_id']==project['id'] and not item['task'].done() for item in self.device_builds.values()):
+            return False,'Appen bygges i bakgrunnen.'
         if self.repairs.active_project(project['id']):
             return False,'Appen repareres i bakgrunnen. Vent til reparasjonen er ferdig før sletting.'
         device_id = project.get("owner_device_id")
@@ -196,6 +198,7 @@ class AppLifecycle(AppManager):
         return device
 
     async def select_app(self, session, event):
+        await self.release_foreground(session)
         device = self.require_app_choice_idle(session)
         project, base = None, None
         if event.app_mode == "update":

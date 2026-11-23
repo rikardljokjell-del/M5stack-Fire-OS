@@ -87,6 +87,9 @@ class DeviceLifecycle:
         device["pending_install_id"] = command["id"]
         self.store.put("devices", device["id"], device)
         await self.state(session, State.awaiting_install)
+        if (session.project_id!=package['project_id'] or session.package_id!=package['id'] or
+                self.store.get('commands',command['id'])['status']!='pending'):
+            return command  # The user changed app while state delivery yielded.
         await self.emit(session, self.command_message(command))
         return command
 

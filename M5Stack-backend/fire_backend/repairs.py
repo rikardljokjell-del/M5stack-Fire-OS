@@ -12,6 +12,7 @@ from .models import State
 from .storage import new_id
 from .builds import verify_archive
 from .quality import require_deliverable
+from .status_text import VERSION as STATUS_TEXT_VERSION,repair_text
 
 
 ACTIVE = {"queued", "building"}
@@ -20,7 +21,7 @@ ACTIVE = {"queued", "building"}
 class Repairs:
     def __init__(self, service):
         self.service,self.store=service,service.store
-        self.tasks,self.watchers={},{}
+        self.tasks,self.watchers,self.workers={},{},{}
         # Unknown paid work is never silently replayed after a backend restart.
         for job in self.store.list('repairs'):
             if job['status'] in ACTIVE:
@@ -92,7 +93,8 @@ class Repairs:
               'reported_package_id','failed_package_id','failed_version','base_package_id','base_version',
               'latest_package_id','latest_version','newer_version_available','target_resolution','identity_warnings',
               'build_id','package_id','version','updated_at')
-        return {'repair_id':job['id'],**{k:job[k] for k in keys if k in job},'physical_verified':False}
+        return {'repair_id':job['id'],**{k:job[k] for k in keys if k in job},'message':repair_text(job),
+                'status_text_version':STATUS_TEXT_VERSION,'physical_verified':False}
 
     async def emit(self,session,job):
         if job['status']=='ready':
@@ -164,7 +166,8 @@ class Repairs:
             project=self.service.app_project(session.device_id,None,event.app_id)
             jobs=[j for j in self.store.list('repairs') if j['device_id']==session.device_id and j['project_id']==project['id']]
             if not jobs:
-                result={'type':'app_repair_status','app_id':event.app_id,'status':'not_found'}
+                result={'type':'app_repair_status','app_id':event.app_id,'status':'not_found',
+                        'message':repair_text({'status':'not_found'}),'status_text_version':STATUS_TEXT_VERSION}
                 await self.service.emit(session,result);return result
             job=max(jobs,key=lambda j:j['updated_at'])
         return await self.emit(session,job)
@@ -194,12 +197,14 @@ class Repairs:
                 'latest_version_used_as_base':base['manifest']['version'],'physical_root_cause_verified':False}
             build=await self.service.confirm_build(worker,job['proposal_id'])
             build.update(repair_job_id=job_id,confirmed_event_id=job['confirmed_event_id'])
+            self.workers[job_id]={'build':build,'worker':worker,'task':worker.task}
             self.store.put('builds',build['id'],build)
             job.update(status='building',build_id=build['id']);self.save(job)
             while not worker.task.done():
                 await asyncio.wait({worker.task},timeout=.5)
                 if worker.progress:
-                    job.update(phase=worker.progress['phase'],progress=worker.progress['progress'],message=self.service.redactor.text(worker.progress['message'])[:240])
+                    job.update(phase=worker.progress['phase'],progress=worker.progress['progress'],message=self.service.redactor.text(worker.progress['message'])[:240],
+                               attempt=worker.progress.get('attempt',1))
                     self.save(job);await self.notify(job)
             await worker.task
             build=self.store.get('builds',build['id'])
@@ -221,6 +226,7 @@ class Repairs:
             if worker:
                 worker.stopped=True;self.service.persist(worker)
             self.tasks.pop(job_id,None)
+            self.workers.pop(job_id,None)
 
     async def close(self):
         tasks=list(self.tasks.values())

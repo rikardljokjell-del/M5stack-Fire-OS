@@ -54,7 +54,7 @@ class GeneratedApp(StrictModel):
     @classmethod
     def short_name(cls, value):
         if not value.strip() or any(ord(c) < 32 for c in value):
-            raise ValueError("Appnavnet må være kort, lesbart og uten kontrolltegn")
+            raise ValueError("Appnavnet mÃ¥ vÃ¦re kort, lesbart og uten kontrolltegn")
         return " ".join(value.split())
 
     @field_validator("required_services")
@@ -214,7 +214,7 @@ class DeviceApp(StrictModel):
 APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
                       "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None,
-                      "repair_id":None,"app_version":None}
+                      "repair_id":None,"app_version":None,"build_id":None,"notification_action":None}
 CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None}
 
 
@@ -232,7 +232,9 @@ class DeviceDiagnostics(StrictModel):
 class DeviceEvent(StrictModel):
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel"]
+    build_id: str | None = Field(default=None,pattern=ID_PATTERN)
+    notification_action: Literal['open','dismiss'] | None = None
     repair_id: str | None = Field(default=None,pattern=ID_PATTERN)
     app_version: str | None = Field(default=None,max_length=32)
     conversation_mode: Literal["chat", "develop"] | None = None
@@ -293,6 +295,8 @@ class DeviceEvent(StrictModel):
                 "listen_start": ("turn_id",), "listen_stop": ("turn_id",),
                 "app_diagnostic": ("app_id", "package_id", "error_code"),
                 "app_repair_prepare": ("app_id",),
+                "build_background": ("build_id",),"build_resume": ("build_id",),"build_cancel": ("build_id",),
+                "build_notice_ack": ("build_id","notification_action"),
                 "audio_playback_started": ("audio_id", "turn_id"), "audio_playback_finished": ("audio_id", "turn_id"),
                 "audio_playback_failed": ("audio_id", "turn_id", "error_code"),
                 "firmware_store_result": ("firmware_id","transfer_id","status"),

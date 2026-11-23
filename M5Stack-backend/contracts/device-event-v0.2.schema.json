@@ -403,10 +403,44 @@
         "app_backend_delete_prepare",
         "app_backend_delete_confirm",
         "app_repair_prepare",
-        "app_repair_status"
+        "app_repair_status",
+        "build_background",
+        "build_jobs",
+        "build_notice_ack",
+        "build_resume",
+        "build_cancel"
       ],
       "title": "Event",
       "type": "string"
+    },
+    "build_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Build Id"
+    },
+    "notification_action": {
+      "anyOf": [
+        {
+          "enum": [
+            "open",
+            "dismiss"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Notification Action"
     },
     "repair_id": {
       "anyOf": [
@@ -925,6 +959,94 @@
   "title": "DeviceEvent",
   "type": "object",
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "build_background"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "build_id"
+        ],
+        "properties": {
+          "build_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "build_resume"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "build_id"
+        ],
+        "properties": {
+          "build_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "build_cancel"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "build_id"
+        ],
+        "properties": {
+          "build_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "build_notice_ack"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "build_id",
+          "notification_action"
+        ],
+        "properties": {
+          "build_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "notification_action": {
+            "enum": [
+              "open",
+              "dismiss"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {

@@ -97,8 +97,13 @@ beeps, loud sudden changes or copied commercial themes. Provide an honest sound
 on/off setting BEFORE start and accessible in the pause/settings menu. Default
 off until chosen, comfortable volume, no overlap with AI speech, immediate mute
 cancels/stops/closes audio and blocks further scheduling. Keep setting over rounds.
-Use only actual speaker/jobs (and sd for file playback); tones can be sequenced
+Use only actual speaker/jobs; tones can be sequenced
 as asynchronous bounded jobs with elapsed-time scheduling, not a blocking loop.
+Manifest dependencies follow the injected SERVICE-LEVEL closure, not only the
+methods invoked: current fire-lua-0.2 speaker ALSO requires sd because play()
+belongs to that service. A tone-only app therefore legitimately declares sd
+without calling fire.sd or starting SD jobs. Do not reject or remove that
+dependency; its presence is not a missing file feature or missing SD coverage.
 Conversation audio flags are NOT game sound. If native game audio is unavailable,
 do not promise or deliver a silent game as satisfying this standard: explain the
 firmware prerequisite and retain the game request until support is available.

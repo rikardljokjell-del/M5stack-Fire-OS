@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import contextlib
 import json
 import time
@@ -11,10 +12,12 @@ from openai import APIStatusError
 from .models import State, Capabilities
 from .devices import DeviceLifecycle
 from .app_lifecycle import AppLifecycle
+from .build_lifecycle import BuildLifecycle
 from .capabilities import generation_policy, policy, status as capability_status
 from .app_quality import APP_QUALITY_POLICY,experience_contract
 from .security import Redactor
 from .storage import Store, new_id
+from .status_text import VERSION as STATUS_TEXT_VERSION,build_text,error_text,display_event
 
 
 class Conflict(ValueError):
@@ -80,7 +83,7 @@ class Session:
     hardware_preview: bool = False
 
 
-class Backend(DeviceLifecycle, AppLifecycle):
+class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
     def __init__(self, settings, provider=None):
         self.settings = settings
         self.redactor = Redactor(settings.openai_api_key.get_secret_value(), settings.fire_backend_token.get_secret_value(), *settings.device_tokens().values())
@@ -98,6 +101,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         self.detaching_sockets = set()
         self.build_lock = asyncio.Lock()
         self.active_build_id = None
+        self.device_builds = {}
         self.active_downloads = {}
         self.store.recover()
         from .repairs import Repairs
@@ -180,6 +184,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         return apps
 
     async def install_saved(self, session, package_id):
+        if session.target=='device':await self.release_foreground(session)
         """Explicit local UI selection reuses a tested package after reboot.
 
         This neither generates code nor authorizes running the app. Validate
@@ -227,6 +232,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
 
     def snapshot(self, session):
         return {"session_id": session.id, "device_id": session.device_id,
+                "backend_features":["background_builds_v1","status_text_v1"],
                 "project_id": session.project_id, "state": session.state,
                 "proposal_id": session.proposal_id, "package_id": session.package_id,
                 "build_id": session.build_id, "mode": self.settings.fire_ai_mode,
@@ -236,6 +242,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 "hardware_preview":session.hardware_preview,
                 "activity": session.activity, "turn_id": session.turn_id, "server_time": int(time.time()),
                 "last_error": session.last_error,
+                "last_error_status":error_text(session.last_error) if session.last_error else '',
                 "app_mode": session.app_mode, "base_package_id": session.base_package_id,
                 "app_revision": session.app_revision, "install_permitted": session.install_permitted,
                 "audio_status": session.audio_status,
@@ -252,6 +259,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
                        "resume_project_aliases": session.resume_project_aliases}, critical=session.state in {State.failed, State.idle})
 
     async def emit(self, session, event):
+        event=display_event(event,operation='repair' if session.repair_context else 'update' if session.app_mode=='update' else 'new',delivery=session.target=='device')
         async with session.send_lock:
             session.sequence += 1
             self.persist(session)
@@ -442,6 +450,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         await self.state(session, session.state)
         await self.report_capabilities(session)
         await self.request_inventory(session)
+        await self.build_notices(session)
         return session
 
     async def resume(self, request, socket, principal):
@@ -518,6 +527,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         if session.target=='device':
             jobs=sorted((j for j in self.store.list('repairs') if j['device_id']==session.device_id),key=lambda j:j['updated_at'],reverse=True)
             for job in jobs[:4]:await self.repairs.emit(session,job)
+            await self.build_notices(session)
 
     async def detach(self, session, socket):
         async with self.connection_locks.setdefault(session.device_id, asyncio.Lock()):
@@ -532,6 +542,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         session.sockets.discard(socket)
         if session.sockets:
             return
+        if session.target=='device':self.detach_device_build(session)
         if session.protocol_version == "0.1":
             await self._stop(session)
             return
@@ -600,6 +611,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
             await self._stop(session)
 
     async def _stop(self, session):
+        if session.target=='device':self.detach_device_build(session)
         # Mark before cancellation so new confirmations cannot race shutdown.
         session.stopped = True
         if session.input_task and session.input_task is not asyncio.current_task() and not session.input_task.done():
@@ -651,6 +663,15 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 saved = self.store.get("sessions", session.id)
                 saved.update(stopped=False, disconnected_at=time.time(), last_seen=time.time())
                 self.store.put("sessions", session.id, saved, critical=True)
+        pending=list(self.device_builds.values())
+        for item in pending:item['task'].cancel()
+        if pending:await asyncio.gather(*(item['task'] for item in pending),return_exceptions=True)
+        for item in list(self.device_builds.values()):
+            build=item['build'];build.update(status='failed',phase='failed',error='Backend stopped before build startup')
+            self.store.put('builds',build['id'],build,critical=True)
+            if self.active_build_id==build['id']:
+                self.active_build_id=None;self.build_lock.release()
+        self.device_builds.clear()
         await self.provider.close()
 
     async def text(self, session, text, *, source="text"):
@@ -756,6 +777,8 @@ class Backend(DeviceLifecycle, AppLifecycle):
         # SDK exceptions are deliberately reduced to their type, without provider bodies.
         if isinstance(error, APIStatusError):
             safe = f"OpenAI HTTP {error.status_code}: {type(error).__name__}; request_id={error.request_id}"
+            if getattr(error,'code',None) in {'insufficient_quota','billing_hard_limit_reached','organization_usage_limit_exceeded','billing_not_active'}:
+                safe+='; billing/quota limit'
         else:
             safe = str(error) if isinstance(error, (ValueError, Conflict)) else type(error).__name__
         safe = self.redactor.text(safe or "Operation timed out")[:6000]
@@ -764,7 +787,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         session.last_error = safe[:240]
         await self.activity(session, "idle")
         await self.state(session, State.failed)
-        await self.emit(session, {"type": "error", "code": "operation_failed", "message": safe[:240]})
+        await self.emit(session, {"type": "error", "code": "operation_failed", "message": error_text(safe)})
         return safe
 
     async def input_retry(self, session, message, code="no_speech"):
@@ -779,19 +802,44 @@ class Backend(DeviceLifecycle, AppLifecycle):
         await self.emit(session, {"type": "error", "code": code, "message": message[:240],
                                   "turn_id": session.turn_id, "recoverable": True})
 
+    def detach_device_build(self, session):
+        item=self.build_entry(session.build_id)
+        if not item or item['task'].done():return False
+        item['build']['foreground_session_id']=None
+        item['build']['background']=True
+        self.store.put('builds',item['build']['id'],item['build'])
+        session.task=None;session.build_id=None;session.progress={}
+        session.state=State.idle
+        self.persist(session)
+        return True
+
+    async def release_foreground(self, session):
+        """A new explicit action may replace speech/dialog, never the build source."""
+        self.detach_device_build(session)
+        if session.state not in {State.building,State.testing,State.running,State.starting,State.stopping,State.rollback_pending}:
+            from .protocol import cancel_turn
+            await cancel_turn(self,session)
+
     async def confirm_build(self, session, proposal_id):
         if session.conversation_mode == "chat":
             raise Conflict("Velg Lag/endre app før du bygger en app.")
-        if (session.stopped or not session.install_permitted or session.lock.locked() or self.build_lock.locked()
+        if (session.stopped or not session.install_permitted or session.lock.locked() or (self.build_lock.locked() and session.target!='device')
                 or session.state != State.awaiting_build_confirmation
                 or not proposal_id or proposal_id != session.proposal_id):
             raise Conflict("No matching build proposal or builder busy")
         # Reserve synchronously before yielding. Consumed confirmations cannot be replayed.
-        await self.build_lock.acquire()
+        device_job=session.target=='device'
+        if device_job and len(self.device_builds)>=8:raise Conflict('Byggekøen er full. Prøv igjen.')
+        if not device_job:await self.build_lock.acquire()
         build_id = new_id("build")
         build = {"id": build_id, "project_id": session.project_id, "session_id": session.id,
                  "status": "building", "phase": "preparing", "progress": 0,
                  "summary": session.summary, "confirmed_proposal_id": proposal_id, "attempts": 0}
+        build.update(owner_device_id=session.device_id if session.target=='device' else session.desktop_device_id,
+                     created_at=time.time(),background=session.target!='device' and bool(session.desktop_device_id),
+                     operation='repair' if session.repair_context else 'update' if session.app_mode=='update' else 'new',
+                     resume_context={'history':bounded_history(copy.deepcopy(session.history)),
+                                     'summary':session.summary,'app_mode':session.app_mode,'base_package_id':session.base_package_id})
         if session.repair_context:
             build.update(repair_context=json.dumps(session.repair_context), repair_of=session.repair_context["package_id"])
         if session.target == "device":
@@ -799,20 +847,63 @@ class Backend(DeviceLifecycle, AppLifecycle):
         try:
             if hasattr(self, "audio"):
                 self.audio.cancel(session)
+            worker=session
+            if session.target=='device':
+                worker=replace(session,id=new_id('session'),device_id=new_id('pc'),target='pc_simulation',
+                    desktop_device_id=session.device_id,sockets=set(),history=copy.deepcopy(session.history),
+                    repair_context=copy.deepcopy(session.repair_context),lock=asyncio.Lock(),send_lock=asyncio.Lock(),
+                    connection_lock=asyncio.Lock(),input_task=None,operation_task=None,speech_task=None,
+                    dialog_manager=None,dialog_connection=None,task=None,turn_id=None)
+                build['foreground_session_id']=session.id
             self.store.put("builds", build_id, build)
             session.build_id = build_id
             session.proposal_id = None
             session.state = State.building
             self.persist(session)
-            self.active_build_id = build_id
-            session.task = asyncio.create_task(self.build_job(session, build))
+            if device_job:
+                build.update(status='queued',phase='queued')
+                self.store.put('builds',build_id,build)
+                async def queued_build():
+                    await self.build_lock.acquire()
+                    self.active_build_id=build_id
+                    await self.build_job(worker,build)
+                session.task=asyncio.create_task(queued_build())
+            else:
+                self.active_build_id = build_id
+                session.task = asyncio.create_task(self.build_job(worker, build))
+            if worker is not session:
+                worker.build_id=build_id;worker.task=session.task
+                self.device_builds[build_id]={'build':build,'task':session.task,'worker':worker}
         except BaseException:
-            self.build_lock.release()
+            if not device_job:self.build_lock.release()
             raise
+        if device_job:
+            session.progress={'type':'build_progress','build_id':build_id,'phase':'queued','progress':0,
+                              'message':build_text('queued'),'eta_seconds':None,'status_text_version':STATUS_TEXT_VERSION}
+            await self.emit(session,session.progress)
         return build
 
     async def build_job(self, session, build):
+        def follower():
+            peer=self.sessions.get(build.get('foreground_session_id'))
+            return peer if peer and not peer.stopped and peer.build_id==build['id'] and peer.project_id==session.project_id else None
+
+        async def build_state(state):
+            await self.state(session,state)
+            peer=follower()
+            if peer:await self.state(peer,state)
+
+        async def build_emit(event):
+            await self.emit(session,event)
+            peer=follower()
+            if peer:await self.emit(peer,event)
+            if build.get('background') and event.get('type')=='build_progress':
+                await self.notify_build_progress(build)
+
         async def progress(phase, percent, message):
+            operation='repair' if build.get('repair_of') or build.get('repair_job_id') else 'update' if session.app_mode=='update' else 'new'
+            message=build_text(phase,operation=operation,attempt=build.get('generation_attempt',1),progress=percent,
+                               detail=message,delivery=session.target=='device' or bool(follower()))
             now=time.time()
             if build.get('phase_started_at') is not None:
                 prior=build.get('phase','preparing')
@@ -820,32 +911,35 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 timings[prior]=round(timings.get(prior,0)+max(0,now-build['phase_started_at']),3)
             build['phase_started_at']=now
             session.progress = {"type": "build_progress", "build_id": build["id"], "phase": phase,
-                                "progress": percent, "message": message, "eta_seconds": None}
+                                "progress": percent, "message": message, "eta_seconds": None,
+                                "attempt":build.get('generation_attempt',1),"status_text_version":STATUS_TEXT_VERSION}
             build.update(phase=phase, progress=percent)
             self.store.put("builds", build["id"], build, critical=phase == "failed")
             if phase == "testing":
-                await self.state(session, State.testing)
+                await build_state(State.testing)
             elif phase in {"generating", "validating", "compiling", "packaging"}:
                 if session.state != State.building:
-                    await self.state(session, State.building)
-            await self.emit(session, session.progress)
+                    await build_state(State.building)
+            peer=follower()
+            if peer:peer.progress=dict(session.progress)
+            await build_emit(session.progress)
 
         async def heartbeat():
             while True:
                 await asyncio.sleep(self.settings.fire_progress_interval_seconds)
                 if session.progress:
-                    await self.emit(session, session.progress)
+                    await build_emit(session.progress)
 
         pulse = asyncio.create_task(heartbeat())
         build_completed = False
         project_before = None
         try:
-            await self.state(session, State.building)
-            await progress("preparing", 1, "Oppretter isolert arbeidsmappe")
+            await build_state(State.building)
+            await progress("preparing", 1, build_text('preparing'))
             async with asyncio.timeout(self.settings.fire_build_timeout_seconds):
                 project = self.store.get("projects", session.project_id)
                 project_before = dict(project)
-                build_project = {**project, "latest_package": session.base_package_id or project.get("latest_package")}
+                build_project = {**project, "latest_package": session.base_package_id}
                 package = await self.builder.build(build, build_project, progress, capabilities=session.capabilities,
                                                    context=self.context_for(session))
             project.update(name=package["manifest"]["name"], app_id=package["manifest"]["id"], latest_package=package["id"],
@@ -855,17 +949,23 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 self.quality.candidate(session.project_id, build["repair_of"], package["id"])
             session.package_id = package["id"]
             session.base_package_id = package["id"]
+            peer=follower()
+            if peer:
+                peer.package_id=package['id'];peer.base_package_id=package['id']
             build.update(status="ready", package_id=package["id"])
-            await progress("ready", 100, "Pakken er testet. Sender til FIRE for installasjon." if session.target == "device"
-                           else "Pakken er testet. Venter på eksplisitt kjørebekreftelse.")
-            await self.state(session, State.ready_to_run)
+            await progress("ready", 100, build_text('ready',delivery=session.target=='device'))
+            await build_state(State.ready_to_run)
             build_completed = True
-            await self.emit(session, {"type": "package_ready", "package_id": package["id"],
+            await build_emit({"type": "package_ready", "package_id": package["id"],
                                       "manifest": package["manifest"], "archive_sha256": package["archive_sha256"],
                                       "project_id": session.project_id, "size_bytes": package["size_bytes"],
                                       "download_url": f"/packages/{package['id']}/download"})
             if session.target == "device":
                 await self.offer_install(session, package)
+            elif follower():
+                await self.offer_install(follower(),package)
+            if build.get('background'):
+                await self.notify_build_ready(build)
         except BaseException as error:
             if not isinstance(error, (Exception, asyncio.CancelledError)):
                 raise
@@ -874,6 +974,11 @@ class Backend(DeviceLifecycle, AppLifecycle):
                 error=ValueError("Byggingen nådde tidsgrensen på "+str(self.settings.fire_build_timeout_seconds)+
                     " sekunder under "+build['timed_out_phase']+". Forsøk og siste kontrollfunn er lagret; ingen utestet pakke er levert.")
             message = "Build cancelled" if isinstance(error, asyncio.CancelledError) else await self.failure(session, error)
+            peer=follower()
+            if peer:
+                peer.last_error=message[:240]
+                await self.state(peer,State.failed)
+                await self.emit(peer,{'type':'error','code':'operation_failed','message':error_text(message)})
             if build_completed:
                 # A delivery/connection failure cannot revoke an already tested,
                 # published immutable package or pretend its compilation failed.
@@ -899,6 +1004,9 @@ class Backend(DeviceLifecycle, AppLifecycle):
             if self.active_build_id == build["id"]:
                 self.active_build_id = None
                 self.build_lock.release()
+            if build['id'] in self.device_builds:
+                session.stopped=True;self.persist(session)
+                self.device_builds.pop(build['id'],None)
 
     async def confirm_run(self, session, package_id):
         if session.conversation_mode == "chat":
