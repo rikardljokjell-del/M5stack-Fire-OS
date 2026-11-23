@@ -4447,6 +4447,7 @@ void FireOS::open(Screen screen) {
     aiInstallId_ = "";
     aiAssistantText_ = "";
     aiWorkflowText_ = "";
+    if (backgroundBuildsSupported_) requestBackgroundBuildJobs();
   }
   if (screen == Screen::AiApi) {
     wifiIndex_ = 0;
@@ -4918,8 +4919,8 @@ void FireOS::handleHelpButton(uint8_t index) {
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
   if (aiProjectPickerActive_) {
-    const uint8_t itemCount =
-        luaAppCount_ + 4;  // Chat + Voice test + New + apps + Back.
+    const uint8_t resumeOffset = aiResumeAvailable_ ? 1 : 0;
+    const uint8_t itemCount = luaAppCount_ + 4 + resumeOffset;
     if (index == 0) {
       aiProjectSelection_ =
           (aiProjectSelection_ + itemCount - 1) % itemCount;
@@ -4927,9 +4928,17 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiProjectSelection_ = (aiProjectSelection_ + 1) % itemCount;
     } else if (aiProjectSelection_ == itemCount - 1) {
       back();
+    } else if (aiResumeAvailable_ && aiProjectSelection_ == 0) {
+      aiProjectPickerActive_ = false;
+      aiBuildId_ = buildJobIds_[0];
+      backgroundBuildActive_ = true;
+      aiWorkflowState_ = 4;
+      aiWorkflowText_ = "Resume bygging";
+      if (backendClient_) backendClient_->buildResume(aiBuildId_);
     } else {
       aiProjectPickerActive_ = false;
-      if (aiProjectSelection_ == 0) {
+      const uint8_t selection = aiProjectSelection_ - resumeOffset;
+      if (selection == 0) {
         aiVoiceTestMode_ = false;
         aiConversationMode_ = 1;
         aiProjectId_ = "";
@@ -4938,7 +4947,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
           backendClient_->setConversationMode("chat");
           backendClient_->setProjectId("");
         }
-      } else if (aiProjectSelection_ == 1) {
+      } else if (selection == 1) {
         aiVoiceTestMode_ = true;
         aiConversationMode_ = 1;
         aiProjectId_ = "";
@@ -4947,7 +4956,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
           backendClient_->setProjectId("");
           backendClient_->setConversationMode("chat");
         }
-      } else if (aiProjectSelection_ == 2) {
+      } else if (selection == 2) {
         aiVoiceTestMode_ = false;
         aiConversationMode_ = 0;
         aiProjectId_ = "";
@@ -4960,7 +4969,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       } else {
         aiVoiceTestMode_ = false;
         aiConversationMode_ = 0;
-        const uint8_t selected = aiProjectSelection_ - 3;
+        const uint8_t selected = selection - 3;
         const String source = luaAppPaths_[selected];
         const int slash = source.lastIndexOf('/');
         const String appFolder = slash > 0 ? source.substring(0, slash) : source;
@@ -6143,6 +6152,24 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
   const String type = jsonStringField(message, "type");
   const String buildId = jsonStringField(message, "build_id");
   if (buildId.length() > 0) aiBuildId_ = buildId;
+  if (type == "build_jobs") {
+    buildJobCount_ = 0;
+    const int jobsAt = message.indexOf("\"jobs\"");
+    int cursor = jobsAt >= 0 ? message.indexOf('{', jobsAt) : -1;
+    while (cursor >= 0 && buildJobCount_ < 4) {
+      const int end = message.indexOf('}', cursor);
+      if (end < 0) break;
+      const String item = message.substring(cursor, end + 1);
+      buildJobIds_[buildJobCount_] = jsonStringField(item, "build_id");
+      buildJobNames_[buildJobCount_] = jsonStringField(item, "name");
+      buildJobStatuses_[buildJobCount_] = jsonStringField(item, "status");
+      if (buildJobIds_[buildJobCount_].length() > 0) ++buildJobCount_;
+      cursor = message.indexOf('{', end + 1);
+    }
+    aiResumeAvailable_ = buildJobCount_ > 0;
+    redrawRequested_ = true;
+    return;
+  }
   if (type == "build_progress" || type == "build_job_status" ||
       type == "build_resumed") {
     buildProgress_ = static_cast<uint8_t>(
@@ -9563,22 +9590,25 @@ void FireOS::drawAiDeveloper() {
       backendColor = kCyan;
     }
     drawText(160, 59, backendLabel, backendColor, 1, kPanel);
-    const uint8_t itemCount = luaAppCount_ + 4;
+    const uint8_t resumeOffset = aiResumeAvailable_ ? 1 : 0;
+    const uint8_t itemCount = luaAppCount_ + 4 + resumeOffset;
     const uint8_t visible = min<uint8_t>(6, itemCount - aiProjectOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = aiProjectOffset_ + row;
       const bool selected = item == aiProjectSelection_;
       const int y = 72 + row * 22;
       if (selected) ui.fillRoundRect(20, y - 4, 280, 19, 4, kCyan);
-      String label = item == 0
-                         ? "Chat only"
-                         : item == 1
-                             ? "Voice test"
-                             : item == 2
-                                 ? "New app"
-                                 : item == itemCount - 1
-                                     ? "Back"
-                                     : luaAppNames_[item - 3];
+       String label = aiResumeAvailable_ && item == 0
+                          ? "Resume"
+                          : item == resumeOffset
+                              ? "Chat only"
+                              : item == resumeOffset + 1
+                                  ? "Voice test"
+                                  : item == resumeOffset + 2
+                                      ? "New app"
+                                      : item == itemCount - 1
+                                          ? "Back"
+                                          : luaAppNames_[item - resumeOffset - 3];
       if (label.length() > 28) label = label.substring(0, 25) + "...";
       drawText(160, y, label, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);

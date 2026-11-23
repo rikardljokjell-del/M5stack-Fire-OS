@@ -473,6 +473,11 @@ class FireOS {
   bool backgroundBuildsSupported_ = false;
   bool backgroundBuildActive_ = false;
   bool buildJobsRequested_ = false;
+  bool aiResumeAvailable_ = false;
+  uint8_t buildJobCount_ = 0;
+  String buildJobIds_[4];
+  String buildJobNames_[4];
+  String buildJobStatuses_[4];
   bool buildNoticeActive_ = false;
   String buildNoticeId_;
   String buildNoticeName_;
