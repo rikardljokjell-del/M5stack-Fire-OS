@@ -568,8 +568,7 @@ bool FireBackendClient::appRepairStatus(const String& repairId,
   if (repairId.length() > 0)
     fields += ",\"repair_id\":\"" + jsonEscape(repairId) + "\"";
   if (appId.length() > 0) {
-    if (fields.length() > 0) fields += ",";
-    fields += "\"app_id\":\"" + jsonEscape(appId) + "\"";
+    fields += ",\"app_id\":\"" + jsonEscape(appId) + "\"";
   }
   return sendEvent("app_repair_status", fields);
 }

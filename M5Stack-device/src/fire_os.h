@@ -439,9 +439,11 @@ class FireOS {
   bool luaRepairRequested_ = false;
   bool luaRepairPrepareSent_ = false;
   bool luaRepairBuildConfirmed_ = false;
+  bool luaRepairConfirmPending_ = false;
   bool luaRepairStatusQueryPending_ = false;
   bool luaRepairRunAfterInstall_ = false;
   uint32_t luaRepairLastAttemptAt_ = 0;
+  uint32_t luaRepairConfirmLastAttemptAt_ = 0;
   uint32_t luaMaxRuntimeMs_ = FireLuaRuntime::kDefaultRuntimeMs;
   uint32_t luaLastFrameAt_ = 0;
   uint8_t luaRgbValues_[10][3] = {};

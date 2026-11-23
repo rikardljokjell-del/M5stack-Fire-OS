@@ -379,6 +379,41 @@ String jsonEscapeField(const String& input) {
   return output;
 }
 
+String compactStatusText(const String& raw) {
+  String value = raw;
+  value.trim();
+  String lower = value;
+  lower.toLowerCase();
+  if (lower == "preparing" || lower.indexOf("preparing repair") >= 0)
+    return "Forbereder reparasjon";
+  if (lower == "awaiting_confirmation" ||
+      lower.indexOf("repair proposal") >= 0)
+    return "Venter på reparasjonsforslag";
+  if (lower == "queued") return "Lagt i kø";
+  if (lower == "building" || lower == "generating") return "Lager app";
+  if (lower == "validating") return "Validerer app";
+  if (lower == "compiling") return "Kontrollerer app";
+  if (lower == "testing") return "Tester app";
+  if (lower == "packaging") return "Pakker app";
+  if (lower == "ready" || lower == "ready_to_run") return "App klar";
+  if (lower == "failed") return "Bygging feilet";
+  if (lower == "downloading" || lower.indexOf("downloading") >= 0)
+    return "Laster ned app";
+  if (lower == "installing" || lower.indexOf("install") >= 0)
+    return "Installerer app";
+  if (lower == "starting" || lower.indexOf("starting fixed") >= 0)
+    return "Starter rettet app";
+  if (lower == "running") return "App kjører";
+  if (lower.indexOf("backend disconnected") >= 0)
+    return "Backend er frakoblet";
+  if (lower.indexOf("backend connection") >= 0)
+    return "Kobler til backend";
+  if (lower.indexOf("waiting for backend") >= 0)
+    return "Venter på backend";
+  if (value.length() <= 28) return value;
+  return "Arbeider";
+}
+
 bool removeSdTree(const String& path) {
   File entry = SD.open(path);
   if (!entry) return true;
@@ -5751,6 +5786,7 @@ void FireOS::stopLuaApp(const String& reason) {
     luaRepairRequested_ = false;
     luaRepairPrepareSent_ = false;
     luaRepairBuildConfirmed_ = false;
+    luaRepairConfirmPending_ = false;
     luaRepairRunAfterInstall_ = false;
     luaRepairStatus_ = "Ready to repair";
     luaRepairPhase_ = "idle";
@@ -5940,6 +5976,7 @@ void FireOS::requestLuaRepair() {
   luaRepairRequested_ = true;
   luaRepairPrepareSent_ = false;
   luaRepairBuildConfirmed_ = false;
+  luaRepairConfirmPending_ = false;
   luaRepairStatusQueryPending_ = false;
   luaErrorAction_ = 0;
 }
@@ -5995,14 +6032,22 @@ void FireOS::handleLuaRepairStatus(const String& message) {
       constrain(jsonIntField(message, "progress"), 0, 100));
   luaRepairPrepareSent_ = true;
 
-  if (luaRepairStatus_ == "awaiting_confirmation" &&
-      luaRepairProposalId_.length() > 0 && !luaRepairBuildConfirmed_ &&
-      backendClient_ && backendClient_->sessionReady()) {
+  const bool repairQueued = luaRepairStatus_ == "queued" ||
+                            luaRepairStatus_ == "building" ||
+                            luaRepairStatus_ == "testing" ||
+                            luaRepairStatus_ == "ready";
+  if (repairQueued) {
+    luaRepairConfirmPending_ = false;
+    luaRepairBuildConfirmed_ = true;
+  } else if (luaRepairStatus_ == "awaiting_confirmation" &&
+             luaRepairProposalId_.length() > 0 && luaRepairRequested_ &&
+             backendClient_ && backendClient_->sessionReady() &&
+             (!luaRepairConfirmPending_ ||
+              millis() - luaRepairConfirmLastAttemptAt_ >= 3000)) {
     if (backendClient_->confirmBuild(luaRepairProposalId_, luaRepairId_)) {
-      luaRepairBuildConfirmed_ = true;
-      luaRepairStatus_ = "queued";
-      luaRepairPhase_ = "queued";
-      luaRepairMessage_ = "Repair queued";
+      luaRepairConfirmPending_ = true;
+      luaRepairConfirmLastAttemptAt_ = millis();
+      luaRepairMessage_ = "Bekrefter reparasjon";
     }
   } else if (luaRepairStatus_ == "ready" &&
              luaRepairReadyPackageId_.length() > 0) {
@@ -6016,6 +6061,7 @@ void FireOS::handleLuaRepairStatus(const String& message) {
     luaRepairRequested_ = false;
     luaRepairPrepareSent_ = false;
     luaRepairBuildConfirmed_ = false;
+    luaRepairConfirmPending_ = false;
   }
 }
 
@@ -9565,7 +9611,7 @@ void FireOS::drawAiDeveloper() {
   if (aiConversationMode_ == 1 && aiWorkflowState_ == 0 &&
       aiWorkflowText_.length() == 0)
     workflowLabel = "CHAT - PRESS B TO SPEAK";
-  if (workflowLabel.length() > 28) workflowLabel = workflowLabel.substring(0, 28);
+  workflowLabel = compactStatusText(workflowLabel);
   drawText(cx, 207, workflowLabel, kMuted, 1, TFT_BLACK);
   if (aiAssistantText_.length() > 0) {
     String assistant = aiAssistantText_;
@@ -9679,7 +9725,7 @@ void FireOS::drawLuaApp() {
     drawText(160, 101, error, kText, 1, TFT_BLACK);
     String status = luaRepairMessage_.length() > 0 ? luaRepairMessage_
                                                    : "Press B to fix this app";
-    if (status.length() > 42) status = status.substring(0, 39) + "...";
+    status = compactStatusText(status);
     drawText(160, 125, status, kMuted, 1, TFT_BLACK);
     const bool wifiConnected = WiFi.status() == WL_CONNECTED;
     const String wifiLabel = wifiMode_ == 2
@@ -9891,7 +9937,7 @@ void FireOS::drawAppsSettingsBackend() {
     ui.setTextDatum(TL_DATUM);
   }
   String status = managerStatus_.length() > 0 ? managerStatus_ : externalAppMessage_;
-  if (status.length() > 38) status = status.substring(0, 38);
+  status = compactStatusText(status);
   drawText(16, 190, status, kMuted, 1);
   drawFooter("A  UP", "B  ACTIONS", "DOWN  C");
 }
