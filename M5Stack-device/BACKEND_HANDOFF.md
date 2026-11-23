@@ -463,3 +463,21 @@ by app cleanup; only app-owned resources are released.
 Build/flash verification: `m5stack-fire-ble` passed (RAM 1.4%, flash 28.8%),
 binary SHA-256 `953701aa461986e369c6a8e56414637fb3077bb2965b831cd3d47b66f836c0e4`.
 The image was flashed to COM3 and reached `FIRE OS started` without reset.
+## Firmware menu and catalog update
+
+- Running firmware is now reported as `fire-os-1.1` and shown separately from
+  candidate files.
+- Settings -> Firmware now has separate GitHub firmware files and SD firmware
+  files views. GitHub rows show `Cloud` or `Both`; SD rows show `Local`.
+- GitHub refreshes its catalog when opened. Existing files require an explicit
+  `Overwrite existing` or `Cancel` choice before download.
+- GitHub downloads clamp initial response bytes to Content-Length, stage to a
+  `.part` file, verify exact size/SHA256, and only then replace an existing
+  file.
+- Public catalog now contains `firmware/fire-os-1.1.bin`, size `1896432`,
+  SHA-256
+  `95376ff07b7ce1a9abe14bd7e0b459443448a12546537ee826019aa1e0297b65`.
+
+The firmware image was built with `m5stack-fire-ble`, flashed to COM3 and
+reached `FIRE OS started` without reset. GitHub download and OTA flashing
+still require a physical network/SD interaction test.

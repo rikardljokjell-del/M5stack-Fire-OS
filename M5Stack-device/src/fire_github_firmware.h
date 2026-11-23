@@ -21,7 +21,7 @@ class FireGithubFirmwareManager {
   void setCallbacks(void* context, StatusCallback status,
                     ResultCallback result);
   bool startManifest();
-  bool startDownload(uint8_t index);
+  bool startDownload(uint8_t index, bool overwriteExisting = false);
   void service(bool wifiConnected, bool sdReady);
 
   bool busy() const { return state_ != State::Idle; }
@@ -52,6 +52,7 @@ class FireGithubFirmwareManager {
   WiFiClientSecure client_;
   File stagedFile_;
   bool manifestMode_ = false;
+  bool overwriteExisting_ = false;
   uint8_t selectedIndex_ = 0;
   uint8_t entryCount_ = 0;
   String names_[kMaxEntries];

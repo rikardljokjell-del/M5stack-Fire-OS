@@ -88,6 +88,7 @@ void FireGithubFirmwareManager::emitResult(bool manifest, bool ok,
 bool FireGithubFirmwareManager::startManifest() {
   if (busy()) return false;
   manifestMode_ = true;
+  overwriteExisting_ = false;
   requestPath_ = kGithubManifestPath;
   headerBuffer_ = "";
   manifestBody_ = "";
@@ -100,12 +101,14 @@ bool FireGithubFirmwareManager::startManifest() {
   return true;
 }
 
-bool FireGithubFirmwareManager::startDownload(uint8_t index) {
+bool FireGithubFirmwareManager::startDownload(uint8_t index,
+                                              bool overwriteExisting) {
   if (busy() || index >= entryCount_ || !validFilename(names_[index]) ||
       !validSha256(hashes_[index]) || sizes_[index] == 0 ||
       sizes_[index] > kMaxBytes)
     return false;
   manifestMode_ = false;
+  overwriteExisting_ = overwriteExisting;
   selectedIndex_ = index;
   requestPath_ = String(kGithubFirmwarePrefix) + names_[index];
   headerBuffer_ = "";
@@ -206,7 +209,7 @@ bool FireGithubFirmwareManager::prepareDownload(bool sdReady) {
   tempPath_ = finalPath_ + ".part";
   expectedHash_ = hashes_[selectedIndex_];
   expectedSize_ = sizes_[selectedIndex_];
-  if (SD.exists(finalPath_)) return false;
+  if (SD.exists(finalPath_) && !overwriteExisting_) return false;
   if (SD.exists(tempPath_)) SD.remove(tempPath_);
   stagedFile_ = SD.open(tempPath_, FILE_WRITE);
   if (!stagedFile_) return false;
@@ -244,6 +247,7 @@ void FireGithubFirmwareManager::fail(const String& code,
   releaseClient();
   if (tempPath_.length() > 0 && SD.exists(tempPath_)) SD.remove(tempPath_);
   state_ = State::Idle;
+  overwriteExisting_ = false;
   errorCode_ = code;
   errorMessage_ = message;
   emitStatus("GitHub failed: " + code);
@@ -302,11 +306,23 @@ void FireGithubFirmwareManager::finishDownload() {
   stagedFile_.flush();
   stagedFile_.close();
   if (!SD.rename(tempPath_, finalPath_)) {
+    if (overwriteExisting_ && SD.exists(finalPath_)) {
+      SD.remove(finalPath_);
+      if (SD.rename(tempPath_, finalPath_)) {
+        releaseClient();
+        state_ = State::Idle;
+        overwriteExisting_ = false;
+        emitStatus("GitHub firmware stored on SD");
+        emitResult(false, true, "stored on SD");
+        return;
+      }
+    }
     fail("rename_failed", "Cannot activate GitHub firmware file");
     return;
   }
   releaseClient();
   state_ = State::Idle;
+  overwriteExisting_ = false;
   emitStatus("GitHub firmware stored on SD");
   emitResult(false, true, "stored on SD");
 }
@@ -387,9 +403,10 @@ void FireGithubFirmwareManager::service(bool wifiConnected, bool sdReady) {
       return;
     }
     const int bodyStart = end + 4;
-    const size_t initial = bodyStart < headerBuffer_.length()
-                               ? headerBuffer_.length() - bodyStart
-                               : 0;
+    const size_t availableBody = bodyStart < headerBuffer_.length()
+                                     ? headerBuffer_.length() - bodyStart
+                                     : 0;
+    const size_t initial = min<size_t>(availableBody, contentLength_);
     if (manifestMode_) {
       manifestBody_ = initial > 0 ? headerBuffer_.substring(bodyStart) : "";
       state_ = State::ManifestBody;

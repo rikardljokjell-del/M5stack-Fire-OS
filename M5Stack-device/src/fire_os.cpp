@@ -47,7 +47,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-0.2+storage-dev";
+constexpr char kFirmwareVersion[] = "fire-os-1.1";
 constexpr uint32_t kFirmwareBootGuardMs = 15000;
 constexpr uint32_t kLuaServiceDisplay = 1u << 0;
 constexpr uint32_t kLuaServiceButtons = 1u << 1;
@@ -4185,6 +4185,9 @@ void FireOS::open(Screen screen) {
     firmwareOffset_ = 0;
     firmwareCount_ = 0;
     firmwareGithubDialog_ = false;
+    firmwareSdDialog_ = false;
+    firmwareGithubOverwriteConfirm_ = false;
+    firmwareGithubPendingIndex_ = 0;
     firmwareGithubSelection_ = 0;
     firmwareGithubOffset_ = 0;
     firmwareInstallConfirm_ = false;
@@ -4432,6 +4435,21 @@ void FireOS::handleBootButton(uint8_t index) {
 }
 
 void FireOS::handleFirmwareButton(uint8_t index) {
+  if (firmwareGithubOverwriteConfirm_) {
+    if (index == 0 || index == 2) {
+      firmwareGithubOverwriteConfirm_ = false;
+      firmwareMessage_ = "Download cancelled";
+    } else if (githubFirmware_ &&
+               githubFirmware_->startDownload(firmwareGithubPendingIndex_,
+                                               true)) {
+      firmwareGithubOverwriteConfirm_ = false;
+      firmwareGithubDialog_ = false;
+      firmwareMessage_ = "Downloading and overwriting...";
+    } else {
+      firmwareMessage_ = "GitHub download unavailable";
+    }
+    return;
+  }
   if (firmwareGithubDialog_) {
     const uint8_t remoteCount = githubFirmware_ ? githubFirmware_->entryCount() : 0;
     const uint8_t itemCount = remoteCount + 1;
@@ -4442,8 +4460,13 @@ void FireOS::handleFirmwareButton(uint8_t index) {
       firmwareGithubSelection_ =
           (firmwareGithubSelection_ + 1) % itemCount;
     } else if (firmwareGithubSelection_ < remoteCount) {
-      if (githubFirmware_ &&
-          githubFirmware_->startDownload(firmwareGithubSelection_)) {
+      const String name = githubFirmware_->entryName(firmwareGithubSelection_);
+      if (sdReady_ && SD.exists("/firmware/" + name)) {
+        firmwareGithubPendingIndex_ = firmwareGithubSelection_;
+        firmwareGithubOverwriteConfirm_ = true;
+        firmwareMessage_ = "File exists: overwrite or cancel";
+      } else if (githubFirmware_ &&
+                 githubFirmware_->startDownload(firmwareGithubSelection_)) {
         firmwareGithubDialog_ = false;
         firmwareMessage_ = "Downloading from GitHub...";
       } else {
@@ -4459,6 +4482,31 @@ void FireOS::handleFirmwareButton(uint8_t index) {
       firmwareGithubOffset_ = firmwareGithubSelection_ - 4;
     return;
   }
+  if (firmwareSdDialog_) {
+    const uint8_t itemCount = firmwareCount_ + 1;
+    if (index == 0) {
+      firmwareSelection_ = (firmwareSelection_ + itemCount - 1) % itemCount;
+    } else if (index == 2) {
+      firmwareSelection_ = (firmwareSelection_ + 1) % itemCount;
+    } else if (firmwareSelection_ < firmwareCount_) {
+      if (firmwareStorage_ && firmwareStorage_->busy()) {
+        firmwareMessage_ = "Wait for firmware download";
+      } else {
+        firmwareInstallConfirm_ = true;
+        firmwareMessage_ = "Confirm firmware flash";
+      }
+    } else {
+      firmwareSdDialog_ = false;
+      firmwareSelection_ = 1;
+      firmwareOffset_ = 0;
+      firmwareMessage_ = "SD firmware list closed";
+    }
+    if (firmwareSelection_ < firmwareOffset_)
+      firmwareOffset_ = firmwareSelection_;
+    if (firmwareSelection_ >= firmwareOffset_ + 5)
+      firmwareOffset_ = firmwareSelection_ - 4;
+    return;
+  }
   if (firmwareInstallConfirm_) {
     if (index == 0 || index == 2) {
       firmwareInstallConfirm_ = false;
@@ -4470,34 +4518,26 @@ void FireOS::handleFirmwareButton(uint8_t index) {
     }
     return;
   }
-  const uint8_t itemCount = firmwareCount_ + 3;  // Refresh + GitHub + Back.
+  const uint8_t itemCount = 3;  // GitHub files, SD files, Back.
   if (index == 0) {
     firmwareSelection_ = (firmwareSelection_ + itemCount - 1) % itemCount;
   } else if (index == 2) {
     firmwareSelection_ = (firmwareSelection_ + 1) % itemCount;
-  } else if (firmwareSelection_ < firmwareCount_) {
-    if (firmwareStorage_ && firmwareStorage_->busy()) {
-      firmwareMessage_ = "Wait for firmware download";
-    } else {
-      firmwareInstallConfirm_ = true;
-      firmwareMessage_ = "Confirm firmware flash";
-    }
-  } else if (firmwareSelection_ == firmwareCount_) {
-    firmwareMessage_ = "Scanning /firmware...";
-    firmwareScanPending_ = true;
-  } else if (firmwareSelection_ == firmwareCount_ + 1) {
-    firmwareMessage_ = "GitHub list: press B to load";
+  } else if (firmwareSelection_ == 0) {
+    firmwareMessage_ = "Updating GitHub list...";
     firmwareGithubDialog_ = true;
     firmwareGithubSelection_ = 0;
     firmwareGithubOffset_ = 0;
     if (githubFirmware_) githubFirmware_->startManifest();
+  } else if (firmwareSelection_ == 1) {
+    firmwareMessage_ = "Scanning /firmware...";
+    firmwareSelection_ = 0;
+    firmwareOffset_ = 0;
+    firmwareSdDialog_ = true;
+    firmwareScanPending_ = true;
   } else {
     back();
   }
-  if (firmwareSelection_ < firmwareOffset_)
-    firmwareOffset_ = firmwareSelection_;
-  if (firmwareSelection_ >= firmwareOffset_ + 5)
-    firmwareOffset_ = firmwareSelection_ - 4;
 }
 
 void FireOS::playBootRgbPulse() {
@@ -8468,8 +8508,25 @@ void FireOS::drawBoot() {
 
 void FireOS::drawFirmware() {
   drawStatusBar("Firmware");
+  if (firmwareGithubOverwriteConfirm_) {
+    ui.fillRoundRect(12, 44, 296, 142, 12, kPanel);
+    drawText(26, 56, "File already exists", kOrange, 2, kPanel);
+    String name = githubFirmware_
+                      ? githubFirmware_->entryName(firmwareGithubPendingIndex_)
+                      : String();
+    if (name.length() > 28) name = name.substring(0, 25) + "...";
+    drawText(26, 88, name, TFT_WHITE, 1, kPanel);
+    drawText(26, 112, "Overwrite existing file?", kText, 1, kPanel);
+    drawText(26, 140, "B overwrite   A/C cancel", kCyan, 1, kPanel);
+    drawFooter("Cancel", "Overwrite", "Cancel");
+    return;
+  }
   if (firmwareGithubDialog_) {
     drawGithubFirmwareDialog();
+    return;
+  }
+  if (firmwareSdDialog_) {
+    drawSdFirmwareDialog();
     return;
   }
   if (firmwareInstallConfirm_) {
@@ -8486,30 +8543,24 @@ void FireOS::drawFirmware() {
     drawFooter("Cancel", "Flash", "Cancel");
     return;
   }
-  drawText(16, 34, "Running: FIRE OS", kMuted, 1);
-  drawText(16, 48, kFirmwareVersion, TFT_WHITE, 1);
+  drawText(16, 34, "Running", kCyan, 1);
+  String runningLabel = kFirmwareVersion;
+  if (runningLabel.startsWith("fire-os-"))
+    runningLabel = "FIRE OS v" + runningLabel.substring(8);
+  drawText(16, 48, runningLabel, TFT_WHITE, 2);
 
-  const uint8_t itemCount = firmwareCount_ + 3;
-  const uint8_t visible = min<uint8_t>(5, itemCount - firmwareOffset_);
+  const uint8_t itemCount = 3;
+  const uint8_t visible = min<uint8_t>(3, itemCount - firmwareOffset_);
   for (uint8_t row = 0; row < visible; ++row) {
     const uint8_t item = firmwareOffset_ + row;
     const bool selected = item == firmwareSelection_;
     const int y = 70 + row * 22;
     if (selected) ui.fillRoundRect(10, y - 3, 300, 19, 4, kCyan);
-    if (item < firmwareCount_) {
-      String name = firmwareNames_[item];
-      if (name.length() > 24) name = name.substring(0, 21) + "...";
-      drawText(20, y, name, selected ? kBg : kText, 1,
+    if (item == 0) {
+      drawText(20, y, "GitHub firmware files", selected ? kBg : kText, 1,
                selected ? kCyan : kBg);
-      ui.setTextDatum(MR_DATUM);
-      drawText(300, y, formatBytes(firmwareSizes_[item]),
-               selected ? kBg : kMuted, 1, selected ? kCyan : kBg);
-      ui.setTextDatum(TL_DATUM);
-    } else if (item == firmwareCount_) {
-      drawText(20, y, "Refresh SD files", selected ? kBg : kText, 1,
-               selected ? kCyan : kBg);
-    } else if (item == firmwareCount_ + 1) {
-      drawText(20, y, "GitHub firmware", selected ? kBg : kText, 1,
+    } else if (item == 1) {
+      drawText(20, y, "SD firmware files", selected ? kBg : kText, 1,
                selected ? kCyan : kBg);
     } else {
       drawText(20, y, "Back", selected ? kBg : kText, 1,
@@ -8527,6 +8578,48 @@ void FireOS::drawFirmware() {
   drawFooter("A  UP", "B  SELECT", "DOWN  C");
 }
 
+void FireOS::drawSdFirmwareDialog() {
+  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
+  ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
+  drawText(18, 39, "SD firmware files", TFT_WHITE, 2, kPanel);
+  const uint8_t itemCount = firmwareCount_ + 1;
+  if (firmwareCount_ == 0) {
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 105, sdReady_ ? "No .bin files" : "SD not detected",
+             kMuted, 1, kPanel);
+    ui.setTextDatum(TL_DATUM);
+  } else {
+    const uint8_t visible = min<uint8_t>(5, itemCount - firmwareOffset_);
+    for (uint8_t row = 0; row < visible; ++row) {
+      const uint8_t item = firmwareOffset_ + row;
+      const bool selected = item == firmwareSelection_;
+      const int y = 68 + row * 25;
+      if (selected) ui.fillRoundRect(15, y - 3, 290, 21, 4, kCyan);
+      if (item < firmwareCount_) {
+        String name = firmwareNames_[item];
+        if (name.length() > 22) name = name.substring(0, 19) + "...";
+        drawText(22, y, name, selected ? kBg : kText, 1,
+                 selected ? kCyan : kPanel);
+        drawText(250, y, "Local", selected ? kBg : kGreen, 1,
+                 selected ? kCyan : kPanel);
+        ui.setTextDatum(MR_DATUM);
+        drawText(300, y, formatBytes(firmwareSizes_[item]),
+                 selected ? kBg : kMuted, 1, selected ? kCyan : kPanel);
+        ui.setTextDatum(TL_DATUM);
+      } else {
+        drawText(22, y, "Back", selected ? kBg : kText, 1,
+                 selected ? kCyan : kPanel);
+      }
+    }
+  }
+  String status = firmwareMessage_;
+  if (status.length() > 35) status = status.substring(0, 35);
+  ui.setTextDatum(MC_DATUM);
+  drawText(160, 190, status, kMuted, 1, kPanel);
+  ui.setTextDatum(TL_DATUM);
+  drawFooter("A  UP", "B  FLASH", "DOWN  C");
+}
+
 void FireOS::drawGithubFirmwareDialog() {
   ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
   ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
@@ -8538,6 +8631,10 @@ void FireOS::drawGithubFirmwareDialog() {
     ui.setTextDatum(MC_DATUM);
     drawText(160, 105, "Loading catalog...", kCyan, 1, kPanel);
     ui.setTextDatum(TL_DATUM);
+  } else if (remoteCount == 0) {
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 105, "No GitHub files", kOrange, 1, kPanel);
+    ui.setTextDatum(TL_DATUM);
   } else {
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = firmwareGithubOffset_ + row;
@@ -8548,6 +8645,11 @@ void FireOS::drawGithubFirmwareDialog() {
         String name = githubFirmware_->entryName(item);
         if (name.length() > 22) name = name.substring(0, 19) + "...";
         drawText(22, y, name, selected ? kBg : kText, 1,
+                 selected ? kCyan : kPanel);
+        const bool local = sdReady_ && SD.exists("/firmware/" +
+                                                  githubFirmware_->entryName(item));
+        drawText(230, y, local ? "Both" : "Cloud",
+                 selected ? kBg : (local ? kGreen : kCyan), 1,
                  selected ? kCyan : kPanel);
         ui.setTextDatum(MR_DATUM);
         drawText(300, y, formatBytes(githubFirmware_->entrySize(item)),

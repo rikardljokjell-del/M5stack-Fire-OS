@@ -4,10 +4,10 @@
   "target": "m5stack-fire",
   "files": [
     {
-      "name": "fire-os-0.2-storage-dev.bin",
-      "version": "fire-os-0.2+storage-dev",
-      "size_bytes": 1839392,
-      "sha256": "251628642871b2cded04b3bba7545e79dccbe9993e257eae2c367991fae934d3"
+      "name": "fire-os-1.1.bin",
+      "version": "fire-os-1.1",
+      "size_bytes": 1896432,
+      "sha256": "95376ff07b7ce1a9abe14bd7e0b459443448a12546537ee826019aa1e0297b65"
     }
   ]
 }

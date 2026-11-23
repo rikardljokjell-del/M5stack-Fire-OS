@@ -225,6 +225,9 @@ class FireOS {
   bool firmwareInstallConfirm_ = false;
   bool firmwareInstallPending_ = false;
   bool firmwareGithubDialog_ = false;
+  bool firmwareSdDialog_ = false;
+  bool firmwareGithubOverwriteConfirm_ = false;
+  uint8_t firmwareGithubPendingIndex_ = 0;
   uint8_t firmwareGithubSelection_ = 0;
   uint8_t firmwareGithubOffset_ = 0;
   bool firmwareBootGuardActive_ = false;
@@ -771,6 +774,7 @@ class FireOS {
   void drawBoot();
   void drawFirmware();
   void drawGithubFirmwareDialog();
+  void drawSdFirmwareDialog();
   void drawMainMenuSettings();
   void drawShortcuts();
   void drawAppsSettings();

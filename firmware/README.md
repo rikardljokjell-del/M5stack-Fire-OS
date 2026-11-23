@@ -11,3 +11,5 @@ known-good firmware available for recovery.
 `index.json` is the public catalog used by `Settings -> Firmware -> GitHub
 firmware`. It must contain only tested M5Stack FIRE builds and the exact
 SHA-256/size of each binary.
+
+The current catalog entry is `fire-os-1.1.bin`.
