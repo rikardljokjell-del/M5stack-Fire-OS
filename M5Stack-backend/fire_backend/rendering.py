@@ -26,8 +26,10 @@ within callback budgets; choose a simpler complete scene over partial/blank fram
 Each callback has a cumulative 256-byte text budget, including unchanged labels.
 Native host safety gate (also applies on the FIRST frame): at most ONE rgb.set
 call per callback, at most 128 total grid CELLS and 32768 grid pixels per callback.
-rgb.set currently transmits the whole ten-LED strip synchronously, not just one
-pixel. Queue desired colours and advance one changed pixel per update; do not
+Older firmware transmits the whole strip synchronously per rgb.set; newer
+firmware buffers writes and flushes outside Lua. Keep this conservative shared
+baseline until a negotiated timing contract permits more. Queue desired colours
+and advance one changed pixel per update; do not
 rewrite unchanged LEDs. Both bars must settle over bounded successive frames.
 Use a single RGB output helper, called ONCE from update, including menu/paused
 states. init/on_button may update desired colours but must NOT call rgb.set.

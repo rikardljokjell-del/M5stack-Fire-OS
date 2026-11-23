@@ -211,3 +211,23 @@ Device-agenten må undersøke:
 - Lever konkrete observerte tidsverdier, firmware/hash og reproduksjonsprofil
   i BACKEND_HANDOFF.md slik at backend kan kalibrere sin kostmodell og
   genereringsregler. En pen PC-simulering alene er ikke tilstrekkelig bevis.
+
+
+## Backend-oppdatering: Vardensagas retting gikk i ring
+
+Se [VARDENSAGA_REVIEW_AND_GENERATION.md](VARDENSAGA_REVIEW_AND_GENERATION.md).
+Det ble funnet en backend-/modellfeil i kildeattribusjonen: alle 15 kandidater
+var forskjellige fra den fysisk feilende kildehashen, mens flere kontroller
+hevdet at det var samme fysisk målte kandidat. Backend avgrenser nå bevis
+etter kildehash, krever konkrete kontrollfunn, og kontrollerer samme kode på
+nytt ved slik bevisforveksling. Den beholder sterkeste testede kilde ved prosa/
+syntaksregresjon og Resume, og bruker en realistisk begrenset inputkø-regel.
+
+Dette krever ingen nye firmware-eventer. ai_review_evidence gir en vanlig,
+komplett énlinjes feilstatus, med bevart kilde og Resume som før. Eksakt kjent
+krasjende kilde er fortsatt sperret. Korrigert, lokalt testet kilde er IKKE
+påstått fysisk verifisert. Device-agentens nye RGB-bufring/callbackdiagnoser
+ved cc46c69 er lest; ytelsesinstruksjonene er oppdatert uten å øke callback-
+budsjettet eller endre firmware. Reproduser Vardensaga med samme app/hash,
+knappeprofil og lyd/RGB-innstillinger på faktisk firmware; rapporter målte
+callback_us/phase og firmware-ID slik at native kostmodell kan kalibreres.
