@@ -997,7 +997,8 @@ void FireOS::begin() {
                                   githubFirmwareResult);
   packageManager_->setReverseTransport(&reverseTransport_);
   packageManager_->setCallbacks(this, packageStatus, packageResult);
-  if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
+  if (mainIndex_ < kSystemMainCount && !mainVisible_[mainIndex_])
+    mainIndex_ = mainItemAtPosition(0);
   const esp_partition_t* runningPartition = esp_ota_get_running_partition();
   const bool runningFactory = runningPartition &&
                               runningPartition->subtype ==
@@ -1354,6 +1355,8 @@ void FireOS::loadSettings() {
     doubleClickAction_[index] = min<uint8_t>(
         preferences.getUChar(("dbl_" + String(index)).c_str(), 0),
         kDoubleClickActionCount - 1);
+    doubleClickLuaAppId_[index] =
+        preferences.getString(("dbl_app_" + String(index)).c_str(), "");
   }
   WiFi.setHostname("M5Stack-FIRE");
   if (wifiMode_ != 1) WiFi.mode(WIFI_OFF);
@@ -1395,7 +1398,10 @@ void FireOS::saveSettings() {
   preferences.putBool("duration_v2", true);
   for (uint8_t index = 0; index < kButtonCount; ++index) {
     preferences.putUChar(("dbl_" + String(index)).c_str(), doubleClickAction_[index]);
+    preferences.putString(("dbl_app_" + String(index)).c_str(),
+                          doubleClickLuaAppId_[index]);
   }
+  saveLuaAppSelections();
 }
 
 void FireOS::loadSavedWifiNetworks() {
@@ -2098,6 +2104,32 @@ void FireOS::scanLuaApps() {
       if (SD.exists(manifest) && SD.exists(source)) {
         luaAppPaths_[luaAppCount_] = source;
         luaAppNames_[luaAppCount_] = sdBaseName(raw);
+        luaAppIds_[luaAppCount_] = jsonStringField(
+            [&]() {
+              File manifestFile = SD.open(manifest, FILE_READ);
+              String body;
+              if (manifestFile && manifestFile.size() <= 8192) {
+                while (manifestFile.available()) body += static_cast<char>(manifestFile.read());
+              }
+              if (manifestFile) manifestFile.close();
+              return body;
+            }(),
+            "id");
+        if (luaAppIds_[luaAppCount_].length() == 0)
+          luaAppIds_[luaAppCount_] = luaAppNames_[luaAppCount_];
+        luaAppDisplayNames_[luaAppCount_] = jsonStringField(
+            [&]() {
+              File manifestFile = SD.open(manifest, FILE_READ);
+              String body;
+              if (manifestFile && manifestFile.size() <= 8192) {
+                while (manifestFile.available()) body += static_cast<char>(manifestFile.read());
+              }
+              if (manifestFile) manifestFile.close();
+              return body;
+            }(),
+            "name");
+        if (luaAppDisplayNames_[luaAppCount_].length() == 0)
+          luaAppDisplayNames_[luaAppCount_] = luaAppNames_[luaAppCount_];
         ++luaAppCount_;
       }
     }
@@ -2114,9 +2146,92 @@ void FireOS::scanLuaApps() {
         String name = luaAppNames_[i];
         luaAppNames_[i] = luaAppNames_[j];
         luaAppNames_[j] = name;
+        String id = luaAppIds_[i];
+        luaAppIds_[i] = luaAppIds_[j];
+        luaAppIds_[j] = id;
+        String displayName = luaAppDisplayNames_[i];
+        luaAppDisplayNames_[i] = luaAppDisplayNames_[j];
+        luaAppDisplayNames_[j] = displayName;
       }
     }
   }
+  syncLuaAppSelections();
+}
+
+void FireOS::syncLuaAppSelections() {
+  const String saved = preferences.getString("lua_menu", "");
+  for (uint8_t index = 0; index < kMaxLuaApps; ++index)
+    luaMenuSelected_[index] = false;
+  for (uint8_t index = 0; index < luaAppCount_; ++index) {
+    luaMenuSelected_[index] = saved.indexOf("|" + luaAppIds_[index] + "|") >= 0;
+  }
+  for (uint8_t button = 0; button < kButtonCount; ++button) {
+    if (doubleClickAction_[button] < kBaseDoubleClickActionCount) continue;
+    if (doubleClickLuaAppId_[button].length() == 0) {
+      const uint8_t oldIndex = doubleClickAction_[button] -
+                               kBaseDoubleClickActionCount;
+      if (oldIndex < luaAppCount_)
+        doubleClickLuaAppId_[button] = luaAppIds_[oldIndex];
+    }
+    uint8_t found = 0xFF;
+    for (uint8_t index = 0; index < luaAppCount_; ++index) {
+      if (luaAppIds_[index] == doubleClickLuaAppId_[button]) {
+        found = index;
+        break;
+      }
+    }
+    if (found == 0xFF) {
+      doubleClickAction_[button] = 0;
+      doubleClickLuaAppId_[button] = "";
+    } else {
+      doubleClickAction_[button] = kBaseDoubleClickActionCount + found;
+    }
+  }
+}
+
+void FireOS::saveLuaAppSelections() {
+  String saved = "|";
+  for (uint8_t index = 0; index < luaAppCount_; ++index) {
+    if (luaMenuSelected_[index]) saved += luaAppIds_[index] + "|";
+  }
+  preferences.putString("lua_menu", saved);
+}
+
+uint8_t FireOS::shortcutActionCount() const {
+  uint8_t count = kBaseDoubleClickActionCount;
+  for (uint8_t index = 0; index < luaAppCount_; ++index)
+    if (luaMenuSelected_[index]) ++count;
+  return count;
+}
+
+uint8_t FireOS::shortcutActionAtPosition(uint8_t position) const {
+  if (position < kBaseDoubleClickActionCount) return position;
+  uint8_t visible = kBaseDoubleClickActionCount;
+  for (uint8_t index = 0; index < luaAppCount_; ++index) {
+    if (!luaMenuSelected_[index]) continue;
+    if (visible++ == position) return kBaseDoubleClickActionCount + index;
+  }
+  return 0;
+}
+
+uint8_t FireOS::shortcutPositionForAction(uint8_t action) const {
+  if (action < kBaseDoubleClickActionCount) return action;
+  uint8_t position = kBaseDoubleClickActionCount;
+  const uint8_t target = action - kBaseDoubleClickActionCount;
+  for (uint8_t index = 0; index < luaAppCount_; ++index) {
+    if (!luaMenuSelected_[index]) continue;
+    if (index == target) return position;
+    ++position;
+  }
+  return 0;
+}
+
+String FireOS::shortcutActionLabel(uint8_t action) const {
+  if (action < kBaseDoubleClickActionCount)
+    return String(doubleClickActionLabel(action));
+  const uint8_t index = action - kBaseDoubleClickActionCount;
+  if (index < luaAppCount_) return luaAppDisplayNames_[index];
+  return "Disabled";
 }
 
 void FireOS::setLuaError(const char** error, const char* value) {
@@ -3967,6 +4082,10 @@ void FireOS::onButton(uint8_t index, bool longPress) {
         open(Screen::Power);
       } else if (mainIndex_ == 3) {
         open(Screen::FileExplorer);
+      } else if (mainIndex_ >= kSystemMainCount) {
+        const uint8_t appIndex = mainIndex_ - kSystemMainCount;
+        if (appIndex < luaAppCount_)
+          startLuaApp(luaAppPaths_[appIndex], luaAppDisplayNames_[appIndex]);
       } else {
         open(Screen::AiDeveloper);
       }
@@ -4038,6 +4157,18 @@ void FireOS::onButton(uint8_t index, bool longPress) {
 void FireOS::onDoubleClick(uint8_t index) {
   redrawRequested_ = true;
   playButtonSound(index, false);
+  if (doubleClickAction_[index] >= kBaseDoubleClickActionCount) {
+    const uint8_t appIndex = doubleClickAction_[index] -
+                             kBaseDoubleClickActionCount;
+    if (appIndex < luaAppCount_ && luaMenuSelected_[appIndex]) {
+      startLuaApp(luaAppPaths_[appIndex], luaAppDisplayNames_[appIndex]);
+    } else {
+      doubleClickAction_[index] = 0;
+      doubleClickLuaAppId_[index] = "";
+      saveSettings();
+    }
+    return;
+  }
   switch (doubleClickAction_[index]) {
     case 1:
       open(Screen::Apps);
@@ -4199,17 +4330,23 @@ void FireOS::open(Screen screen) {
 
 uint8_t FireOS::visibleMainCount() const {
   uint8_t count = 0;
-  for (uint8_t index = 0; index < kMainCount; ++index) {
+  for (uint8_t index = 0; index < kSystemMainCount; ++index) {
     if (mainVisible_[index]) ++count;
   }
+  for (uint8_t index = 0; index < luaAppCount_; ++index)
+    if (luaMenuSelected_[index]) ++count;
   return count;
 }
 
 uint8_t FireOS::mainItemAtPosition(uint8_t position) const {
   uint8_t visible = 0;
-  for (uint8_t index = 0; index < kMainCount; ++index) {
+  for (uint8_t index = 0; index < kSystemMainCount; ++index) {
     if (!mainVisible_[index]) continue;
     if (visible++ == position) return index;
+  }
+  for (uint8_t index = 0; index < luaAppCount_; ++index) {
+    if (!luaMenuSelected_[index]) continue;
+    if (visible++ == position) return kSystemMainCount + index;
   }
   return 1;  // Settings remains the recovery fallback.
 }
@@ -6500,7 +6637,31 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
     return;
   }
   if (screen_ == Screen::MainMenuSettings) {
-    constexpr uint8_t kCount = 6;
+    if (luaMenuPicker_) {
+      const uint8_t itemCount = luaAppCount_ + 1;
+      if (index == 0) {
+        luaMenuSelection_ = (luaMenuSelection_ + itemCount - 1) % itemCount;
+      } else if (index == 2) {
+        luaMenuSelection_ = (luaMenuSelection_ + 1) % itemCount;
+      } else if (luaMenuSelection_ < luaAppCount_) {
+        luaMenuSelected_[luaMenuSelection_] =
+            !luaMenuSelected_[luaMenuSelection_];
+        saveLuaAppSelections();
+        if (visibleMainCount() == 0) mainVisible_[1] = true;
+        if (mainIndex_ < kSystemMainCount && !mainVisible_[mainIndex_])
+          mainIndex_ = mainItemAtPosition(0);
+      } else {
+        luaMenuPicker_ = false;
+        luaMenuSelection_ = 0;
+        luaMenuOffset_ = 0;
+        detailIndex_ = 5;
+      }
+      if (luaMenuSelection_ < luaMenuOffset_) luaMenuOffset_ = luaMenuSelection_;
+      if (luaMenuSelection_ >= luaMenuOffset_ + 6)
+        luaMenuOffset_ = luaMenuSelection_ - 5;
+      return;
+    }
+    constexpr uint8_t kCount = 7;
     if (index == 0) {
       detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
     } else if (index == 2) {
@@ -6513,8 +6674,14 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
       }
       mainVisible_[detailIndex_] = !mainVisible_[detailIndex_];
       if (visibleMainCount() == 0) mainVisible_[1] = true;
-      if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
+      if (mainIndex_ < kSystemMainCount && !mainVisible_[mainIndex_])
+        mainIndex_ = mainItemAtPosition(0);
       saveSettings();
+    } else if (detailIndex_ == 5) {
+      scanLuaApps();
+      luaMenuPicker_ = true;
+      luaMenuSelection_ = 0;
+      luaMenuOffset_ = 0;
     } else {
       back();
     }
@@ -6522,16 +6689,22 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
   }
   if (screen_ == Screen::Shortcuts) {
     if (shortcutPicker_) {
+      const uint8_t count = shortcutActionCount();
+      uint8_t position = shortcutPositionForAction(shortcutPickerAction_);
       if (index == 0 || index == 2) {
-        shortcutPickerAction_ =
-            (shortcutPickerAction_ + kDoubleClickActionCount +
-             (index == 0 ? -1 : 1)) % kDoubleClickActionCount;
-        if (shortcutPickerAction_ < shortcutPickerOffset_)
-          shortcutPickerOffset_ = shortcutPickerAction_;
-        if (shortcutPickerAction_ >= shortcutPickerOffset_ + 7)
-          shortcutPickerOffset_ = shortcutPickerAction_ - 6;
+        position = (position + count + (index == 0 ? -1 : 1)) % count;
+        shortcutPickerAction_ = shortcutActionAtPosition(position);
+        shortcutPickerOffset_ = position > 6 ? position - 6 : 0;
       } else {
         doubleClickAction_[shortcutPickerButton_] = shortcutPickerAction_;
+        if (shortcutPickerAction_ < kBaseDoubleClickActionCount) {
+          doubleClickLuaAppId_[shortcutPickerButton_] = "";
+        } else {
+          const uint8_t appIndex = shortcutPickerAction_ -
+                                   kBaseDoubleClickActionCount;
+          doubleClickLuaAppId_[shortcutPickerButton_] =
+              appIndex < luaAppCount_ ? luaAppIds_[appIndex] : String();
+        }
         shortcutPicker_ = false;
         saveSettings();
       }
@@ -6545,8 +6718,8 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
     } else if (detailIndex_ >= 3 && detailIndex_ <= 5) {
       shortcutPickerButton_ = detailIndex_ - 3;
       shortcutPickerAction_ = doubleClickAction_[shortcutPickerButton_];
-      shortcutPickerOffset_ = shortcutPickerAction_ > 6
-                                  ? shortcutPickerAction_ - 6
+      shortcutPickerOffset_ = shortcutPositionForAction(shortcutPickerAction_) > 6
+                                  ? shortcutPositionForAction(shortcutPickerAction_) - 6
                                   : 0;
       shortcutPicker_ = true;
     } else if (detailIndex_ == 6) {
@@ -7991,7 +8164,8 @@ void FireOS::drawMain() {
   // Visibility can change in Menu Layout while the previous carousel index is
   // still cached. Normalize before drawing so a hidden card is never shown at
   // boot or after returning Home.
-  if (!mainVisible_[mainIndex_]) mainIndex_ = mainItemAtPosition(0);
+  if (mainIndex_ < kSystemMainCount && !mainVisible_[mainIndex_])
+    mainIndex_ = mainItemAtPosition(0);
   constexpr int32_t kLargeCard = 150;
   constexpr int32_t kSmallCard = 58;
   constexpr int32_t kCenterX = 160;
@@ -8039,7 +8213,7 @@ void FireOS::drawMain() {
                           : item == 1 ? kPurple
                           : item == 2 ? kOrange
                           : item == 3 ? kGreen
-                                      : kCyan;
+                          : kCyan;
     ui.fillCircle(firstDot + position * 10, 207, 3,
                   item == mainIndex_ ? color : kMuted);
   }
@@ -8051,19 +8225,25 @@ void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size) {
                         : item == 1 ? kPurple
                         : item == 2 ? kOrange
                         : item == 3 ? kGreen
-                                    : kCyan;
+                        : item >= kSystemMainCount ? kCyan
+                                                    : kCyan;
   const bool large = size >= 100;
   const int32_t centerX = x + size / 2;
   const int32_t centerY = y + size / 2;
   const int32_t iconCenterY = large ? centerY : y + size - 20;
   ui.setTextDatum(MC_DATUM);
-  drawText(centerX, y + (large ? 20 : 11),
-           item == 0 ? "Apps"
-           : item == 1 ? "Settings"
-           : item == 2 ? "Power"
-           : item == 3 ? "Files"
-                       : "AI Developer",
-           TFT_WHITE, large ? 2 : 1, kBg);
+  String title = item == 0 ? "Apps"
+                : item == 1 ? "Settings"
+                : item == 2 ? "Power"
+                : item == 3 ? "Files"
+                : item == 4 ? "AI Developer"
+                : (item - kSystemMainCount < luaAppCount_
+                       ? luaAppDisplayNames_[item - kSystemMainCount]
+                       : String("App"));
+  if (title.length() > (large ? 14 : 9))
+    title = title.substring(0, large ? 14 : 9);
+  drawText(centerX, y + (large ? 20 : 11), title, TFT_WHITE,
+           large ? 2 : 1, kBg);
   const int iconSize = large ? 78 : 36;
   ui.fillRoundRect(centerX - iconSize / 2, iconCenterY - iconSize / 2,
                    iconSize, iconSize, large ? 10 : 6, kBg);
@@ -8110,7 +8290,7 @@ void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size) {
     ui.drawLine(centerX - width / 2 + 8, iconCenterY - height / 2,
                 centerX - width / 2 + 14, iconCenterY - height / 2 - 6,
                 accent);
-  } else {
+  } else if (item == 4) {
     const int radius = large ? 25 : 12;
     ui.drawCircle(centerX, iconCenterY, radius, accent);
     ui.fillCircle(centerX - (large ? 9 : 5), iconCenterY - (large ? 5 : 3),
@@ -8119,6 +8299,15 @@ void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size) {
                   large ? 4 : 2, accent);
     ui.drawArc(centerX, iconCenterY + (large ? 5 : 3), large ? 14 : 7,
                large ? 8 : 4, 205, 335, accent);
+  } else {
+    const int dot = large ? 9 : 4;
+    const int gap = large ? 16 : 8;
+    for (uint8_t row = 0; row < 2; ++row) {
+      for (uint8_t column = 0; column < 2; ++column) {
+        ui.fillCircle(centerX - gap / 2 + column * gap,
+                      iconCenterY - gap / 2 + row * gap, dot / 2, accent);
+      }
+    }
   }
 
   ui.setTextDatum(TL_DATUM);
@@ -8671,6 +8860,35 @@ void FireOS::drawGithubFirmwareDialog() {
 
 void FireOS::drawMainMenuSettings() {
   drawStatusBar("Menu Layout");
+  if (luaMenuPicker_) {
+    drawText(16, 37, "Select Lua apps for carousel", kMuted, 1);
+    const uint8_t itemCount = luaAppCount_ + 1;
+    const uint8_t visible = min<uint8_t>(7, itemCount - luaMenuOffset_);
+    for (uint8_t row = 0; row < visible; ++row) {
+      const uint8_t item = luaMenuOffset_ + row;
+      const bool selected = item == luaMenuSelection_;
+      const int y = 57 + row * 21;
+      if (selected) ui.fillRoundRect(10, y - 3, 300, 18, 4, kCyan);
+      if (item < luaAppCount_) {
+        String name = luaAppDisplayNames_[item];
+        if (name.length() > 24) name = name.substring(0, 21) + "...";
+        drawText(18, y, name, selected ? kBg : kText, 1,
+                 selected ? kCyan : kBg);
+        ui.setTextDatum(MR_DATUM);
+        drawText(300, y, luaMenuSelected_[item] ? "Shown" : "Hidden",
+                 selected ? kBg : (luaMenuSelected_[item] ? kGreen : kMuted),
+                 1, selected ? kCyan : kBg);
+        ui.setTextDatum(TL_DATUM);
+      } else {
+        drawText(18, y, "Back", selected ? kBg : kText, 1,
+                 selected ? kCyan : kBg);
+      }
+    }
+    if (luaAppCount_ == 0)
+      drawText(18, 76, "No Lua apps installed", kMuted, 1);
+    drawFooter("Previous", "Toggle", "Next");
+    return;
+  }
   drawText(16, 38, "System menu layout", kMuted, 1);
   drawRow(0, "Apps", detailIndex_ == 0, mainVisible_[0] ? "Visible" : "Hidden");
   drawRow(1, "Settings", detailIndex_ == 1, mainVisible_[1] ? "Visible" : "Hidden");
@@ -8679,7 +8897,8 @@ void FireOS::drawMainMenuSettings() {
           mainVisible_[3] ? "Visible" : "Hidden");
   drawRow(4, "AI Developer", detailIndex_ == 4,
           mainVisible_[4] ? "Visible" : "Hidden");
-  drawRow(5, "Back", detailIndex_ == 5);
+  drawRow(5, "Show selected apps", detailIndex_ == 5);
+  drawRow(6, "Back", detailIndex_ == 6);
   drawText(16, 192, "B toggles visibility.", kMuted, 1);
   drawFooter("Previous", "Select", "Next");
 }
@@ -8690,37 +8909,39 @@ void FireOS::drawShortcuts() {
   const char* labels[] = {"Long left",    "Long center",  "Long right",
                           "Double left",  "Double center", "Double right",
                           "Back"};
-  const char* values[] = {"Home", "Quick Settings", "Back",
-                          doubleClickActionLabel(doubleClickAction_[0]),
-                          doubleClickActionLabel(doubleClickAction_[1]),
-                          doubleClickActionLabel(doubleClickAction_[2]), ""};
+  const String values[] = {"Home", "Quick Settings", "Back",
+                           shortcutActionLabel(doubleClickAction_[0]),
+                           shortcutActionLabel(doubleClickAction_[1]),
+                           shortcutActionLabel(doubleClickAction_[2]), ""};
   for (uint8_t row = 0; row < 7; ++row) {
     const int y = 53 + row * 22;
     const bool selected = row == detailIndex_;
     if (selected) ui.fillRoundRect(10, y - 2, 300, 19, 5, kCyan);
     drawText(20, y + 2, labels[row], selected ? kBg : kText, 1,
              selected ? kCyan : kBg);
-    if (values[row][0] != '\0') {
+    if (values[row].length() > 0) {
       ui.setTextDatum(MR_DATUM);
-      drawText(300, y + 2, values[row], selected ? kBg : kMuted, 1,
+      String value = values[row];
+      if (value.length() > 17) value = value.substring(0, 14) + "...";
+      drawText(300, y + 2, value, selected ? kBg : kMuted, 1,
                selected ? kCyan : kBg);
       ui.setTextDatum(TL_DATUM);
     }
   }
   if (shortcutPicker_) {
-    static const char* const actions[] = {
-        "Disabled", "Apps", "Power", "All settings", "Display & Sound",
-        "Wi-Fi", "Bluetooth", "Menu Layout", "System Info"};
     ui.fillRoundRect(12, 32, 296, 180, 10, kPanel);
     drawText(24, 40, "Choose shortcut", TFT_WHITE, 2, kPanel);
-    const uint8_t visible = min<uint8_t>(7, kDoubleClickActionCount -
-                                             shortcutPickerOffset_);
+    const uint8_t actionCount = shortcutActionCount();
+    const uint8_t visible = min<uint8_t>(7, actionCount - shortcutPickerOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
-      const uint8_t item = shortcutPickerOffset_ + row;
+      const uint8_t position = shortcutPickerOffset_ + row;
+      const uint8_t action = shortcutActionAtPosition(position);
       const int y = 70 + row * 19;
-      const bool selected = item == shortcutPickerAction_;
+      const bool selected = action == shortcutPickerAction_;
       if (selected) ui.fillRoundRect(18, y - 3, 284, 17, 4, kCyan);
-      drawText(26, y, actions[item], selected ? kBg : kText, 1,
+      String label = shortcutActionLabel(action);
+      if (label.length() > 27) label = label.substring(0, 24) + "...";
+      drawText(26, y, label, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);
     }
   }

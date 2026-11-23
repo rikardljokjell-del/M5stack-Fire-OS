@@ -100,7 +100,9 @@ class FireOS {
   };
 
   static constexpr uint8_t kButtonCount = 3;
-  static constexpr uint8_t kMainCount = 5;
+  static constexpr uint8_t kSystemMainCount = 5;
+  static constexpr uint8_t kMaxLuaApps = 32;
+  static constexpr uint8_t kMainCount = kSystemMainCount + kMaxLuaApps;
   static constexpr uint8_t kSettingsCount = 17;
   static constexpr uint8_t kQuickCount = 8;
   static constexpr uint8_t kPowerCount = 6;
@@ -109,7 +111,9 @@ class FireOS {
   static constexpr uint8_t kMaxBluetoothSavedDevices = 5;
   static constexpr uint8_t kDurationCount = 21;
   static constexpr uint8_t kDateFieldCount = 11;
-  static constexpr uint8_t kDoubleClickActionCount = 9;
+  static constexpr uint8_t kBaseDoubleClickActionCount = 9;
+  static constexpr uint8_t kDoubleClickActionCount =
+      kBaseDoubleClickActionCount + kMaxLuaApps;
   static constexpr int16_t kCarouselDistance = 112;
   static constexpr uint32_t kLongPressMs = 650;
   static constexpr uint32_t kDoubleClickWindowMs = 350;
@@ -122,6 +126,10 @@ class FireOS {
 
   uint8_t mainIndex_ = 0;
   bool mainVisible_[kMainCount] = {true, true, true, true, true};
+  bool luaMenuSelected_[kMaxLuaApps] = {};
+  bool luaMenuPicker_ = false;
+  uint8_t luaMenuSelection_ = 0;
+  uint8_t luaMenuOffset_ = 0;
   uint8_t carouselFromIndex_ = 0;
   uint8_t carouselToIndex_ = 0;
   int8_t carouselDirection_ = 0;
@@ -140,6 +148,7 @@ class FireOS {
   uint8_t dimOption_ = 2;
   uint8_t screenOffOption_ = 3;
   uint8_t doubleClickAction_[kButtonCount] = {0, 0, 0};
+  String doubleClickLuaAppId_[kButtonCount];
   uint8_t placeholderIndex_ = 0;
   bool safeMode_ = false;
   bool factoryResetArmed_ = false;
@@ -182,7 +191,6 @@ class FireOS {
   static constexpr uint8_t kMaxFileEntries = 40;
   static constexpr uint8_t kFileVisibleRows = 6;
   static constexpr uint8_t kMaxExternalApps = 16;
-  static constexpr uint8_t kMaxLuaApps = 32;
   static constexpr uint8_t kMaxBackendApps = 32;
   static constexpr uint8_t kMaxBackendVersions = 8;
   static constexpr uint8_t kMaxManagerItems = 40;
@@ -319,6 +327,8 @@ class FireOS {
   uint8_t appManagerVersionCount_ = 0;
   String luaAppPaths_[kMaxLuaApps];
   String luaAppNames_[kMaxLuaApps];
+  String luaAppIds_[kMaxLuaApps];
+  String luaAppDisplayNames_[kMaxLuaApps];
   uint8_t luaAppCount_ = 0;
   bool fileExplorerScanPending_ = false;
 
@@ -579,6 +589,12 @@ class FireOS {
   void releaseSdImageBuffer();
   void scanExternalApps();
   void scanLuaApps();
+  void syncLuaAppSelections();
+  void saveLuaAppSelections();
+  uint8_t shortcutActionCount() const;
+  uint8_t shortcutActionAtPosition(uint8_t position) const;
+  uint8_t shortcutPositionForAction(uint8_t action) const;
+  String shortcutActionLabel(uint8_t action) const;
   void serviceLuaHardwareJobs();
   void releaseLuaHardware();
   LuaHardwareJob* findLuaJob(uint16_t id);

@@ -481,3 +481,18 @@ The image was flashed to COM3 and reached `FIRE OS started` without reset.
 The firmware image was built with `m5stack-fire-ble`, flashed to COM3 and
 reached `FIRE OS started` without reset. GitHub download and OTA flashing
 still require a physical network/SD interaction test.
+## Lua app carousel and shortcut metadata
+
+Menu Layout now has `Show selected apps`. Lua apps are selected by stable
+manifest `id`, not by version or array position; the carousel always starts
+the current installed version for that ID. The same installed app IDs are
+available as configurable double-click shortcut targets. If an app is deleted
+or its ID cannot be resolved, its shortcut is disabled and its carousel entry
+is deselected without affecting FIRE OS.
+
+Backend app packages should provide a short human-readable manifest `name`
+(ideally no more than 14 characters for the 320x240 carousel). The device
+uses that name as the label and a consistent standard app icon when no icon
+asset is supplied. Backend-generated icons/assets must remain optional and
+app-private; missing or invalid icon metadata must never block installation or
+menu recovery.
