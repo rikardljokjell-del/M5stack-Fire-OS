@@ -10313,7 +10313,9 @@ void FireOS::drawQuickSettings() {
 
   auto drawQuickRow = [&](uint8_t item, const String& label,
                           const String& value) {
-    const int y = 101 + static_cast<int>(item - 2) * 15;
+    // Keep the first status row below the volume control. The seven compact
+    // rows then fit inside the panel without touching the footer.
+    const int y = 114 + static_cast<int>(item - 2) * 13;
     const bool selected = quickIndex_ == item;
     if (selected) ui.fillRoundRect(10, y - 2, 300, 15, 5, kCyan);
     drawText(20, y + 1, label, selected ? kBg : kText, 1,
