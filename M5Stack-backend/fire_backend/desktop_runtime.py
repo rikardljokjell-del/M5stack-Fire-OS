@@ -148,6 +148,9 @@ class DesktopRuntime:
     def add_job_context(self,build_id,text):
         return self.request("POST",f"/desktop/jobs/{build_id}/context",json={"text":text})
 
+    def resume_job(self,build_id):
+        return self.request("POST",f"/desktop/jobs/{build_id}/resume",json={})
+
     def usage(self):
         return self.request("GET", "/desktop/usage")
 

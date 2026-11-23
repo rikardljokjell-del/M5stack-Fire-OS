@@ -14,6 +14,7 @@ from .desktop_config import DesktopConfig, DesktopStore, ECONOMY_MODELS, COST_PR
 from .desktop_runtime import DesktopRuntime, check_api_key, configure_firewall, firewall_ready, lan_addresses, network_info
 from .token_qr import token_matrix
 from .model_catalog import ROLE_MODELS, PRICING_DATE, choice_label, price_detail
+from .status_text import error_text
 
 
 BG, INK, MUTED, ORANGE, NAV = "#f2f4f8", "#182231", "#637083", "#e95725", "#172231"
@@ -41,6 +42,7 @@ class DesktopUI:
         self.job_snapshot = {}
         self.job_rows = {}
         self.job_drafts = {}
+        self.activity_drafts = {}
         self.job_editor_target = None
         self.current_page = "Oversikt"
         self.network, self.firewall = "Kontrollerer nettverk …", False
@@ -450,6 +452,9 @@ class DesktopUI:
         audio_in=item.get('input_audio_tokens',0);audio_out=item.get('output_audio_tokens',0)
         self.usage_detail.configure(text=f"{self.usage_job_name(item)} · {item.get('audio_seconds',0):.1f} s lyd · lydtokens inn/ut {audio_in}/{audio_out}. "
             +f"Cache lest/skrevet: {item.get('cached_tokens',0)}/{item.get('cache_write_tokens',0)} tokens. "
+            +f"Intern resonnering: {item.get('reasoning_tokens',0)} av {item.get('output_tokens',0)} outputtokens. "
+            +(f"Svargrense: {item['max_output_tokens']} tokens ({item.get('reasoning_effort','')}). " if item.get('max_output_tokens') else '')
+            +(error_text('',item['failure_code'])+'. ' if item.get('failure_code') else '')
             +("Tokens rapportert av OpenAI; USD beregnet lokalt." if item.get('usage_source')=='provider' else
               "Anslag fra lydlengde." if item.get('usage_source')=='duration' else "Ufullstendig måling: konservativ kostnadsreserve beholdes."))
 
@@ -473,10 +478,13 @@ class DesktopUI:
         self.label(page,"Tillegg til utviklingen", "Heading.TLabel").pack(anchor='w',pady=(10,5))
         self.job_prompt=tk.Text(page,height=3,wrap='word',font=('Segoe UI',11));self.job_prompt.pack(fill='x')
         self.label(page,"Gjelder neste generering, ikke et modellkall som allerede pågår. Kan bruke ett av jobbens tillatte forsøk.\n"
-            "Ved ferdig/feilet jobb: åpne Aktivitet for videre utvikling. Ingen nye bygg starter fra dette tekstfeltet alene.",
+            "Ved feil: velg Resume. Plan og dialog beholdes; bekreft Bygg for et nytt forsøk.",
             "Muted.TLabel",wraplength=800).pack(anchor='w',pady=6)
-        self.job_send=ttk.Button(page,text='Legg til kontekst i valgt jobb',command=self.send_job_context,style='Accent.TButton')
-        self.job_send.pack(anchor='w')
+        actions=ttk.Frame(page);actions.pack(fill='x')
+        self.job_send=ttk.Button(actions,text='Legg til kontekst i valgt jobb',command=self.send_job_context,style='Accent.TButton')
+        self.job_send.pack(side='left')
+        self.job_resume=ttk.Button(actions,text='Resume valgt jobb',command=self.resume_selected_job)
+        self.job_resume.pack(side='left',padx=10)
         ttk.Button(page,text='Åpne Aktivitet',command=lambda:self.show('Aktivitet')).pack(anchor='w',pady=7)
 
     def send_job_context(self):
@@ -489,6 +497,12 @@ class DesktopUI:
             if self.job_editor_target==row['id']:self.job_prompt.delete('1.0','end')
             self.notice.set(value['message'])
         self.work(lambda:self.runtime.add_job_context(row['build_id'],text),done=done,message='Lagrer kontekst til jobben …')
+
+    def resume_selected_job(self):
+        selected=self.job_table.selection();row=self.job_rows.get(selected[0]) if selected else None
+        if row and row.get('can_resume'):
+            self.work(lambda:self.runtime.resume_job(row['build_id']),done=self.choose_pc_session,
+                      message='Henter tilbake plan og dialog …')
 
     def render_jobs(self):
         rows=self.job_snapshot.get('jobs',[]);self.job_rows={r['id']:r for r in rows}
@@ -515,6 +529,7 @@ class DesktopUI:
             self.job_editor_target=target
         self.job_send.configure(text='Legg til kontekst: '+r['name'] if r else 'Legg til kontekst i valgt jobb')
         self.job_send.configure(state='normal' if r and r.get('can_add_context') and not self.busy else 'disabled')
+        self.job_resume.configure(state='normal' if r and r.get('can_resume') and not self.busy else 'disabled')
         self.job_progress['value']=r.get('progress',0) if r else 0
         text='Ingen bygg eller feilrettinger registrert.'
         if r:
@@ -675,6 +690,14 @@ class DesktopUI:
                   message="Starter maskinvareutkast med simulerte målinger …" if hardware_preview else "Starter AI-dialog på PC …")
 
     def choose_pc_session(self,result):
+        prior=self.session()
+        if prior:self.activity_drafts[prior['session_id']]=self.prompt.get('1.0','end').strip()
+        draft=self.activity_drafts.get(result['session_id'],'')
+        source=result.get('resumed_from_build_id')
+        if source:
+            pending=self.job_prompt.get('1.0','end').strip() if self.job_editor_target==source else self.job_drafts.get(source,'')
+            draft=pending or draft
+        self.prompt.delete('1.0','end');self.prompt.insert('1.0',draft)
         self.snapshot["sessions"]=[s for s in self.snapshot["sessions"] if s["session_id"]!=result["session_id"]]+[{**result,"online":False,"history":[]}]
         self.selected_session.set(self.session_name(result))
         self.show("Aktivitet")

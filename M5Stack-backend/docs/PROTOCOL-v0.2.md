@@ -380,6 +380,25 @@ and history_restored. Ready Resume uses normal install_request/receipt handling;
 only explicit run_confirm starts the app. A new boot never inherits old command
 authority. Native runs require app_stop and a matching receipt before switching.
 
+### Failed-build Resume (`failed_build_resume_v1`)
+
+Failed jobs remain in `build_jobs` with `can_open=true`, `can_resume=true` when
+a plan is retained. Views/status events add `error_code`, `error_status`, a
+redacted `diagnostic_message` (at most 240 characters on device) and `retryable`.
+Short errors distinguish `ai_output_limit`, `ai_refused`, `ai_invalid_response`
+and `ai_incomplete` from account/budget/network failures. PC details can be longer.
+
+`build_resume` for a failed job restores its project, app/base version, dialogue
+and manual notes, without generating content. `build_resumed` returns
+`state=awaiting_build_confirmation`, a fresh `proposal_id`, `can_retry=true`,
+`package_id=null`, `history_restored=true`, and previous failure information.
+An ordinary `build_proposal` follows; full notes stay server-side to preserve
+the 8 KiB control-event limit. A new explicit `build_confirm` starts a new build
+with `retry_of=<failed build_id>`. Merely opening Resume never spends tokens.
+Repeat Resume before confirmation reuses the pending proposal. Event replay
+cannot consume the same confirmation twice. Old failures cannot replace active
+progress on reconnect. See [device handoff](DEVICE_FAILED_BUILD_RESUME.md).
+
 build_progress.message, app_repair_status.message, error.message/status_message
 and last_error_status are complete NFC Norwegian lines, at most28 characters AND
 28 UTF-8 bytes. status_text_version=fire-status-text-v1. error.diagnostic_message

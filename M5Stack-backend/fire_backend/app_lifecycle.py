@@ -225,6 +225,7 @@ class AppLifecycle(AppManager):
             session.app_mode, session.install_permitted = event.app_mode, True
             session.conversation_mode = "develop"
             session.resume_project_aliases = []
+            session.resumed_from_build_id = None
             session.app_revision = device.get("app_change_counter", 0)
             session.package_id = session.build_id = session.proposal_id = session.turn_id = None
             session.summary, session.last_error, session.progress, session.history = "", "", {}, []

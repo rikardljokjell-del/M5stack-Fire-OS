@@ -9,12 +9,14 @@ from contextlib import contextmanager
 from importlib.resources import files
 
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from .models import DialogReply, GeneratedApp
 from .rendering import VISUAL_POLICY
 from .app_quality import APP_QUALITY_POLICY, AppReview, FireAppReview
 from .metering import usage_scope
 from .prompt_context import compact_validation
+from .generation_errors import response_meta, response_error, GenerationResponseError
 
 
 DIALOG_INSTRUCTIONS = """
@@ -111,7 +113,7 @@ class OpenAIProvider:
             raise
         finally:
             if ledger and state.get('id'):
-                ledger.finish(state['id'],state.get('usage'),status=status,request_id=state.get('request_id'))
+                ledger.finish(state['id'],state.get('usage'),status=status,request_id=state.get('request_id'),response_meta=state.get('response_meta'))
 
     @staticmethod
     def measured(state,response):
@@ -134,10 +136,49 @@ class OpenAIProvider:
                 'prompt_cache_breakpoint':{'mode':'explicit'}}]
             if suffix:request['input'][0]['content'].append({'type':'input_text','text':suffix})
             request['prompt_cache_options']={'mode':'explicit','ttl':'30m'}
-        with self.metered(operation,model,{'input':request['input'],'schema':schema.model_json_schema()},max_output_tokens) as state:
-            response=await self.api().responses.parse(**request)
-            self.measured(state,response)
-            return response
+        retry_reason=None
+        for retry in range(2):
+            limit = max_output_tokens * (2 if retry_reason=='ai_output_limit' else 1)
+            request['max_output_tokens'] = limit
+            if retry and model == 'gpt-6-luna':
+                request['reasoning'] = {'effort':'none'}
+            try:
+                with self.metered(operation,model,{'input':request['input'],'schema':schema.model_json_schema()},limit) as state:
+                    responses=self.api().responses
+                    if hasattr(responses,'with_raw_response'):
+                        # Inspect status/usage BEFORE parsing JSON. A truncated
+                        # JSON string otherwise raises before the SDK exposes
+                        # its status, causing a lost diagnosis and lost usage.
+                        raw=await responses.with_raw_response.parse(**request)
+                        body=raw.http_response.json()
+                        state['usage']=body.get('usage')
+                        state['request_id']=raw.headers.get('x-request-id') or body.get('id')
+                        state['response_meta']=response_meta({**body,'output_parsed':True},limit,request.get('reasoning',{}).get('effort','none'))
+                        error=response_error(state['response_meta'],state['usage'])
+                        if error:raise error
+                        try:response=raw.parse()
+                        except (ValidationError,json.JSONDecodeError):
+                            state['response_meta']['failure_code']='ai_invalid_response'
+                            raise response_error(state['response_meta'],state['usage']) from None
+                    else:
+                        response=await responses.parse(**request)
+                    self.measured(state,response)
+                    state['response_meta']=response_meta(response,limit,request.get('reasoning',{}).get('effort','none'))
+                    error=response_error(state['response_meta'],state.get('usage'))
+                    if error:raise error
+                    return response
+            except GenerationResponseError as error:
+                if error.code not in {'ai_output_limit','ai_invalid_response'} or retry:
+                    raise
+                retry_reason=error.code
+                if error.code=='ai_invalid_response':
+                    request['input'].append({'role':'user','content':
+                        'The previous response did not satisfy the structured schema. Return a complete response matching '
+                        'all required fields, types, enum values and bounds. Use bare required_services names such as '
+                        'display, buttons and rgb, never fire.display. Preserve the confirmed app requirements.'})
+                if self.usage_ledger and usage_scope.get().get('build_id'):
+                    self.usage_ledger.store.log(usage_scope.get()['build_id'],
+                        'AI-svaret må fullføres eller formatrettes. Ett nytt forsøk; kostnadsgrenser gjelder fortsatt.')
 
     def api(self):
         if not self.settings.openai_api_key.get_secret_value():
@@ -220,7 +261,7 @@ class OpenAIProvider:
             "Never use technical IDs, random suffixes, version numbers or generic AI app labels as the name. "
             "Use the exact injected versioned host contract; hardware services, resources and API version are negotiated. "
             "Never call or declare services missing from the device handshake. Never include credentials.",
-            request, GeneratedApp, 8000, "medium",
+            request, GeneratedApp, 24000 if self.settings.openai_code_model in {'gpt-6-luna','gpt-5.6-luna'} else 12000, "low",
         )
         if response.status != "completed" or response.output_parsed is None:
             raise ValueError("OpenAI code response incomplete or refused")
@@ -266,7 +307,7 @@ class OpenAIProvider:
             "or quieter secondary cue. Do not claim real loudness from synthetic job success. "
             "Approve only if EVERY named check passes with no concrete unresolved issues.",
             {"confirmed_app":summary,"candidate":generated.model_dump(),"pc_validation":compact_validation(validation)},
-            FireAppReview, 2000, "low",
+            FireAppReview, 6000, "low",
         )
         if response.status!="completed" or response.output_parsed is None:
             raise ValueError("Pre-delivery review incomplete or refused")

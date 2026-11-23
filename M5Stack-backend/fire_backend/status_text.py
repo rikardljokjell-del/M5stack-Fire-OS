@@ -34,6 +34,10 @@ TEXT = {
     'resumed':'Fortsett utviklingen',
     'dismissed':'Varslet er lukket',
     'failed':'Arbeidet mislyktes',
+    'ai_output_limit':'AI-svaret ble avkuttet',
+    'ai_refused':'AI avslo forespørselen',
+    'ai_invalid_response':'AI ga ikke gyldig appkode',
+    'ai_incomplete':'AI-svaret ble avbrutt',
     'test_failed':'Appen bestod ikke testen',
     'cancelled':'Byggingen ble avbrutt',
     'timeout':'Tidsavbrudd. Prøv igjen',
@@ -76,6 +80,10 @@ def error_text(detail='',code=''):
         return detail
     text=(str(code)+' '+str(detail)).casefold()
     choices=(
+        (('ai_output_limit','svargrensen','svartokens','ai-svaret ble avkuttet'), 'ai_output_limit'),
+        (('ai_refused','ai avslo'), 'ai_refused'),
+        (('ai_invalid_response','ikke gyldig appkode'), 'ai_invalid_response'),
+        (('ai_incomplete','ai-svaret ble avbrutt'), 'ai_incomplete'),
         (('cost_limit','kostnadsgrens','cost limit','budget_usd'), 'cost_limit'),
         (('unknown_model_price','mangler pris'), 'unknown_price'),
         (('source_identity','identity mismatch','app identity','appversjon'), 'identity'),

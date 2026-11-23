@@ -83,6 +83,7 @@ class Session:
     resume_project_aliases: list = field(default_factory=list)
     desktop_device_id: str | None = None
     hardware_preview: bool = False
+    resumed_from_build_id: str | None = None
 
 
 class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
@@ -135,7 +136,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         if project:
             versions = self.app_versions(project)
             base = next((p for p in versions if p["id"] == (base_package_id or project.get("latest_package"))),None)
-            if not base:raise ValueError("Velg en lagret basisversjon i denne appen.")
+            if not base and (versions or base_package_id):raise ValueError("Velg en lagret basisversjon i denne appen.")
         elif base_package_id:
             raise ValueError("Basisversjon krever valgt app.")
         peers=[s for s in self.sessions.values() if not s.stopped and s.desktop_device_id==device_id]
@@ -239,7 +240,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
 
     def snapshot(self, session):
         return {"session_id": session.id, "device_id": session.device_id,
-                "backend_features":["background_builds_v1","status_text_v1"],
+                "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1"],
+                "resumed_from_build_id":session.resumed_from_build_id,
                 "project_id": session.project_id, "state": session.state,
                 "proposal_id": session.proposal_id, "package_id": session.package_id,
                 "build_id": session.build_id, "mode": self.settings.fire_ai_mode,
@@ -476,7 +478,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
                          "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error",
-                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases"):
+                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id"):
                 if name in saved:
                     setattr(session, name, saved[name])
             session.sequence = saved.get("sequence", 0)
@@ -802,7 +804,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         session.last_error = safe[:240]
         await self.activity(session, "idle")
         await self.state(session, State.failed)
-        await self.emit(session, {"type": "error", "code": "operation_failed", "message": error_text(safe)})
+        await self.emit(session, {"type": "error", "code": getattr(error,'code','operation_failed'), "message": safe[:240]})
         return safe
 
     async def input_retry(self, session, message, code="no_speech"):
@@ -855,6 +857,9 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                      operation='repair' if session.repair_context else 'update' if session.app_mode=='update' else 'new',
                      resume_context={'history':bounded_history(copy.deepcopy(session.history)),
                                      'summary':session.summary,'app_mode':session.app_mode,'base_package_id':session.base_package_id})
+        if session.resumed_from_build_id:
+            build['retry_of']=session.resumed_from_build_id
+            session.resumed_from_build_id=None
         if session.repair_context:
             build.update(repair_context=json.dumps(session.repair_context), repair_of=session.repair_context["package_id"])
         if session.target == "device":
@@ -928,6 +933,10 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             session.progress = {"type": "build_progress", "build_id": build["id"], "phase": phase,
                                 "progress": percent, "message": message, "eta_seconds": None,
                                 "attempt":build.get('generation_attempt',1),"total":build.get('max_attempts',4),"status_text_version":STATUS_TEXT_VERSION}
+            if phase=='failed':
+                from .generation_errors import build_failure
+                session.progress.update(build_failure(self.store,build),can_resume=True)
+                session.progress['diagnostic_message']=session.progress['diagnostic_message'][:240]
             build.update(phase=phase, progress=percent)
             self.store.put("builds", build["id"], build, critical=phase == "failed")
             if phase == "testing":
@@ -998,7 +1007,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             if peer:
                 peer.last_error=message[:240]
                 await self.state(peer,State.failed)
-                await self.emit(peer,{'type':'error','code':'operation_failed','message':error_text(message)})
+                await self.emit(peer,{'type':'error','code':getattr(error,'code','operation_failed'),'message':message[:240]})
             if build_completed:
                 # A delivery/connection failure cannot revoke an already tested,
                 # published immutable package or pretend its compilation failed.
@@ -1014,7 +1023,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 if current_project.get("latest_package") == build["id"]:
                     self.store.put("projects", session.project_id, project_before, critical=True)
             session.package_id = None
-            build.update(status="failed", error=message)
+            build.update(status="failed", error=message,error_code=getattr(error,'code','operation_failed'))
             self.store.log(build["id"], message, critical=True)
             await progress("failed", 0, message[:240])
         finally:
