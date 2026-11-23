@@ -12,7 +12,7 @@ from test_device_protocol import ADMIN, configured, headers
 
 def ledger(tmp_path, clock=None, **limits):
     store=Store(tmp_path, Redactor('sk-secret-ledger-check'), 10_000_000)
-    settings=SimpleNamespace(fire_request_budget_usd=.25, fire_daily_budget_usd=2, fire_build_budget_usd=.60)
+    settings=SimpleNamespace(fire_request_budget_usd=.25, fire_daily_budget_usd=2, fire_build_budget_usd=.60,fire_cost_limits_enabled=True)
     for key, value in limits.items():setattr(settings, key, value)
     return UsageLedger(store, settings, **({'clock':clock} if clock else {}))
 

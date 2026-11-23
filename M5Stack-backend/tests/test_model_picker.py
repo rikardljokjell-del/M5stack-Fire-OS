@@ -25,7 +25,7 @@ def test_previous_economy_profile_moves_code_and_review_to_luna_once(tmp_path):
     assert restored.config.cost_profile_version==COST_PROFILE_VERSION
     assert restored.config.code_model==restored.config.review_model=='gpt-6-luna'
     assert restored.config.dialog_model=='gpt-realtime-2.1'  # deliberate current choice
-    assert restored.config.port==9876 and restored.config.daily_budget_usd==1
+    assert restored.config.port==9876 and restored.config.daily_budget_usd==0
     assert restored.vault.values==credentials
     settings=restored.settings()
     assert settings.openai_code_model==settings.openai_review_model=='gpt-6-luna'
@@ -55,12 +55,12 @@ def test_prices_show_correct_units_and_fractional_cache_prices():
 
 
 @pytest.mark.skipif(os.name!='nt',reason='Windows Tk picker')
-def test_dropdown_selection_prices_profile_and_reload_keep_model_ids(tmp_path,monkeypatch):
+def test_dropdown_selection_prices_profile_and_reload_keep_model_ids(tmp_path,monkeypatch,ui_root):
     import tkinter as tk
     from fire_backend.desktop_ui import DesktopUI
     monkeypatch.setattr('fire_backend.desktop_ui.threading.Thread.start',lambda _:None)
     monkeypatch.setattr('fire_backend.desktop_ui.lan_addresses',lambda:['127.0.0.1'])
-    root=tk.Tk();root.withdraw()
+    root=ui_root
     store=DesktopStore(tmp_path,MemoryVault())
     try:
         ui=DesktopUI(root,store)

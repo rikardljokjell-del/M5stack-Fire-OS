@@ -74,7 +74,7 @@ async def test_live_build_cannot_fall_back_to_old_three_flag_review(tmp_path):
     class OldReviewer(MockProvider):
         async def review(self,*args):
             return AppReview(requirements_met=True,runtime_safe=True,visual_quality_ok=True,issues=[])
-    service=Backend(configured(tmp_path).model_copy(update={'fire_ai_mode':'openai'}),OldReviewer())
+    service=Backend(configured(tmp_path).model_copy(update={'fire_ai_mode':'openai','fire_max_corrections':1}),OldReviewer())
     try:
         s=await service.start(SessionStart());await service.text(s,'Lag en sirkel')
         # Make the fixture quick; no secret/API/network call is used by this provider.

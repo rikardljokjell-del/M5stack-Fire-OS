@@ -18,6 +18,10 @@ ROLE_MODELS = {
 ECONOMY_MODELS = {name: models[0] for name, models in ROLE_MODELS.items()}
 EXPLICIT_CACHE_MODELS = frozenset(CODE_MODELS)
 LONG_CONTEXT_MODELS = frozenset(CODE_MODELS)
+# Native model capacities, not backend cost caps. Used for uncertain-usage
+# accounting when the user has chosen to send uncapped requests.
+MODEL_OUTPUT_CAPACITY = {**{model:128000 for model in CODE_MODELS},
+                         **{model:32000 for model in REALTIME_MODELS}}
 
 
 @dataclass(frozen=True)

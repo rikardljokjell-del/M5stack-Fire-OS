@@ -61,7 +61,7 @@ async def test_speech_uses_realtime_pcm_and_closes_connection():
             calls.append(values)
 
         async def create(self,**values):
-            assert values['response']['max_output_tokens']==1200
+            assert values['response']['max_output_tokens']=='inf'
 
         def __aiter__(self):
             async def events():

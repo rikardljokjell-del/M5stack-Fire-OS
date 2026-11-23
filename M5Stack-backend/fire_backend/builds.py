@@ -4,6 +4,8 @@ import json
 import os
 import platform
 import random
+import re
+from itertools import count
 import time
 from email.utils import parsedate_to_datetime
 import shutil
@@ -14,7 +16,7 @@ from importlib import metadata
 from pathlib import Path
 from openai import APIStatusError,APIConnectionError
 
-from .models import Manifest,AppTestSequence
+from .models import Manifest,AppTestSequence,GeneratedApp
 from .storage import canonical
 from .app_names import app_id_for
 from .rendering import VISUAL_POLICY,NATIVE_HOST_POLICY
@@ -26,6 +28,7 @@ from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VE
 from .capabilities import CapabilityError
 from .usage import UsageBudgetError
 from .jobs import apply_context,mark_context_applied,require_current_context,ContextChanged
+from .generation_errors import GenerationResponseError
 
 
 def sha256(data):
@@ -180,6 +183,35 @@ class Builder:
     def __init__(self, settings, store, provider, context):
         self.settings, self.store, self.provider, self.context = settings, store, provider, context
 
+    def reusable_candidate(self,build,request,summary):
+        """Reuse generated source after an interrupted review, never a package verdict.
+
+        Scope, source checksum, full context/capabilities, original base and
+        effective user requirements must match. Local tests and review run again.
+        """
+        old_id=build.get('retry_of')
+        if not old_id:return None
+        try:
+            old=self.store.get('builds',old_id)
+            if old['project_id']!=build['project_id'] or old['status']!='failed':return None
+            folder=self.store.path('builds',old_id,'')
+            meta_path=folder/f"candidate-{old.get('attempts',0)}.json"
+            if meta_path.stat().st_size>8192:return None
+            meta=json.loads(meta_path.read_text(encoding='utf-8'))
+            if (not meta.get('local_validated') or meta['context_sha256']!=request['context_sha256'] or
+                    meta['summary_sha256']!=sha256(summary.encode('utf-8')) or
+                    meta['capabilities_sha256']!=sha256(canonical(request['capabilities'])) or
+                    meta['base_package_id']!=request['base_package_id'] or meta['mode']!=request['mode']):return None
+            source_path=folder/f"attempt-{old['attempts']}.lua"
+            if source_path.stat().st_size>100000:return None
+            source=source_path.read_bytes()
+            if sha256(source)!=meta['source_sha256']:return None
+            plan_path=folder/f"test-plan-{old['attempts']}.json"
+            if plan_path.stat().st_size>24000:return None
+            return GeneratedApp(name=meta['name'],main_lua=source.decode('utf-8'),required_services=meta['required_services'],
+                                test_sequences=json.loads(plan_path.read_text(encoding='utf-8')))
+        except (OSError,ValueError,KeyError,TypeError):return None
+
     @build_usage
     async def provider_call(self,build,phase,progress,call,*args):
         """Retry the SAME generation/review, without spending a Lua correction.
@@ -234,8 +266,8 @@ class Builder:
         # Also applies to direct Builder callers, new apps and the first attempt.
         learned_policy=Quality(self.store).policy()
         if learned_policy and learned_policy not in context:context+=learned_policy
-        max_corrections=getattr(self.settings,'fire_max_corrections',1)
-        max_attempts=max_corrections+1
+        max_corrections=getattr(self.settings,'fire_max_corrections',0) or None
+        max_attempts=max_corrections+1 if max_corrections is not None else None
         build.update(max_corrections=max_corrections,max_attempts=max_attempts)
         request = {
             "summary": build["summary"], "context": context, "capabilities": capabilities,
@@ -265,17 +297,27 @@ class Builder:
                 previous = archive.read(f"apps/{base['manifest']['id']}/main.lua").decode("utf-8")
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
-            for attempt in range(max_attempts):
+            seen_sources=set();seen_failures=set()
+            for attempt in range(max_attempts) if max_attempts is not None else count():
                 summary,context_revision=apply_context(self.store,build,attempt+1)
                 build['generation_attempt']=attempt+1
                 operation='repair' if build.get('repair_of') or build.get('repair_job_id') else 'update' if project.get('latest_package') else 'new'
-                await progress("generating", 10 + attempt * 3, build_text('generating',operation=operation,attempt=attempt+1,total=max_attempts))
-                generated = await self.provider_call(build,'generating',progress,self.provider.generate,summary, context, last_error, previous)
+                await progress("generating", min(25,10 + attempt * 3), build_text('generating',operation=operation,attempt=attempt+1,total=max_attempts))
+                generated=self.reusable_candidate(build,request,summary) if attempt==0 else None
+                if generated:
+                    build['reused_candidate_from']=build['retry_of']
+                    self.store.log(build_id,'Gjenbruker appkode fra '+build['retry_of']+'. Lokale tester og AI-kontroll kjøres på nytt.')
+                else:
+                    generated = await self.provider_call(build,'generating',progress,self.provider.generate,summary, context, last_error, previous)
                 mark_context_applied(self.store,build_id,context_revision,attempt+1)
                 # Redact before persisting, validating or packaging any model output.
                 generated = type(generated).model_validate(self.store.redactor.value(generated.model_dump()))
                 api_version=(capabilities or {}).get("api_version",BASE_API)
                 payload = generated.main_lua.encode("utf-8")
+                source_hash=sha256(payload)
+                if max_corrections is None and source_hash in seen_sources:
+                    raise GenerationResponseError('ai_no_progress','AI gjentar samme appkode uten å rette feilen. Plan og siste kontrollfunn er bevart; velg Resume for å fortsette.')
+                seen_sources.add(source_hash)
                 if len(payload) > 100000:
                     raise ValueError("Generated source exceeds limit")
                 self.store.reserve(len(payload) * 3 + 32768)
@@ -285,6 +327,11 @@ class Builder:
                 (work / "main.lua").write_bytes(payload)
                 (folder / f"attempt-{attempt + 1}.lua").write_bytes(payload)
                 self.store.write(folder / f"test-plan-{attempt+1}.json",[s.model_dump() for s in generated.test_sequences])
+                candidate_meta={'name':generated.name,'required_services':generated.required_services,'source_sha256':source_hash,
+                    'context_sha256':request['context_sha256'],'summary_sha256':sha256(summary.encode('utf-8')),
+                    'capabilities_sha256':sha256(canonical(capabilities)),'base_package_id':request['base_package_id'],
+                    'mode':request['mode'],'local_validated':False}
+                self.store.write(folder/f'candidate-{attempt+1}.json',candidate_meta)
                 build["attempts"] = attempt + 1
                 self.store.put("builds", build_id, build)
                 await progress("validating", 35, build_text('validating'))
@@ -301,13 +348,14 @@ class Builder:
                     coverage=set(generated.required_services)
                     if 'speaker' in coverage:
                         from .lua_worker import without_literals
-                        import re
                         if not re.search(r'\bfire\s*\.\s*sd\b',without_literals(generated.main_lua)):coverage.discard('sd')
                     result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
                         "coverage_services":sorted(coverage),
                         "hardware":(capabilities or {}).get("hardware") or {},
                         "require_io_coverage":self.settings.fire_ai_mode=="openai",
                         **({"experience_policy_version":UX_POLICY_VERSION} if self.settings.fire_ai_mode=="openai" else {})}, self.store, build_id)
+                    candidate_meta['local_validated']=True
+                    self.store.write(folder/f'candidate-{attempt+1}.json',candidate_meta)
                     await progress("testing",75,build_text('testing',progress=75))
                     require_current_context(self.store,build,context_revision)
                     reviewer=getattr(self.provider,"review",None)
@@ -334,17 +382,26 @@ class Builder:
                     result.update(pre_delivery_review_required=True,pre_delivery_review=review_record)
                     break
                 except ContextChanged as error:
+                    seen_sources.discard(source_hash)
                     previous=generated.main_lua;last_error=str(error)
                     self.store.log(build_id,last_error)
                     if attempt==max_corrections:raise ValueError('Ny kontekst venter, men rettingsgrensen er nådd. Fortsett i Aktivitet med konteksten.') from error
-                except (CapabilityError,UsageBudgetError):
+                except (CapabilityError,UsageBudgetError,GenerationResponseError):
                     raise  # Regenerating Lua cannot implement a missing native driver.
                 except (ValueError, asyncio.TimeoutError) as error:
+                    # A rejected candidate must not be reused as though only
+                    # its remote review was interrupted.
+                    candidate_meta['local_validated']=False
+                    self.store.write(folder/f'candidate-{attempt+1}.json',candidate_meta)
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
                     build["last_validation_error"]=self.store.redactor.text(last_error)[:2400]
                     self.store.put("builds",build_id,build)
                     Quality(self.store).record_validation(build, generated.main_lua, last_error)
                     self.store.log(build_id, f"Attempt {attempt + 1} failed: {last_error}")
+                    fingerprint=re.sub(r'\b\d+\b','#',' '.join(last_error.casefold().split()))
+                    if max_corrections is None and fingerprint in seen_failures:
+                        raise GenerationResponseError('ai_no_progress','AI løser ikke det samme kontrollfunnet etter retting. Ingen utestet app er levert. Plan og feil er bevart; velg Resume.') from error
+                    seen_failures.add(fingerprint)
                     if attempt == max_corrections:
                         raise ValueError(f"Build failed after {max_corrections} corrections: " + last_error) from error
             await progress("packaging", 85, build_text('packaging'))

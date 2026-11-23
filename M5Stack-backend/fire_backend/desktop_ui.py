@@ -31,6 +31,22 @@ def usage_status_name(record):
     return status+(' · anslag' if record.get('usage_source')!='provider' else '')
 
 
+def app_cost_text(app):
+    prefix='≈' if app.get('cost_detail',{}).get('historical_estimate') else ''
+    return f"{prefix}${app.get('cost',0):.4f}"
+
+
+def app_cost_detail(app):
+    detail=app.get('cost_detail',{})
+    history=detail.get('historical_estimate')
+    text=f"Total Cost: {app_cost_text(app)} · alle versjoner og feilrettinger · {detail.get('requests',0)} registrerte API-kall\n"
+    if history:
+        text+=(f"Registrert: ${detail.get('recorded_usd',0):.4f} · historisk anslag: ${history['estimated_usd']:.2f} "
+            f"(scenario ${history['low_usd']:.2f}–${history['high_usd']:.2f})\n"
+            f"Eldre bygg/kodekontroll: {', '.join(history['models'])}. Eldre tale/dialog uten måling er ikke med.\n")
+    return text
+
+
 class DesktopUI:
     def __init__(self, root, store):
         self.root, self.store = root, store
@@ -98,6 +114,9 @@ class DesktopUI:
         self.key_saved = bool(self.store.secret("openai"))
         self.key_status = tk.StringVar(value="Nøkkel er lagret i Windows." if self.key_saved else "Ingen API-nøkkel er lagret ennå.")
         self.audio = tk.BooleanVar(value=c.audio_enabled)
+        self.speech_enabled=tk.BooleanVar(value=c.speech_enabled)
+        self.cost_limits_enabled=tk.BooleanVar(value=c.cost_limits_enabled)
+        self.output_limits_enabled=tk.BooleanVar(value=c.output_limits_enabled)
         self.models = {name: tk.StringVar(value=getattr(c, name)) for name in
                        ("dialog_model", "code_model", "review_model", "transcribe_model", "speech_model", "speech_voice")}
         self.cost_limits = {name: tk.StringVar(value=str(getattr(c, name))) for name in
@@ -285,6 +304,10 @@ class DesktopUI:
         ttk.Button(row, text="Fjern lagret nøkkel", command=self.remove_key).pack(side="left")
         self.api_label = self.label(page, self.api_result, wraplength=800)
         self.api_label.pack(anchor="w", pady=(0, 15))
+        ttk.Checkbutton(page,text='Les AI-svar høyt på FIRE',variable=self.speech_enabled).pack(anchor='w',pady=(0,4))
+        self.label(page,'Slå av for å unngå AI-lydkostnad. Mikrofon, transkripsjon, tekstsvar og bygging virker fortsatt.\n'
+                   'Lydprisen i modellvalget gjelder per million lydtokens, ikke per svar.',
+                   'Muted.TLabel',wraplength=780).pack(anchor='w',pady=(0,8))
         self.label(page, "Modeller", "Heading.TLabel").pack(anchor="w", pady=(5, 8))
         grid = ttk.Frame(page)
         grid.pack(fill="x")
@@ -343,10 +366,12 @@ class DesktopUI:
     def economy_profile(self):
         for name, value in ECONOMY_MODELS.items():
             self.models[name].set(value)
-        for name, value in {"daily_budget_usd":2, "build_budget_usd":.60,
-                            "request_budget_usd":.25, "max_corrections":1}.items():
+        for name, value in {"daily_budget_usd":0, "build_budget_usd":0,
+                            "request_budget_usd":0, "max_corrections":0}.items():
             self.cost_limits[name].set(str(value))
-        self.notice.set("Rimelige modeller og kostnadsgrenser er valgt. Trykk Lagre og bruk.")
+        self.cost_limits_enabled.set(False);self.output_limits_enabled.set(False)
+        self.sync_cost_controls()
+        self.notice.set("Rimelige modeller er valgt, uten beløps- og svartak. Trykk Lagre og bruk.")
 
     def usage_page(self, page):
         row = ttk.Frame(page);row.pack(fill="x")
@@ -403,10 +428,12 @@ class DesktopUI:
             total=data.get(key,{})
             label.configure(text=f"${float(total.get('estimated_usd',0)):.4f} · {total.get('requests',0)} kall")
         limits=data.get('limits',{});period=data.get('since_reset',{})
+        budget=(f"Dagsgrense ${float(limits.get('daily_usd',self.store.config.daily_budget_usd)):.2f}; "
+                f"ledig ${float(limits.get('daily_remaining_usd') or 0):.2f}. " if limits.get('enabled',False) and limits.get('daily_usd',0)>0 else
+                "Ingen dagsgrense. Øvrige valgte beløpstak gjelder. " if limits.get('enabled',False) else
+                "Kostnadsgrenser er av. Forbruk måles fortsatt. ")
         text=(f"Anslått kostnad · USD · Prisgrunnlag {data.get('pricing_date','–')}. "
-              f"Dagsgrense ${float(limits.get('daily_usd',self.store.config.daily_budget_usd)):.2f}; "
-              f"ledig ${float(limits.get('daily_remaining_usd',0)):.2f} "
-              f"({limits.get('budget_day','–')}, {limits.get('timezone','lokal tid')}).\n"
+              +budget+f"({limits.get('budget_day','–')}, {limits.get('timezone','lokal tid')}).\n"
               f"Cache lest/skrevet: {period.get('cached_tokens',0):,}/{period.get('cache_write_tokens',0):,} tokens · {period.get('audio_seconds',0):.1f} s lyd · "
               f"{period.get('unknown_usage_requests',0)} kall uten full tokenmåling. "
               "Tokens inkluderer reserver når måling mangler. "
@@ -454,6 +481,7 @@ class DesktopUI:
             +f"Cache lest/skrevet: {item.get('cached_tokens',0)}/{item.get('cache_write_tokens',0)} tokens. "
             +f"Intern resonnering: {item.get('reasoning_tokens',0)} av {item.get('output_tokens',0)} outputtokens. "
             +(f"Svargrense: {item['max_output_tokens']} tokens ({item.get('reasoning_effort','')}). " if item.get('max_output_tokens') else '')
+            +('Ingen ekstra svartak fra backend. ' if 'max_output_tokens' in item and item['max_output_tokens'] is None else '')
             +(error_text('',item['failure_code'])+'. ' if item.get('failure_code') else '')
             +("Tokens rapportert av OpenAI; USD beregnet lokalt." if item.get('usage_source')=='provider' else
               "Anslag fra lydlengde." if item.get('usage_source')=='duration' else "Ufullstendig måling: konservativ kostnadsreserve beholdes."))
@@ -535,7 +563,9 @@ class DesktopUI:
         if r:
             pending='VENTER på neste generering' if r.get('context_pending') else 'Tatt med i generering'
             notes=r.get('context',{}).get('notes',[])
-            lines=[r['name']+' · '+r['id'],r['message']+f" · {r.get('attempt',0)}/{r.get('max_attempts','–')} forsøk · anslått ${r.get('estimated_usd',0):.4f}"]
+            attempts=f"{r.get('attempt',0)}/{r['max_attempts']} forsøk" if r.get('max_attempts') else f"Forsøk {r.get('attempt',0)} · automatisk retting"
+            lines=[r['name']+' · '+r['id'],r['message']+f" · {attempts} · anslått ${r.get('estimated_usd',0):.4f}"]
+            if r.get('reused_candidate_from'):lines.append('Gjenbruker appkode fra '+r['reused_candidate_from']+'; tester og kontrollerer på nytt.')
             if r.get('retry_at'):lines.append('Neste AI-forsøk tidligst '+time.strftime('%H:%M:%S',time.localtime(r['retry_at'])))
             if r.get('error'):lines+=['STOPPÅRSAK: '+r.get('error_status',''),r['error']]
             if r.get('last_validation_error'):lines+=['Siste kontrollfunn:',r['last_validation_error']]
@@ -596,12 +626,13 @@ class DesktopUI:
         ttk.Button(top,text="Lag ny app med AI",command=self.new_pc_app,style="Accent.TButton").pack(side="right")
         ttk.Button(top,text="Maskinvareutkast på PC",command=lambda:self.new_pc_app(True)).pack(side="right",padx=8)
         self.label(page, "FIRE lagrer appen på SD-kortet i /apps/<app-ID>/.\n"
-                   "Tabellen viser backendens pakker og enhetens siste kvitteringer, ikke en direktelesing av SD-kortet.",
+                   "Cost summerer registrert API-bruk for alle versjoner, feilrettinger og tale, uavhengig av nullstilling.\n"
+                   "≈ inkluderer historiske anslag fra lagrede bygg. Eldre tale uten måling er ikke med.",
                    "Muted.TLabel", wraplength=800).pack(anchor="w", pady=(0, 12))
         frame = ttk.Frame(page)
         frame.pack(fill="both", expand=True)
-        self.apps_table = ttk.Treeview(frame, columns=("name", "version", "device", "status"), show="headings", height=7,selectmode="browse")
-        for name, title, width in (("name", "App", 180), ("version", "Versjoner", 85), ("device", "Enhet", 145), ("status", "Nyeste versjon", 210)):
+        self.apps_table = ttk.Treeview(frame, columns=("name", "version", "device", "cost", "status"), show="headings", height=7,selectmode="browse")
+        for name, title, width in (("name", "App", 165), ("version", "Versjoner", 75), ("device", "Enhet", 135), ('cost','Cost (USD)',100), ("status", "Nyeste versjon", 210)):
             self.apps_table.heading(name, text=title)
             self.apps_table.column(name, width=width, minwidth=60)
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.apps_table.yview)
@@ -647,7 +678,8 @@ class DesktopUI:
             quality_hint = ("Sperret etter feil – bruk Reparer valgt app.\n" if app.get("quality",{}).get("blocked") else
                             "Trenger utvidet test – bruk Reparer valgt app eller bygg ny versjon.\n" if app.get("validation_suite") != "release-v4" else "")
             self.apps_detail.configure(text=f"{app['name']} · {app['version']} · {app['mode']}\n"
-                f"SD-mappe: {app['sd_path']}\nPakke: {app['package_id']}\n"
+                +app_cost_detail(app)
+                +f"SD-mappe: {app['sd_path']}\nPakke: {app['package_id']}\n"
                 + quality_hint
                 + (app.get("delete_block_reason") or "FIRE har bekreftet at appen er borte; PC-historikken kan slettes."))
         else:self.apps_detail.configure(text="Ingen app valgt.")
@@ -800,12 +832,22 @@ class DesktopUI:
         ttk.Checkbutton(page, text="Aktiver backendens lydtransport", variable=self.audio).pack(anchor="w", pady=8)
         self.label(page, "Enheten må annonsere mikrofon/avspilling. Tekst virker også uten lydtransport.", "Muted.TLabel").pack(anchor="w")
         self.label(page, "Kostnadsgrenser", "Heading.TLabel").pack(anchor="w",pady=(16,6))
+        ttk.Checkbutton(page,text='Bruk kostnadsgrenser (av som standard)',variable=self.cost_limits_enabled,
+                        command=self.sync_cost_controls).pack(anchor='w',pady=(0,7))
         grid=ttk.Frame(page);grid.pack(fill="x")
+        self.budget_fields=[]
         for row,(name,title) in enumerate((("daily_budget_usd","Maks per dag (USD)"),("build_budget_usd","Maks per appjobb (USD)"),
-                                          ("request_budget_usd","Maks per API-kall (USD)"),("max_corrections","Automatiske rettinger (0–3)"))):
-            self.field(grid,row,title,self.cost_limits[name])
-        self.label(page,"Nye kall stoppes før den beregnede reserven passerer en grense.\n"
-                   "Nullstilling av visningstellerne endrer ikke dagens grense eller historikken.","Muted.TLabel").pack(anchor="w",pady=(6,0))
+                                          ("request_budget_usd","Maks per API-kall (USD)"))):
+            self.budget_fields.append(self.field(grid,row,title,self.cost_limits[name]))
+        ttk.Checkbutton(page,text='Bruk ekstra svartak for AI (av som standard)',variable=self.output_limits_enabled).pack(anchor='w',pady=(10,4))
+        row=ttk.Frame(page);row.pack(fill='x')
+        self.field(row,0,'Automatiske rettinger (0 = automatisk)',self.cost_limits['max_corrections'])
+        self.label(page,"0 = ingen fast grense i hvert av feltene over. Alle fire har 0 som standard.\n"
+                   "Med svartaket av fullfører modellen innen sin egen kapasitet. Modellvalg og lav resonnering styrer forbruket.\n"
+                   "Automatisk retting fortsetter ved framgang og stopper gjentatte, uløste feil. Kvalitetskontroll beholdes.\n"
+                   "Når beløpstak slås på, gjelder de lagrede grensene også for tidligere forbruk i dag.\n"
+                   "Nullstilling endrer bare visningen. Tekniske enhets- og driftsgrenser gjelder fortsatt.","Muted.TLabel",wraplength=790).pack(anchor="w",pady=(6,0))
+        self.sync_cost_controls()
         ttk.Button(page, text="Lagre innstillinger", style="Accent.TButton", command=self.save).pack(anchor="w", pady=18)
         ttk.Button(page, text="Åpne datamappen", command=self.open_workspace).pack(anchor="w", pady=6)
         self.label(page, "Lagring og drift", "Heading.TLabel").pack(anchor="w", pady=(15, 8))
@@ -813,6 +855,9 @@ class DesktopUI:
                    "flytter ikke tidligere prosjekter. Innstillinger og nøkler huskes ved neste start.\n\n"
                    "Programmet starter backend når du åpner det. Lukk vinduet for å stoppe den.\n"
                    "La PC-en være på og våken mens M5Stack bruker forbindelsen.", wraplength=800).pack(anchor="w")
+
+    def sync_cost_controls(self):
+        for field in getattr(self,'budget_fields',[]):field.configure(state='normal' if self.cost_limits_enabled.get() else 'disabled')
 
     def collect(self):
         values = self.store.config.model_dump()
@@ -825,6 +870,8 @@ class DesktopUI:
                       reverse_port=self.reverse_port.get(), reverse_device_id=device_id if self.transport.get() == "reverse_tcp" else "",
                       port=self.port.get(), workspace=self.workspace.get(), device_ids=ids,
                       audio_enabled=self.audio.get(), max_workspace_mb=self.disk.get(),
+                      cost_limits_enabled=self.cost_limits_enabled.get(),output_limits_enabled=self.output_limits_enabled.get(),
+                      speech_enabled=self.speech_enabled.get(),
                       cost_profile_version=COST_PROFILE_VERSION,
                       **{name:var.get().strip() for name,var in self.cost_limits.items()},
                       **{name: var.get().strip() for name, var in self.models.items()})
@@ -1144,7 +1191,7 @@ class DesktopUI:
                           "Kjører (kvittert)" if app["running"] else "Tidligere kjøring bekreftet" if app["current_healthy"] else
                           "Installert (kvittert)" if app["installed_receipt"] else
                           "Tidligere installert; SD ukjent" if app.get("had_install_receipt") else "Testet på PC; ikke installert")
-                self.apps_table.insert("", "end", iid=project_id, values=(app["name"], len(versions), app.get("device_id") or "PC-simulering", app["version"]+" · "+status))
+                self.apps_table.insert("", "end", iid=project_id, values=(app["name"], len(versions), app.get("device_id") or "PC-simulering",app_cost_text(app), app["version"]+" · "+status))
             if selected and selected[0] in groups:
                 self.apps_table.selection_set(selected[0])
             elif groups:
@@ -1160,7 +1207,7 @@ class DesktopUI:
         self.edit_app_button.configure(state="normal" if ready and app and app.get("device_id") and not self.busy else "disabled")
         self.pc_app_button.configure(state="normal" if ready and not self.busy else "disabled")
         for button in (self.replay_voice_button,self.test_voice_button):
-            button.configure(state="normal" if session and session["target"]=="device" and session.get("online") and not self.busy else "disabled")
+            button.configure(state="normal" if self.store.config.speech_enabled and session and session["target"]=="device" and session.get("online") and not self.busy else "disabled")
         self.new_app_button.configure(state="normal" if choice_idle and not self.busy else "disabled")
         self.delete_app_button.configure(state="normal" if ready and app and app.get("can_delete_backend") and not self.busy else "disabled")
         self.delete_version_button.configure(state="normal" if ready and app and app.get("can_delete_backend") and not self.busy else "disabled")

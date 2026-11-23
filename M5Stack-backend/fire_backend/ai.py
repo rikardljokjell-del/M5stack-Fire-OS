@@ -14,9 +14,10 @@ from pydantic import ValidationError
 from .models import DialogReply, GeneratedApp
 from .rendering import VISUAL_POLICY
 from .app_quality import APP_QUALITY_POLICY, AppReview, FireAppReview
-from .metering import usage_scope
+from .metering import usage_scope,usage_session
 from .prompt_context import compact_validation
 from .generation_errors import response_meta, response_error, GenerationResponseError
+from .model_catalog import MODEL_OUTPUT_CAPACITY
 
 
 DIALOG_INSTRUCTIONS = """
@@ -105,7 +106,10 @@ class OpenAIProvider:
             # A deliberately conservative bound, not a token count presented as
             # measured usage. Actual returned usage replaces it after completion.
             bound=len(json.dumps(payload,ensure_ascii=False).encode('utf-8'))+512
-            state['id']=ledger.begin(operation,model,bound,max_output_tokens,**usage_scope.get(),**limits)
+            scope=dict(usage_scope.get());active=usage_session.get()
+            if active is not None and not scope.get('build_id'):
+                scope.update(project_id=active.project_id,session_id=active.id,turn_id=active.turn_id)
+            state['id']=ledger.begin(operation,model,bound,max_output_tokens,**scope,**limits)
         status='completed'
         try:yield state
         except BaseException as error:
@@ -138,12 +142,15 @@ class OpenAIProvider:
             request['prompt_cache_options']={'mode':'explicit','ttl':'30m'}
         retry_reason=None
         for retry in range(2):
-            limit = max_output_tokens * (2 if retry_reason=='ai_output_limit' else 1)
-            request['max_output_tokens'] = limit
+            capped=getattr(self.settings,'fire_output_limits_enabled',False)
+            limit = max_output_tokens * (2 if retry_reason=='ai_output_limit' else 1) if capped else None
+            if limit is None:request.pop('max_output_tokens',None)
+            else:request['max_output_tokens'] = limit
             if retry and model == 'gpt-6-luna':
                 request['reasoning'] = {'effort':'none'}
             try:
-                with self.metered(operation,model,{'input':request['input'],'schema':schema.model_json_schema()},limit) as state:
+                with self.metered(operation,model,{'input':request['input'],'schema':schema.model_json_schema()},
+                                  limit or MODEL_OUTPUT_CAPACITY.get(model,128000)) as state:
                     responses=self.api().responses
                     if hasattr(responses,'with_raw_response'):
                         # Inspect status/usage BEFORE parsing JSON. A truncated
@@ -214,12 +221,13 @@ class OpenAIProvider:
     async def dialog(self, history, context, connection):
         # Explicit local history survives reconnects. Out-of-band responses avoid
         # unacknowledged tool calls and duplicate remote history on reconnection.
-        with self.metered('dialog',self.settings.openai_realtime_model,{'context':dialog_instructions(context),'history':history[-32:],'schema':DialogReply.model_json_schema()},800) as meter:
+        capped=getattr(self.settings,'fire_output_limits_enabled',False)
+        with self.metered('dialog',self.settings.openai_realtime_model,{'context':dialog_instructions(context),'history':history[-32:],'schema':DialogReply.model_json_schema()},800 if capped else 32000) as meter:
             await connection.response.create(response={
                 "conversation": "none", "output_modalities": ["text"],
                 "instructions": dialog_instructions(context),
                 "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": json.dumps(history[-32:], ensure_ascii=False)}]}],
-                "max_output_tokens": 800,
+                "max_output_tokens": 800 if capped else "inf",
             })
             arguments = None
             async for event in connection:
@@ -333,7 +341,9 @@ class OpenAIProvider:
             return response.text
 
     async def speech(self, text):
-        with self.metered('speech',self.settings.openai_speech_model,{'text':text},1200,max_output_audio_tokens=1200) as meter:
+        if not getattr(self.settings,'fire_speech_enabled',True):return
+        capped=getattr(self.settings,'fire_output_limits_enabled',False)
+        with self.metered('speech',self.settings.openai_speech_model,{'text':text},1200 if capped else 32000,max_output_audio_tokens=1200 if capped else 32000) as meter:
             async with self.api().realtime.connect(model=self.settings.openai_speech_model) as connection:
                 await connection.session.update(session={
                     "type": "realtime", "output_modalities": ["audio"],
@@ -342,7 +352,7 @@ class OpenAIProvider:
                 })
                 await connection.conversation.item.create(item={"type": "message", "role": "user",
                     "content": [{"type": "input_text", "text": "Read this text:\n" + text}]})
-                await connection.response.create(response={"max_output_tokens":1200})
+                await connection.response.create(response={"max_output_tokens":1200 if capped else "inf"})
                 async for event in connection:
                     if event.type == "response.output_audio.delta":
                         yield base64.b64decode(event.delta, validate=True)

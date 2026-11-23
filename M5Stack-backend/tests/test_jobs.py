@@ -28,14 +28,19 @@ async def test_live_context_is_applied_to_next_candidate_and_does_not_ship_stale
         assert not b.store.list('commands')
     finally:await b.close()
 
-async def test_no_extra_paid_attempt_after_context_arrives_at_last_allowed_attempt(tmp_path):
-    p=RepairProvider();p.release.clear();b=Backend(configured(tmp_path,fire_max_corrections=0),p)
+async def test_no_extra_paid_attempt_after_context_arrives_at_explicit_last_attempt(tmp_path):
+    class Provider(RepairProvider):
+        async def generate(self,*args):
+            result=await super().generate(*args)
+            b.jobs.context(self.build_id,'Ny endring '+str(len(self.calls)))
+            return result
+    p=Provider();p.release.clear();b=Backend(configured(tmp_path,fire_max_corrections=1),p)
     try:
-        s,build=await start(b);await p.entered.wait();b.jobs.context(build['id'],'Bruk større tekst')
+        s,build=await start(b);p.build_id=build['id'];await p.entered.wait()
         p.release.set();await s.task
         row=b.jobs.snapshot()['jobs'][0]
         assert row['status']=='failed' and row['context_pending']
-        assert len(p.calls)==1 and not b.store.list('packages')
+        assert len(p.calls)==2 and not b.store.list('packages')
         assert 'rettingsgrensen' in row['error']
     finally:await b.close()
 
@@ -97,14 +102,14 @@ async def test_cost_failure_does_not_claim_pending_context_was_used(tmp_path):
     finally:await b.close()
 
 
-def test_job_ui_shows_errors_and_context_without_losing_draft(tmp_path,monkeypatch):
+def test_job_ui_shows_errors_and_context_without_losing_draft(tmp_path,monkeypatch,ui_root):
     import tkinter as tk
     from fire_backend.desktop_ui import DesktopUI
     from fire_backend.desktop_config import DesktopStore
     from test_desktop_costs import MemoryVault
     monkeypatch.setattr('fire_backend.desktop_ui.threading.Thread.start',lambda _:None)
     monkeypatch.setattr('fire_backend.desktop_ui.lan_addresses',lambda:['127.0.0.1'])
-    root=tk.Tk();root.withdraw()
+    root=ui_root
     try:
         ui=DesktopUI(root,DesktopStore(tmp_path,MemoryVault()))
         ui.job_snapshot={'active_count':0,'jobs':[{'id':'build-one','name':'Prøve','status':'failed','message':'Kontroller API-kontoen',

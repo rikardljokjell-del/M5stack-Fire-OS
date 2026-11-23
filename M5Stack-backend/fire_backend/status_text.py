@@ -38,6 +38,7 @@ TEXT = {
     'ai_refused':'AI avslo forespørselen',
     'ai_invalid_response':'AI ga ikke gyldig appkode',
     'ai_incomplete':'AI-svaret ble avbrutt',
+    'ai_no_progress':'AI kommer ikke videre',
     'test_failed':'Appen bestod ikke testen',
     'cancelled':'Byggingen ble avbrutt',
     'timeout':'Tidsavbrudd. Prøv igjen',
@@ -84,6 +85,7 @@ def error_text(detail='',code=''):
         (('ai_refused','ai avslo'), 'ai_refused'),
         (('ai_invalid_response','ikke gyldig appkode'), 'ai_invalid_response'),
         (('ai_incomplete','ai-svaret ble avbrutt'), 'ai_incomplete'),
+        (('ai_no_progress','ai gjentar samme','ai løser ikke det samme'), 'ai_no_progress'),
         (('cost_limit','kostnadsgrens','cost limit','budget_usd'), 'cost_limit'),
         (('unknown_model_price','mangler pris'), 'unknown_price'),
         (('source_identity','identity mismatch','app identity','appversjon'), 'identity'),
@@ -112,9 +114,13 @@ def error_text(detail='',code=''):
 def build_text(phase,*,operation='new',attempt=1,total=4,progress=0,detail='',delivery=False):
     if phase=='generating':
         key=operation if operation in {'new','update','repair'} else 'new'
-        total=total if type(total) is int and 1<=total<=4 else 4
+        if total is None:
+            label=TEXT[key] if attempt==1 else f'{TEXT[key]} ({attempt})'
+            return checked(label if len(label.encode('utf-8'))<=MAX_UTF8_BYTES else TEXT[key])
+        total=total if type(total) is int and total>=1 else 4
         attempt=attempt if type(attempt) is int and 1<=attempt<=total else 1
-        return checked(f'{TEXT[key]} ({attempt}/{total})')
+        label=f'{TEXT[key]} ({attempt}/{total})'
+        return checked(label if len(label.encode('utf-8'))<=MAX_UTF8_BYTES else TEXT[key])
     if phase=='testing' and progress>=75:return TEXT['review']
     if phase=='ready':return TEXT['sending' if delivery else 'ready']
     if phase=='failed':return error_text(detail)

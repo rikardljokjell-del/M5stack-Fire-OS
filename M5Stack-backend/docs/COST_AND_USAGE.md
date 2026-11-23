@@ -1,189 +1,178 @@
-# Kostnad og bruk i Windows-programmet
+# Kostnad, modellvalg og effektiv apputvikling
 
-Oppdatert 2026-11-23. Gjelder `M5Stack-backend/`; device-koden er uendret.
+Oppdatert 2026-11-23. Gjelder Windows-programmet og M5Stack-backend/.
 
-## Rimelig standardoppsett
+## Standard: ingen beløps- eller svartak fra backend
 
-| Oppgave | Standardmodell | Begrunnelse |
-| --- | --- | --- |
-| Lage og rette Lua-kode | `gpt-6-luna` | Brukerens valgte rimelige standard for fokuserte Lua-oppgaver. |
-| Kontroll av kildekode før levering | `gpt-6-luna` | Egen kontroll beholdes; ingen dyr automatisk modelloppgradering. |
-| Samtale og avklaring av appønsker | `gpt-realtime-2.1-mini` | Kort, strukturert dialog i eksisterende taleflyt. |
-| Gjøre taleopptak om til tekst | `gpt-transcribe` | Beholder nyere transkripsjon og norsk forståelse. |
-| Lese opp AI-svaret | `gpt-realtime-2.1-mini` | Viderefører den eksisterende lydtransporten og stemmen. |
+Under Innstillinger er alle fire tallfelt **0 som standard**:
 
-`OpenAI → Anbefalt rimelig oppsett` fyller inn disse modellene og
-standardgrensene. Trykk `Lagre og bruk` for å ta dem i bruk. Kontroll av
-API-nøkkelen henter modellisten; den tester ikke betalt kode- eller talegenerering.
+| Felt | 0 betyr |
+| --- | --- |
+| Maks per dag (USD) | Ingen dagsgrense |
+| Maks per appjobb (USD) | Ingen beløpsgrense per jobb |
+| Maks per API-kall (USD) | Ingen beløpsgrense per kall |
+| Automatiske rettinger | Automatisk retting etter framgang, uten fast antallsgrense |
 
-Kodekontroll og lokale Lua-tester beholdes. En billigere modell er ikke et bevis
-på identisk kvalitet, og en bestått PC-test er ikke fysisk verifikasjon på FIRE.
-Utviklingstester bruker lokal simulering og API-mocker, ikke brukerens betalte
-API-nøkkel. Live bruk kan likevel koste penger, også når en respons avbrytes eller
-appen ikke blir ferdig.
+Bruk kostnadsgrenser er av som standard. Når bryteren slås på, håndheves bare
+positive beløp; et enkelt felt med 0 er fortsatt uten grense. Lagrede beløp kan
+endres ved behov. En positiv grense for rettinger er et eksplisitt valg om et
+fast antall etter første kandidat. Standard 0 deaktiverer ikke feilretting.
 
-Eldre Windows-profiler kan migreres med `DesktopStore.migrate_cost_profile()`.
-Profilversjon 2 bytter tidligere standardvalg Sol/Astra for kode og kontroll til
-Luna én gang. Den første profiloppgraderingen bytter også full Realtime til mini;
-et bevisst Realtime-valg i en nyere profil bevares. Egendefinerte modellnavn, API-nøkkel, device-token, nettverk og
-prosjektmappe beholdes. Ingen modell oppgraderes automatisk til en dyr modell
-fordi et bygg feiler. Ukjent prisgrunnlag må avklares før nye kall tillates.
+Bruk ekstra svartak for AI er også av som standard. Kodegenerering og
+kodekontroll sender da ingen max_output_tokens fra backend. Realtime dialog
+og talesvar bruker inf, som betyr modellens egen tilgjengelige kapasitet.
+Dette opphever ikke modellens tekniske kapasitet, konto-/kredittbegrensninger,
+nettfeil eller enhetens minne- og driftsgrenser.
 
-## Modellvalg med priser
+Hvis ekstra svartak velges, brukes 24000 for Luna-generering (12000 for
+andre kodemodeller) og 6000 for kontroll. Et avkuttet svar kan gjenopprettes
+med større svarrom én gang. Dette er valgfri virkemåte, ikke standardtaket.
 
-`OpenAI → Modeller` har separate nedtrekkslister for dialog, kodegenerering,
-kodekontroll, transkripsjon og talesvar. Valget viser modell-ID og inn-/utpris.
-Forklaringen under hvert valg viser enhet, cachepriser og eventuelle lydpriser.
-Prisene og kostnadstelleren bruker samme katalog, `fire_backend/model_catalog.py`.
+Forbruksregnskapet er aktivt uansett om grensene er av. Nullstilling av
+visningstellerne endrer aldri de historiske registreringene eller appens Cost.
+Når måling mangler, brukes et konservativt anslag fra modellens maksimale
+svarrom. Et slikt beløp merkes som reserve, ikke som målt fakturert bruk.
 
-- Kode/kontroll: GPT-6 Luna, GPT-5.6 Luna, GPT-6.1 Terra, GPT-6.2 Sol,
-  GPT-6.1 Sol og GPT-6.2 Astra. Luna koster USD 0,10 inn / 0,50 ut per million
-  tokens (Standard). Cacheskriving med 30 minutters levetid koster USD 0,125.
-- Dialog: Realtime 2.1 mini og Realtime 2.1. Denne transporten bruker tekst;
-  lydsvaret er et separat kall. Luna har ingen lydutdata og tilbys ikke her.
-- Talesvar: de samme to Realtime-modellene, med separate tekst- og lydpriser.
-- Transkripsjon: GPT-Transcribe, USD 0,0045 per minutt opptak. Tekstutdata er
-  inkludert. Den er den aktuelle modellen for fullførte WAV-opptak. Live-Transcribe
-  trenger en annen strømmetransport; utgående 4o-/Whisper-modeller tilbys ikke.
+## Rimelige modeller og arbeidsmåte
 
-Innstillinger lagrer bare modell-ID, aldri visningstekst med pris. Tidligere
-lagrede egendefinerte modellnavn beholdes og merkes tydelig. Kontotilgang er
-ikke garantert av katalogen. Prislisten er datert og oppdateres i kode, ikke
-automatisk fra nettet. Lange forespørsler over 272 000 inputtokens prises med
-2× input/cache og 1,5× output i regnskapet. Ingen betalte testkall brukes for å
-verifisere modellvelgeren eller migrasjonen.
+| Oppgave | Standard |
+| --- | --- |
+| Lage og rette Lua-kode | gpt-6-luna |
+| Kontroll før levering | gpt-6-luna |
+| Samtale | gpt-realtime-2.1-mini |
+| Opptak til tekst | gpt-transcribe |
+| Hørbart AI-svar | gpt-realtime-2.1-mini, når talesvar er slått på |
 
-## Verifikasjon av modellvelgeren 2026-11-23
+OpenAI-siden har nedtrekkslister med inn-/utpris og riktig enhet. Kodevelgeren
+inkluderer Luna 6/5.6, Terra 6.1, Sol 6.2/6.1 og Astra 6.2. Lydvalg filtreres
+etter transporten som faktisk er implementert. Modeller oppgraderes ikke
+automatisk til dyrere alternativer. Modellkatalogen og kostnadstelleren har
+samme prisgrunnlag i fire_backend/model_catalog.py, datert 2026-11-23.
 
-487 tester bestått, inkludert modellvalg/lagring, engangsmigrasjon med bevarte
-legitimasjoner, SDK-forespørsler og forbruksprising for alle seks kodemodeller.
-Windows-vinduet er kontrollert visuelt med nedtrekksliste, cachepris,
-lydpriser og rulling til hele oppsettet. PC-profilen er migrert til Luna for
-kode og kontroll, programmet er startet på nytt og `/health` svarer `ok`.
-Ingen betalte API-kall ble brukt. Dette bekrefter integrasjon og lokale tester;
-kvaliteten på nye Luna-genererte apper er ikke fysisk verifisert på FIRE.
+Kostnadseffektivitet oppnås ved å redusere unødvendig arbeid:
 
-## Bruk og kostnad
+- Lav resonnering og presise, komplette kildekodesvar.
+- Et stabilt instruksjonsprefiks med eksplisitt 30-minutters caching.
+- Kompakte test-/sensordata uten å fjerne nødvendig funksjonalitet eller bevis.
+- Registryens tjenestenavn som enum i AI-skjemaet. Entydig navnefeil som
+  fire.display til display rettes lokalt uten et nytt modellkall.
+- Lokale Lua-/kontrakttester før egen AI-kontroll. Ingen utestet pakke leveres.
+- Automatisk retting fortsetter når det kommer nye kontrollfunn. Gjentatt
+  identisk kode eller samme uløste kontrollfunn stopper en løkke uten framgang,
+  med forklaring og bevart plan. Det finnes fortsatt en teknisk jobbtidsgrense.
+- Ved avbrutt/feilet AI-kontroll kan Resume gjenbruke kildekoden som allerede
+  bestod lokale tester. Prosjekt, krav, kildehash, kontekst, capabilities,
+  modus og basisversjon må samsvare. Lokale tester og AI-kontroll kjøres igjen.
+  Endrede krav eller manipulert kode gjør at den ikke gjenbrukes.
+- Konto-/betalingsfeil og avslag gjentas ikke som om de var Lua-feil.
+- Å åpne Resume eller hente kostnadsoversikten gjør ingen nye modellkall.
 
-### Svarrom og automatisk gjenoppretting
+En billig modell er ikke et bevis for at alle apper fungerer. Fysisk kjøring
+må bekreftes av enheten; lokale tester og AI-kontroll beholdes uansett prisvalg.
 
-RPG-jobben `build-a5ab57cfbc8444cca5f5` avdekket at den tidligere grensen på
-8 000 outputtokens ble brukt helt til intern resonnering, uten synlig appkode.
-Den brukte USD 0,00571425. Grensen inkluderte både resonnering og synlig svar,
-og den generelle feilmeldingen skjulte forskjellen på avkutt og avslag.
+## Slå AI-talesvar av eller på
 
-Generering bruker nå **low** resonnering. Luna-modellene får 24 000 outputtokens,
-øvrige kodemodeller 12 000. Kodekontroll får 6 000. Dette er maksimumsgrenser,
-ikke et mål på hvor mange tokens et normalt svar skal bruke. Et avkuttet svar
-kan forsøkes én gang til med dobbelt svarrom; GPT-6 Luna bruker da **none**
-resonnering. Ingen automatisk overgang til dyrere modell. Konto-/kredittfeil
-og modellavslag gjentas ikke. Avslag, avkutt og ugyldige svar får ulike årsaker.
+OpenAI har valget **Les AI-svar høyt på FIRE**. Standard er på for å bevare
+valg og den eksisterende taleflyten. Slå av og trykk Lagre og bruk for å spare
+lydgenereringen. Da blir det ingen speech/TTS-kall eller audio_ready fra nye
+svar. Mikrofon, transkripsjon, tekstsvar, avklaringer og appbygging virker
+fortsatt. Replay/Test lyd er ikke tilgjengelig mens talesvar er av.
 
-SDK-status og faktisk bruk leses før strukturert JSON parses, slik at også
-ufullstendig JSON får riktig forbruk og forklaring. Ugyldig svarstruktur kan
-formatrettes én gang med samme tokengrense. `required_services` oppgis med
-registryens enum i skjemaet; entydig AI-feilstaving som `fire.display` blir
-`display` uten et ekstra modellkall. Ukjente/dupliserte tjenester avvises fortsatt.
-Manifest, annonserte capabilities, Lua-tester og kodekontroll er like strenge.
+Dette er uavhengig av Aktiver backendens lydtransport: den transporten må
+være på for mikrofonopptak. Det endrer heller ikke Lua-appers spilllyd eller
+OS-hovedvolum. Conversation audio gir aldri ekstra Lua-hardwaretjenester.
 
-Alle forsøk må reservere innen dags-, jobb- og kallbudsjett. Et legitimt
-kostnadsstopp kan fortsatt kreve brukerens justering. Det er ingen ubegrenset
-retry-løkke. Pris/forbruk rapporterer resonnering som del av output, ikke i tillegg.
-Det holdes metadata om responsstatus, stoppårsak, svartak og resonneringsnivå;
-selve resonneringsteksten eller rå modellfeil lagres ikke i forbruksregnskapet.
+USD20 for Realtime mini betyr per én million genererte lydtokens, ikke per
+svar. Mini er allerede det rimeligste aktuelle alternativet i den eksisterende
+Realtime-transporten. Eldre Speech API-modeller tilbys ikke som ny løsning:
+de er utgående og planlagt stengt 2027-01-06. Bryteren kan spare hele den
+framtidige TTS-delen; transkripsjon, dialog og kode har fortsatt egne kostnader.
 
-Ved feil velger man **Jobber → Resume valgt jobb**. Plan/dialog gjenopprettes i
-Aktivitet uten nytt modellkall; endre planen eller trykk Bygg for nytt forsøk.
-Tidligere jobb, kostnad og feil bevares. Ny jobb peker tilbake med `retry_of`.
-FIRE bruker samme flyt gjennom `build_resume`; visningsarbeid hos device-agenten
-er beskrevet i [DEVICE_FAILED_BUILD_RESUME.md](DEVICE_FAILED_BUILD_RESUME.md).
+## Cost i Apper
 
-Verifisert lokalt: hele testsuiten, 505 tester bestått. Den siste UI-justeringen
-for bevaring av utkast ved Resume er også kontrollert med egne Tk-tester.
-Windows-appen viser nå konkret årsak for de to historiske feilene (RPG-avkutt
-og `fire.display` i appformatet). RPG-jobbens prosjekt/dialog er gjenopprettet
-til byggebekreftelse uten betalt modellkall. Fysisk skjermvisning og nytt
-Luna-generert RPG på FIRE er ikke verifisert; dette krever device-oppdateringen
-og et brukerbekreftet bygg. Ingen betalte testkall ble gjort i denne endringen.
+Apper viser **Cost (USD)** på appens samlede rad. Hver versjon får samme
+prosjekttotal fra backend; UI summerer ikke disse versjonstotalene en gang til.
+Den valgte versjonen påvirker aldri beløpet. Beregningen bruker hele den
+registrerte levetidshistorikken, med blant annet:
 
-Den nye siden viser:
+- generering og kontroll for alle versjoner;
+- mislykkede bygg, nye forsøk og feilrettinger;
+- dialog, transkripsjon og AI-talesvar som kan knyttes til appen;
+- registrert usikkert/avbrutt forbruk, tydelig behandlet som anslag.
 
-- anslått USD og antall kall siden nullstilling, i dag og siden målingen startet;
-- kostnadsdrivere fordelt på kodebygging, kontroll, samtale, taletolkning og talesvar;
-- fordeling per modell og appjobb;
-- siste kall med tokens inn/ut/cache, status og lokal kostnadsberegning;
-- lydlengde, lydtokens og appjobb ved valg av et kall.
+Regnskapet grupperes etter prosjekt-ID, ikke navn, slik at forskjellige apper
+med samme navn ikke blandes. Bygg-ID gir sikker reservekobling når en eldre
+registrering mangler prosjekt-ID. Nye byggregistreringer får denne koblingen
+før historiske versjoner kan slettes. Når et taleønske automatisk velger en
+annen reparasjonsapp, knyttes den aktuelle taleomgangens kostnad til den
+løste appidentiteten; beløp og eksplisitte byggekoblinger endres ikke.
 
-Oversikten hentes lokalt og utløser ingen nye betalte API-kall. Den lagrer ikke
-API-nøkler, prompts, Lua-kilde, lyd eller komplette modelsvar i bruksregnskapet.
-Opplysninger om app-/bygg-ID og modell brukes til å forklare kostnadsdriverne.
+Sletting av en versjon og Nullstill visningstellerne sletter ikke API-bruken.
+Cost kombinerer registrert bruk med tydelig merkede historiske byggeanslag.
+Det er ikke en OpenAI-faktura. Apper med historiske anslag vises med ≈.
+Detaljene viser registrert beløp, historisk anslag, scenariointervall og modell.
 
-USD-beløpene er **anslag, ikke OpenAI-faktura**. Grunnlaget er en datert lokal
-prisliste og rapportert bruk der endepunktet leverer det. Cachetokens inngår i
-inputtotalen; reasoning inngår i outputtotalen. De belastes ikke en ekstra gang
-som egne totale tokenmengder.
+Historiske bygg før målingens start rekonstrueres én gang fra request.json,
+attempt-N.lua og review-N.json, også mislykkede forsøk knyttet til appen.
+Lagret modell brukes; i den undersøkte historikken var dette GPT-6.2 Astra.
+Review-modell antas lik lagret kodemodell når eget modellnavn mangler.
+Ved oppdateringer tas forrige pakkes kildekode med i inputanslaget.
+Lokale metadata-/lydforsterkningsrettelser uten AI-kall gis ingen ekstra kostnad.
 
-Cachelesing og cacheskriving vises separat og prises etter rapportert bruk.
-Kodeforespørsler bruker eksplisitt cachepunkt før prosjektdata og 30 minutters
-levetid; innhold som bare gjelder den enkelte appen blir ikke skrevet til cache
-som om det var en felles instruks. Ingen cachetreff eller spareprosent loves.
+Metode retained-artifacts-v2: tegn/4 anslår tokens; scenariointervallet bruker
+tegn/5..3. Sentralt anslag legger til 1500 resonneringstokens for generering og
+1000 for review, begrenset av daværende 8000/4000 svartak. Øvre scenario bruker
+hele daværende svartak og 2,5 ganger inputpris for mulig cache-skriving; ingen
+cache-leserabatt antas. Full lagret kontekst, kilde, simuleringsdata og 4096
+tegn instruksjons-/skjemapåslag inngår. Dette er grove scenarioanslag, ikke
+statistiske konfidensintervaller eller garanterte øvre/nedre fakturabeløp.
+Ukjent faktisk resonnering, cache-treff og tapte svar kan gi vesentlige avvik.
+Eldre dialog/tale uten måling er utelatt; slike kostnader fordeles ikke vilkårlig.
 
-Ved manglende tokenmåling beholdes en konservativ kostnadsreserve, og kallet
-merkes som anslag. Dette gjelder også avbrutte eller usikre kall etter omstart:
-backend kan ikke anta at OpenAI ikke fakturerte dem. Tokenoversikter kan derfor
-inneholde reserverte maksimumsverdier sammen med rapporterte målinger. Velg et
-kall for å se grunnlaget. Varighetsprisede transkripsjoner beregnes fra lydlengde.
+Historiske anslag lagres separat uten prompts, kildekode eller nøkler.
+De inngår i appens Cost, men aldri i dagens forbruk, budsjetter eller
+nullstillbare API-tellere. Sletting av versjoner/bygg og nullstilling bevarer
+anslagene. Senere registrert/importert bruk for samme bygg og operasjon erstatter
+hele denne operasjonens historiske anslag, slik at den ikke telles dobbelt.
 
-Forbruk før denne målingen ble aktivert kan ikke rekonstrueres nøyaktig fra gamle
-byggefiler. Tidligere betalte beløp, for eksempel de første to utviklingsdagene,
-blir derfor ikke lagt inn som oppdiktede målte tall. OpenAIs egen forbruksoversikt
-og faktura er fasit for det faktiske historiske beløpet.
+## Resume og konkrete feilårsaker
 
-## Kostnadsgrenser
+RPG-jobben build-a5ab57cfbc8444cca5f5 brukte tidligere 8000 outputtokens til
+intern resonnering uten kode. Grensen inkluderte både resonnering og selve
+svaret; beløpet var USD0,00571425. Denne backend-svargrensen er ikke lenger
+aktiv som standard.
 
-Standard under `Innstillinger`:
+Status og faktisk bruk leses før JSON parses. Avslag, avkutt og ugyldig
+svarstruktur skilles fra hverandre. Plan, dialog og manuelle tillegg beholdes.
+Velg Jobber -> Resume valgt jobb, endre planen eller bekreft et nytt bygg.
+Tidligere jobb og kostnad bevares; det nye bygget peker tilbake med retry_of.
+FIRE bruker samme flyt gjennom build_resume, med kort norsk årsak og separat
+begrenset diagnosefelt. Se DEVICE_FAILED_BUILD_RESUME.md.
 
-| Grense | Standard |
-| --- | ---: |
-| Maks per dag | USD 2,00 |
-| Maks per appjobb | USD 0,60 |
-| Maks per API-kall | USD 0,25 |
-| Automatiske rettinger etter første kandidat | 1 |
+## Profiloppgradering og sikker lagring
 
-Før et betalt kall reserverer backend et konservativt beløp for innholdet og
-det tillatte svaret. Hvis denne reserven ville passere en grense, startes ikke
-kallet. En jobb kan derfor stoppes selv om det endelige modelsvar hypotetisk
-kunne ha blitt billigere. Dette er ønsket vern mot uventet forbruk; det er ingen
-garanti for at alle appønsker fullføres innenfor beløpet.
+Profilversjon3 setter de fire grensene til0 og slår ekstra kostnads-/svartak
+av én gang, etter brukerens uttrykkelige bestilling. Senere egne innstillinger
+bevares. Eksisterende modellvalg fra profilversjon2, nettverk, workspace,
+API-nøkkel og device-token bevares. For enda eldre profiler gjelder den tidligere
+Luna-/mini-migrasjonen. Nøkler lagres fortsatt i Windows Credential Manager.
 
-Grensene gjelder kall som går gjennom denne backenden og dette lokale
-bruksregnskapet. De er ikke en grense satt hos OpenAI, påvirker ikke andre
-programmer som bruker samme konto, og er ikke et mål på gjenværende API-kreditt.
-Daggrensen og hvilken tidssone som brukes vises i oversikten. Ved manglende
-tidssonedatabase kan backend rapportere UTC i stedet for Europe/Oslo.
-
-## Nullstill visningstellerne
-
-Knappen `Nullstill visningstellerne` starter en ny visningsperiode. Den sletter
-ikke historikken, nullstiller ikke dagens kostnadsgrense og tilbakefører ikke
-API-kreditt. «I dag» og «Siden målingen startet» bevarer tidligere bruk. Et kall
-som fortsatt pågår ved nullstilling, vises når det fullføres i den nye perioden.
+Bruksregnskapet lagrer ikke API-nøkler, enhetstoken, prompts, lyd, kildekode
+eller rå modellfeil/resonneringstekst. Metadata om prosjekt/bygg/sesjon/taleomgang,
+modell, tokens, status og beregnet USD brukes for måling og appfordeling.
 
 ## Offisielle kilder
 
-Modellvalg og prisliste er kontrollert mot OpenAI Docs 2026-11-23:
+Verifikasjon denne leveransen: hele testsuiten, 533 tester bestått. Deretter bestod
+9 målrettede historikktester, inkludert pakkekilde ved oppdatering. Windows-UI er visuelt kontrollert: alle fire felt har 0, svartak/beløpstak
+er av, Talesvar har egen bryter og Apper har Cost (USD). PC-profilen er migrert
+og /health svarer ok. Ingen betalte API-testkall er utført. Fysisk visning og
+lyd på FIRE etter denne oppdateringen er ikke bekreftet i disse testene.
 
-- [GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
 - [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
-- [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
-- [GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
-- [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
-- [GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra)
-- [GPT-Realtime-2.1](https://developers.openai.com/api/docs/models/gpt-realtime-2.1)
-- [GPT-Realtime-2.1 mini](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini)
+- [Realtime mini](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini)
 - [GPT-Transcribe](https://developers.openai.com/api/docs/models/gpt-transcribe)
-- [Priser](https://developers.openai.com/api/docs/pricing)
 - [Kostnadsoptimalisering](https://developers.openai.com/api/docs/guides/cost-optimization)
-
-Modellpriser og tilgjengelighet kan endres. Ukjente modeller trenger et eksplisitt
-prisgrunnlag; backend skal ikke gjette at de er gratis.
+- [Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
+- [Realtime svargrenser](https://developers.openai.com/api/reference/resources/realtime/client-events)
+- [Speech API og utgående modeller](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)
