@@ -1,5 +1,9 @@
 # Device-agent: «Fix error» fra APP ERROR, 2026-11-23
 
+Oppfølging etter implementasjonc8a0756:
+[DEVICE_FIX_ERROR_REVIEW.md](DEVICE_FIX_ERROR_REVIEW.md) inneholder en ny
+fysisk vater-feil og konkrete funn om reconnect, JSON og SD-gjenoppretting.
+
 Backend-støtte er implementert. Endre bare `M5Stack-device/`. Les også
 [IMU-ferskhet](DEVICE_IMU_FRESHNESS_HANDOFF.md) og
 [native callback/RGB](DEVICE_NATIVE_CALLBACK_HANDOFF.md); firmwaretiltakene
