@@ -1455,6 +1455,45 @@ void FireOS::loadSettings() {
   pendingDiagnosticJson_ = preferences.isKey("diag_meta")
                                ? preferences.getString("diag_meta", "")
                                : String();
+  luaRepairId_ = preferences.isKey("repair_id")
+                     ? preferences.getString("repair_id", "")
+                     : String();
+  luaRepairProjectId_ = preferences.isKey("repair_project")
+                            ? preferences.getString("repair_project", "")
+                            : String();
+  luaRepairProposalId_ = preferences.isKey("repair_proposal")
+                             ? preferences.getString("repair_proposal", "")
+                             : String();
+  luaRepairReadyPackageId_ = preferences.isKey("repair_package")
+                                ? preferences.getString("repair_package", "")
+                                : String();
+  luaRepairReadyVersion_ = preferences.isKey("repair_version")
+                              ? preferences.getString("repair_version", "")
+                              : String();
+  luaRepairStatus_ = preferences.isKey("repair_status")
+                         ? preferences.getString("repair_status", "")
+                         : String();
+  luaRepairPhase_ = preferences.isKey("repair_phase")
+                        ? preferences.getString("repair_phase", "")
+                        : String();
+  luaRepairMessage_ = preferences.isKey("repair_message")
+                          ? preferences.getString("repair_message", "")
+                          : String();
+  luaRepairProgress_ = preferences.getUChar("repair_progress", 0);
+  if (pendingDiagnosticAppId_.length() > 0) {
+    luaErrorAppId_ = pendingDiagnosticAppId_;
+    luaErrorPackageId_ = pendingDiagnosticPackageId_;
+    luaErrorCode_ = pendingDiagnosticErrorCode_;
+    luaAppError_ = pendingDiagnosticMessage_;
+    luaErrorDiagnostics_ = pendingDiagnosticJson_;
+  }
+  const bool persistedRepair = luaRepairId_.length() > 0 &&
+                               luaRepairStatus_ != "cancelled" &&
+                               luaRepairStatus_ != "failed" &&
+                               luaRepairStatus_ != "unavailable";
+  luaRepairRequested_ = persistedRepair;
+  luaRepairPrepareSent_ = persistedRepair;
+  luaRepairStatusQueryPending_ = persistedRepair;
   loadSavedWifiNetworks();
   bluetoothEnabled_ = false;
   bluetoothMode_ = 0;
@@ -4997,8 +5036,13 @@ void FireOS::handleHelpButton(uint8_t index) {
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
   if (aiProjectPickerActive_) {
-    const uint8_t resumeOffset = aiResumeAvailable_ ? 1 : 0;
-    const uint8_t itemCount = luaAppCount_ + 4 + resumeOffset;
+    const bool repairResume = luaRepairId_.length() > 0 &&
+                              luaRepairStatus_ != "cancelled" &&
+                              luaRepairStatus_ != "failed" &&
+                              luaRepairStatus_ != "unavailable";
+    const uint8_t repairOffset = repairResume ? 1 : 0;
+    const uint8_t buildOffset = aiResumeAvailable_ ? 1 : 0;
+    const uint8_t itemCount = luaAppCount_ + 4 + repairOffset + buildOffset;
     if (index == 0) {
       aiProjectSelection_ =
           (aiProjectSelection_ + itemCount - 1) % itemCount;
@@ -5006,7 +5050,17 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiProjectSelection_ = (aiProjectSelection_ + 1) % itemCount;
     } else if (aiProjectSelection_ == itemCount - 1) {
       back();
-    } else if (aiResumeAvailable_ && aiProjectSelection_ == 0) {
+    } else if (repairResume && aiProjectSelection_ == 0) {
+      aiProjectPickerActive_ = false;
+      if (luaErrorAppId_.length() == 0)
+        luaErrorAppId_ = pendingDiagnosticAppId_;
+      if (luaAppError_.length() == 0)
+        luaAppError_ = luaRepairMessage_.length() > 0 ? luaRepairMessage_
+                                                      : "Repair pending";
+      previousScreen_ = Screen::AiDeveloper;
+      screen_ = Screen::LuaApp;
+      requestLuaRepairStatus();
+    } else if (aiResumeAvailable_ && aiProjectSelection_ == repairOffset) {
       aiProjectPickerActive_ = false;
       aiBuildId_ = buildJobIds_[0];
       aiBuildErrorCode_ = buildJobErrorCodes_[0];
@@ -5027,7 +5081,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       if (backendClient_) backendClient_->buildResume(aiBuildId_);
     } else {
       aiProjectPickerActive_ = false;
-      const uint8_t selection = aiProjectSelection_ - resumeOffset;
+      const uint8_t selection = aiProjectSelection_ - repairOffset - buildOffset;
       if (selection == 0) {
         aiVoiceTestMode_ = false;
         aiConversationMode_ = 1;
@@ -5897,9 +5951,13 @@ void FireOS::stopLuaApp(const String& reason) {
                         reason == "user_exit";
   const bool requestedStop = reason == "remote_stop" || reason == "rollback";
   const bool osNavigation = reason == "os_navigation";
-  const String stoppedDiagnostics = luaDiagnosticsJson(
-      reason == "runtime_limit" ? "stop"
-                                 : (userExit ? "stop" : "update"));
+  const char* diagnosticPhase = "update";
+  if (reason == "runtime_limit" || userExit) {
+    diagnosticPhase = "stop";
+  } else if (luaRuntime_ && luaRuntime_->lastPhase()) {
+    diagnosticPhase = luaRuntime_->lastPhase();
+  }
+  const String stoppedDiagnostics = luaDiagnosticsJson(diagnosticPhase);
   const bool failedRun = reason.length() > 0 && !userExit && !requestedStop &&
                          !osNavigation;
   if (luaAppActive_ && reason.length() > 0) {
@@ -6155,6 +6213,30 @@ void FireOS::serviceLuaRepair() {
   }
 }
 
+void FireOS::cancelLuaRepair() {
+  if (!repairCancelSupported_) {
+    luaRepairMessage_ = "Cancel not supported";
+    return;
+  }
+  if (luaRepairId_.length() == 0) {
+    luaRepairRequested_ = false;
+    luaRepairPrepareSent_ = false;
+    luaRepairBuildConfirmed_ = false;
+    luaRepairConfirmPending_ = false;
+    luaRepairCancelPending_ = false;
+    luaRepairStatus_ = "cancelled";
+    luaRepairPhase_ = "cancelled";
+    luaRepairMessage_ = "Byggingen ble avbrutt";
+    goToBootApp();
+    return;
+  }
+  luaRepairCancelPending_ = true;
+  luaRepairMessage_ = "Avbryter bygging";
+  luaRepairStatus_ = "cancelling";
+  luaRepairPhase_ = "cancelling";
+  goToBootApp();
+}
+
 void FireOS::handleLuaRepairStatus(const String& message) {
   const String incomingRepair = jsonStringField(message, "repair_id");
   const String incomingApp = jsonStringField(message, "app_id");
@@ -6177,11 +6259,21 @@ void FireOS::handleLuaRepairStatus(const String& message) {
   luaRepairProgress_ = static_cast<uint8_t>(
       constrain(jsonIntField(message, "progress"), 0, 100));
   luaRepairPrepareSent_ = true;
+  if (luaRepairId_.length() > 0) {
+    preferences.putString("repair_id", luaRepairId_);
+    preferences.putString("repair_project", luaRepairProjectId_);
+    preferences.putString("repair_proposal", luaRepairProposalId_);
+    preferences.putString("repair_package", luaRepairReadyPackageId_);
+    preferences.putString("repair_version", luaRepairReadyVersion_);
+    preferences.putString("repair_status", luaRepairStatus_);
+    preferences.putString("repair_phase", luaRepairPhase_);
+    preferences.putString("repair_message", luaRepairMessage_.substring(0, 240));
+    preferences.putUChar("repair_progress", luaRepairProgress_);
+  }
 
   const bool repairQueued = luaRepairStatus_ == "queued" ||
                             luaRepairStatus_ == "building" ||
-                            luaRepairStatus_ == "testing" ||
-                            luaRepairStatus_ == "ready";
+                            luaRepairStatus_ == "testing";
   if (repairQueued) {
     luaRepairConfirmPending_ = false;
     luaRepairBuildConfirmed_ = true;
@@ -6203,11 +6295,27 @@ void FireOS::handleLuaRepairStatus(const String& message) {
                             : "Fixed app ready to run";
   } else if (luaRepairStatus_ == "failed" ||
              luaRepairStatus_ == "interrupted" ||
-             luaRepairStatus_ == "unavailable") {
+             luaRepairStatus_ == "unavailable" ||
+             luaRepairStatus_ == "cancelled") {
     luaRepairRequested_ = false;
     luaRepairPrepareSent_ = false;
     luaRepairBuildConfirmed_ = false;
     luaRepairConfirmPending_ = false;
+    luaRepairCancelPending_ = false;
+    preferences.remove("repair_id");
+    preferences.remove("repair_project");
+    preferences.remove("repair_proposal");
+    preferences.remove("repair_package");
+    preferences.remove("repair_version");
+    preferences.remove("repair_status");
+    preferences.remove("repair_phase");
+    preferences.remove("repair_message");
+    preferences.remove("repair_progress");
+    luaRepairId_ = "";
+    luaRepairProjectId_ = "";
+    luaRepairProposalId_ = "";
+    luaRepairReadyPackageId_ = "";
+    luaRepairReadyVersion_ = "";
   }
 }
 
@@ -6231,12 +6339,23 @@ void FireOS::startLuaRepairRun() {
 }
 
 void FireOS::handleLuaErrorButton(uint8_t index) {
-  if (index == 2) {
-    back();
+  const bool repairActive = luaRepairRequested_ || luaRepairId_.length() > 0 ||
+                            luaRepairStatus_ == "ready" ||
+                            luaRepairStatus_ == "building" ||
+                            luaRepairStatus_ == "testing" ||
+                            luaRepairStatus_ == "queued" ||
+                            luaRepairStatus_ == "awaiting_confirmation";
+  if (index == 0) {
+    // Minimize only. The PC-owned repair continues in the background.
+    goToBootApp();
     return;
   }
-  if (index == 0) {
-    luaErrorAction_ = 0;
+  if (repairActive && index == 2) {
+    cancelLuaRepair();
+    return;
+  }
+  if (index == 2) {
+    back();
     return;
   }
   if (luaErrorAction_ == 0) {
@@ -6563,6 +6682,13 @@ void FireOS::updateBackend() {
     requestWifi(true);
   }
   backendClient_->service(WiFi.status() == WL_CONNECTED);
+  if (luaRepairCancelPending_ && backendClient_->sessionReady() &&
+      luaRepairId_.length() > 0) {
+    if (backendClient_->appRepairCancel(luaRepairId_)) {
+      luaRepairCancelPending_ = false;
+      luaRepairMessage_ = "Venter på avbrytelse";
+    }
+  }
   if (buildJobsRequested_ && buildJobsRequestAt_ != 0 &&
       millis() - buildJobsRequestAt_ >= 5000) {
     buildJobsRequested_ = false;
@@ -6740,6 +6866,7 @@ void FireOS::handleBackendMessage(const String& message) {
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
     failedBuildResumeSupported_ =
         message.indexOf("failed_build_resume_v1") >= 0;
+    repairCancelSupported_ = message.indexOf("repair_cancel_v1") >= 0;
     if (backgroundBuildsSupported_ || failedBuildResumeSupported_)
       requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
@@ -6754,6 +6881,7 @@ void FireOS::handleBackendMessage(const String& message) {
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
     failedBuildResumeSupported_ =
         message.indexOf("failed_build_resume_v1") >= 0;
+    repairCancelSupported_ = message.indexOf("repair_cancel_v1") >= 0;
     if (backgroundBuildsSupported_ || failedBuildResumeSupported_)
       requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
@@ -8871,6 +8999,17 @@ void FireOS::resetSettings() {
   backendBootSyncStartedAt_ = 0;
   buildJobsRetryCount_ = 0;
   buildJobsRequestAt_ = 0;
+  luaRepairId_ = "";
+  luaRepairProjectId_ = "";
+  luaRepairProposalId_ = "";
+  luaRepairReadyPackageId_ = "";
+  luaRepairReadyVersion_ = "";
+  luaRepairStatus_ = "";
+  luaRepairPhase_ = "";
+  luaRepairMessage_ = "";
+  luaRepairRequested_ = false;
+  luaRepairPrepareSent_ = false;
+  luaRepairCancelPending_ = false;
   if (backendClient_ && backendClient_->active()) backendClient_->disconnect();
   wifiTimeSync_ = false;
   timeSyncPending_ = false;
@@ -9102,6 +9241,12 @@ void FireOS::drawStatusBar(const char* title) {
     ui.drawRoundRect(112, 23, 96, 3, 1, kMuted);
     ui.fillRoundRect(113, 24,
                      max<int>(2, 94 * buildProgress_ / 100), 1, 1, kCyan);
+  } else if (luaRepairRequested_ && luaRepairProgress_ > 0 &&
+             luaRepairStatus_ != "ready") {
+    ui.drawRoundRect(112, 23, 96, 3, 1, kMuted);
+    ui.fillRoundRect(113, 24,
+                     max<int>(2, 94 * luaRepairProgress_ / 100), 1, 1,
+                     kOrange);
   } else if (buildNoticeActive_) {
     ui.fillCircle(160, 24, 2, kGreen);
   }
@@ -9990,30 +10135,38 @@ void FireOS::drawAiDeveloper() {
       backendColor = kCyan;
     }
     drawText(160, 59, backendLabel, backendColor, 1, kPanel);
-    const uint8_t resumeOffset = aiResumeAvailable_ ? 1 : 0;
-    const uint8_t itemCount = luaAppCount_ + 4 + resumeOffset;
+    const bool repairResume = luaRepairId_.length() > 0 &&
+                              luaRepairStatus_ != "cancelled" &&
+                              luaRepairStatus_ != "failed" &&
+                              luaRepairStatus_ != "unavailable";
+    const uint8_t repairOffset = repairResume ? 1 : 0;
+    const uint8_t buildOffset = aiResumeAvailable_ ? 1 : 0;
+    const uint8_t itemCount = luaAppCount_ + 4 + repairOffset + buildOffset;
     const uint8_t visible = min<uint8_t>(6, itemCount - aiProjectOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = aiProjectOffset_ + row;
       const bool selected = item == aiProjectSelection_;
       const int y = 72 + row * 22;
       if (selected) ui.fillRoundRect(20, y - 4, 280, 19, 4, kCyan);
-       String label = aiResumeAvailable_ && item == 0
-                          ? "Resume"
-                          : item == resumeOffset
-                              ? "Chat only"
-                              : item == resumeOffset + 1
-                                  ? "Voice test"
-                                  : item == resumeOffset + 2
-                                      ? "New app"
-                                      : item == itemCount - 1
-                                          ? "Back"
-                                          : luaAppNames_[item - resumeOffset - 3];
+       String label = repairResume && item == 0
+                          ? "Resume feilretting"
+                          : aiResumeAvailable_ && item == repairOffset
+                              ? "Resume bygging"
+                              : item == repairOffset + buildOffset
+                                  ? "Chat only"
+                                  : item == repairOffset + buildOffset + 1
+                                      ? "Voice test"
+                                      : item == repairOffset + buildOffset + 2
+                                          ? "New app"
+                                          : item == itemCount - 1
+                                              ? "Back"
+                                              : luaAppNames_[item - repairOffset - buildOffset - 3];
       if (label.length() > 28) label = label.substring(0, 25) + "...";
       drawText(160, y, label, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);
     }
-    if (aiResumeAvailable_ && aiProjectSelection_ == 0 &&
+    const uint8_t buildResumeItem = repairOffset;
+    if (aiResumeAvailable_ && aiProjectSelection_ == buildResumeItem &&
         buildJobCount_ > 0) {
       const bool failed = buildJobStatuses_[0] == "failed";
       String reason = buildJobErrors_[0];
@@ -10376,9 +10529,15 @@ void FireOS::drawLuaApp() {
                TFT_BLACK);
     else
       drawText(160, 207, "B starter valgt handling", kMuted, 1, TFT_BLACK);
-    drawText(46, 232, "HOME", kMuted, 1, TFT_BLACK);
+    const bool repairActive = luaRepairRequested_ || luaRepairId_.length() > 0 ||
+                              luaRepairStatus_ == "ready" ||
+                              luaRepairStatus_ == "building" ||
+                              luaRepairStatus_ == "testing" ||
+                              luaRepairStatus_ == "queued" ||
+                              luaRepairStatus_ == "awaiting_confirmation";
+    drawText(46, 232, "MINIMER", kMuted, 1, TFT_BLACK);
     drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
-    drawText(274, 232, "BACK", kMuted, 1, TFT_BLACK);
+    drawText(274, 232, "AVBRYT", kMuted, 1, TFT_BLACK);
     ui.setTextDatum(TL_DATUM);
   }
 }
