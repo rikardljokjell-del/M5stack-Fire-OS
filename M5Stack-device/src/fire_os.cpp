@@ -1015,7 +1015,10 @@ void FireOS::begin() {
              selectedBootAppPath_.length() > 0) {
     preferences.putBool("boot_pending", true);
     saveSettings();
-    if (launchSelectedBootApp()) return;
+    // External .bin boot returns after selecting the OTA partition and
+    // rebooting. Lua boot apps stay in this firmware and must continue the
+    // normal display/audio/backend initialization below.
+    if (launchSelectedBootApp() && screen_ != Screen::LuaApp) return;
     preferences.putBool("boot_pending", false);
     selectedBootAppPath_ = "";
     saveSettings();
@@ -3841,6 +3844,14 @@ bool FireOS::installExternalApp(const String& path, bool rebootAfterInstall,
 bool FireOS::launchSelectedBootApp() {
   if (selectedBootAppPath_.length() == 0) return false;
   if (!sdReady_ && !initSdCard()) return false;
+  if (selectedBootAppPath_.endsWith("/main.lua")) {
+    scanLuaApps();
+    for (uint8_t index = 0; index < luaAppCount_; ++index) {
+      if (luaAppPaths_[index] == selectedBootAppPath_)
+        return startLuaApp(luaAppPaths_[index], luaAppDisplayNames_[index]);
+    }
+    return false;
+  }
   return installExternalApp(selectedBootAppPath_, true, true);
 }
 
@@ -4527,15 +4538,21 @@ void FireOS::handleDisplaySoundButton(uint8_t index) {
 
 void FireOS::handleBootButton(uint8_t index) {
   if (bootAppPicker_) {
-    const uint8_t itemCount = externalAppCount_ + 1;
+    const uint8_t appCount = externalAppCount_ + luaAppCount_;
+    const uint8_t itemCount = appCount + 1;
     if (index == 0) {
       bootAppSelection_ = (bootAppSelection_ + itemCount - 1) % itemCount;
     } else if (index == 2) {
       bootAppSelection_ = (bootAppSelection_ + 1) % itemCount;
     } else {
-      selectedBootAppPath_ = bootAppSelection_ == 0
-                                 ? ""
-                                 : externalAppPaths_[bootAppSelection_ - 1];
+      if (bootAppSelection_ == 0) {
+        selectedBootAppPath_ = "";
+      } else if (bootAppSelection_ - 1 < externalAppCount_) {
+        selectedBootAppPath_ = externalAppPaths_[bootAppSelection_ - 1];
+      } else {
+        selectedBootAppPath_ =
+            luaAppPaths_[bootAppSelection_ - 1 - externalAppCount_];
+      }
       saveSettings();
       bootAppPicker_ = false;
     }
@@ -4559,11 +4576,20 @@ void FireOS::handleBootButton(uint8_t index) {
     back();
   } else if (detailIndex_ == 0) {
     scanExternalApps();
+    scanLuaApps();
     bootAppSelection_ = selectedBootAppPath_.length() == 0 ? 0 : 1;
     for (uint8_t i = 0; i < externalAppCount_; ++i) {
       if (externalAppPaths_[i] == selectedBootAppPath_) {
         bootAppSelection_ = i + 1;
         break;
+      }
+    }
+    if (bootAppSelection_ == 1 && selectedBootAppPath_.endsWith("/main.lua")) {
+      for (uint8_t i = 0; i < luaAppCount_; ++i) {
+        if (luaAppPaths_[i] == selectedBootAppPath_) {
+          bootAppSelection_ = externalAppCount_ + i + 1;
+          break;
+        }
       }
     }
     bootAppOffset_ = bootAppSelection_ > 5 ? bootAppSelection_ - 5 : 0;
@@ -8665,9 +8691,19 @@ void FireOS::drawBluetoothSavedDialog() {
 
 void FireOS::drawBoot() {
   drawStatusBar("Boot");
-  const String bootLabel = selectedBootAppPath_.length() == 0
-                               ? "Default"
-                               : externalAppBaseName(selectedBootAppPath_);
+  String bootLabel = "Default";
+  if (selectedBootAppPath_.length() > 0) {
+    if (selectedBootAppPath_.endsWith("/main.lua")) {
+      for (uint8_t index = 0; index < luaAppCount_; ++index) {
+        if (luaAppPaths_[index] == selectedBootAppPath_) {
+          bootLabel = luaAppDisplayNames_[index];
+          break;
+        }
+      }
+    } else {
+      bootLabel = externalAppBaseName(selectedBootAppPath_);
+    }
+  }
   drawRow(0, "Boot app", detailIndex_ == 0, bootLabel);
   drawRow(1, "RGB pulse", detailIndex_ == 1, bootRgbPulse_ ? "ON" : "OFF");
   drawRow(2, "Startup melody", detailIndex_ == 2, bootMelody_ ? "ON" : "OFF");
@@ -8677,17 +8713,28 @@ void FireOS::drawBoot() {
   if (bootAppPicker_) {
     ui.fillRoundRect(12, 32, 296, 180, 10, kPanel);
     drawText(24, 40, "Choose Boot App", TFT_WHITE, 2, kPanel);
-    const uint8_t itemCount = externalAppCount_ + 1;
+    const uint8_t itemCount = externalAppCount_ + luaAppCount_ + 1;
     const uint8_t visible = min<uint8_t>(6, itemCount - bootAppOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = bootAppOffset_ + row;
       const bool selected = item == bootAppSelection_;
       const int y = 72 + row * 22;
       if (selected) ui.fillRoundRect(18, y - 3, 284, 19, 4, kCyan);
-      const String name = item == 0 ? "FIRE OS (Default)"
-                                    : externalAppNames_[item - 1];
+      String name = "FIRE OS (Default)";
+      if (item > 0 && item - 1 < externalAppCount_) {
+        name = externalAppNames_[item - 1];
+      } else if (item > externalAppCount_) {
+        name = luaAppDisplayNames_[item - 1 - externalAppCount_];
+      }
+      if (name.length() > 25) name = name.substring(0, 22) + "...";
       drawText(26, y, name, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);
+      if (item > externalAppCount_) {
+        ui.setTextDatum(MR_DATUM);
+        drawText(298, y, "Lua", selected ? kBg : kCyan, 1,
+                 selected ? kCyan : kPanel);
+        ui.setTextDatum(TL_DATUM);
+      }
     }
     drawFooter("Previous", "Select", "Next");
     return;
