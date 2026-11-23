@@ -52,6 +52,41 @@ rapporter som identitetskonflikt, ber om inventar og sperrer ikke feil kildehash
 
 ## Protokoll0.2, additive hendelser
 
+### Bruk eksisterende SD-mappe `/logs` til små feil-snapshots
+
+Brukeren bekrefter at `/logs` finnes og kan benyttes. Anbefalt implementasjon
+for device-agenten er en avgrenset feilbuffer under `/logs/ai-developer/`:
+
+- Inntil åtte roterende `error-0.json`…`error-7.json`, maks4KiB hver. Ikke
+  overskriv eller rydd andre filer i `/logs`. Ingen voksende fritekstlogg.
+- Ta snapshot i RAM ved feil, før appidentitet og runtime ryddes. Skriv én gang
+  etter at Lua-callbacken har returnert og appen er stoppet, i OS-eid arbeid.
+  Aldri SD-skriving per frame eller inne i den tidsbegrensede Lua-callbacken.
+- Lagre schema_version, en stabil lokal error_id, opprinnelig boot-ID,
+  app-ID, faktisk manifestversjon, package-ID, Lua-SHA256, eventuell run-ID,
+  kort feiltekst og tilgjengelige typede diagnostics. Uptime er relativ til
+  boot; ikke dikt opp klokkeslett. Legg til repair_id når backend returnerer den.
+- Skriv via en begrenset midlertidig fil og rename; håndter avbrutt skriving,
+  fullt/utkoblet SD og ugyldig JSON uten å kræsje feilsiden. RAM-snapshot og
+  vanlig reparasjonsforespørsel fungerer fortsatt hvis lagring mislykkes.
+- Etter omstart kan APP ERROR/historikk bruke siste gyldige snapshot for å
+  identifisere appen automatisk. Hvis repair_id finnes, hent status først.
+  En lagret logg skal ikke starte en betalt reparasjon uten brukerens Fix-trykk.
+- Send eksisterende strukturerte app_repair_prepare-felt og diagnostics til
+  backend. Det er ikke implementert et generelt filopplastingsendepunkt for
+  `/logs`; ikke send hele JSON-filen som et nytt/ukjent felt. Privat metadata
+  fra filen som ikke finnes i protokollskjemaet beholdes lokalt.
+- Bruk gjeldende session_id/boot_id i nye transportmeldinger etter omstart.
+  Ikke gjenbruk en gammel event-ID med endret envelope/payload. Samme event-ID
+  brukes bare ved nøyaktig replay av samme melding; jobbstatus og backendens
+  app-/jobb-deduplisering håndterer resten.
+- Ingen API-nøkler, device-/admin-token, lydopptak, Wi-Fi-passord, appkilde
+  eller full samtalehistorikk i loggen. Ikke eksponer `/logs` som åpen filserver.
+
+Dette er firmwarearbeid som gjenstår. Backend har fortsatt ikke skrevet til
+SD-kortet eller endret device-koden. Lagring av rapporten er støtte for
+feilgjenoppretting, ikke dokumentasjon på at appen er reparert.
+
 Vanlig envelope beholdes: `type=device_event`, protocol_version, device_id,
 session_id, boot_id, unik event_id. Bruk samme autentiserte reverse/WebSocket-
 transport som eksisterende meldinger. Ingen ny tjeneste, token eller API-nøkkel.
