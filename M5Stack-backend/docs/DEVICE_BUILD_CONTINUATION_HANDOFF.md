@@ -179,3 +179,35 @@ nå uttrykkelig autorisert kodegenereringsfase fra brukerens dialogfase, og
 kodefeltets skjema krever bare komplett Lua. Dette gir ingen ekstra rettighet
 til installasjon eller kjøring: run_confirm er fortsatt separat og obligatorisk.
 Firmware skal ikke be om ny bekreftelse for hvert automatisk rettingsforsøk.
+
+
+## Fysisk rapport: Vardensaga trenger callback-timingundersøkelse
+
+Backend har en faktisk device_diagnostic for pakke build-821cd176a43445d7b657
+(Vardensaga 0.1.1): runtime_error: Lua update: [string "main.lua"]:117:
+app callback budget exceeded. Pakken er sperret etter denne rapporten; PC-
+godkjenning må IKKE beskrives som fysisk fungerende app. Et senere
+reparasjonsbygg build-eb73ef9dd86b423babbe nådde backendens 900 s tekniske
+jobbtidsgrense etter 15 forsøk. Ingen av de avviste kandidatene ble publisert.
+
+Linje 117 tegner fem handlingsvalg med display.text, og en markering med
+fill_rect. Den statiske kildeplasseringen alene beviser ikke om tidsgrensen
+eller instruksjonsgrensen ble nådd. Firmware instructionHook bruker samme
+feilmelding for begge. PC-modellen begrenser instruksjoner/tegnearbeid og
+RGB-kall, men simulerer ikke faktisk ESP32/M5GFX veggklokketid.
+
+Device-agenten må undersøke:
+- Hent pakken/kilde fra backend og kjør start-B og handlingsmeny, også med
+  bakgrunnssync og RGB/lyd aktivt. Ikke anta at bare ledeteksten er problemet.
+- Rapporter callback_us, phase, frames, elapsed_ms og Lua/heap-mål i de
+  ALLEREDE støttede DeviceDiagnostics-feltene. Bruk kort error_code/message
+  til å skille tidsbudsjett fra instruksjonsbudsjett; ikke legg nye ukjente
+  JSON-felt i streng v0.2-envelope uten å avtale/eksportere schema først.
+- Skill native display/RGB/audio-tid fra Lua-instruksjoner i lokal /logs-
+  diagnostikk når mulig. Hold loggen begrenset og uten nøkler/tokens.
+- Sjekk om sprites/fonter og native adaptere bruker uventet tid, om bakgrunns-
+  arbeid belastes appens veggklokke, og om lys-/lyd-flush ligger inne i samme
+  callback. Ikke fjern watchdog/minnebudsjett eller øk tall ukritisk.
+- Lever konkrete observerte tidsverdier, firmware/hash og reproduksjonsprofil
+  i BACKEND_HANDOFF.md slik at backend kan kalibrere sin kostmodell og
+  genereringsregler. En pen PC-simulering alene er ikke tilstrekkelig bevis.
