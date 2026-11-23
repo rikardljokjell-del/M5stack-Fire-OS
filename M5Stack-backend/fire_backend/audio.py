@@ -156,6 +156,8 @@ class AudioManager:
             **{k:item[k] for k in keys}})
 
     async def replay(self,session,test=False):
+        if not getattr(self.settings,'fire_speech_enabled',True):
+            raise ValueError('Talesvar er slått av i backend. Taleopptak og tekst fungerer fortsatt.')
         if (not session.sockets or not session.turn_id or session.activity!="idle" or session.lock.locked()
                 or (session.input_task and not session.input_task.done()) or session.state not in
                 {State.idle,State.clarification_needed,State.awaiting_build_confirmation,State.failed}):

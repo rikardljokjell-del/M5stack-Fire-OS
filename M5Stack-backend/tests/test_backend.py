@@ -126,7 +126,8 @@ async def test_three_corrections_and_no_failed_package(settings):
         await service.close()
 
 
-async def test_default_cost_profile_stops_after_one_correction_without_shipping_failure(settings):
+async def test_explicit_correction_limit_stops_after_one_correction_without_shipping_failure(settings):
+    settings=settings.model_copy(update={'fire_max_corrections':1})
     provider=BrokenProvider()
     service=Backend(settings,provider)
     try:

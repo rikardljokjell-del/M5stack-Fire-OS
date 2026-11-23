@@ -130,6 +130,8 @@ class UsageLedger:
             if record['status'] == 'pending':
                 record.update(status='unknown', finished_at=self.clock(), usage_source='reservation')
                 self.store.put('usage', record['id'], record, critical=True)
+        from .historical_costs import backfill
+        backfill(self.store, self.meta['tracking_started_at'])
 
     def records(self):
         return [r for r in self.store.list('usage') if r.get('id') != 'meta']
@@ -138,7 +140,7 @@ class UsageLedger:
         return datetime.fromtimestamp(stamp, self.tz).date().isoformat()
 
     def begin(self, operation, model, input_tokens, max_output_tokens, *, build_id=None,
-              project_id=None, input_audio_tokens=0, max_output_audio_tokens=0, audio_seconds=None):
+              project_id=None, input_audio_tokens=0, max_output_audio_tokens=0, audio_seconds=None,session_id=None,turn_id=None):
         if operation not in OPERATIONS:
             raise ValueError('Unknown usage operation')
         if any(type(v) is not int or v < 0 for v in (input_tokens, max_output_tokens, input_audio_tokens, max_output_audio_tokens)):
@@ -167,19 +169,24 @@ class UsageLedger:
             # not display input/output reservation bounds as measured tokens.
             tokens = {key: 0 for key in tokens}
         reserve = _price(model, tokens, seconds)
+        if not project_id and _safe_id(build_id):
+            try:project_id=self.store.get('builds',build_id).get('project_id')
+            except FileNotFoundError:pass
         now = self.clock()
         with self.lock:
             records = self.records()
             today = sum(r['estimated_usd'] for r in records if self._day(r['started_at']) == self._day(now))
             build = sum(r['estimated_usd'] for r in records if build_id and r.get('build_id') == build_id)
-            if reserve > self.settings.fire_request_budget_usd + 1e-12:
+            enforce=getattr(self.settings,'fire_cost_limits_enabled',False)
+            if enforce and self.settings.fire_request_budget_usd>0 and reserve > self.settings.fire_request_budget_usd + 1e-12:
                 raise UsageBudgetError('Kallet overstiger kostnadsgrensen.')
-            if today + reserve > self.settings.fire_daily_budget_usd + 1e-12:
+            if enforce and self.settings.fire_daily_budget_usd>0 and today + reserve > self.settings.fire_daily_budget_usd + 1e-12:
                 raise UsageBudgetError('Dagens kostnadsgrense er nådd.')
-            if build_id and build + reserve > self.settings.fire_build_budget_usd + 1e-12:
+            if enforce and self.settings.fire_build_budget_usd>0 and build_id and build + reserve > self.settings.fire_build_budget_usd + 1e-12:
                 raise UsageBudgetError('Byggets kostnadsgrense er nådd.')
             record = {'id': new_id('usage'), 'operation': operation, 'model': model,
                       'build_id': _safe_id(build_id), 'project_id': _safe_id(project_id),
+                      'session_id':_safe_id(session_id),'turn_id':_safe_id(turn_id),
                       'status': 'pending', 'started_at': now, 'finished_at': None,
                       **tokens, 'audio_seconds': seconds, 'reserved_usd': reserve,
                       'estimated_usd': reserve, 'usage_source': 'reservation',
@@ -217,6 +224,46 @@ class UsageLedger:
             self.store.put('usage', record_id, record, critical=True)
             return record
 
+    def attribute_turn(self,session_id,turn_id,project_id):
+        """Attach ASR/dialogue to the resolved app when a repair picks its target.
+
+        Only attribution changes; financial amounts/status remain untouched.
+        Explicit build attribution is authoritative and is never rewritten.
+        """
+        project_id=_safe_id(project_id)
+        if not project_id or not _safe_id(session_id) or not _safe_id(turn_id):return
+        with self.lock:
+            records_all=self.records()
+            for record in records_all:
+                if (not record.get('build_id') and record.get('session_id')==session_id and
+                        record.get('turn_id')==turn_id and record.get('project_id')!=project_id):
+                    record.setdefault('original_project_id',record.get('project_id'))
+                    record['project_id']=project_id
+                    self.store.put('usage',record['id'],record,critical=True)
+
+    def project_costs(self):
+        """Lifetime app totals, independent of resets and package/version deletion."""
+        with self.lock:
+            builds={b['id']:b.get('project_id') for b in self.store.list('builds')}
+            grouped={}
+            records_all=self.records()
+            for record in records_all:
+                project_id=record.get('project_id') or builds.get(record.get('build_id'))
+                if project_id:grouped.setdefault(project_id,[]).append(record)
+            result={project_id:{**self._totals(records),
+                'by_operation':[{'operation':op,**self._totals([r for r in records if r['operation']==op])}
+                                for op in sorted({r['operation'] for r in records})],
+                'currency':'USD','scope':'all_versions_lifetime','tracking_started_at':self.meta['tracking_started_at']}
+                    for project_id,records in grouped.items()}
+            from .historical_costs import totals
+            for project_id,history in totals(self.store,records_all).items():
+                row=result.setdefault(project_id,{**self._totals([]),'by_operation':[],
+                    'currency':'USD','scope':'all_versions_lifetime','tracking_started_at':self.meta['tracking_started_at']})
+                row['historical_estimate']=history
+                row['recorded_usd']=row['estimated_usd']
+                row['estimated_usd']+=history['estimated_usd']
+            return result
+
     @staticmethod
     def _totals(records):
         return {'requests': len(records),
@@ -241,16 +288,19 @@ class UsageLedger:
             return {'currency': 'USD', 'estimated': True, 'pricing_date': PRICING_DATE,
                     'reset_at': self.meta['reset_at'], 'tracking_started_at': self.meta['tracking_started_at'],
                     'since_reset': self._totals(visible), 'today': self._totals(today), 'lifetime': self._totals(records),
-                    'limits': {'daily_usd': self.settings.fire_daily_budget_usd,
+                    'limits': {'enabled':getattr(self.settings,'fire_cost_limits_enabled',False),
+                               'output_limits_enabled':getattr(self.settings,'fire_output_limits_enabled',False),
+                               'daily_usd': self.settings.fire_daily_budget_usd,
                                'request_usd': self.settings.fire_request_budget_usd,
                                'build_usd': self.settings.fire_build_budget_usd,
-                               'daily_remaining_usd': max(0, self.settings.fire_daily_budget_usd - self._totals(today)['estimated_usd']),
+                               'daily_remaining_usd': max(0, self.settings.fire_daily_budget_usd - self._totals(today)['estimated_usd']) if getattr(self.settings,'fire_cost_limits_enabled',False) and self.settings.fire_daily_budget_usd>0 else None,
                                'budget_day': self._day(now), 'timezone': self.timezone},
                     'by_operation': grouped('operation'), 'by_model': grouped('model'), 'by_build': grouped('build_id')[:50],
                     'recent': sorted(visible, key=lambda r: r.get('finished_at') or r['started_at'], reverse=True)[:100],
                     'note': 'Anslått USD fra registrert bruk og datert prisliste, ikke faktura. '
                             'Manglende bruk beholder et konservativt reservert beløp. '
-                            'Eldre forbruk før måling startet er ikke med. Nullstilling endrer bare visningstellerne.'}
+                            'Historiske byggeanslag vises separat under Apper, ikke i disse målingstellerne. '
+                            'Nullstilling endrer bare visningstellerne.'}
 
     def reset(self):
         with self.lock:

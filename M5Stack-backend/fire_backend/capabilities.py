@@ -30,7 +30,8 @@ def policy(settings, target, capabilities):
         "conversation_audio": {
             "input_announced": input_declared, "output_announced": output_declared,
             "input_enabled": input_declared and settings.fire_audio_enabled,
-            "output_enabled": output_declared and settings.fire_audio_enabled,
+            "output_enabled": output_declared and settings.fire_audio_enabled and getattr(settings,'fire_speech_enabled',True),
+            "speech_enabled":getattr(settings,'fire_speech_enabled',True),
             "backend_enabled": settings.fire_audio_enabled,
         },
         "physical_verified": False,
@@ -58,6 +59,8 @@ def status(settings, session):
     error = audio_input_error(settings, session.target, session.capabilities)
     if error:
         code, message = error.code, str(error)
+    elif not getattr(settings,'fire_speech_enabled',True):
+        code,message='backend_speech_disabled','Talesvar er slått av i backend. Taleopptak, tekst og appbygging fungerer fortsatt.'
     elif not effective["conversation_audio"]["output_enabled"]:
         code, message = "audio_output_unavailable", "Taleopptak er tilgjengelig, men enheten annonserer ikke talesvar. Svaret sendes som tekst."
     else:

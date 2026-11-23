@@ -3,14 +3,23 @@ from contextvars import ContextVar
 from functools import wraps
 
 usage_scope = ContextVar('fire_usage_scope', default={})
+usage_session = ContextVar('fire_usage_session', default=None)
 
 
 def session_usage(method):
     @wraps(method)
     async def scoped(self,session,*args,**kwargs):
         token=usage_scope.set({'project_id':session.project_id})
+        session_token=usage_session.set(session)
         try:return await method(self,session,*args,**kwargs)
-        finally:usage_scope.reset(token)
+        finally:
+            try:
+                ledger=getattr(self,'usage',None) or getattr(getattr(self,'service',None),'usage',None)
+                if ledger and session.turn_id:
+                    ledger.attribute_turn(session.id,session.turn_id,session.project_id)
+            finally:
+                usage_session.reset(session_token)
+                usage_scope.reset(token)
     return scoped
 
 

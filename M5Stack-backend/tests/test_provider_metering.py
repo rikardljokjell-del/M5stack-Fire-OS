@@ -19,6 +19,8 @@ from fire_backend.usage import UsageLedger, UsageBudgetError
 
 
 def provider(tmp_path, handle=None, **config):
+    config.setdefault('fire_cost_limits_enabled',True)
+    config.setdefault('fire_output_limits_enabled',True)
     settings=Settings(_env_file=None,openai_api_key='sk-metering-private-test',**config)
     result=OpenAIProvider(settings)
     result.usage_ledger=UsageLedger(Store(tmp_path,Redactor('sk-metering-private-test'),10_000_000),settings)

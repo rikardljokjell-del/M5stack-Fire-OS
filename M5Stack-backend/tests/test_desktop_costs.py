@@ -38,7 +38,7 @@ def test_migration_keeps_custom_codegen_and_dialogue_models(tmp_path):
     store.path.write_text(json.dumps(raw),encoding="utf-8")
     store=DesktopStore(tmp_path,store.vault);store.migrate_cost_profile()
     assert store.config.code_model=="custom-code" and store.config.dialog_model=="custom-dialog"
-    assert store.config.daily_budget_usd==3 and store.config.request_budget_usd==.1
+    assert store.config.daily_budget_usd==0 and store.config.request_budget_usd==0
 
 
 def test_desktop_budget_and_review_fields_reach_backend_settings(tmp_path):
@@ -52,7 +52,7 @@ def test_desktop_budget_and_review_fields_reach_backend_settings(tmp_path):
     assert settings.openai_transcribe_model=="gpt-transcribe"
 
 
-@pytest.mark.parametrize("field,value",[("daily_budget_usd",0),("build_budget_usd",-1),("request_budget_usd",float('inf')),("max_corrections",4)])
+@pytest.mark.parametrize("field,value",[("daily_budget_usd",-1),("build_budget_usd",-1),("request_budget_usd",float('inf')),("max_corrections",-1)])
 def test_cost_settings_cannot_disable_guards_with_invalid_values(field,value):
     with pytest.raises(ValueError):DesktopConfig(**{field:value})
 
@@ -68,12 +68,12 @@ def test_usage_controls_only_call_local_admin_endpoints():
 
 
 @pytest.mark.skipif(__import__('os').name!='nt',reason='Windows Tk smoke')
-def test_usage_screen_renders_reported_and_uncertain_requests_without_paid_calls(tmp_path,monkeypatch):
+def test_usage_screen_renders_reported_and_uncertain_requests_without_paid_calls(tmp_path,monkeypatch,ui_root):
     import tkinter as tk
     from fire_backend.desktop_ui import DesktopUI
     monkeypatch.setattr('fire_backend.desktop_ui.threading.Thread.start',lambda _:None)
     monkeypatch.setattr('fire_backend.desktop_ui.lan_addresses',lambda:['127.0.0.1'])
-    root=tk.Tk();root.withdraw()
+    root=ui_root
     try:
         ui=DesktopUI(root,DesktopStore(tmp_path,MemoryVault()))
         ui.usage_snapshot={'pricing_date':'2026-11-23','since_reset':{'requests':2,'estimated_usd':.08,'audio_seconds':3,'cached_tokens':200,'unknown_usage_requests':1},
@@ -93,5 +93,5 @@ def test_usage_screen_renders_reported_and_uncertain_requests_without_paid_calls
         assert 'Intern resonnering: 200 av 200' in ui.usage_detail.cget('text')
         assert 'AI-svaret ble avkuttet' in ui.usage_detail.cget('text')
         ui.economy_profile();assert ui.models['review_model'].get()=='gpt-6-luna'
-        assert ui.collect().daily_budget_usd==2
+        assert ui.collect().daily_budget_usd==0
     finally:root.destroy()

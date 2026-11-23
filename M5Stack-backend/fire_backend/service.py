@@ -168,6 +168,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         installed = {(c["device_id"], c["package_id"]) for c in self.store.list("commands")
                      if c["kind"] == "install" and c["status"] == "completed"}
         apps = []
+        costs=self.usage.project_costs()
         for package in self.store.list("packages"):
             project = projects.get(package["project_id"], {})
             device_id = project.get("owner_device_id")
@@ -180,6 +181,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                          "api_version":manifest.get("api_version","fire-lua-0.1"),
                          "quality": package.get("quality", {}), "validation_suite": package.get("validation",{}).get("suite"),
                          "project_id": package["project_id"], "package_id": package["id"], "mode": package["mode"], "device_id": device_id,
+                         "cost":costs.get(package['project_id'],{}).get('estimated_usd',0),
+                         "cost_detail":costs.get(package['project_id'],{'estimated_usd':0,'requests':0,'currency':'USD','scope':'all_versions_lifetime','by_operation':[]}),
                          "device_presence": presence.get("state", "unknown"), "can_delete_backend": can_delete,
                          "delete_block_reason": block_reason,
                          "sd_path": f"/apps/{manifest['id']}/", "installed_receipt": bool(not absent and device.get("online")

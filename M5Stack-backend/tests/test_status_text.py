@@ -30,6 +30,8 @@ def test_catalog_all_build_modes_attempts_and_repair_states_are_complete_lines()
     for status in ('awaiting_confirmation','queued','building','ready','failed','interrupted','unavailable','not_found','unknown'):
         assert_line(repair_text(dict(status=status,phase='generating',message='Last ned og ...'+'x'*1000)))
     assert build_text('generating',operation='repair',attempt=3)=='Retter appen (3/4)'
+    assert build_text('generating',attempt=6,total=6)=='Lager appen (6/6)'
+    assert build_text('generating',attempt=8,total=None)=='Lager appen (8)'
     assert 'kjøring' in build_text('ready')
 
 

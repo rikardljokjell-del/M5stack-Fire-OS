@@ -18,7 +18,7 @@ def data_directory():
     return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "FIRE Backend"
 
 
-COST_PROFILE_VERSION = 2
+COST_PROFILE_VERSION = 3
 
 
 class DesktopConfig(BaseModel):
@@ -35,7 +35,10 @@ class DesktopConfig(BaseModel):
     workspace: str = Field(default_factory=lambda: str(data_directory() / "workspace"))
     device_ids: list[str] = Field(default_factory=lambda: ["m5stack-fire-01"], min_length=1, max_length=16)
     audio_enabled: bool = True
+    speech_enabled: bool = True
     cost_profile_version: int = Field(default=COST_PROFILE_VERSION, ge=0)
+    cost_limits_enabled: bool = False
+    output_limits_enabled: bool = False
     dialog_model: str = ECONOMY_MODELS["dialog_model"]
     code_model: str = ECONOMY_MODELS["code_model"]
     review_model: str = ECONOMY_MODELS["review_model"]
@@ -43,10 +46,10 @@ class DesktopConfig(BaseModel):
     speech_model: str = "gpt-realtime-2.1-mini"
     speech_voice: str = "marin"
     max_workspace_mb: int = Field(default=512, ge=16, le=16384)
-    daily_budget_usd: float = Field(default=2, gt=0, le=1000, allow_inf_nan=False)
-    build_budget_usd: float = Field(default=.60, gt=0, le=100, allow_inf_nan=False)
-    request_budget_usd: float = Field(default=.25, gt=0, le=100, allow_inf_nan=False)
-    max_corrections: int = Field(default=1, ge=0, le=3)
+    daily_budget_usd: float = Field(default=0, ge=0, allow_inf_nan=False)
+    build_budget_usd: float = Field(default=0, ge=0, allow_inf_nan=False)
+    request_budget_usd: float = Field(default=0, ge=0, allow_inf_nan=False)
+    max_corrections: int = Field(default=0, ge=0)
 
     @field_validator("reverse_host")
     @classmethod
@@ -153,9 +156,12 @@ class DesktopStore:
             return False
         legacy = {"code_model": {"gpt-6.2-astra", "gpt-6.2-sol"},
                   "review_model": {"gpt-6.2-astra", "gpt-6.2-sol"}}
+        if self.config.cost_profile_version>=2:legacy={}
         if self.config.cost_profile_version < 1:
             legacy["dialog_model"] = {"gpt-realtime-2.1"}
         changes = {name: ECONOMY_MODELS[name] for name, old in legacy.items() if getattr(self.config, name) in old}
+        changes.update(cost_limits_enabled=False,output_limits_enabled=False,max_corrections=0,
+                       daily_budget_usd=0,build_budget_usd=0,request_budget_usd=0)
         changes["cost_profile_version"] = COST_PROFILE_VERSION
         self.save(self.config.model_copy(update=changes))
         return True
@@ -201,6 +207,7 @@ class DesktopStore:
                         fire_device_tokens=json.dumps({key: self.secret("device/" + key) for key in config.device_ids}),
                         fire_backend_host="0.0.0.0" if config.allow_lan else "127.0.0.1", fire_backend_port=config.port,
                         fire_workspace=Path(config.workspace), fire_ai_mode=config.mode, fire_audio_enabled=config.audio_enabled,
+                        fire_speech_enabled=config.speech_enabled,
                         fire_desktop_enabled=True,
                         fire_reverse_host=config.reverse_host if config.transport == "reverse_tcp" else "",
                         fire_reverse_port=config.reverse_port,
@@ -209,6 +216,7 @@ class DesktopStore:
                         openai_review_model=config.review_model,
                         openai_transcribe_model=config.transcribe_model, openai_speech_model=config.speech_model,
                         openai_speech_voice=config.speech_voice, fire_max_workspace_mb=config.max_workspace_mb,
+                        fire_cost_limits_enabled=config.cost_limits_enabled,fire_output_limits_enabled=config.output_limits_enabled,
                         fire_daily_budget_usd=config.daily_budget_usd, fire_build_budget_usd=config.build_budget_usd,
                         fire_request_budget_usd=config.request_budget_usd, fire_max_corrections=config.max_corrections)
         return Settings(_env_file=None, **defaults)

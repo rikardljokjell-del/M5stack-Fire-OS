@@ -13,10 +13,12 @@ class Settings(BaseSettings):
     openai_realtime_model: str = "gpt-realtime-2.1-mini"
     openai_code_model: str = "gpt-6-luna"
     openai_review_model: str = "gpt-6-luna"
-    fire_daily_budget_usd: float = Field(default=2.0,gt=0,le=1000,allow_inf_nan=False)
-    fire_request_budget_usd: float = Field(default=.25,gt=0,le=100,allow_inf_nan=False)
-    fire_build_budget_usd: float = Field(default=.60,gt=0,le=100,allow_inf_nan=False)
-    fire_max_corrections: int = Field(default=1,ge=0,le=3)
+    fire_cost_limits_enabled: bool = False
+    fire_output_limits_enabled: bool = False
+    fire_daily_budget_usd: float = Field(default=0,ge=0,allow_inf_nan=False)
+    fire_request_budget_usd: float = Field(default=0,ge=0,allow_inf_nan=False)
+    fire_build_budget_usd: float = Field(default=0,ge=0,allow_inf_nan=False)
+    fire_max_corrections: int = Field(default=0,ge=0)
     fire_backend_host: str = "127.0.0.1"
     fire_backend_port: int = Field(default=8765, ge=1, le=65535)
     fire_ai_mode: Literal["openai", "mock"] = "openai"
@@ -32,6 +34,7 @@ class Settings(BaseSettings):
     fire_session_resume_seconds: int = Field(default=600, ge=30, le=3600)
     fire_command_timeout_seconds: int = Field(default=30, ge=5, le=120)
     fire_audio_enabled: bool = False
+    fire_speech_enabled: bool = True
     fire_desktop_enabled: bool = False
     fire_reverse_host: str = ""
     fire_reverse_port: int = Field(default=8766, ge=1024, le=65535)

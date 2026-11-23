@@ -31,8 +31,9 @@ def response_error(meta, usage):
         return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
     output = field(usage, 'output_tokens')
     reasoning = field(field(usage, 'output_tokens_details', {}), 'reasoning_tokens')
+    ceiling=f"backendens svargrense på {meta['max_output_tokens']} tokens" if meta['max_output_tokens'] else 'modellens egen svargrense'
     details = {
-        'ai_output_limit': f"AI-svaret nådde svargrensen på {meta['max_output_tokens']} tokens. "
+        'ai_output_limit': f"AI-svaret nådde {ceiling}. "
             f"{reasoning} av {output} outputtokens var intern resonnering; "
             "ingen fullstendig, validert app ble levert. Planen er bevart. Velg Resume for å prøve igjen.",
         'ai_refused': 'AI avslo forespørselen. Planen er bevart; velg Resume for å endre den.',

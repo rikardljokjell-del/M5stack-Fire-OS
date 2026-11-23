@@ -82,6 +82,7 @@ class Jobs:
                 'error_code':failure.get('error_code',''),'can_resume':b['status']=='failed' and bool(b.get('summary')) and bool(p.get('owner_device_id')),
                 'last_validation_error':b.get('last_validation_error',''),'summary':b.get('effective_summary',b.get('summary','')),
                 'attempt':b.get('generation_attempt',b.get('attempts',0)),'max_attempts':b.get('max_attempts',4),
+                'reused_candidate_from':b.get('reused_candidate_from'),
                 'created_at':b.get('created_at',b.get('phase_started_at',0)),'phase_started_at':b.get('phase_started_at'),
                 'retry_at':b.get('retry_at') if active and b.get('phase')=='api_wait' else None,
                 'phase_seconds':b.get('phase_seconds',{}),'package_id':b.get('package_id'),

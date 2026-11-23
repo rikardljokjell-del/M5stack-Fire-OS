@@ -173,13 +173,16 @@ avklares i firmware og testes fysisk. AI-genererte Lua-apper bruker aldri .bin/O
 | OPENAI_REALTIME_MODEL | gpt-realtime-2.1-mini | Tekstdialog med validert dialog_reply-funksjon |
 | OPENAI_CODE_MODEL | gpt-6-luna | Responses med strukturert Lua-output |
 | OPENAI_REVIEW_MODEL | gpt-6-luna | Egen kildekontroll før levering |
-| FIRE_DAILY_BUDGET_USD | 2.00 | Lokal dagsgrense inkludert reserver |
-| FIRE_BUILD_BUDGET_USD | 0.60 | Lokal grense per appjobb |
-| FIRE_REQUEST_BUDGET_USD | 0.25 | Maks reserve før hvert API-kall |
-| FIRE_MAX_CORRECTIONS | 1 | Automatiske rettinger etter første kandidat |
+| FIRE_COST_LIMITS_ENABLED | false | Valgfrie beløpstak; av som standard |
+| FIRE_OUTPUT_LIMITS_ENABLED | false | Ekstra svartak for AI; av som standard |
+| FIRE_DAILY_BUDGET_USD | 0 | 0 = ingen dagsgrense |
+| FIRE_BUILD_BUDGET_USD | 0 | 0 = ingen beløpsgrense per appjobb |
+| FIRE_REQUEST_BUDGET_USD | 0 | 0 = ingen beløpsgrense per API-kall |
+| FIRE_MAX_CORRECTIONS | 0 | 0 = automatisk etter framgang; positivt tall = fast antall rettinger |
 | OPENAI_TRANSCRIBE_MODEL | gpt-transcribe | Opptaksfil til tekst |
 | OPENAI_SPEECH_MODEL | gpt-realtime-2.1-mini | Tekst til PCM gjennom Realtime |
 | OPENAI_SPEECH_VOICE | marin | Talesvar |
+| FIRE_SPEECH_ENABLED | true | Kun hørbare AI-svar; false beholder mikrofon, transkripsjon og tekst |
 | FIRE_AI_MODE | openai | openai eller eksplisitt mock |
 | FIRE_BACKEND_HOST / PORT | 127.0.0.1 / 8765 | HTTP og WebSocket |
 | FIRE_BACKEND_TOKEN | tom | Admin-/PC-token; kreves på LAN |

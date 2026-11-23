@@ -399,6 +399,14 @@ Repeat Resume before confirmation reuses the pending proposal. Event replay
 cannot consume the same confirmation twice. Old failures cannot replace active
 progress on reconnect. See [device handoff](DEVICE_FAILED_BUILD_RESUME.md).
 
+Default backend policy now uses adaptive corrections: `total`/`max_attempts`
+can be null instead of a fixed candidate count. Render the supplied single-line
+message; do not invent a 1/4 counter. Technical device/runtime limits remain.
+Conversation `effective_capabilities.conversation_audio.output_enabled` can be
+false because AI speech is disabled on PC, while `input_enabled` remains true.
+In that case assistant text/proposals complete normally and no `audio_ready`
+follows. The UI must allow the next turn without waiting for an audio event.
+
 build_progress.message, app_repair_status.message, error.message/status_message
 and last_error_status are complete NFC Norwegian lines, at most28 characters AND
 28 UTF-8 bytes. status_text_version=fire-status-text-v1. error.diagnostic_message
