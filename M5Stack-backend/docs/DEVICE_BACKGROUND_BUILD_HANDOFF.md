@@ -125,3 +125,18 @@ For Fix error: eksisterende app_repair_status beholder repair_id og vil innehold
 10. Tidligere Fix error-reconnect/JSON/SD-gjenoppretting og ekte native callback-feil testes etter review-dokumentet. Bygg/flash/boot alene er ikke fysisk ende-til-ende-verifikasjon.
 
 Rapporter commit, faktisk build/flash og hvilke fysiske testpunkter som er kjørt. Ikke rapporter utestet popup-, nettbrudd-, tale- eller reparasjonsflyt som verifisert.
+
+## Backend er klar for integrasjon
+
+Backend-kode publisert i `f50e526` og Windows-programmet startet på nytt.
+432 automatiske tester bestod; 16 målrettede tester av siste jobb-/retry-endringer
+bestod også. Den tilkoblede FIRE-sessionen mottar backend_features med
+background_builds_v1 og status_text_v1. Reverse TCP er tilkoblet.
+Dette verifiserer kjørende backend og kontrakt, ikke den nye fysiske UI-flyten.
+
+Backend har app_list/app_versions/app_select også for apper slettet lokalt.
+En egen test velger en slik backendapp uten forhåndsinstallasjon.
+Vanlige bygg og reparasjoner kan gjenopptas; jobbavbrudd skiller aktivt arbeid
+fra ferdig pakke. Midlertidig AI-kapasitetsfeil får venting og nye forsøk uten
+å bruke en Lua-rettingsrunde. Se BUILD_RELIABILITY_2026-11-23.md for den
+undersøkte RPG-feilen og korreksjonen av review/SD-avhengigheter.
