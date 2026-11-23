@@ -12,20 +12,9 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .storage import new_id
+from .model_catalog import PRICING_DATE, RATES, MINUTE_RATES, EXPLICIT_CACHE_MODELS, LONG_CONTEXT_MODELS
 
 
-PRICING_DATE = '2026-11-23'
-# USD per million tokens: text input/cache/output, audio input/cache/output.
-# Source: https://developers.openai.com/api/docs/models/<model> (Standard).
-RATES = {
-    'gpt-6.2-sol': (2, .10, 10, None, None, None),
-    'gpt-6.2-astra': (8, .40, 40, None, None, None),
-    'gpt-6.1-sol': (2, .10, 10, None, None, None),
-    'gpt-realtime-2.1-mini': (.60, .06, 2.40, 10, .30, 20),
-    'gpt-realtime-2.1': (4, .40, 24, 32, .40, 64),
-    'gpt-4o-mini-transcribe': (1.25, 1.25, 5, 1.25, 1.25, None),
-}
-MINUTE_RATES = {'gpt-transcribe': .0045}
 OPERATIONS = {'generate', 'review', 'dialog', 'transcribe', 'speech'}
 
 
@@ -108,7 +97,7 @@ def _price(model, tokens, audio_seconds=0):
     if rate is None:
         raise UsageBudgetError('Modellen mangler prisgrunnlag. Velg en støttet modell.', code='unknown_model_price')
     ti, tc, to, ai, ac, ao = rate
-    if model in {'gpt-6.2-sol', 'gpt-6.2-astra'} and tokens['input_tokens'] > 272000:
+    if model in LONG_CONTEXT_MODELS and tokens['input_tokens'] > 272000:
         ti, tc, to = ti * 2, tc * 2, to * 1.5
     if ((tokens['input_audio_tokens'] and ai is None) or
             (tokens['output_audio_tokens'] and ao is None)):
@@ -164,7 +153,7 @@ class UsageLedger:
                   'cached_tokens': 0, 'cached_text_tokens': 0, 'cached_audio_tokens': 0,
                   'cache_write_tokens': 0, 'cache_write_30m_tokens': 0, 'cache_write_12h_tokens': 0,
                   'reasoning_tokens': 0}
-        cache_ttl = '30m' if operation in {'generate', 'review'} and model in {'gpt-6.2-sol', 'gpt-6.2-astra'} else None
+        cache_ttl = '30m' if operation in {'generate', 'review'} and model in EXPLICIT_CACHE_MODELS else None
         if cache_ttl == '30m':
             # Responses defaults to paid 30m cache writes on current models.
             # Reserve the write rate for the whole input bound before sending.

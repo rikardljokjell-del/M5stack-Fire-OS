@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk, scrolledtext
 from .desktop_config import DesktopConfig, DesktopStore, ECONOMY_MODELS, COST_PROFILE_VERSION
 from .desktop_runtime import DesktopRuntime, check_api_key, configure_firewall, firewall_ready, lan_addresses, network_info
 from .token_qr import token_matrix
+from .model_catalog import ROLE_MODELS, PRICING_DATE, choice_label, price_detail
 
 
 BG, INK, MUTED, ORANGE, NAV = "#f2f4f8", "#182231", "#637083", "#e95725", "#172231"
@@ -285,13 +286,57 @@ class DesktopUI:
         self.label(page, "Modeller", "Heading.TLabel").pack(anchor="w", pady=(5, 8))
         grid = ttk.Frame(page)
         grid.pack(fill="x")
+        grid.columnconfigure(1, weight=1)
+        self.model_pickers = {}
+        self.model_labels = {}
+        self.model_price_labels = {}
         for row, (name, title) in enumerate((("dialog_model", "Dialog"), ("code_model", "Kodegenerering"),
                                            ("review_model", "Kodekontroll"),
                                            ("transcribe_model", "Transkripsjon"), ("speech_model", "Talesvar"), ("speech_voice", "Stemme"))):
-            self.field(grid, row, title, self.models[name])
+            if name == "speech_voice":
+                self.field(grid, row * 2, title, self.models[name])
+            else:
+                self.model_field(grid, row * 2, title, name)
+        self.label(page, f"Standardpriser i USD, kontrollert {PRICING_DATE}. Inn / ut gjelder 1 million tokens.\n"
+                   "Transkripsjon prises per minutt. Lange kodeforespørsler (>272 000 inn-tokens)\n"
+                   "har 2× input-/cachepris og 1,5× outputpris. Kontotilgang kan variere.\n"
+                   "Listene viser modeller som passer den aktuelle oppgaven og lydtransporten.",
+                   "Muted.TLabel", wraplength=780).pack(anchor="w", pady=(12, 0))
         ttk.Button(page, text="Anbefalt rimelig oppsett", command=self.economy_profile).pack(anchor="w", pady=(10, 0))
         self.label(page, "Nøkkeltesten henter modellisten. Den genererer ikke innhold og bekrefter\n"
                    "ikke at hele tale-/byggeflyten virker. Bruk av OpenAI kan koste penger.", "Muted.TLabel").pack(anchor="w", pady=12)
+
+    def model_field(self, grid, row, title, name):
+        self.label(grid, title).grid(row=row, column=0, sticky="nw", padx=(0, 16), pady=(6, 0))
+        display = tk.StringVar()
+        picker = ttk.Combobox(grid, textvariable=display, state="readonly", width=58)
+        picker.grid(row=row, column=1, sticky="ew", pady=(6, 0))
+        detail = self.label(grid, "", "Muted.TLabel", wraplength=610)
+        detail.grid(row=row + 1, column=1, sticky="w", pady=(2, 8))
+        self.model_pickers[name] = picker
+        self.model_labels[name] = display
+        self.model_price_labels[name] = detail
+        mapping = {}
+
+        def sync(*_):
+            current = self.models[name].get()
+            models = list(ROLE_MODELS[name])
+            if current not in models:
+                models.append(current)
+            mapping.clear()
+            mapping.update({choice_label(name, model): model for model in models})
+            picker.configure(values=tuple(mapping))
+            display.set(choice_label(name, current))
+            detail.configure(text=price_detail(name, current))
+
+        def select(_):
+            model = mapping.get(display.get())
+            if model is not None:
+                self.models[name].set(model)
+
+        picker.bind("<<ComboboxSelected>>", select)
+        self.models[name].trace_add("write", sync)
+        sync()
 
     def economy_profile(self):
         for name, value in ECONOMY_MODELS.items():
@@ -1208,6 +1253,7 @@ def main():
         # One desktop per profile; advisory locking also protects its server data.
         from .desktop_runtime import WorkspaceLock
         lock = WorkspaceLock(store.root / "desktop-instance")
+        store.migrate_cost_profile()
         DesktopUI(root, store)
         root.mainloop()
         lock.close()

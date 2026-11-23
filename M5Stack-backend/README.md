@@ -171,8 +171,8 @@ avklares i firmware og testes fysisk. AI-genererte Lua-apper bruker aldri .bin/O
 | --- | --- | --- |
 | OPENAI_API_KEY | tom | Bare PC; påkrevd for ekte API-kall |
 | OPENAI_REALTIME_MODEL | gpt-realtime-2.1-mini | Tekstdialog med validert dialog_reply-funksjon |
-| OPENAI_CODE_MODEL | gpt-6.2-sol | Responses med strukturert Lua-output |
-| OPENAI_REVIEW_MODEL | gpt-6.2-sol | Egen kildekontroll før levering |
+| OPENAI_CODE_MODEL | gpt-6-luna | Responses med strukturert Lua-output |
+| OPENAI_REVIEW_MODEL | gpt-6-luna | Egen kildekontroll før levering |
 | FIRE_DAILY_BUDGET_USD | 2.00 | Lokal dagsgrense inkludert reserver |
 | FIRE_BUILD_BUDGET_USD | 0.60 | Lokal grense per appjobb |
 | FIRE_REQUEST_BUDGET_USD | 0.25 | Maks reserve før hvert API-kall |

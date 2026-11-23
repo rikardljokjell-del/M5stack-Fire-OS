@@ -36,25 +36,29 @@ def generated(usage):
                 'name':'Prøve','main_lua':'function init() end function update(dt) end','required_services':[]})}]}]}
 
 
-async def test_real_sdk_records_returned_usage_cache_and_attribution(tmp_path):
+@pytest.mark.parametrize('model', ['gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.2-astra'])
+async def test_real_sdk_records_returned_usage_cache_and_attribution(tmp_path, model):
     calls=[]
     def handle(request):
         calls.append(request)
         return httpx.Response(200,headers={'x-request-id':'req_metered'},json=generated({
             'input_tokens':1000,'output_tokens':200,'total_tokens':1200,
             'input_tokens_details':{'cached_tokens':700,'cache_write_tokens':200},'output_tokens_details':{'reasoning_tokens':150}}))
-    p=provider(tmp_path,handle)
+    p=provider(tmp_path,handle,openai_code_model=model,fire_request_budget_usd=1,fire_build_budget_usd=2)
     token=usage_scope.set({'build_id':'build-one','project_id':'app-one'})
     try:
         await p.generate('Lag en sirkel','FIRE context')
         row=p.usage_ledger.snapshot()['recent'][0]
         assert row['input_tokens']==1000 and row['output_tokens']==200 and row['cached_tokens']==700
-        assert row['estimated_usd']==pytest.approx((100*2+700*.1+200*2*1.25+200*10)/1e6)
+        from fire_backend.model_catalog import PRICES
+        price=PRICES[model]
+        assert row['estimated_usd']==pytest.approx((100*price.text_in+700*price.text_cache+200*price.text_in*1.25+200*price.text_out)/1e6)
         assert row['cache_write_tokens']==200 and row['cache_write_ttl']=='30m'
         assert row['build_id']=='build-one' and row['project_id']=='app-one'
         assert row['request_id']=='req_metered' and row['usage_source']=='provider'
         assert len(calls)==1
         body=json.loads(calls[0].content)
+        assert body['model']==row['model']==model
         assert body['prompt_cache_options']=={'mode':'explicit','ttl':'30m'}
         assert body['input'][0]['content'][0]['prompt_cache_breakpoint']=={'mode':'explicit'}
         assert body['reasoning']=={'effort':'medium'}

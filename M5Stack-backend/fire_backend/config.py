@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
     openai_api_key: SecretStr = SecretStr("")
     openai_realtime_model: str = "gpt-realtime-2.1-mini"
-    openai_code_model: str = "gpt-6.2-sol"
-    openai_review_model: str = "gpt-6.2-sol"
+    openai_code_model: str = "gpt-6-luna"
+    openai_review_model: str = "gpt-6-luna"
     fire_daily_budget_usd: float = Field(default=2.0,gt=0,le=1000,allow_inf_nan=False)
     fire_request_budget_usd: float = Field(default=.25,gt=0,le=100,allow_inf_nan=False)
     fire_build_budget_usd: float = Field(default=.60,gt=0,le=100,allow_inf_nan=False)

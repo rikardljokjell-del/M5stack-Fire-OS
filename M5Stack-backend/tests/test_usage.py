@@ -129,6 +129,11 @@ def test_upfront_cache_write_reservation_and_known_request_ttl(tmp_path):
 def test_unknown_cache_write_ttl_stays_conservatively_priced(tmp_path):
     meter=ledger(tmp_path)
     item=meter.begin('review','gpt-6.1-sol',10000,1000)
+    # Historical/custom records without a request TTL remain conservative,
+    # even though new picker requests now explicitly select 30m retention.
+    pending=meter.store.get('usage',item)
+    pending['cache_write_ttl']=None
+    meter.store.put('usage',item,pending)
     row=meter.finish(item,{'input_tokens':10000,'output_tokens':1000,
         'input_tokens_details':{'cached_tokens':0,'cache_write_tokens':10000}})
     assert row['estimated_usd']==pytest.approx((10000*2*2.5+1000*10)/1e6)
