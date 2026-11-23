@@ -1081,6 +1081,15 @@ void FireOS::begin() {
 
 void FireOS::update() {
   M5.update();
+  // M5Unified updates button state in M5.update(), but the IMU data register
+  // is refreshed separately. Keep one bounded 50 Hz update for the Debug view
+  // and the shared Lua IMU service so both expose live sensor values.
+  static uint32_t lastImuUpdateAt = 0;
+  const uint32_t now = millis();
+  if (M5.Imu.isEnabled() && now - lastImuUpdateAt >= 20) {
+    M5.Imu.update();
+    lastImuUpdateAt = now;
+  }
 #ifdef FIRE_OS_BLE
   bool bluetoothUpdate = false;
   bool bluetoothConnectedSnapshot = false;
