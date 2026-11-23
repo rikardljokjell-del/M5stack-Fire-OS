@@ -8771,10 +8771,27 @@ void FireOS::drawStatusBar(const char* title) {
                                    wifiSetupActive_)
                                       ? 1
                                       : 0;
-  drawBackendIcon(232, 5,
-                  backendClient_ && backendClient_->sessionReady());
+  const bool backendConnected = backendClient_ &&
+                                backendClient_->sessionReady();
+  const bool backendWorking = !backendConnected && backendClient_ &&
+                              backendClient_->configured() &&
+                              backendMode_ != 2 && wifiMode_ != 2 &&
+                              (backendClient_->active() || backendBootPending_ ||
+                               (backendMode_ == 1 &&
+                                WiFi.status() == WL_CONNECTED));
+  drawBackendIcon(232, 5, backendConnected ? 2 : backendWorking ? 1 : 0);
   drawWifiIcon(252, 6, wifiState);
-  drawBluetoothIcon(276, 5, bluetoothEnabled_);
+  bool bluetoothConnected = bluetoothConnected_;
+#ifdef FIRE_OS_BLE
+  bluetoothConnected = bluetoothConnected || bluetoothPeripheralConnected;
+#endif
+  const uint8_t bluetoothState =
+      bluetoothConnected
+          ? 2
+          : (bluetoothScanInProgress_ || bluetoothBootInitPending_)
+                ? 1
+                : (bluetoothEnabled_ || bluetoothRadioReady) ? 3 : 0;
+  drawBluetoothIcon(276, 5, bluetoothState);
   drawBatteryIcon(298, 6, batteryLevel(), batteryCharging());
   if (backgroundBuildActive_) {
     ui.drawRoundRect(112, 23, 96, 3, 1, kMuted);
@@ -10706,8 +10723,13 @@ void FireOS::refreshBatteryStatus() const {
       M5.Power.isCharging() == m5::Power_Class::is_charging;
 }
 
-void FireOS::drawBackendIcon(int32_t x, int32_t y, bool connected) {
-  const uint16_t color = connected ? kGreen : kMuted;
+void FireOS::drawBackendIcon(int32_t x, int32_t y, uint8_t state) {
+  uint16_t color = kMuted;
+  if (state == 2) {
+    color = kGreen;
+  } else if (state == 1) {
+    color = (millis() / 250) % 2 == 0 ? kGreen : kMuted;
+  }
   ui.drawCircle(x + 4, y + 6, 3, color);
   ui.drawCircle(x + 10, y + 6, 3, color);
   ui.drawLine(x + 6, y + 4, x + 8, y + 8, color);
@@ -10727,8 +10749,15 @@ void FireOS::drawWifiIcon(int32_t x, int32_t y, uint8_t state) {
   ui.fillCircle(x + 6, y + 11, 1, color);
 }
 
-void FireOS::drawBluetoothIcon(int32_t x, int32_t y, bool enabled) {
-  const uint16_t color = enabled ? kCyan : kMuted;
+void FireOS::drawBluetoothIcon(int32_t x, int32_t y, uint8_t state) {
+  uint16_t color = kMuted;
+  if (state == 2) {
+    color = kGreen;
+  } else if (state == 3) {
+    color = kCyan;
+  } else if (state == 1) {
+    color = (millis() / 250) % 2 == 0 ? kCyan : kMuted;
+  }
   ui.drawLine(x + 5, y, x + 5, y + 14, color);
   ui.drawLine(x + 5, y, x + 10, y + 4, color);
   ui.drawLine(x + 10, y + 4, x + 5, y + 8, color);

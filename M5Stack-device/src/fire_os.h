@@ -893,8 +893,8 @@ class FireOS {
                     uint8_t stepCount, bool selected, uint16_t accent,
                     bool editing = false);
   void drawWifiIcon(int32_t x, int32_t y, uint8_t state);
-  void drawBackendIcon(int32_t x, int32_t y, bool connected);
-  void drawBluetoothIcon(int32_t x, int32_t y, bool enabled);
+  void drawBackendIcon(int32_t x, int32_t y, uint8_t state);
+  void drawBluetoothIcon(int32_t x, int32_t y, uint8_t state);
   void drawBatteryIcon(int32_t x, int32_t y, int level, bool charging);
   int batteryLevel() const;
   bool batteryCharging() const;
