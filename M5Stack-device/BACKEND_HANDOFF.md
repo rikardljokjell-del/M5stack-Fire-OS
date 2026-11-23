@@ -572,3 +572,37 @@ Verification on 2026-11-23:
   job retry with same build ID, two simultaneous jobs, offline completion
   notice, and `Åpne`/install/Run/Avbryt against a running backend. These remain
   explicit physical acceptance tests and are not reported as complete.
+
+## Durable repair continuation and callback timing
+
+Implemented against the latest additions in
+`M5Stack-backend/docs/DEVICE_BUILD_CONTINUATION_HANDOFF.md`.
+
+- `repair_id`, repair status, phase, proposal/package identity, version,
+  message and progress are persisted locally and restored after reboot.
+- AI Developer exposes `Resume feilretting` for an active persisted repair.
+  Opening it requests status for the same `repair_id`; it does not call
+  `app_repair_prepare` again.
+- In the APP ERROR view, A minimizes without cancelling. C sends the additive
+  `app_repair_cancel` event only after `repair_cancel_v1` is advertised. The
+  pending cancel is retried after reconnect, and a cancelled repair is removed
+  from the local resume cache. No package is deleted or auto-run.
+- The device now clears a stale repair error when the same build resumes and
+  reports the runtime callback phase from the Lua runtime (`update`, `init`,
+  `on_button` or `load`) in the existing bounded DeviceDiagnostics fields.
+
+Verification on 2026-11-23:
+
+- Firmware commit: `c42143f`.
+- `m5stack-fire-ble` build: passed; RAM 1.4%, flash 29.5%, binary
+  1,941,568 bytes.
+- Firmware SHA-256:
+  `A596DB0C7B572C0DA1C2E102E209C789244E325E555A9D15551297CDB532EF67`.
+- Flash to COM3 at 921600 baud: passed; esptool hash verification passed.
+- Serial boot: passed through `M5.begin OK`, `RGB OK`, `SD OK`, `buttons OK`,
+  `DateTime OK`, `settings OK` and `FIRE OS started`; missing repair NVS keys
+  no longer produce boot log errors.
+- The Vardensaga package was not physically available for reproduction in this
+  run. Callback timing is instrumented and reported through existing fields,
+  but no claim is made that Vardensaga or the full repair-cancel/reconnect/
+  reboot matrix has been physically verified against a running backend.
