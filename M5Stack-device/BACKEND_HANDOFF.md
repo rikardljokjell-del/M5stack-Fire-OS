@@ -496,3 +496,37 @@ uses that name as the label and a consistent standard app icon when no icon
 asset is supplied. Backend-generated icons/assets must remain optional and
 app-private; missing or invalid icon metadata must never block installation or
 menu recovery.
+
+## APP ERROR repair flow
+
+Implemented against `M5Stack-backend/docs/DEVICE_FIX_ERROR_HANDOFF.md`.
+
+- Runtime failures preserve app ID, manifest name/version, package ID, Lua
+  source SHA256, run ID and bounded diagnostics before Lua/runtime cleanup.
+- APP ERROR now shows the failed app identity and selects `Fiks feil` by
+  default. One B press sends `app_repair_prepare`; the first matching
+  `awaiting_confirmation` status automatically sends `build_confirm` with both
+  `repair_id` and `proposal_id`. Repeated presses do not create parallel jobs.
+- Repair status/progress is rendered on the same error page. Home/Back leaves
+  the page without cancelling the backend job. Reconnect requests status for
+  the same repair ID.
+- A ready repair offers `Kjor rettet app`. The device uses the existing
+  package download path, sends `device_install_result`, and only then sends
+  `run_confirm` for the new package ID.
+- Small rotating snapshots are written only after a failed app has stopped to
+  `/logs/ai-developer/error-0.json` through `error-7.json`, capped at 4 KiB.
+  No SD write occurs in a Lua callback or per frame.
+- Lua RGB writes now update an OS-owned buffer and flush one bounded strip
+  outside the Lua callback at controlled cadence. The 12 ms callback limit was
+  not increased.
+- IMU freshness uses the existing 50 Hz OS-owned `M5.Imu.update()` loop.
+
+Verification on 2026-11-23: `m5stack-fire-ble` built successfully (RAM 1.4%,
+flash 29.2%, binary 1,920,880 bytes, SHA256
+`7024fb22733bae535189c1b9d21093860e8bbafbf571133b0e3163219e31489d`). The
+image was flashed to COM3 at 921600 baud after one interrupted upload attempt;
+flash hashes were verified and the device reached `FIRE OS started` without a
+reset loop. The complete physical crash -> repair -> download -> install
+receipt -> run flow, reconnect and double-press matrix still require a real
+crashing Lua package and running backend; they are not claimed as physically
+verified.

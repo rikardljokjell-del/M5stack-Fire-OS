@@ -414,11 +414,40 @@ class FireOS {
   String luaAppPath_;
   String luaAppName_;
   String luaAppId_;
+  String luaAppVersion_;
+  String luaSourceHash_;
   String luaPackageId_;
   String luaAppError_;
+  String luaErrorAppId_;
+  String luaErrorAppName_;
+  String luaErrorAppVersion_;
+  String luaErrorPackageId_;
+  String luaErrorSourceHash_;
+  String luaErrorRunId_;
+  String luaErrorCode_;
+  String luaErrorDiagnostics_;
+  String luaRepairId_;
+  String luaRepairProposalId_;
+  String luaRepairProjectId_;
+  String luaRepairReadyPackageId_;
+  String luaRepairReadyVersion_;
+  String luaRepairStatus_;
+  String luaRepairPhase_;
+  String luaRepairMessage_;
+  uint8_t luaRepairProgress_ = 0;
+  uint8_t luaErrorAction_ = 0;  // 0=Fix error, 1=Run fixed app
+  bool luaRepairRequested_ = false;
+  bool luaRepairPrepareSent_ = false;
+  bool luaRepairBuildConfirmed_ = false;
+  bool luaRepairStatusQueryPending_ = false;
+  bool luaRepairRunAfterInstall_ = false;
+  uint32_t luaRepairLastAttemptAt_ = 0;
   uint32_t luaMaxRuntimeMs_ = FireLuaRuntime::kDefaultRuntimeMs;
   uint32_t luaLastFrameAt_ = 0;
   uint8_t luaRgbValues_[10][3] = {};
+  bool luaRgbDirty_ = false;
+  uint32_t luaRgbDirtyAt_ = 0;
+  uint32_t luaRgbLastFlushAt_ = 0;
   FireBackendClient* backendClient_ = nullptr;
   FireFirmwareStorage* firmwareStorage_ = nullptr;
   FireGithubFirmwareManager* githubFirmware_ = nullptr;
@@ -754,6 +783,15 @@ class FireOS {
                    const String& launchPackageId = String());
   void stopLuaApp(const String& reason = String());
   void updateLuaApp();
+  void handleLuaErrorButton(uint8_t index);
+  void requestLuaRepair();
+  void requestLuaRepairStatus();
+  void serviceLuaRepair();
+  void handleLuaRepairStatus(const String& message);
+  void startLuaRepairRun();
+  void writeLuaErrorSnapshot(const String& errorCode, const String& message,
+                             const String& diagnostics);
+  void flushLuaRgb();
   void queueLuaDiagnostic(const String& appId, const String& packageId,
                           const String& errorCode, const String& message,
                           const String& diagnostics = String());

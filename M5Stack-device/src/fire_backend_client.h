@@ -57,8 +57,14 @@ class FireBackendClient {
                                const String& scope,
                                const String& packageId = String());
   bool appBackendDeleteConfirm(const String& deleteId);
-  bool confirmBuild(const String& proposalId);
+  bool confirmBuild(const String& proposalId,
+                    const String& repairId = String());
   bool confirmRun(const String& packageId);
+  bool appRepairPrepare(const String& appId, const String& packageId,
+                        const String& appVersion, const String& sha256,
+                        const String& errorCode, const String& message,
+                        const String& diagnostics, const String& runId = String());
+  bool appRepairStatus(const String& repairId, const String& appId = String());
   bool appStop();
   bool deviceInstallResult(const String& installId, const String& packageId,
                            bool ok, const String& archiveHash,

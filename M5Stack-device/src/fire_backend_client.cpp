@@ -525,14 +525,53 @@ bool FireBackendClient::appBackendDeleteConfirm(const String& deleteId) {
                                                    jsonEscape(deleteId) + "\"");
 }
 
-bool FireBackendClient::confirmBuild(const String& proposalId) {
-  return sendEvent("build_confirm", ",\"proposal_id\":\"" +
-                   jsonEscape(proposalId) + "\"");
+bool FireBackendClient::confirmBuild(const String& proposalId,
+                                     const String& repairId) {
+  String fields = ",\"proposal_id\":\"" + jsonEscape(proposalId) + "\"";
+  if (repairId.length() > 0)
+    fields += ",\"repair_id\":\"" + jsonEscape(repairId) + "\"";
+  return sendEvent("build_confirm", fields);
 }
 
 bool FireBackendClient::confirmRun(const String& packageId) {
   return sendEvent("run_confirm", ",\"package_id\":\"" +
                    jsonEscape(packageId) + "\"");
+}
+
+bool FireBackendClient::appRepairPrepare(
+    const String& appId, const String& packageId, const String& appVersion,
+    const String& sha256, const String& errorCode, const String& message,
+    const String& diagnostics, const String& runId) {
+  if (appId.length() == 0) return false;
+  String fields = ",\"app_id\":\"" + jsonEscape(appId) + "\"";
+  if (packageId.length() > 0)
+    fields += ",\"package_id\":\"" + jsonEscape(packageId) + "\"";
+  if (appVersion.length() > 0)
+    fields += ",\"app_version\":\"" + jsonEscape(appVersion) + "\"";
+  if (sha256.length() == 64)
+    fields += ",\"sha256\":\"" + jsonEscape(sha256) + "\"";
+  if (errorCode.length() > 0)
+    fields += ",\"error_code\":\"" + jsonEscape(errorCode) + "\"";
+  if (message.length() > 0)
+    fields += ",\"message\":\"" + jsonEscape(message.substring(0, 240)) +
+              "\"";
+  if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
+  if (runId.length() > 0)
+    fields += ",\"run_id\":\"" + jsonEscape(runId) + "\"";
+  return sendEvent("app_repair_prepare", fields);
+}
+
+bool FireBackendClient::appRepairStatus(const String& repairId,
+                                        const String& appId) {
+  if (repairId.length() == 0 && appId.length() == 0) return false;
+  String fields;
+  if (repairId.length() > 0)
+    fields += ",\"repair_id\":\"" + jsonEscape(repairId) + "\"";
+  if (appId.length() > 0) {
+    if (fields.length() > 0) fields += ",";
+    fields += "\"app_id\":\"" + jsonEscape(appId) + "\"";
+  }
+  return sendEvent("app_repair_status", fields);
 }
 
 bool FireBackendClient::appStop() { return sendEvent("app_stop"); }

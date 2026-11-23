@@ -4030,6 +4030,10 @@ void FireOS::onButton(uint8_t index, bool longPress) {
     return;
   }
   if (screen_ == Screen::LuaApp) {
+    if (!luaAppActive_ && luaAppError_.length() > 0) {
+      handleLuaErrorButton(index);
+      return;
+    }
     const char* buttonName = index == 0 ? "A" : index == 1 ? "B" : "C";
     if (luaAppActive_ && luaRuntime_ && !luaRuntime_->button(buttonName, "pressed")) {
       const String error = luaRuntime_->lastError();
@@ -5477,6 +5481,8 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   while (manifestFile.available()) manifest += static_cast<char>(manifestFile.read());
   manifestFile.close();
   const String manifestId = jsonStringField(manifest, "id");
+  const String manifestName = jsonStringField(manifest, "name");
+  const String manifestVersion = jsonStringField(manifest, "version");
   const String manifestApi = jsonStringField(manifest, "api_version");
   const String manifestContract = jsonStringField(manifest, "api_contract");
   const String manifestHash = jsonStringField(manifest, "checksum");
@@ -5673,8 +5679,12 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     return false;
   }
   luaAppPath_ = path;
-  luaAppName_ = name.length() > 0 ? name : sdBaseName(path);
+  luaAppName_ = manifestName.length() > 0
+                    ? manifestName
+                    : (name.length() > 0 ? name : sdBaseName(path));
   luaAppId_ = manifestId;
+  luaAppVersion_ = manifestVersion;
+  luaSourceHash_ = sourceHash;
   luaPackageId_ = packageId;
   luaMaxRuntimeMs_ = maxRuntimeMs;
   if (launchPackageId.length() > 0) {
@@ -5682,6 +5692,8 @@ bool FireOS::startLuaApp(const String& path, const String& name,
                           launchPackageId);
   }
   luaAppError_ = "";
+  luaRgbDirty_ = false;
+  luaRgbLastFlushAt_ = millis();
   luaAppActive_ = true;
   luaRunId_ = "";
   luaHealthySent_ = false;
@@ -5694,22 +5706,28 @@ bool FireOS::startLuaApp(const String& path, const String& name,
 void FireOS::stopLuaApp(const String& reason) {
   const String stoppedRunId = luaRunId_;
   const String stoppedAppId = luaAppId_;
+  const String stoppedAppName = luaAppName_;
+  const String stoppedAppVersion = luaAppVersion_;
+  const String stoppedSourceHash = luaSourceHash_;
   const String stoppedPackageId = luaPackageId_.length() > 0
                                       ? luaPackageId_
                                       : aiPackageId_;
   const bool userExit = reason == "back" || reason == "home" ||
                         reason == "user_exit";
   const bool requestedStop = reason == "remote_stop" || reason == "rollback";
+  const bool osNavigation = reason == "os_navigation";
   const String stoppedDiagnostics = luaDiagnosticsJson(
       reason == "runtime_limit" ? "stop"
                                  : (userExit ? "stop" : "update"));
+  const bool failedRun = reason.length() > 0 && !userExit && !requestedStop &&
+                         !osNavigation;
   if (luaAppActive_ && reason.length() > 0) {
     Serial.printf("Lua app stopped: %s\n", reason.c_str());
   }
   releaseLuaHardware();
   if (stoppedRunId.length() == 0 && stoppedAppId.length() > 0 &&
       stoppedPackageId.length() > 0 && reason.length() > 0 && !userExit &&
-      !requestedStop) {
+      !requestedStop && !osNavigation) {
     const String errorCode = reason == "runtime_limit" ? "runtime_limit"
                                                          : "runtime_error";
     queueLuaDiagnostic(stoppedAppId, stoppedPackageId, errorCode, reason,
@@ -5718,8 +5736,32 @@ void FireOS::stopLuaApp(const String& reason) {
   luaAppActive_ = false;
   if (luaRuntime_) luaRuntime_->stop();
   luaRuntimeReady_ = false;
+  if (failedRun && stoppedAppId.length() > 0) {
+    luaErrorAppId_ = stoppedAppId;
+    luaErrorAppName_ = stoppedAppName;
+    luaErrorAppVersion_ = stoppedAppVersion;
+    luaErrorPackageId_ = stoppedPackageId;
+    luaErrorSourceHash_ = stoppedSourceHash;
+    luaErrorRunId_ = stoppedRunId;
+    luaErrorCode_ = reason == "runtime_limit" ? "runtime_limit"
+                                               : "runtime_error";
+    luaErrorDiagnostics_ = stoppedDiagnostics;
+    luaAppError_ = reason;
+    luaErrorAction_ = 0;
+    luaRepairRequested_ = false;
+    luaRepairPrepareSent_ = false;
+    luaRepairBuildConfirmed_ = false;
+    luaRepairRunAfterInstall_ = false;
+    luaRepairStatus_ = "Ready to repair";
+    luaRepairPhase_ = "idle";
+    luaRepairMessage_ = "Press B to fix this app";
+    luaRepairProgress_ = 0;
+    writeLuaErrorSnapshot(luaErrorCode_, luaAppError_, stoppedDiagnostics);
+  }
   for (auto& pixel : luaRgbValues_)
     pixel[0] = pixel[1] = pixel[2] = 0;
+  luaRgbDirty_ = false;
+  luaRgbLastFlushAt_ = millis();
 #ifdef FIRE_OS_BLE
   writeFireRgbRaw(0, 0, 0, 0);
 #else
@@ -5728,6 +5770,8 @@ void FireOS::stopLuaApp(const String& reason) {
 #endif
   luaRunId_ = "";
   luaAppId_ = "";
+  luaAppVersion_ = "";
+  luaSourceHash_ = "";
   luaPackageId_ = "";
   luaMaxRuntimeMs_ = FireLuaRuntime::kDefaultRuntimeMs;
   luaHealthySent_ = false;
@@ -5739,11 +5783,12 @@ void FireOS::stopLuaApp(const String& reason) {
     else if (reason == "runtime_limit")
       backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "runtime_limit",
                                  stoppedDiagnostics);
-    else if (reason.length() > 0 && !requestedStop)
+    else if (reason.length() > 0 && !requestedStop && !osNavigation)
       backendClient_->appFailed(stoppedRunId, stoppedPackageId, "runtime_error",
                                 reason, stoppedDiagnostics);
   }
-  if (reason.length() > 0 && reason != "back" && reason != "home") {
+  if (reason.length() > 0 && reason != "back" && reason != "home" &&
+      !osNavigation) {
     luaAppError_ = reason;
   }
 }
@@ -5769,6 +5814,20 @@ String FireOS::audioDiagnosticsJson(const char* phase) const {
   return "{\"phase\":\"" + String(phase ? phase : "audio_playback") +
          "\",\"free_heap\":" + String(ESP.getFreeHeap()) +
          ",\"min_free_heap\":" + String(ESP.getMinFreeHeap()) + "}";
+}
+
+void FireOS::flushLuaRgb() {
+  if (!luaRgbDirty_ || millis() - luaRgbLastFlushAt_ < 20) return;
+  luaRgbLastFlushAt_ = millis();
+#ifdef FIRE_OS_BLE
+  writeFireRgbArray(luaRgbValues_, 180);
+#else
+  M5.Led.setBrightness(180);
+  M5.Led.setAllColor(luaRgbValues_[0][0], luaRgbValues_[0][1],
+                     luaRgbValues_[0][2]);
+  M5.Led.display();
+#endif
+  luaRgbDirty_ = false;
 }
 
 void FireOS::queueLuaDiagnostic(const String& appId, const String& packageId,
@@ -5818,6 +5877,183 @@ void FireOS::flushLuaDiagnostic() {
   pendingDiagnosticJson_ = "";
 }
 
+void FireOS::writeLuaErrorSnapshot(const String& errorCode,
+                                   const String& message,
+                                   const String& diagnostics) {
+  if (!sdReady_ && !initSdCard()) return;
+  if (!SD.exists("/logs") && !SD.mkdir("/logs")) return;
+  if (!SD.exists("/logs/ai-developer") &&
+      !SD.mkdir("/logs/ai-developer"))
+    return;
+
+  static uint8_t slot = 0;
+  const String path = "/logs/ai-developer/error-" + String(slot++ % 8) + ".json";
+  const String temporary = path + ".tmp";
+  String body = "{\"schema_version\":1,\"error_id\":\"error-" +
+                String(millis(), HEX) + "-" + String(esp_random(), HEX) +
+                "\",\"boot_id\":\"" +
+                jsonEscapeField(backendClient_ ? backendClient_->bootId()
+                                                : String("boot-local")) +
+                "\",\"uptime_ms\":" + String(millis()) +
+                ",\"app_id\":\"" + jsonEscapeField(luaErrorAppId_) +
+                "\",\"app_version\":\"" +
+                jsonEscapeField(luaErrorAppVersion_) +
+                "\",\"package_id\":\"" +
+                jsonEscapeField(luaErrorPackageId_) + "\",\"sha256\":\"" +
+                jsonEscapeField(luaErrorSourceHash_) + "\",\"run_id\":\"" +
+                jsonEscapeField(luaErrorRunId_) + "\",\"error_code\":\"" +
+                jsonEscapeField(errorCode) + "\",\"message\":\"" +
+                jsonEscapeField(message.substring(0, 240)) +
+                "\",\"diagnostics\":" + diagnostics + "}";
+  if (body.length() > 4096) body = body.substring(0, 4093) + "...}";
+  File file = SD.open(temporary, FILE_WRITE);
+  if (!file) return;
+  file.print(body);
+  file.close();
+  if (SD.exists(path)) SD.remove(path);
+  SD.rename(temporary, path);
+}
+
+void FireOS::requestLuaRepair() {
+  if (luaErrorAppId_.length() == 0) {
+    luaRepairMessage_ = "App identity unavailable";
+    luaRepairStatus_ = "Unavailable";
+    return;
+  }
+  if (luaRepairStatus_ == "awaiting_confirmation" ||
+      luaRepairStatus_ == "preparing" ||
+      luaRepairStatus_ == "queued" || luaRepairStatus_ == "building" ||
+      luaRepairStatus_ == "testing" || luaRepairStatus_ == "ready" ||
+      luaRepairStatus_ == "downloading" || luaRepairStatus_ == "starting" ||
+      luaRepairStatus_ == "running") {
+    return;
+  }
+  luaRepairId_ = "";
+  luaRepairProposalId_ = "";
+  luaRepairProjectId_ = "";
+  luaRepairReadyPackageId_ = "";
+  luaRepairReadyVersion_ = "";
+  luaRepairStatus_ = "Waiting for backend";
+  luaRepairPhase_ = "preparing";
+  luaRepairMessage_ = "Preparing repair...";
+  luaRepairProgress_ = 0;
+  luaRepairRequested_ = true;
+  luaRepairPrepareSent_ = false;
+  luaRepairBuildConfirmed_ = false;
+  luaRepairStatusQueryPending_ = false;
+  luaErrorAction_ = 0;
+}
+
+void FireOS::requestLuaRepairStatus() {
+  if (!backendClient_ || !backendClient_->sessionReady() ||
+      luaRepairId_.length() == 0)
+    return;
+  if (backendClient_->appRepairStatus(luaRepairId_, luaErrorAppId_))
+    luaRepairStatusQueryPending_ = false;
+}
+
+void FireOS::serviceLuaRepair() {
+  if (!luaRepairRequested_ || !backendClient_ ||
+      !backendClient_->sessionReady())
+    return;
+  const uint32_t now = millis();
+  if (!luaRepairPrepareSent_ && now - luaRepairLastAttemptAt_ >= 1000) {
+    luaRepairLastAttemptAt_ = now;
+    if (backendClient_->appRepairPrepare(
+            luaErrorAppId_, luaErrorPackageId_, luaErrorAppVersion_,
+            luaErrorSourceHash_, luaErrorCode_, luaAppError_,
+            luaErrorDiagnostics_, luaErrorRunId_)) {
+      luaRepairPrepareSent_ = true;
+      luaRepairStatus_ = "preparing";
+      luaRepairMessage_ = "Waiting for repair proposal...";
+    } else {
+      luaRepairMessage_ = "Backend unavailable - retrying";
+    }
+  }
+}
+
+void FireOS::handleLuaRepairStatus(const String& message) {
+  const String incomingRepair = jsonStringField(message, "repair_id");
+  const String incomingApp = jsonStringField(message, "app_id");
+  if ((luaRepairId_.length() > 0 && incomingRepair.length() > 0 &&
+       incomingRepair != luaRepairId_) ||
+      (incomingApp.length() > 0 && incomingApp != luaErrorAppId_))
+    return;
+  if (incomingRepair.length() > 0) luaRepairId_ = incomingRepair;
+  const String incomingProject = jsonStringField(message, "project_id");
+  const String incomingProposal = jsonStringField(message, "proposal_id");
+  if (incomingProject.length() > 0) luaRepairProjectId_ = incomingProject;
+  if (incomingProposal.length() > 0) luaRepairProposalId_ = incomingProposal;
+  const String incomingPackage = jsonStringField(message, "package_id");
+  if (incomingPackage.length() > 0) luaRepairReadyPackageId_ = incomingPackage;
+  const String incomingVersion = jsonStringField(message, "version");
+  if (incomingVersion.length() > 0) luaRepairReadyVersion_ = incomingVersion;
+  luaRepairStatus_ = jsonStringField(message, "status");
+  luaRepairPhase_ = jsonStringField(message, "phase");
+  luaRepairMessage_ = jsonStringField(message, "message");
+  luaRepairProgress_ = static_cast<uint8_t>(
+      constrain(jsonIntField(message, "progress"), 0, 100));
+  luaRepairPrepareSent_ = true;
+
+  if (luaRepairStatus_ == "awaiting_confirmation" &&
+      luaRepairProposalId_.length() > 0 && !luaRepairBuildConfirmed_ &&
+      backendClient_ && backendClient_->sessionReady()) {
+    if (backendClient_->confirmBuild(luaRepairProposalId_, luaRepairId_)) {
+      luaRepairBuildConfirmed_ = true;
+      luaRepairStatus_ = "queued";
+      luaRepairPhase_ = "queued";
+      luaRepairMessage_ = "Repair queued";
+    }
+  } else if (luaRepairStatus_ == "ready" &&
+             luaRepairReadyPackageId_.length() > 0) {
+    luaErrorAction_ = 1;
+    luaRepairMessage_ = luaRepairMessage_.length() > 0
+                            ? luaRepairMessage_
+                            : "Fixed app ready to run";
+  } else if (luaRepairStatus_ == "failed" ||
+             luaRepairStatus_ == "interrupted" ||
+             luaRepairStatus_ == "unavailable") {
+    luaRepairRequested_ = false;
+    luaRepairPrepareSent_ = false;
+    luaRepairBuildConfirmed_ = false;
+  }
+}
+
+void FireOS::startLuaRepairRun() {
+  if (luaRepairReadyPackageId_.length() == 0 || !backendClient_ ||
+      !backendClient_->sessionReady()) {
+    luaRepairMessage_ = "Waiting for backend connection";
+    return;
+  }
+  if (luaRepairRunAfterInstall_ || (packageManager_ && packageManager_->busy()))
+    return;
+  if (backendClient_->appDownload(luaRepairProjectId_,
+                                  luaRepairReadyPackageId_, luaErrorAppId_)) {
+    luaRepairRunAfterInstall_ = true;
+    luaRepairStatus_ = "downloading";
+    luaRepairPhase_ = "installing";
+    luaRepairMessage_ = "Downloading fixed app...";
+  } else {
+    luaRepairMessage_ = "Download request failed";
+  }
+}
+
+void FireOS::handleLuaErrorButton(uint8_t index) {
+  if (index == 2) {
+    back();
+    return;
+  }
+  if (index == 0) {
+    luaErrorAction_ = 0;
+    return;
+  }
+  if (luaErrorAction_ == 0) {
+    requestLuaRepair();
+  } else {
+    startLuaRepairRun();
+  }
+}
+
 void FireOS::updateLuaApp() {
   if (!luaAppActive_) return;
   const uint32_t now = millis();
@@ -5834,6 +6070,7 @@ void FireOS::updateLuaApp() {
                                  luaDiagnosticsJson("update"));
     luaHealthySent_ = true;
   }
+  if (luaAppActive_) flushLuaRgb();
 }
 
 void FireOS::updateBackend() {
@@ -5844,6 +6081,7 @@ void FireOS::updateBackend() {
                               screen_ == Screen::Settings ||
                               screen_ == Screen::AppsSettings ||
                               screen_ == Screen::Firmware ||
+                               luaRepairRequested_ || luaRepairId_.length() > 0 ||
                               (packageManager_ && packageManager_->busy()) ||
                               (firmwareStorage_ && firmwareStorage_->busy()) ||
                               (githubFirmware_ && githubFirmware_->busy()) ||
@@ -5860,6 +6098,11 @@ void FireOS::updateBackend() {
     requestWifi(true);
   }
   backendClient_->service(WiFi.status() == WL_CONNECTED);
+  serviceLuaRepair();
+  if (luaRepairStatusQueryPending_ && backendClient_->sessionReady()) {
+    if (backendClient_->appRepairStatus(luaRepairId_, luaErrorAppId_))
+      luaRepairStatusQueryPending_ = false;
+  }
   updateAppManagerBackend();
   flushLuaDiagnostic();
 }
@@ -5868,6 +6111,15 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   os->backendStatus_ = status;
+  if (connected && os->luaRepairId_.length() > 0)
+    os->luaRepairStatusQueryPending_ = true;
+  if (!connected && os->luaRepairPrepareSent_ &&
+      os->luaRepairId_.length() == 0) {
+    // The backend reuses the same failed-package repair job on retry, so a
+    // lost prepare response can safely be replayed after reconnect.
+    os->luaRepairPrepareSent_ = false;
+    os->luaRepairMessage_ = "Backend disconnected - waiting to retry";
+  }
   if (!connected && os->screen_ == Screen::AppsSettings) {
     os->backendCatalogLoading_ = false;
     os->backendCatalogRequested_ = false;
@@ -5925,6 +6177,17 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
     }
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
         os->aiInstallId_, packageId, true, archiveHash, "installed");
+    if (os->luaRepairRunAfterInstall_ &&
+        packageId == os->luaRepairReadyPackageId_) {
+      os->luaRepairRunAfterInstall_ = false;
+      if (os->backendClient_ && os->backendClient_->confirmRun(packageId)) {
+        os->luaRepairStatus_ = "starting";
+        os->luaRepairPhase_ = "starting";
+        os->luaRepairMessage_ = "Starting fixed app...";
+      } else {
+        os->luaRepairMessage_ = "Run authorization failed";
+      }
+    }
     os->aiWorkflowState_ = 5;
   } else {
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
@@ -6024,6 +6287,10 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "app_versions") {
     parseBackendAppVersions(message);
+    return;
+  }
+  if (type == "app_repair_status") {
+    handleLuaRepairStatus(message);
     return;
   }
   if (type == "app_backend_delete_ready") {
@@ -6350,6 +6617,11 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowState_ = 6;
       aiDeveloperMode_ = 3;
       aiWorkflowText_ = "RUNNING";
+      if (packageId == luaRepairReadyPackageId_) {
+        luaRepairStatus_ = "running";
+        luaRepairPhase_ = "running";
+        luaRepairMessage_ = "Fixed app running";
+      }
       preferences.putString(consumedKey.c_str(), "started");
       saveSettings();
       if (backendClient_)
@@ -6368,6 +6640,11 @@ void FireOS::handleBackendMessage(const String& message) {
                                          : "not_installed";
       if (backendClient_)
         backendClient_->appFailed(runId, packageId, errorCode, failure);
+      if (packageId == luaRepairReadyPackageId_) {
+        luaRepairStatus_ = "failed";
+        luaRepairPhase_ = "failed";
+        luaRepairMessage_ = failure;
+      }
       aiWorkflowText_ = "APP NOT INSTALLED";
     }
     return;
@@ -6543,14 +6820,8 @@ void FireOS::luaRgbSet(void* context, int index, int red, int green,
   os->luaRgbValues_[index][0] = static_cast<uint8_t>(red);
   os->luaRgbValues_[index][1] = static_cast<uint8_t>(green);
   os->luaRgbValues_[index][2] = static_cast<uint8_t>(blue);
-#ifdef FIRE_OS_BLE
-  writeFireRgbArray(os->luaRgbValues_, 180);
-#else
-  M5.Led.setBrightness(180);
-  M5.Led.setAllColor(static_cast<uint8_t>(red), static_cast<uint8_t>(green),
-                     static_cast<uint8_t>(blue));
-  M5.Led.display();
-#endif
+  os->luaRgbDirty_ = true;
+  os->luaRgbDirtyAt_ = millis();
 }
 
 bool FireOS::luaImuAccel(void* context, float* x, float* y, float* z) {
@@ -9395,9 +9666,41 @@ void FireOS::drawLuaApp() {
   }
   if (!luaAppActive_ && luaAppError_.length() > 0) {
     ui.setTextDatum(MC_DATUM);
-    drawText(160, 96, "APP ERROR", kOrange, 2, TFT_BLACK);
-    drawText(160, 126, luaAppError_.substring(0, 38), kText, 1, TFT_BLACK);
-    drawText(160, 160, "Hold left for Home", kMuted, 1, TFT_BLACK);
+    drawText(160, 28, "APP ERROR", kOrange, 2, TFT_BLACK);
+    String appLabel = luaErrorAppName_.length() > 0 ? luaErrorAppName_
+                                                     : luaAppName_;
+    if (appLabel.length() > 24) appLabel = appLabel.substring(0, 21) + "...";
+    drawText(160, 55, appLabel, kText, 2, TFT_BLACK);
+    String version = luaErrorAppVersion_.length() > 0
+                         ? "v" + luaErrorAppVersion_
+                         : "version unavailable";
+    drawText(160, 78, version, kMuted, 1, TFT_BLACK);
+    String error = luaAppError_.substring(0, 38);
+    drawText(160, 101, error, kText, 1, TFT_BLACK);
+    String status = luaRepairMessage_.length() > 0 ? luaRepairMessage_
+                                                   : "Press B to fix this app";
+    if (status.length() > 42) status = status.substring(0, 39) + "...";
+    drawText(160, 125, status, kMuted, 1, TFT_BLACK);
+    if (luaRepairProgress_ > 0 && luaRepairStatus_ != "ready") {
+      ui.drawRoundRect(32, 139, 256, 10, 4, kMuted);
+      ui.fillRoundRect(34, 141,
+                       max<int>(2, 252 * luaRepairProgress_ / 100), 6, 3,
+                       kCyan);
+    }
+    const uint16_t actionColor = luaErrorAction_ == 0 ? kCyan : kGreen;
+    ui.fillRoundRect(58, 157, 204, 30, 7, actionColor);
+    drawText(160, 166,
+             luaErrorAction_ == 0 ? "Fiks feil" : "Kjør rettet app", kBg, 2,
+             actionColor);
+    if (luaRepairStatus_ == "ready")
+      drawText(160, 194,
+               "Ny versjon " + luaRepairReadyVersion_, kGreen, 1,
+               TFT_BLACK);
+    else
+      drawText(160, 194, "B starter valgt handling", kMuted, 1, TFT_BLACK);
+    drawText(46, 232, "HOME", kMuted, 1, TFT_BLACK);
+    drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
+    drawText(274, 232, "BACK", kMuted, 1, TFT_BLACK);
     ui.setTextDatum(TL_DATUM);
   }
 }
