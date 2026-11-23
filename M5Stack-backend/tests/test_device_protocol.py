@@ -241,7 +241,7 @@ async def test_restart_expires_commands_and_preserves_resumable_project(tmp_path
 
 
 async def test_capability_mismatch_never_offers_invalid_package(tmp_path):
-    service = Backend(configured(tmp_path))
+    service = Backend(configured(tmp_path,fire_max_corrections=3))
     try:
         session = await service.start(SessionStart(device_id="fire-01", target="device", protocol_version="0.2", boot_id="boot-01",
                                                  capabilities=Capabilities(**{**CAPS, "services": ["display"]})), principal="fire-01")

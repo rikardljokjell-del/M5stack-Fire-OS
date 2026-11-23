@@ -1,5 +1,6 @@
 """Local Windows control panel. Tk widgets and callbacks stay on the UI thread."""
 import ctypes
+from datetime import datetime
 import os
 from pathlib import Path
 import queue
@@ -9,12 +10,23 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, scrolledtext
 
-from .desktop_config import DesktopConfig, DesktopStore
+from .desktop_config import DesktopConfig, DesktopStore, ECONOMY_MODELS, COST_PROFILE_VERSION
 from .desktop_runtime import DesktopRuntime, check_api_key, configure_firewall, firewall_ready, lan_addresses, network_info
 from .token_qr import token_matrix
 
 
 BG, INK, MUTED, ORANGE, NAV = "#f2f4f8", "#182231", "#637083", "#e95725", "#172231"
+
+
+def usage_task_name(operation):
+    return {"generate":"Kodebygging", "review":"Kodekontroll", "dialog":"Samtale",
+            "transcribe":"Taletolkning", "speech":"Talesvar"}.get(operation,operation or "Ukjent")
+
+
+def usage_status_name(record):
+    status={"pending":"Pågår", "completed":"Fullført", "failed":"Feilet", "cancelled":"Avbrutt",
+            "unknown":"Ukjent", "interrupted":"Avbrutt", "rejected":"Stoppet av grense"}.get(record.get('status'),record.get('status','–'))
+    return status+(' · anslag' if record.get('usage_source')!='provider' else '')
 
 
 class DesktopUI:
@@ -24,6 +36,7 @@ class DesktopUI:
         self.queue = queue.Queue()
         self.busy, self.closing = False, False
         self.snapshot = {"sessions": [], "devices": [], "builds": []}
+        self.usage_snapshot = {}
         self.current_page = "Oversikt"
         self.network, self.firewall = "Kontrollerer nettverk …", False
         self.addresses = lan_addresses()
@@ -79,7 +92,9 @@ class DesktopUI:
         self.key_status = tk.StringVar(value="Nøkkel er lagret i Windows." if self.key_saved else "Ingen API-nøkkel er lagret ennå.")
         self.audio = tk.BooleanVar(value=c.audio_enabled)
         self.models = {name: tk.StringVar(value=getattr(c, name)) for name in
-                       ("dialog_model", "code_model", "transcribe_model", "speech_model", "speech_voice")}
+                       ("dialog_model", "code_model", "review_model", "transcribe_model", "speech_model", "speech_voice")}
+        self.cost_limits = {name: tk.StringVar(value=str(getattr(c, name))) for name in
+                            ("daily_budget_usd", "build_budget_usd", "request_budget_usd", "max_corrections")}
         self.workspace = tk.StringVar(value=c.workspace)
         self.disk = tk.StringVar(value=str(c.max_workspace_mb))
         self.selected_session = tk.StringVar()
@@ -100,11 +115,11 @@ class DesktopUI:
         tk.Label(nav, text="FIRE", bg=NAV, fg="#ff8456", font=("Segoe UI Black", 28)).pack(anchor="w", padx=25, pady=(27, 0))
         tk.Label(nav, text="BACKEND", bg=NAV, fg="white", font=("Segoe UI", 12)).pack(anchor="w", padx=27, pady=(0, 32))
         self.nav_buttons = {}
-        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Aktivitet", "Apper", "Firmware", "Innstillinger"):
+        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Bruk og kostnad", "Aktivitet", "Apper", "Firmware", "Innstillinger"):
             button = tk.Button(nav, text=name, command=lambda n=name: self.show(n), anchor="w", relief="flat",
                                bg=NAV, fg="#c1ccd9", activebackground="#293b51", activeforeground="white",
-                               font=("Segoe UI", 12), padx=25, pady=12, bd=0, cursor="hand2")
-            button.pack(fill="x", padx=10, pady=3)
+                               font=("Segoe UI", 12), padx=25, pady=10, bd=0, cursor="hand2")
+            button.pack(fill="x", padx=10, pady=2)
             self.nav_buttons[name] = button
         tk.Label(nav, text="Lokal Windows-app\nProtokoll 0.2", justify="left", bg=NAV, fg="#91a2b6",
                  font=("Segoe UI", 9)).pack(side="bottom", anchor="w", padx=26, pady=22)
@@ -128,11 +143,12 @@ class DesktopUI:
         self.overview(self.pages["Oversikt"])
         self.connection_page(self.pages["M5Stack"])
         self.transport_page(self.pages["Tilkobling"])
-        self.openai_page(self.pages["OpenAI"])
+        self.openai_page(self.scroll_content(self.pages["OpenAI"]))
+        self.usage_page(self.scroll_content(self.pages["Bruk og kostnad"]))
         self.activity_page(self.pages["Aktivitet"])
         self.apps_page(self.pages["Apper"])
         self.firmware_page(self.pages["Firmware"])
-        self.settings_page(self.pages["Innstillinger"])
+        self.settings_page(self.scroll_content(self.pages["Innstillinger"]))
         self.label(content, textvariable=self.notice, foreground=MUTED, wraplength=830).pack(anchor="w", pady=(14, 0))
         self.show("Oversikt")
 
@@ -144,6 +160,18 @@ class DesktopUI:
         self.title.configure(text=name)
         for key, button in self.nav_buttons.items():
             button.configure(bg="#2a3a4e" if key == name else NAV, fg="white" if key == name else "#c1ccd9")
+
+    @staticmethod
+    def scroll_content(page):
+        canvas=tk.Canvas(page,bg=BG,highlightthickness=0)
+        bar=ttk.Scrollbar(page,orient="vertical",command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side="left",fill="both",expand=True);bar.pack(side="right",fill="y")
+        inner=ttk.Frame(canvas)
+        window=canvas.create_window((0,0),window=inner,anchor="nw")
+        inner.bind("<Configure>",lambda _:canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",lambda event:canvas.itemconfigure(window,width=event.width))
+        return inner
 
     def card(self, parent, title):
         card = ttk.Frame(parent, style="Card.TFrame", padding=18)
@@ -253,10 +281,127 @@ class DesktopUI:
         grid = ttk.Frame(page)
         grid.pack(fill="x")
         for row, (name, title) in enumerate((("dialog_model", "Dialog"), ("code_model", "Kodegenerering"),
+                                           ("review_model", "Kodekontroll"),
                                            ("transcribe_model", "Transkripsjon"), ("speech_model", "Talesvar"), ("speech_voice", "Stemme"))):
             self.field(grid, row, title, self.models[name])
+        ttk.Button(page, text="Anbefalt rimelig oppsett", command=self.economy_profile).pack(anchor="w", pady=(10, 0))
         self.label(page, "Nøkkeltesten henter modellisten. Den genererer ikke innhold og bekrefter\n"
                    "ikke at hele tale-/byggeflyten virker. Bruk av OpenAI kan koste penger.", "Muted.TLabel").pack(anchor="w", pady=12)
+
+    def economy_profile(self):
+        for name, value in ECONOMY_MODELS.items():
+            self.models[name].set(value)
+        for name, value in {"daily_budget_usd":2, "build_budget_usd":.60,
+                            "request_budget_usd":.25, "max_corrections":1}.items():
+            self.cost_limits[name].set(str(value))
+        self.notice.set("Rimelige modeller og kostnadsgrenser er valgt. Trykk Lagre og bruk.")
+
+    def usage_page(self, page):
+        row = ttk.Frame(page);row.pack(fill="x")
+        self.usage_totals = {}
+        for i, (name, title) in enumerate((("since_reset", "Siden nullstilling"), ("today", "I dag"), ("lifetime", "Siden målingen startet"))):
+            row.columnconfigure(i, weight=1, uniform="usage")
+            card = ttk.Frame(row, style="Card.TFrame", padding=12)
+            card.grid(row=0, column=i, sticky="nsew", padx=(0 if i==0 else 8,0))
+            self.label(card,title,"Card.TLabel").pack(anchor="w")
+            label = self.label(card,"$0.0000","Card.TLabel",font=("Segoe UI Semibold",18))
+            label.pack(anchor="w",pady=(5,0));self.usage_totals[name]=label
+        self.usage_info = self.label(page,"Kostnadsoversikten hentes når backend kjører.","Muted.TLabel",wraplength=800)
+        self.usage_info.pack(anchor="w",pady=(9,5))
+        controls = ttk.Frame(page);controls.pack(fill="x",pady=(0,8))
+        ttk.Button(controls,text="Oppdater",command=self.refresh_usage).pack(side="left")
+        self.usage_reset_button = ttk.Button(controls,text="Nullstill visningstellerne",command=self.reset_usage)
+        self.usage_reset_button.pack(side="left",padx=8)
+        ttk.Button(controls,text="Endre kostnadsgrenser",command=lambda:self.show("Innstillinger")).pack(side="right")
+        self.label(page,"Hva driver kostnaden?", "Heading.TLabel").pack(anchor="w",pady=(2,7))
+        notebook = ttk.Notebook(page);notebook.pack(fill="both",expand=True)
+        self.usage_groups = {}
+        for key, title in (("by_operation","Oppgaver"),("by_model","Modeller"),("by_build","Appjobber")):
+            tab=ttk.Frame(notebook);notebook.add(tab,text=title)
+            tree=ttk.Treeview(tab,columns=("name","calls","input","output","cost"),show="headings",height=4)
+            for name,label,width in (("name",title,280),("calls","Kall",55),("input","Inputtokens",100),("output","Outputtokens",100),("cost","Anslått USD",105)):
+                tree.heading(name,text=label);tree.column(name,width=width,minwidth=45)
+            bar=ttk.Scrollbar(tab,orient="vertical",command=tree.yview);tree.configure(yscrollcommand=bar.set)
+            tree.pack(side="left",fill="both",expand=True);bar.pack(side="right",fill="y")
+            self.usage_groups[key]=tree
+        self.label(page,"Siste API-kall", "Heading.TLabel").pack(anchor="w",pady=(10,6))
+        recent_frame=ttk.Frame(page);recent_frame.pack(fill="both",expand=True)
+        self.usage_recent=ttk.Treeview(recent_frame,columns=("time","task","model","tokens","cost","status"),show="headings",height=5)
+        for name,label,width in (("time","Tid",62),("task","Oppgave",110),("model","Modell",195),("tokens","Inn / ut / cache",140),("cost","Anslått USD",90),("status","Måling / status",130)):
+            self.usage_recent.heading(name,text=label);self.usage_recent.column(name,width=width,minwidth=45)
+        bar=ttk.Scrollbar(recent_frame,orient="vertical",command=self.usage_recent.yview);self.usage_recent.configure(yscrollcommand=bar.set)
+        self.usage_recent.pack(side="left",fill="both",expand=True);bar.pack(side="right",fill="y")
+        self.usage_recent.bind("<<TreeviewSelect>>",lambda _:self.render_usage_detail())
+        self.usage_detail=self.label(page,"Velg et kall for å se cache, lyd og jobbtilknytning.","Muted.TLabel",wraplength=800)
+        self.usage_detail.pack(anchor="w",pady=(7,0))
+        self.usage_records={}
+
+    def refresh_usage(self):
+        self.work(self.runtime.usage, done=lambda value:setattr(self,"usage_snapshot",value), message="Henter lokal kostnadsoversikt …")
+
+    def reset_usage(self):
+        def done(value):
+            self.usage_snapshot=value
+            self.notice.set("Visningstellerne er nullstilt. Historikk og dagens kostnadsgrense beholdes.")
+        self.work(self.runtime.reset_usage, done=done, message="Nullstiller visningstellerne …")
+
+    def render_usage(self):
+        data=self.usage_snapshot
+        for key,label in self.usage_totals.items():
+            total=data.get(key,{})
+            label.configure(text=f"${float(total.get('estimated_usd',0)):.4f} · {total.get('requests',0)} kall")
+        limits=data.get('limits',{});period=data.get('since_reset',{})
+        text=(f"Anslått kostnad · USD · Prisgrunnlag {data.get('pricing_date','–')}. "
+              f"Dagsgrense ${float(limits.get('daily_usd',self.store.config.daily_budget_usd)):.2f}; "
+              f"ledig ${float(limits.get('daily_remaining_usd',0)):.2f} "
+              f"({limits.get('budget_day','–')}, {limits.get('timezone','lokal tid')}).\n"
+              f"Cache lest/skrevet: {period.get('cached_tokens',0):,}/{period.get('cache_write_tokens',0):,} tokens · {period.get('audio_seconds',0):.1f} s lyd · "
+              f"{period.get('unknown_usage_requests',0)} kall uten full tokenmåling. "
+              "Tokens inkluderer reserver når måling mangler. "
+              "Eldre forbruk inngår ikke. OpenAI-fakturaen er fasit.")
+        if not data:text="Start backend for å vise lokal kostnadsoversikt. Ingen API-kall gjøres for å hente oversikten."
+        self.usage_info.configure(text=text)
+        self.usage_reset_button.configure(state="normal" if self.runtime.ready and not self.busy else "disabled")
+        for group,tree in self.usage_groups.items():
+            rows=[]
+            for item in data.get(group,[]):
+                name=usage_task_name(item.get('operation','')) if group=='by_operation' else item.get('model','–') if group=='by_model' else self.usage_job_name(item)
+                rows.append((name,item.get('requests',0),f"{item.get('input_tokens',0):,}",f"{item.get('output_tokens',0):,}",f"${float(item.get('estimated_usd',0)):.4f}"))
+            self.replace_rows(tree,rows)
+        records=data.get('recent',[]);self.usage_records={str(item['id']):item for item in records}
+        rows=[]
+        for item in records:
+            stamp=item.get('finished_at') or item.get('started_at')
+            label=datetime.fromtimestamp(stamp).strftime('%H:%M:%S') if stamp else '–'
+            tokens=f"{item.get('input_tokens',0):,} / {item.get('output_tokens',0):,} / {item.get('cached_tokens',0):,}"
+            status=usage_status_name(item)
+            rows.append((str(item['id']),(label,usage_task_name(item.get('operation','')),item.get('model','–'),tokens,f"${float(item.get('estimated_usd',0)):.4f}",status)))
+        if rows!=getattr(self,'usage_recent_rows',None):
+            selected=self.usage_recent.selection();self.usage_recent_rows=rows
+            self.usage_recent.delete(*self.usage_recent.get_children())
+            for item_id,values in rows:self.usage_recent.insert('', 'end', iid=item_id, values=values)
+            if selected and selected[0] in self.usage_records:self.usage_recent.selection_set(selected[0])
+
+    @staticmethod
+    def replace_rows(tree, rows):
+        if rows==getattr(tree,'_usage_rows',None):return
+        tree._usage_rows=rows;tree.delete(*tree.get_children())
+        for values in rows:tree.insert('', 'end', values=values)
+
+    def usage_job_name(self,item):
+        project=item.get('project_id')
+        app=next((a for a in self.snapshot.get('apps',[]) if a.get('project_id')==project),None)
+        name=app.get('name') if app else 'Appjobb'
+        return name+' · '+str(item.get('build_id') or 'uten bygg')[-12:]
+
+    def render_usage_detail(self):
+        selected=self.usage_recent.selection();item=self.usage_records.get(selected[0]) if selected else None
+        if not item:return
+        audio_in=item.get('input_audio_tokens',0);audio_out=item.get('output_audio_tokens',0)
+        self.usage_detail.configure(text=f"{self.usage_job_name(item)} · {item.get('audio_seconds',0):.1f} s lyd · lydtokens inn/ut {audio_in}/{audio_out}. "
+            +f"Cache lest/skrevet: {item.get('cached_tokens',0)}/{item.get('cache_write_tokens',0)} tokens. "
+            +("Tokens rapportert av OpenAI; USD beregnet lokalt." if item.get('usage_source')=='provider' else
+              "Anslag fra lydlengde." if item.get('usage_source')=='duration' else "Ufullstendig måling: konservativ kostnadsreserve beholdes."))
 
     def activity_page(self, page):
         self.label(page, "Snakk med AI eller beskriv en app. B på FIRE starter et nytt opptak og avbryter forrige svar.", "Muted.TLabel").pack(anchor="w")
@@ -503,11 +648,17 @@ class DesktopUI:
         self.field(grid, 1, "Lagringsgrense (MB)", self.disk)
         ttk.Button(page, text="Velg datamappe …", command=self.choose_workspace).pack(anchor="w", pady=10)
         ttk.Checkbutton(page, text="Aktiver backendens lydtransport", variable=self.audio).pack(anchor="w", pady=8)
-        self.label(page, "Enheten må i tillegg annonsere hver lydretning. Nyeste kilde annonserer\n"
-                   "mikrofon, men ingen avspilling. Fysisk lydtest gjenstår; tekst virker også.", "Muted.TLabel").pack(anchor="w")
+        self.label(page, "Enheten må annonsere mikrofon/avspilling. Tekst virker også uten lydtransport.", "Muted.TLabel").pack(anchor="w")
+        self.label(page, "Kostnadsgrenser", "Heading.TLabel").pack(anchor="w",pady=(16,6))
+        grid=ttk.Frame(page);grid.pack(fill="x")
+        for row,(name,title) in enumerate((("daily_budget_usd","Maks per dag (USD)"),("build_budget_usd","Maks per appjobb (USD)"),
+                                          ("request_budget_usd","Maks per API-kall (USD)"),("max_corrections","Automatiske rettinger (0–3)"))):
+            self.field(grid,row,title,self.cost_limits[name])
+        self.label(page,"Nye kall stoppes før den beregnede reserven passerer en grense.\n"
+                   "Nullstilling av visningstellerne endrer ikke dagens grense eller historikken.","Muted.TLabel").pack(anchor="w",pady=(6,0))
         ttk.Button(page, text="Lagre innstillinger", style="Accent.TButton", command=self.save).pack(anchor="w", pady=18)
         ttk.Button(page, text="Åpne datamappen", command=self.open_workspace).pack(anchor="w", pady=6)
-        self.label(page, "Lagring og drift", "Heading.TLabel").pack(anchor="w", pady=(25, 8))
+        self.label(page, "Lagring og drift", "Heading.TLabel").pack(anchor="w", pady=(15, 8))
         self.label(page, "Prosjekter, testede Lua-pakker og logger lagres lokalt. Endring av datamappe\n"
                    "flytter ikke tidligere prosjekter. Innstillinger og nøkler huskes ved neste start.\n\n"
                    "Programmet starter backend når du åpner det. Lukk vinduet for å stoppe den.\n"
@@ -524,6 +675,8 @@ class DesktopUI:
                       reverse_port=self.reverse_port.get(), reverse_device_id=device_id if self.transport.get() == "reverse_tcp" else "",
                       port=self.port.get(), workspace=self.workspace.get(), device_ids=ids,
                       audio_enabled=self.audio.get(), max_workspace_mb=self.disk.get(),
+                      cost_profile_version=COST_PROFILE_VERSION,
+                      **{name:var.get().strip() for name,var in self.cost_limits.items()},
                       **{name: var.get().strip() for name, var in self.models.items()})
         return DesktopConfig.model_validate(values)
 
@@ -733,10 +886,14 @@ class DesktopUI:
         self.work(self.runtime.snapshot, lambda data: setattr(self, "snapshot", data), "Henter status …")
 
     def poll(self):
+        next_usage=0
         while not self.closing:
             if self.runtime.ready:
                 try:
                     self.queue.put(("snapshot", self.runtime.snapshot()))
+                    if time.monotonic()>=next_usage:
+                        self.queue.put(("usage",self.runtime.usage()))
+                        next_usage=time.monotonic()+6
                 except Exception:
                     pass
             time.sleep(2)
@@ -749,6 +906,8 @@ class DesktopUI:
                 break
             if kind == "snapshot":
                 self.snapshot = value
+            elif kind == "usage":
+                self.usage_snapshot=value
             elif kind == "network":
                 self.network, self.firewall = value
             elif kind == "done":
@@ -785,6 +944,7 @@ class DesktopUI:
         self.summary_labels["server"].configure(text=("● Kjører" if ready else "● Starter …" if self.runtime.alive else "● Stoppet"),
                                                   foreground="#16825b" if ready else MUTED)
         self.summary_labels["api"].configure(text=mode + ("\nNøkkel lagret" if self.key_saved else "\nNøkkel mangler"))
+        self.render_usage()
         sessions = [s for s in self.snapshot["sessions"] if s["target"] == "device" and s.get("online") and ready]
         self.summary_labels["device"].configure(text=f"{len(sessions)} tilkoblet" if sessions else "Venter på FIRE")
         choices = [self.session_name(s) for s in self.snapshot["sessions"] if ready and (s.get("desktop_device_id") or s["target"]=="device" and s.get("online"))]

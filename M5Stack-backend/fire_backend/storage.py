@@ -26,7 +26,7 @@ class Store:
         self.redactor = redactor
         self.max_bytes = max_bytes
         self.failure_reserve = min(65536, max_bytes // 8)
-        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio", "quality", "feedback", "app_deletions", "repairs", "diagnostics"):
+        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio", "quality", "feedback", "app_deletions", "repairs", "diagnostics", "usage"):
             (self.root / name).mkdir(parents=True, exist_ok=True)
 
     def path(self, group: str, item_id: str, suffix=".json") -> Path:

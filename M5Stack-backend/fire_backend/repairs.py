@@ -204,7 +204,7 @@ class Repairs:
                 await asyncio.wait({worker.task},timeout=.5)
                 if worker.progress:
                     job.update(phase=worker.progress['phase'],progress=worker.progress['progress'],message=self.service.redactor.text(worker.progress['message'])[:240],
-                               attempt=worker.progress.get('attempt',1))
+                               attempt=worker.progress.get('attempt',1),total=worker.progress.get('total',4))
                     self.save(job);await self.notify(job)
             await worker.task
             build=self.store.get('builds',build['id'])

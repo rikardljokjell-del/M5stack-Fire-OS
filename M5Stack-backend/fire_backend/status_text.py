@@ -40,6 +40,8 @@ TEXT = {
     'ai_busy':'AI er opptatt. Prøv igjen',
     'api_key':'Kontroller API-nøkkelen',
     'api_account':'Kontroller API-kontoen',
+    'cost_limit':'Kostnadsgrensen er nådd',
+    'unknown_price':'Modellen mangler pris',
     'network':'Nettverksfeil. Prøv igjen',
     'storage':'SD-kortet er ikke klart',
     'disk_full':'PC-lagringen er full',
@@ -74,6 +76,8 @@ def error_text(detail='',code=''):
         return detail
     text=(str(code)+' '+str(detail)).casefold()
     choices=(
+        (('cost_limit','kostnadsgrens','cost limit','budget_usd'), 'cost_limit'),
+        (('unknown_model_price','mangler pris'), 'unknown_price'),
         (('source_identity','identity mismatch','app identity','appversjon'), 'identity'),
         (('permission','another device','another app','tilhører'), 'scope'),
         (('expired','utløpt'), 'expired'),
@@ -97,11 +101,12 @@ def error_text(detail='',code=''):
     return TEXT[next((key for needles,key in choices if any(n in text for n in needles)),'failed')]
 
 
-def build_text(phase,*,operation='new',attempt=1,progress=0,detail='',delivery=False):
+def build_text(phase,*,operation='new',attempt=1,total=4,progress=0,detail='',delivery=False):
     if phase=='generating':
         key=operation if operation in {'new','update','repair'} else 'new'
-        attempt=attempt if type(attempt) is int and 1<=attempt<=4 else 1
-        return checked(f'{TEXT[key]} ({attempt}/4)')
+        total=total if type(total) is int and 1<=total<=4 else 4
+        attempt=attempt if type(attempt) is int and 1<=attempt<=total else 1
+        return checked(f'{TEXT[key]} ({attempt}/{total})')
     if phase=='testing' and progress>=75:return TEXT['review']
     if phase=='ready':return TEXT['sending' if delivery else 'ready']
     if phase=='failed':return error_text(detail)
@@ -115,7 +120,7 @@ def repair_text(job):
     if status=='failed':return error_text(job.get('message',''))
     if status in {'queued','interrupted','unavailable','not_found'}:return TEXT[status]
     if status=='building':
-        return build_text(job.get('phase','preparing'),operation='repair',attempt=job.get('attempt',1),progress=job.get('progress',0))
+        return build_text(job.get('phase','preparing'),operation='repair',attempt=job.get('attempt',1),total=job.get('total',4),progress=job.get('progress',0))
     return TEXT['unknown']
 
 
@@ -130,7 +135,7 @@ def display_event(event,*,operation='new',delivery=False):
         event['status_text_version']=VERSION
     elif kind=='build_progress':
         event['message']=build_text(event.get('phase'),operation=operation,attempt=event.get('attempt',1),
-                                    progress=event.get('progress',0),detail=event.get('message',''),delivery=delivery)
+                                    total=event.get('total',4),progress=event.get('progress',0),detail=event.get('message',''),delivery=delivery)
         event['status_text_version']=VERSION
     elif kind=='session_snapshot' and event.get('progress'):
         event['progress']=display_event({**event['progress'],'type':'build_progress'},operation=operation,delivery=delivery)

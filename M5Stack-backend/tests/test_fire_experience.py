@@ -81,5 +81,5 @@ async def test_live_build_cannot_fall_back_to_old_three_flag_review(tmp_path):
         s.capabilities={'services':['display','buttons','rgb','imu','time'],'max_memory':131072,'max_runtime_ms':16}
         await service.confirm_build(s,s.proposal_id);await s.task
         assert s.package_id is None and not service.store.list('packages')
-        assert service.store.get('builds',s.build_id)['attempts']==4
+        assert service.store.get('builds',s.build_id)['attempts']==2
     finally:await service.close()

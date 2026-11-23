@@ -27,7 +27,7 @@ class BuildLifecycle:
         project=self.store.get('projects',build['project_id'])
         phase=build.get('phase','queued');status=build['status']
         message=build_text(phase,operation=build.get('operation','new'),attempt=build.get('generation_attempt',1),
-                           progress=build.get('progress',0),detail=build.get('error',''))
+                           total=build.get('max_attempts',4),progress=build.get('progress',0),detail=build.get('error',''))
         package_id=build.get('package_id') if status=='ready' else None
         package=self.store.get('packages',package_id) if package_id else None
         available=False

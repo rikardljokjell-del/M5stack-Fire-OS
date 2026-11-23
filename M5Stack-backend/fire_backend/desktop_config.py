@@ -17,6 +17,14 @@ def data_directory():
     return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "FIRE Backend"
 
 
+COST_PROFILE_VERSION = 1
+ECONOMY_MODELS = {
+    "code_model": "gpt-6.2-sol", "review_model": "gpt-6.2-sol",
+    "dialog_model": "gpt-realtime-2.1-mini", "transcribe_model": "gpt-transcribe",
+    "speech_model": "gpt-realtime-2.1-mini",
+}
+
+
 class DesktopConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: int = 1
@@ -31,12 +39,18 @@ class DesktopConfig(BaseModel):
     workspace: str = Field(default_factory=lambda: str(data_directory() / "workspace"))
     device_ids: list[str] = Field(default_factory=lambda: ["m5stack-fire-01"], min_length=1, max_length=16)
     audio_enabled: bool = True
-    dialog_model: str = "gpt-realtime-2.1"
-    code_model: str = "gpt-6.2-astra"
-    transcribe_model: str = "gpt-transcribe"
+    cost_profile_version: int = Field(default=COST_PROFILE_VERSION, ge=0)
+    dialog_model: str = ECONOMY_MODELS["dialog_model"]
+    code_model: str = ECONOMY_MODELS["code_model"]
+    review_model: str = ECONOMY_MODELS["review_model"]
+    transcribe_model: str = ECONOMY_MODELS["transcribe_model"]
     speech_model: str = "gpt-realtime-2.1-mini"
     speech_voice: str = "marin"
     max_workspace_mb: int = Field(default=512, ge=16, le=16384)
+    daily_budget_usd: float = Field(default=2, gt=0, le=1000, allow_inf_nan=False)
+    build_budget_usd: float = Field(default=.60, gt=0, le=100, allow_inf_nan=False)
+    request_budget_usd: float = Field(default=.25, gt=0, le=100, allow_inf_nan=False)
+    max_corrections: int = Field(default=1, ge=0, le=3)
 
     @field_validator("reverse_host")
     @classmethod
@@ -60,7 +74,7 @@ class DesktopConfig(BaseModel):
             raise ValueError("Bruk unik enhets-ID med små bokstaver, tall og bindestrek.")
         return values
 
-    @field_validator("dialog_model", "code_model", "transcribe_model", "speech_model", "speech_voice")
+    @field_validator("dialog_model", "code_model", "review_model", "transcribe_model", "speech_model", "speech_voice")
     @classmethod
     def valid_model(cls, value):
         if not value.strip() or len(value) > 120 or any(c.isspace() for c in value):
@@ -130,10 +144,22 @@ class DesktopStore:
         self.path = self.root / "settings.json"
         self.vault = vault if vault is not None else WindowsVault()
         if self.path.exists():
-            self.config = DesktopConfig.model_validate_json(self.path.read_text(encoding="utf-8"))
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw.setdefault("cost_profile_version", 0)
+            self.config = DesktopConfig.model_validate(raw)
         else:
             self.config = DesktopConfig(workspace=str((self.root / "workspace").resolve()))
             self.save(self.config)
+
+    def migrate_cost_profile(self):
+        """Apply the user's requested economy migration once, preserving custom settings."""
+        if self.config.cost_profile_version >= COST_PROFILE_VERSION:
+            return False
+        legacy = {"code_model": "gpt-6.2-astra", "dialog_model": "gpt-realtime-2.1"}
+        changes = {name: ECONOMY_MODELS[name] for name, old in legacy.items() if getattr(self.config, name) == old}
+        changes["cost_profile_version"] = COST_PROFILE_VERSION
+        self.save(self.config.model_copy(update=changes))
+        return True
 
     def target(self, name):
         return f"FIREBackend/{self.config.credential_namespace}/{name}"
@@ -181,6 +207,9 @@ class DesktopStore:
                         fire_reverse_port=config.reverse_port,
                         fire_reverse_device_id=(config.reverse_device_id or config.device_ids[0]) if config.transport == "reverse_tcp" else "",
                         openai_realtime_model=config.dialog_model, openai_code_model=config.code_model,
+                        openai_review_model=config.review_model,
                         openai_transcribe_model=config.transcribe_model, openai_speech_model=config.speech_model,
-                        openai_speech_voice=config.speech_voice, fire_max_workspace_mb=config.max_workspace_mb)
+                        openai_speech_voice=config.speech_voice, fire_max_workspace_mb=config.max_workspace_mb,
+                        fire_daily_budget_usd=config.daily_budget_usd, fire_build_budget_usd=config.build_budget_usd,
+                        fire_request_budget_usd=config.request_budget_usd, fire_max_corrections=config.max_corrections)
         return Settings(_env_file=None, **defaults)

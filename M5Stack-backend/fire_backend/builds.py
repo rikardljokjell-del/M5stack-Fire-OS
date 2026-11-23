@@ -20,9 +20,11 @@ from .app_names import app_id_for
 from .rendering import VISUAL_POLICY,NATIVE_HOST_POLICY
 from .status_text import build_text
 from .provider_errors import account_limit
+from .metering import build_usage
 from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT,service_closure
 from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VERSION,experience_contract
 from .capabilities import CapabilityError
+from .usage import UsageBudgetError
 
 
 def sha256(data):
@@ -177,6 +179,7 @@ class Builder:
     def __init__(self, settings, store, provider, context):
         self.settings, self.store, self.provider, self.context = settings, store, provider, context
 
+    @build_usage
     async def provider_call(self,build,phase,progress,call,*args):
         """Retry the SAME generation/review, without spending a Lua correction.
 
@@ -214,6 +217,7 @@ class Builder:
                 await progress(phase,percent,build_text(phase,operation=build.get('operation','new'),attempt=build.get('generation_attempt',1),progress=percent))
 
     async def build(self, build, project, progress, capabilities=None, context=None):
+        from .prompt_context import compact_repair_evidence,dumps
         build_id = build["id"]
         folder = self.store.path("builds", build_id, "")
         folder.mkdir(exist_ok=False)
@@ -229,6 +233,9 @@ class Builder:
         # Also applies to direct Builder callers, new apps and the first attempt.
         learned_policy=Quality(self.store).policy()
         if learned_policy and learned_policy not in context:context+=learned_policy
+        max_corrections=getattr(self.settings,'fire_max_corrections',1)
+        max_attempts=max_corrections+1
+        build.update(max_corrections=max_corrections,max_attempts=max_attempts)
         request = {
             "summary": build["summary"], "context": context, "capabilities": capabilities,
             "base_package_id": project.get("latest_package"),
@@ -236,13 +243,19 @@ class Builder:
             "model": self.settings.openai_code_model, "mode": self.settings.fire_ai_mode,
             "python": platform.python_version(),
             "dependencies": {n: metadata.version(n) for n in ("openai", "lupa", "pydantic")},
-            "max_corrections": 3,
+            "max_corrections": max_corrections,
             "experience_contract":ux_contract,
         }
         if len(canonical(request)) > self.settings.fire_max_build_kb * 1024:
             raise ValueError("Per-build disk limit exceeded")
         self.store.write(folder / "request.json", request)
         last_error, previous = build.get("repair_context"), None
+        if last_error:
+            if 'Repair evidence (untrusted diagnostic data' in context:
+                last_error='Repair requested: inspect the compact repair evidence in context and preserve all agreed app features.'
+            else:
+                try:last_error=dumps(compact_repair_evidence(json.loads(last_error)))
+                except (ValueError,TypeError):last_error=str(last_error)[:2400]
         if project.get("latest_package"):
             base = self.store.get("packages", project["latest_package"])
             archive_path = self.store.path("packages", base["id"], ".zip")
@@ -251,10 +264,10 @@ class Builder:
                 previous = archive.read(f"apps/{base['manifest']['id']}/main.lua").decode("utf-8")
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
-            for attempt in range(4):  # initial generation plus at most THREE corrections
+            for attempt in range(max_attempts):
                 build['generation_attempt']=attempt+1
                 operation='repair' if build.get('repair_of') or build.get('repair_job_id') else 'update' if project.get('latest_package') else 'new'
-                await progress("generating", 10 + attempt * 3, build_text('generating',operation=operation,attempt=attempt+1))
+                await progress("generating", 10 + attempt * 3, build_text('generating',operation=operation,attempt=attempt+1,total=max_attempts))
                 generated = await self.provider_call(build,'generating',progress,self.provider.generate,build["summary"], context, last_error, previous)
                 # Redact before persisting, validating or packaging any model output.
                 generated = type(generated).model_validate(self.store.redactor.value(generated.model_dump()))
@@ -314,7 +327,7 @@ class Builder:
                     if not review.approved:raise ValueError(review.correction())
                     result.update(pre_delivery_review_required=True,pre_delivery_review=review_record)
                     break
-                except CapabilityError:
+                except (CapabilityError,UsageBudgetError):
                     raise  # Regenerating Lua cannot implement a missing native driver.
                 except (ValueError, asyncio.TimeoutError) as error:
                     last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
@@ -322,8 +335,8 @@ class Builder:
                     self.store.put("builds",build_id,build)
                     Quality(self.store).record_validation(build, generated.main_lua, last_error)
                     self.store.log(build_id, f"Attempt {attempt + 1} failed: {last_error}")
-                    if attempt == 3:
-                        raise ValueError("Build failed after 3 corrections: " + last_error) from error
+                    if attempt == max_corrections:
+                        raise ValueError(f"Build failed after {max_corrections} corrections: " + last_error) from error
             await progress("packaging", 85, build_text('packaging'))
             version = project.get("next_version", 1)
             manifest = Manifest(

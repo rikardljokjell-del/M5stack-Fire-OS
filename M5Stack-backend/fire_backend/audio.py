@@ -13,6 +13,7 @@ import wave
 from .models import State
 from .capabilities import policy, require_audio_input
 from .storage import identifier, new_id
+from .metering import session_usage
 
 
 class CaptureSignalError(ValueError):
@@ -270,6 +271,7 @@ class AudioManager:
         finally:
             self.uploads.pop(upload_key, None)
 
+    @session_usage
     async def transcribe(self, session, item, path):
         try:
             await self.service.state(session, State.processing)
@@ -311,6 +313,7 @@ class AudioManager:
             path.unlink(missing_ok=True)
             self.store.put("audio", item["id"], item, critical=True)
 
+    @session_usage
     async def speak(self, session, text):
         if not policy(self.settings, session.target, session.capabilities)["conversation_audio"]["output_enabled"]:
             return

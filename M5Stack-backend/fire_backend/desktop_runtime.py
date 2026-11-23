@@ -142,6 +142,12 @@ class DesktopRuntime:
             return {"sessions": [], "devices": [], "builds": []}
         return self.request("GET", "/desktop/status")
 
+    def usage(self):
+        return self.request("GET", "/desktop/usage")
+
+    def reset_usage(self):
+        return self.request("POST", "/desktop/usage/reset", json={})
+
     def send_text(self, session_id, text):
         return self.request("POST", f"/desktop/sessions/{session_id}/text", json={"text": text})
 
@@ -264,7 +270,7 @@ def check_api_key(settings, key):
     try:
         with OpenAI(api_key=key, base_url="https://api.openai.com/v1", timeout=18, max_retries=0) as client:
             available = {model.id for model in client.models.list()}
-        selected = [settings.dialog_model, settings.code_model]
+        selected = [settings.dialog_model, settings.code_model, settings.review_model]
         if settings.audio_enabled:
             selected += [settings.transcribe_model, settings.speech_model]
         missing = [name for name in selected if name not in available]

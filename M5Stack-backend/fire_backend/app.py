@@ -165,6 +165,17 @@ def create_app(settings=None, provider=None):
                 "firmware":service.firmware.catalog(),
                 "physical_verified": False, "transport": service.reverse_tcp.status()}
 
+    @app.get('/desktop/usage', dependencies=[Depends(desktop_auth)])
+    async def desktop_usage(service: Backend = Depends(backend)):
+        return service.usage.snapshot()
+
+    @app.post('/desktop/usage/reset', dependencies=[Depends(desktop_auth)])
+    async def reset_desktop_usage(request: Request, service: Backend = Depends(backend)):
+        body = await request.body()
+        if body and body.strip() != b'{}':
+            raise HTTPException(422, 'Expected empty request')
+        return service.usage.reset()
+
     @app.post("/desktop/sessions/{session_id}/text", dependencies=[Depends(desktop_auth)])
     async def desktop_text(session_id: str, request: Request, service: Backend = Depends(backend)):
         session = service.session(session_id)

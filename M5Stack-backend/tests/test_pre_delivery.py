@@ -70,7 +70,7 @@ async def test_persistent_design_defect_is_never_packaged(tmp_path):
     provider=ReviewedProvider(always_reject=True);service=Backend(configured(tmp_path),provider)
     try:
         s=await build(service)
-        assert len(provider.generated)==4 and len(provider.reviewed)==4
+        assert len(provider.generated)==2 and len(provider.reviewed)==2
         assert s.package_id is None and not service.store.list('packages')
         assert not list((service.store.root/'packages').glob('*.zip'))
         assert not service.store.list('commands')
@@ -106,5 +106,8 @@ async def test_live_provider_uses_separate_structured_review_without_executing_c
     app=GeneratedApp(name='Sirkel',main_lua="function init() end function update(dt) fire.display.circle(20,20,5,2016) end",required_services=['display'])
     review=await provider.review('Lag en sirkel','negotiated API',app,simulate({'main_lua':app.main_lua,'required_services':['display']}))
     assert review.approved and calls[0]['text_format'] is FireAppReview and calls[0]['store'] is False
-    assert calls[0]['model']==settings.openai_code_model
-    assert APP_QUALITY_POLICY in calls[0]['instructions'] and 'main_lua' in calls[0]['input']
+    assert calls[0]['model']==settings.openai_review_model
+    assert APP_QUALITY_POLICY in calls[0]['input'][0]['content'][0]['text']
+    assert 'main_lua' in calls[0]['input'][1]['content']
+    assert calls[0]['prompt_cache_options']=={'mode':'explicit','ttl':'30m'}
+    assert calls[0]['reasoning']=={'effort':'low'}

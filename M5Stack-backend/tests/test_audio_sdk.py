@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import io
+import wave
 from types import SimpleNamespace
 
 import httpx
@@ -21,7 +23,10 @@ async def test_transcription_uses_real_sdk_multipart_and_language_hints(model):
     provider = OpenAIProvider(Settings(_env_file=None, openai_api_key="sk-sdk-secret", openai_transcribe_model=model))
     provider.client = AsyncOpenAI(api_key="sk-sdk-secret", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)))
     try:
-        assert await provider.transcribe(b"test-wav-content") == "Lag en sirkel"
+        wav=io.BytesIO()
+        with wave.open(wav,'wb') as audio:
+            audio.setnchannels(1);audio.setsampwidth(2);audio.setframerate(16000);audio.writeframes(bytes(1600))
+        assert await provider.transcribe(wav.getvalue()) == "Lag en sirkel"
         request = calls[0]
         assert str(request.url) == "https://api.openai.com/v1/audio/transcriptions"
         assert model.encode() in request.content and b'turn.wav' in request.content
@@ -55,8 +60,8 @@ async def test_speech_uses_realtime_pcm_and_closes_connection():
         async def item(self, **values):
             calls.append(values)
 
-        async def create(self):
-            pass
+        async def create(self,**values):
+            assert values['response']['max_output_tokens']==1200
 
         def __aiter__(self):
             async def events():

@@ -132,8 +132,9 @@ class Quality:
     def policy(self):
         # Only fixed, reviewed rules are promoted. No generated prompt/code from logs.
         categories={case["category"] for case in self.store.list("quality")}
-        from .app_quality import APP_QUALITY_POLICY
-        rules={**RULES,"design":APP_QUALITY_POLICY}
+        # The full mandatory design policy is supplied once by the builder.
+        # Repeating it here used to multiply every generation/review prompt.
+        rules={**RULES,"design":"Apply the mandatory FIRE experience policy: coherent full-screen layout, readable hierarchy, predictable three-button controls, complete scenes and verified settings/effects."}
         return ("\nLearned regression precautions (fixed rules from observed failures):\n"+"\n".join(rules[k] for k in sorted(categories) if k in rules)
             +"\nRequired regression checks:\n"+"\n".join(REGRESSION_CHECKS[k] for k in sorted(categories) if k in REGRESSION_CHECKS)) if categories else ""
 

@@ -37,8 +37,11 @@ async def test_actual_sdk_responses_request_contains_context_and_error(tmp_path)
         body = json.loads(request.content)
         assert str(request.url) == "https://api.openai.com/v1/responses"
         assert body["model"] == "configured-code-model"
-        assert "COMPACT HARDWARE CONTEXT" in body["instructions"]
-        assert "syntax error line 4" in body["input"]
+        assert 'instructions' not in body
+        assert body['input'][0]['role']=='developer'
+        assert "COMPACT HARDWARE CONTEXT" in body['input'][0]['content']
+        assert body['input'][1]['role']=='user'
+        assert "syntax error line 4" in body['input'][1]['content']
         assert body["store"] is False
         assert body["text"]["format"]["type"] == "json_schema"
         assert "sk-test" not in request.content.decode()

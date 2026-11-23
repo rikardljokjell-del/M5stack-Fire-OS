@@ -1,5 +1,11 @@
 # FIRE OS AI Developer backend 0.2
 
+[Kostnad og bruk](docs/COST_AND_USAGE.md): nytt panel med USD-anslag,
+kostnadsdrivere, tokens/cache/lyd og nullstilling av visningsperioden. Sol og
+Realtime mini er standard, med én automatisk retting og lokale stoppgrenser
+per kall, bygg og dag. Måling starter ved oppdateringen; eldre kostnader
+rekonstrueres ikke som faktiske målinger.
+
 [Device-handoff: bakgrunnsbygg og Resume](docs/DEVICE_BACKGROUND_BUILD_HANDOFF.md)
 samler knapper, status mellom tid/dato, ferdigvarsel, jobbavbrudd og hele
 appbiblioteket i AI Developer. Backend viderefører bekreftede bygg ved FIRE-reboot
@@ -159,8 +165,13 @@ avklares i firmware og testes fysisk. AI-genererte Lua-apper bruker aldri .bin/O
 | Variabel | Standard | Bruk |
 | --- | --- | --- |
 | OPENAI_API_KEY | tom | Bare PC; påkrevd for ekte API-kall |
-| OPENAI_REALTIME_MODEL | gpt-realtime-2.1 | Tekstdialog med validert dialog_reply-funksjon |
-| OPENAI_CODE_MODEL | gpt-6.2-astra | Responses med strukturert Lua-output |
+| OPENAI_REALTIME_MODEL | gpt-realtime-2.1-mini | Tekstdialog med validert dialog_reply-funksjon |
+| OPENAI_CODE_MODEL | gpt-6.2-sol | Responses med strukturert Lua-output |
+| OPENAI_REVIEW_MODEL | gpt-6.2-sol | Egen kildekontroll før levering |
+| FIRE_DAILY_BUDGET_USD | 2.00 | Lokal dagsgrense inkludert reserver |
+| FIRE_BUILD_BUDGET_USD | 0.60 | Lokal grense per appjobb |
+| FIRE_REQUEST_BUDGET_USD | 0.25 | Maks reserve før hvert API-kall |
+| FIRE_MAX_CORRECTIONS | 1 | Automatiske rettinger etter første kandidat |
 | OPENAI_TRANSCRIBE_MODEL | gpt-transcribe | Opptaksfil til tekst |
 | OPENAI_SPEECH_MODEL | gpt-realtime-2.1-mini | Tekst til PCM gjennom Realtime |
 | OPENAI_SPEECH_VOICE | marin | Talesvar |

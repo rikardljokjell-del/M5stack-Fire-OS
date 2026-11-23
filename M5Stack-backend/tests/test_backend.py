@@ -109,6 +109,7 @@ class BrokenProvider(MockProvider):
 
 async def test_three_corrections_and_no_failed_package(settings):
     provider = BrokenProvider()
+    settings=settings.model_copy(update={'fire_max_corrections':3})
     service = Backend(settings, provider)
     try:
         session = await proposed(service)
@@ -123,6 +124,20 @@ async def test_three_corrections_and_no_failed_package(settings):
         assert "stdout:" in service.store.path("logs", build["id"], ".log").read_text()
     finally:
         await service.close()
+
+
+async def test_default_cost_profile_stops_after_one_correction_without_shipping_failure(settings):
+    provider=BrokenProvider()
+    service=Backend(settings,provider)
+    try:
+        session=await proposed(service)
+        build=await service.confirm_build(session,session.proposal_id)
+        await session.task
+        saved=service.store.get('builds',build['id'])
+        assert len(provider.calls)==2 and saved['max_attempts']==2
+        assert saved['max_corrections']==1 and saved['status']=='failed'
+        assert service.store.list('packages')==[]
+    finally:await service.close()
 
 
 async def test_version_rotation_rollback(settings):
