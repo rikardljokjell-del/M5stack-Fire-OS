@@ -11,18 +11,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .config import Settings
+from .model_catalog import ECONOMY_MODELS
 
 
 def data_directory():
     return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "FIRE Backend"
 
 
-COST_PROFILE_VERSION = 1
-ECONOMY_MODELS = {
-    "code_model": "gpt-6.2-sol", "review_model": "gpt-6.2-sol",
-    "dialog_model": "gpt-realtime-2.1-mini", "transcribe_model": "gpt-transcribe",
-    "speech_model": "gpt-realtime-2.1-mini",
-}
+COST_PROFILE_VERSION = 2
 
 
 class DesktopConfig(BaseModel):
@@ -155,8 +151,11 @@ class DesktopStore:
         """Apply the user's requested economy migration once, preserving custom settings."""
         if self.config.cost_profile_version >= COST_PROFILE_VERSION:
             return False
-        legacy = {"code_model": "gpt-6.2-astra", "dialog_model": "gpt-realtime-2.1"}
-        changes = {name: ECONOMY_MODELS[name] for name, old in legacy.items() if getattr(self.config, name) == old}
+        legacy = {"code_model": {"gpt-6.2-astra", "gpt-6.2-sol"},
+                  "review_model": {"gpt-6.2-astra", "gpt-6.2-sol"}}
+        if self.config.cost_profile_version < 1:
+            legacy["dialog_model"] = {"gpt-realtime-2.1"}
+        changes = {name: ECONOMY_MODELS[name] for name, old in legacy.items() if getattr(self.config, name) in old}
         changes["cost_profile_version"] = COST_PROFILE_VERSION
         self.save(self.config.model_copy(update=changes))
         return True

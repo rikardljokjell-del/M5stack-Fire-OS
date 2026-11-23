@@ -119,13 +119,14 @@ class OpenAIProvider:
         state['request_id']=getattr(response,'_request_id',None) or getattr(response,'id',None)
 
     async def parsed(self,operation,model,instructions,payload,schema,max_output_tokens,effort):
-        # Stable developer prefix is cache eligible on GPT-6.2; project data and
+        # Stable developer prefix is cache eligible; project data and
         # corrections stay in the following untrusted user message.
         request={'model':model,'input':[{'role':'developer','content':instructions},
             {'role':'user','content':json.dumps(payload,ensure_ascii=False)}],
             'text_format':schema,'store':False,'max_output_tokens':max_output_tokens}
         if model.startswith(('gpt-6','gpt-5')):request['reasoning']={'effort':effort}
-        if model in {'gpt-6.2-sol','gpt-6.2-astra'}:
+        from .model_catalog import EXPLICIT_CACHE_MODELS
+        if model in EXPLICIT_CACHE_MODELS:
             boundary=instructions.find('\nProject:')
             prefix=instructions if boundary<0 else instructions[:boundary]
             suffix='' if boundary<0 else instructions[boundary:]

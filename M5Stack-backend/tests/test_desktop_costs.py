@@ -23,7 +23,7 @@ def test_legacy_economy_migration_preserves_credentials_network_and_own_models(t
     assert not restored.migrate_cost_profile()
     cfg=restored.config
     assert cfg.cost_profile_version==COST_PROFILE_VERSION
-    assert cfg.code_model==cfg.review_model=="gpt-6.2-sol"
+    assert cfg.code_model==cfg.review_model=="gpt-6-luna"
     assert cfg.dialog_model=="gpt-realtime-2.1-mini"
     assert cfg.transcribe_model=="gpt-transcribe" and cfg.speech_model=="my-saved-voice-model"
     assert cfg.port==8787 and cfg.max_workspace_mb==1024
@@ -46,7 +46,7 @@ def test_desktop_budget_and_review_fields_reach_backend_settings(tmp_path):
     store.save(store.config.model_copy(update={"daily_budget_usd":1.5,"build_budget_usd":.4,"request_budget_usd":.12,
         "max_corrections":0,"review_model":"my-review"}))
     settings=store.settings()
-    assert settings.openai_code_model=="gpt-6.2-sol" and settings.openai_review_model=="my-review"
+    assert settings.openai_code_model=="gpt-6-luna" and settings.openai_review_model=="my-review"
     assert settings.fire_daily_budget_usd==1.5 and settings.fire_build_budget_usd==.4
     assert settings.fire_request_budget_usd==.12 and settings.fire_max_corrections==0
     assert settings.openai_transcribe_model=="gpt-transcribe"
@@ -88,6 +88,6 @@ def test_usage_screen_renders_reported_and_uncertain_requests_without_paid_calls
         assert 'Kodebygging' in str(ui.usage_groups['by_operation'].item(ui.usage_groups['by_operation'].get_children()[0])['values'])
         ui.usage_recent.selection_set('usage-two');ui.render_usage_detail()
         assert 'reserve beholdes' in ui.usage_detail.cget('text')
-        ui.economy_profile();assert ui.models['review_model'].get()=='gpt-6.2-sol'
+        ui.economy_profile();assert ui.models['review_model'].get()=='gpt-6-luna'
         assert ui.collect().daily_budget_usd==2
     finally:root.destroy()
