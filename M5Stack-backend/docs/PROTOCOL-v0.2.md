@@ -321,3 +321,26 @@ Local administrator POST /desktop/sessions/{id}/voice with {"test":true} plays
 a fixed speaker test; false repeats the last assistant reply. A connected idle
 session with an existing turn and advertised audio_output is required. Turn,
 app selection and proposal are retained; every replay has a new audio_id.
+
+## Background repair from APP ERROR
+
+See [DEVICE_FIX_ERROR_HANDOFF.md](DEVICE_FIX_ERROR_HANDOFF.md) for the complete
+device UI flow and examples. Additive events: app_repair_prepare requires app_id;
+optional package_id, app_version, sha256 (Lua source), error_code, message and
+typed diagnostics identify the actual failed source. Missing log/version is
+allowed; missing app identity must be resolved by the device error context or
+an explicit fallback app choice. Never infer another app from the AI dialogue.
+
+Backend emits app_repair_status with repair_id, proposal_id and a300s proposal
+TTL. The Fix user action explicitly sends build_confirm with both proposal_id
+and repair_id; prepare alone never invokes generation. Status can be queried
+with app_repair_status and repair_id or app_id, including after reconnect.
+Jobs outlive device page/session closure and use the normal immutable package,
+versioning, quality and capability gates. New code is based on the latest saved
+version with original failure evidence retained. A ready job does not execute
+code: app_download, install receipt and explicit run_confirm still apply.
+
+Diagnostic sha256/source_bytes inconsistent with the named package are retained
+as identity_conflict and trigger an inventory request. They do not create a
+known-bad source guard or block a different immutable source. Firmware must
+capture app/package/version/checksum at actual runtime start, before teardown.

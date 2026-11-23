@@ -401,10 +401,38 @@
         "firmware_store_result",
         "app_download",
         "app_backend_delete_prepare",
-        "app_backend_delete_confirm"
+        "app_backend_delete_confirm",
+        "app_repair_prepare",
+        "app_repair_status"
       ],
       "title": "Event",
       "type": "string"
+    },
+    "repair_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Repair Id"
+    },
+    "app_version": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "App Version"
     },
     "conversation_mode": {
       "anyOf": [
@@ -897,6 +925,26 @@
   "title": "DeviceEvent",
   "type": "object",
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_repair_prepare"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "app_id"
+        ],
+        "properties": {
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {
@@ -1636,6 +1684,41 @@
             "pattern": "^[a-f0-9]{64}$"
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_repair_status"
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "repair_id"
+            ],
+            "properties": {
+              "repair_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          },
+          {
+            "required": [
+              "app_id"
+            ],
+            "properties": {
+              "app_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              }
+            }
+          }
+        ]
       }
     },
     {

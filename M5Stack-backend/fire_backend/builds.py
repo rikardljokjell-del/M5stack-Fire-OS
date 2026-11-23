@@ -41,7 +41,7 @@ async def validate_release(app, store, build_id):
     if app.get("experience_policy_version")==UX_POLICY_VERSION:
         profiles+=("os_long_a","os_long_b","os_long_c","os_double","start_b_idle","play_directions","long_session")
     if 'imu' in app['required_services']:
-        profiles+=("imu_flat","imu_tilt","imu_vertical","imu_zero","imu_calibration","imu_recovery","imu_tolerance")
+        profiles+=("imu_flat","imu_tilt","imu_vertical","imu_zero","imu_calibration","imu_recovery","imu_tolerance","imu_motion")
     for profile in profiles:
         try:
             result = await simulate({**app, "profile": profile,

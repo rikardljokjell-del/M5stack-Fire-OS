@@ -100,6 +100,8 @@ class Backend(DeviceLifecycle, AppLifecycle):
         self.active_build_id = None
         self.active_downloads = {}
         self.store.recover()
+        from .repairs import Repairs
+        self.repairs=Repairs(self)
         from .firmware import Firmware
         self.firmware=Firmware(self)
         for command in self.store.list("commands"):
@@ -513,6 +515,9 @@ class Backend(DeviceLifecycle, AppLifecycle):
         await self.emit(session, {"type": "session_snapshot", **self.snapshot(session), "progress": session.progress,
                                   "summary": session.summary, "pending_commands": [self.command_message(c) for c in self.pending_commands(session)],
                                   "device": self.device_view(session) if session.target == "device" else None})
+        if session.target=='device':
+            jobs=sorted((j for j in self.store.list('repairs') if j['device_id']==session.device_id),key=lambda j:j['updated_at'],reverse=True)
+            for job in jobs[:4]:await self.repairs.emit(session,job)
 
     async def detach(self, session, socket):
         async with self.connection_locks.setdefault(session.device_id, asyncio.Lock()):
@@ -632,6 +637,7 @@ class Backend(DeviceLifecycle, AppLifecycle):
         self.sessions.pop(session.id, None)
 
     async def close(self):
+        await self.repairs.close()
         if self.maintenance_task:
             self.maintenance_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

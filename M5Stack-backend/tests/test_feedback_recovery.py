@@ -67,7 +67,7 @@ async def test_light_feedback_records_verified_identity_and_metrics(tmp_path):
         s,_=await session(service)
         event=DeviceEvent(device_id=s.device_id,event="app_diagnostic",protocol_version="0.2",event_id="diagnostic-feedback",
             session_id=s.id,boot_id=s.boot_id,app_id=package["manifest"]["id"],package_id=package["id"],error_code="init_error",
-            message="callback budget",diagnostics={"phase":"init","callback_us":13000,"free_heap":100000,"source_bytes":123})
+            message="callback budget",diagnostics={"phase":"init","callback_us":13000,"free_heap":100000,"source_bytes":len(service.repairs.source(package).encode('utf-8'))})
         await dispatch(service,s,event)
         report=service.store.list("feedback")[0]
         assert report["source_sha256"]==package["manifest"]["checksum"] and report["diagnostics"]["callback_us"]==13000

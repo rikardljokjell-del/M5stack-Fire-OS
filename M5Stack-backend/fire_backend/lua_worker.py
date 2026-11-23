@@ -82,6 +82,11 @@ local scenes, led_state, scene = {},{},nil
 local checkpoints={400,1400,3400,5400,7400}
 local next_checkpoint=1
 local function imu_value()
+  if profile=="imu_motion" then
+    if elapsed<2000 or elapsed>=6000 then return {x=0,y=0,z=1} end
+    local sign=elapsed<4000 and 1 or -1
+    return {x=-0.5*sign,y=0.5*sign,z=math.sqrt(0.5)}
+  end
   if profile=="imu_flat" then return {x=0,y=0,z=1} end
   if profile=="imu_tilt" or profile=="imu_calibration" then return {x=-0.5,y=0.5,z=math.sqrt(0.5)} end
   if profile=="imu_vertical" then return {x=1,y=0,z=0} end

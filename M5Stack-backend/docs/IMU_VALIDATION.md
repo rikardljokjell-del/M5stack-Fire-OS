@@ -20,6 +20,7 @@ i tillegg disse isolerte testprofilene, også uten live OpenAI:
 | imu_calibration | kjent helling, B etter1s |
 | imu_recovery | helling → nullvektor ved2s → loddrett ved4s → helling ved6s; B ved1/3/5s |
 | imu_tolerance | pitch2°, A ved1s, C ved3/5s |
+| imu_motion | flat → positiv helling ved2s → negativ ved4s → flat ved6s; ingen knapper |
 
 Faktiske utdata fra update registreres ved første frame etter400,1400,3400,
 5400 og7400ms: inntil12 tekster, to grid-bilder (maks384 celler hver), fire

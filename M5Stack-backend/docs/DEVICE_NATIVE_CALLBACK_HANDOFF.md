@@ -3,6 +3,10 @@
 Device-agent: les dette og `docs/IMU_VALIDATION.md`. Backend har ikke endret
 firmware. Feilen er reell, ikke en uklar feilmelding fra brukeren.
 
+Oppfølging2026-11-23: brukeren har ikke kjørt disse firmwaretiltakene ennå.
+Vater starter, men målingen er statisk. Gjennomfør også
+[IMU-ferskhet-rettelsen](DEVICE_IMU_FRESHNESS_HANDOFF.md).
+
 ## Faktisk observasjon
 
 - Pakke `build-0c153938345f40e4b9d3`, Digitalt vater0.1.1.

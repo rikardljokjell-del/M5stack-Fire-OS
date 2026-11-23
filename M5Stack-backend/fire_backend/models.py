@@ -195,6 +195,7 @@ class SessionAction(StrictModel):
 
 class BuildConfirm(SessionAction):
     proposal_id: str = Field(pattern=ID_PATTERN)
+    repair_id: str | None = Field(default=None,pattern=ID_PATTERN)
 
 
 class RunConfirm(SessionAction):
@@ -212,7 +213,8 @@ class DeviceApp(StrictModel):
 # compatible with persisted protocol-0.2 events.
 APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
-                      "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None}
+                      "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None,
+                      "repair_id":None,"app_version":None}
 CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None}
 
 
@@ -230,7 +232,9 @@ class DeviceDiagnostics(StrictModel):
 class DeviceEvent(StrictModel):
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status"]
+    repair_id: str | None = Field(default=None,pattern=ID_PATTERN)
+    app_version: str | None = Field(default=None,max_length=32)
     conversation_mode: Literal["chat", "develop"] | None = None
     diagnostics: DeviceDiagnostics | None = None
     firmware_id: str | None = Field(default=None,pattern=ID_PATTERN)
@@ -288,6 +292,7 @@ class DeviceEvent(StrictModel):
                 "rollback_result": ("rollback_id", "package_id", "status"),
                 "listen_start": ("turn_id",), "listen_stop": ("turn_id",),
                 "app_diagnostic": ("app_id", "package_id", "error_code"),
+                "app_repair_prepare": ("app_id",),
                 "audio_playback_started": ("audio_id", "turn_id"), "audio_playback_finished": ("audio_id", "turn_id"),
                 "audio_playback_failed": ("audio_id", "turn_id", "error_code"),
                 "firmware_store_result": ("firmware_id","transfer_id","status"),
@@ -297,6 +302,8 @@ class DeviceEvent(StrictModel):
             }
             if any(not getattr(self, name) for name in required.get(self.event, ())):
                 raise ValueError("Missing event-specific fields")
+            if self.event=="app_repair_status" and not (self.repair_id or self.app_id):
+                raise ValueError("Repair status requires repair_id or app_id")
             if self.event == "device_install_result" and self.status == "ok" and not self.archive_sha256:
                 raise ValueError("Successful installation requires archive_sha256")
             if self.event == "firmware_store_result" and self.status == "ok" and not self.sha256:

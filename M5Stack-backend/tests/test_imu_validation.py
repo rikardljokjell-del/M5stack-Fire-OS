@@ -27,6 +27,7 @@ end'''), 'profile': 'idle'})
     ('imu_vertical', ['10,0,0']*5),
     ('imu_zero', ['0,0,0']*5),
     ('imu_recovery', ['-5,5,7','-5,5,7','0,0,0','10,0,0','-5,5,7']),
+    ('imu_motion', ['0,0,10','0,0,10','-5,5,7','5,-5,7','0,0,10']),
 ])
 def test_sensor_profiles_capture_actual_output_and_both_led_bars(profile, expected):
     result = simulate({**app('''function update(dt)
@@ -49,6 +50,7 @@ end'''), 'profile': profile})
     ('imu_recovery', ['','B','BB','BBB','BBB']),
     ('imu_tolerance', ['','A','AC','ACC','ACC']),
     ('imu_flat', ['']*5),
+    ('imu_motion', ['']*5),
 ])
 def test_imu_buttons_are_timed_and_do_not_receive_generic_cycle_input(profile, expected):
     result=simulate({**app('''local seen=''
@@ -62,6 +64,6 @@ async def test_every_imu_release_includes_sensor_profiles_and_keeps_physical_unv
         def log(self,*args): pass
     result=await validate_release(app('function update(dt) fire.imu.accel() fire.display.text(0,0,"Level",65535) end'),Log(),'build-imu')
     sensor={r['profile']:r for r in result['profiles'] if r['profile'].startswith('imu_')}
-    assert set(sensor)=={'imu_flat','imu_tilt','imu_vertical','imu_zero','imu_calibration','imu_recovery','imu_tolerance'}
+    assert set(sensor)=={'imu_flat','imu_tilt','imu_vertical','imu_zero','imu_calibration','imu_recovery','imu_tolerance','imu_motion'}
     assert all(len(r['imu_scenes'])==5 for r in sensor.values())
     assert result['physical_verified'] is False

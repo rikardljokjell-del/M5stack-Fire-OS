@@ -8,6 +8,7 @@ from .api_registry import REGISTRY,API_CONTRACT,ALL_SERVICES
 
 
 REQUIRED = {
+    "app_repair_prepare":["app_id"],
     "app_download":["package_id"],
     "app_backend_delete_prepare":["delete_scope"],
     "app_backend_delete_confirm":["delete_id"],
@@ -52,6 +53,8 @@ def schemas():
                                           {"required": ["reason"], "properties": {"reason": {"enum": ["completed", "user_exit", "runtime_limit"]}}}]}})
     conditions.append({"if": {"properties": {"event": {"const": "device_install_result"}, "status": {"const": "ok"}}},
                        "then": {"required": ["archive_sha256"], "properties": {"archive_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}})
+    conditions.append({"if":{"properties":{"event":{"const":"app_repair_status"}}},
+                       "then":{"anyOf":[{"required":[name],"properties":{name:nonnull(name)}} for name in ('repair_id','app_id')]}})
     event["allOf"] = conditions
     conditions.append({"if":{"properties":{"event":{"const":"firmware_store_result"},"status":{"const":"ok"}}},
                        "then":{"required":["sha256"],"properties":{"sha256":nonnull("sha256")}}})
