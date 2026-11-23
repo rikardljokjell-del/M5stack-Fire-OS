@@ -538,3 +538,37 @@ reset loop. The complete physical crash -> repair -> download -> install
 receipt -> run flow, reconnect and double-press matrix still require a real
 crashing Lua package and running backend; they are not claimed as physically
 verified.
+
+## Build continuation, boot recovery and completion notices
+
+Implemented against `M5Stack-backend/docs/DEVICE_BUILD_CONTINUATION_HANDOFF.md`.
+
+- Boot/Auto backend sync now remains demanded until `build_jobs` is received or
+  a bounded 15-second timeout expires. Missing job responses are retried up to
+  two times with a five-second request timeout; the UI loop is never blocked.
+- `build_jobs` uses a string-aware bounded JSON object scanner, preserves job
+  error text/diagnostics/resume flags, and prefers a running/building job over
+  a queued job when several jobs are returned.
+- Same-job continuation preserves the build ID and accepts the valid
+  `failed -> queued -> building -> ready` sequence. Old failure text is cleared
+  when the same job resumes. `build_resumed` accepts both top-level
+  `progress_percent` and nested progress objects.
+- Resume counts reject older delayed events. A selected job does not suppress a
+  ready notice for another build ID; notices are deduplicated after local ACK.
+- The completion notice is rendered once as a final overlay on every normal OS
+  screen with `Åpne`/`Avbryt` hints. It does not auto-install or auto-run.
+
+Verification on 2026-11-23:
+
+- Firmware commit: `03bf3e2`.
+- `m5stack-fire-ble` build: passed; RAM 1.4%, flash 29.5%, binary
+  1,937,584 bytes.
+- Firmware SHA-256:
+  `B16B114807D892F88F016610BE91FDC7CEBA5C8605843FD1DEB44CFBA52001F0`.
+- Flash to COM3 at 921600 baud: passed; esptool hash verification passed.
+- Serial boot: passed through `M5.begin OK`, `RGB OK`, `SD OK`, `buttons OK`,
+  `DateTime OK`, `settings OK` and `FIRE OS started`; no reset loop observed.
+- Not physically verified in this run: live backend job during reboot, failed
+  job retry with same build ID, two simultaneous jobs, offline completion
+  notice, and `Åpne`/install/Run/Avbryt against a running backend. These remain
+  explicit physical acceptance tests and are not reported as complete.
