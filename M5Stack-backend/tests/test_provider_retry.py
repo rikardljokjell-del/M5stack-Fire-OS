@@ -11,9 +11,9 @@ from fire_backend.storage import Store
 from fire_backend.app_quality import APP_QUALITY_POLICY
 
 
-def failure(status=429,code="rate_limit_exceeded",headers=None):
+def failure(status=429,code="rate_limit_exceeded",headers=None,error_type=None):
     response=httpx.Response(status,request=httpx.Request("POST","https://api.openai.com/v1/responses"),headers=headers or {})
-    return APIStatusError("private provider response body",response=response,body={"code":code})
+    return APIStatusError("private provider response body",response=response,body={"code":code,"type":error_type})
 
 
 def builder(tmp_path):
@@ -35,11 +35,27 @@ async def test_temporary_review_rate_limit_retries_same_candidate_and_honors_ser
     assert "private provider response body" not in b.store.path("logs",job["id"],".log").read_text()
 
 
-@pytest.mark.parametrize("status,code",[(401,"invalid_api_key"),(400,"invalid_request"),(429,"insufficient_quota"),(429,"organization_usage_limit_exceeded")])
+@pytest.mark.parametrize("status,code",[(401,"invalid_api_key"),(400,"invalid_request"),(429,"insufficient_quota"),(429,"organization_usage_limit_exceeded"),(429,"credit_balance_exhausted")])
 async def test_account_or_invalid_requests_are_not_retried(tmp_path,status,code):
     b,job=builder(tmp_path);call=AsyncMock(side_effect=failure(status,code))
     with pytest.raises(APIStatusError):await b.provider_call(job,"generating",AsyncMock(),call)
     assert call.call_count==1
+
+
+async def test_quota_error_type_stops_unknown_account_codes_and_maps_to_account_status(tmp_path):
+    from fire_backend.service import Backend
+    from test_device_protocol import configured
+    from test_repair_target import session
+    b,job=builder(tmp_path);call=AsyncMock(side_effect=failure(code='new_account_code',error_type='insufficient_quota'))
+    with pytest.raises(APIStatusError):await b.provider_call(job,'generating',AsyncMock(),call)
+    assert call.call_count==1
+    service=Backend(configured(tmp_path/'service'))
+    try:
+        s,peer=await session(service)
+        await service.failure(s,failure(code='credit_balance_exhausted',error_type='insufficient_quota'))
+        assert peer.events[-1]['message']=='Kontroller API-kontoen'
+        assert 'private provider response body' not in service.store.path('logs',s.id,'.log').read_text()
+    finally:await service.close()
 
 
 async def test_retry_is_bounded_and_never_ignores_long_server_delay(tmp_path,monkeypatch):

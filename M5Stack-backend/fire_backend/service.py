@@ -18,6 +18,7 @@ from .app_quality import APP_QUALITY_POLICY,experience_contract
 from .security import Redactor
 from .storage import Store, new_id
 from .status_text import VERSION as STATUS_TEXT_VERSION,build_text,error_text,display_event
+from .provider_errors import account_limit
 
 
 class Conflict(ValueError):
@@ -777,7 +778,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         # SDK exceptions are deliberately reduced to their type, without provider bodies.
         if isinstance(error, APIStatusError):
             safe = f"OpenAI HTTP {error.status_code}: {type(error).__name__}; request_id={error.request_id}"
-            if getattr(error,'code',None) in {'insufficient_quota','billing_hard_limit_reached','organization_usage_limit_exceeded','billing_not_active'}:
+            if account_limit(error):
                 safe+='; billing/quota limit'
         else:
             safe = str(error) if isinstance(error, (ValueError, Conflict)) else type(error).__name__

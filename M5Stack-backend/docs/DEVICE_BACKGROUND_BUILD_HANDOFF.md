@@ -140,3 +140,9 @@ Vanlige bygg og reparasjoner kan gjenopptas; jobbavbrudd skiller aktivt arbeid
 fra ferdig pakke. Midlertidig AI-kapasitetsfeil får venting og nye forsøk uten
 å bruke en Lua-rettingsrunde. Se BUILD_RELIABILITY_2026-11-23.md for den
 undersøkte RPG-feilen og korreksjonen av review/SD-avhengigheter.
+
+Etter utrulling ble aktiv OpenAI-konto bekreftet tom for API-kreditt
+(credit_balance_exhausted / insufficient_quota fra transkripsjon). Dette kan
+ikke firmware løse. Backend viser Kontroller API-kontoen og gjentar ikke
+kontofeilen. Før ekte AI-ende-til-ende-test må API-kontoen ha kreditt igjen.
+40 målrettede konto-/retry-/lyd-/statustester bestod etter dette tillegget.

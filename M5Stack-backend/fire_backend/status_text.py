@@ -78,7 +78,7 @@ def error_text(detail='',code=''):
         (('permission','another device','another app','tilhører'), 'scope'),
         (('expired','utløpt'), 'expired'),
         (('401','invalid_api_key','authenticationerror','api key'), 'api_key'),
-        (('insufficient_quota','billing'), 'api_account'),
+        (('insufficient_quota','billing','credit_balance_exhausted'), 'api_account'),
         (('429','ratelimit','rate limit'), 'ai_busy'),
         (('no_speech','ingen forståelig','ingen tale'), 'no_speech'),
         (('upload_missing','opptaket kom ikke'), 'audio_missing'),

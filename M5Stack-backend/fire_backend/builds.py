@@ -19,6 +19,7 @@ from .storage import canonical
 from .app_names import app_id_for
 from .rendering import VISUAL_POLICY,NATIVE_HOST_POLICY
 from .status_text import build_text
+from .provider_errors import account_limit
 from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT,service_closure
 from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VERSION,experience_contract
 from .capabilities import CapabilityError
@@ -187,8 +188,7 @@ class Builder:
         for retry in range(5):
             try:return await call(*args)
             except (APIStatusError,APIConnectionError) as error:
-                code=getattr(error,'code',None)
-                if code in {'insufficient_quota','billing_hard_limit_reached','organization_usage_limit_exceeded','billing_not_active'}:raise
+                if account_limit(error):raise
                 if isinstance(error,APIStatusError) and error.status_code not in {408,409,429,500,502,503,504}:raise
                 if retry==4:raise
                 headers=error.response.headers if isinstance(error,APIStatusError) else {}

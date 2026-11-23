@@ -26,3 +26,11 @@ påstå at alle bygg lykkes: PC-test og kildekontroll er ikke bevis på feilfri
 fysisk maskinvarekjøring. Den sanitiserte HTTP429-loggen fastslår ikke hvilken
 konkret konto-/modellgrense som ble nådd. Varig kapasitets-/kontobegrensning kan
 fortsatt stoppe et bygg etter begrensede forsøk, med forståelig kort status.
+
+Etter utrulling mottok to nye taleopptak HTTP429. En liten separat kontroll
+av transkripsjonsendepunktet bekreftet `code=credit_balance_exhausted`,
+`type=insufficient_quota`. Dette er tom API-kreditt, ikke midlertidig kø.
+Backend klassifiserer nå denne koden og quota-typen som kontofeil, uten retry,
+med status `Kontroller API-kontoen`. Kontoen må fylles på utenfor backend.
+Den eldre RPG-loggen lagret ikke denne koden; den eksakte tidligere årsaken
+kan derfor ikke bevises retrospektivt fra HTTP-statusen alene.
