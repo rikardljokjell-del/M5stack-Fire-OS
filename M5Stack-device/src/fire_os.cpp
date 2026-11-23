@@ -1176,11 +1176,11 @@ void FireOS::update() {
   updateWifiState();
   updateBluetoothScan();
   serviceLuaHardwareJobs();
-  updateDebugTests();
   reverseTransport_.service(WiFi.status() == WL_CONNECTED &&
                             backendClient_ && backendClient_->configured());
   updateBackend();
   updateAiAudio();
+  updateDebugTests();
   updateAiAudioOutput();
   if (packageManager_) packageManager_->service(WiFi.status() == WL_CONNECTED);
   if (firmwareStorage_)
@@ -4109,7 +4109,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       if (debugMicRecording_) {
         stopDebugMicTest();
       } else if (debugMicPlaying_) {
-        M5.Speaker.stop();
+        cancelConversationTurn("READY", false);
         debugMicPlaying_ = false;
         debugMicStatus_ = "Playback stopped";
       } else {
@@ -4250,7 +4250,7 @@ void FireOS::onDoubleClick(uint8_t index) {
     if (debugMicRecording_)
       stopDebugMicTest();
     else if (debugMicPlaying_) {
-      M5.Speaker.stop();
+      cancelConversationTurn("READY", false);
       debugMicPlaying_ = false;
       debugMicStatus_ = "Playback stopped";
     } else
@@ -9681,23 +9681,53 @@ void FireOS::drawLuaApp() {
                                                    : "Press B to fix this app";
     if (status.length() > 42) status = status.substring(0, 39) + "...";
     drawText(160, 125, status, kMuted, 1, TFT_BLACK);
+    const bool wifiConnected = WiFi.status() == WL_CONNECTED;
+    const String wifiLabel = wifiMode_ == 2
+                                 ? "Wi-Fi: OFF"
+                                 : wifiConnected
+                                       ? "Wi-Fi: connected"
+                                       : wifiConnectActive_
+                                             ? "Wi-Fi: connecting"
+                                             : wifiSsid_.length() > 0
+                                                   ? "Wi-Fi: waiting"
+                                                   : "Wi-Fi: not configured";
+    drawText(16, 139, wifiLabel,
+             wifiConnected ? kGreen : wifiMode_ == 2 ? kMuted : kOrange, 1,
+             TFT_BLACK);
+    const String backendLabel =
+        !backendClient_ || !backendClient_->configured()
+            ? "Backend: not configured"
+            : backendClient_->sessionReady()
+                  ? "Backend: connected"
+                  : backendClient_->active() ? "Backend: connecting"
+                                             : "Backend: disconnected";
+    drawText(16, 152, backendLabel,
+             backendClient_ && backendClient_->sessionReady()
+                 ? kGreen
+                 : kOrange,
+             1, TFT_BLACK);
     if (luaRepairProgress_ > 0 && luaRepairStatus_ != "ready") {
-      ui.drawRoundRect(32, 139, 256, 10, 4, kMuted);
-      ui.fillRoundRect(34, 141,
+      ui.drawRoundRect(32, 160, 256, 10, 4, kMuted);
+      ui.fillRoundRect(34, 162,
                        max<int>(2, 252 * luaRepairProgress_ / 100), 6, 3,
                        kCyan);
     }
     const uint16_t actionColor = luaErrorAction_ == 0 ? kCyan : kGreen;
-    ui.fillRoundRect(58, 157, 204, 30, 7, actionColor);
-    drawText(160, 166,
+    ui.fillRoundRect(58, 170, 204, 30, 7, actionColor);
+    const bool waitingForRepair = luaRepairRequested_ && luaErrorAction_ == 0;
+    drawText(160, 179,
              luaErrorAction_ == 0 ? "Fiks feil" : "Kjør rettet app", kBg, 2,
              actionColor);
+    if (waitingForRepair) {
+      ui.fillRoundRect(58, 170, 204, 30, 7, actionColor);
+      drawText(160, 179, "VENT...", kBg, 2, actionColor);
+    }
     if (luaRepairStatus_ == "ready")
-      drawText(160, 194,
+    drawText(160, 207,
                "Ny versjon " + luaRepairReadyVersion_, kGreen, 1,
                TFT_BLACK);
     else
-      drawText(160, 194, "B starter valgt handling", kMuted, 1, TFT_BLACK);
+      drawText(160, 207, "B starter valgt handling", kMuted, 1, TFT_BLACK);
     drawText(46, 232, "HOME", kMuted, 1, TFT_BLACK);
     drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
     drawText(274, 232, "BACK", kMuted, 1, TFT_BLACK);
@@ -10109,49 +10139,27 @@ void FireOS::drawPlaceholder() {
 
 void FireOS::updateDebugTests() {
   if (debugMicRecording_) {
-    if (fireMicCaptureFailed()) {
-      fireReleaseMicCapture();
-      debugMicRecording_ = false;
-      debugMicSamples_ = 0;
-      debugMicStatus_ = "Microphone capture failed";
-    } else if (!fireMicCaptureRunning()) {
-      const size_t captured =
-          min(fireMicCapturedSamples(), static_cast<size_t>(kDebugMicSamples));
-      if (!fireReleaseMicCapture()) {
-        debugMicRecording_ = false;
-        debugMicSamples_ = 0;
-        debugMicStatus_ = "Microphone stop failed";
-      } else {
-        debugMicRecording_ = false;
-        debugMicSamples_ = captured;
-        if (captured == 0 || !M5.Speaker.isEnabled() ||
-            !M5.Speaker.playRaw(debugMicBuffer_, captured,
-                                kDebugMicSampleRate, false, 1, 0, true)) {
-          debugMicSamples_ = 0;
-          debugMicStatus_ = "Playback failed";
-        } else {
-          debugMicPlaying_ = true;
-          debugMicStatus_ = "Playing recording";
-        }
-      }
+    if (aiAudioCaptureActive_) {
+      debugMicStatus_ = "Recording - press B to stop";
       redrawRequested_ = true;
-    } else {
-      debugMicStatus_ =
-          "Recording " + String((millis() - debugMicStartedAt_) / 1000) +
-          "/" + String(kDebugMicSeconds) + " sec";
+    } else if (aiVoiceTestPlaybackActive_) {
+      debugMicRecording_ = false;
+      debugMicPlaying_ = true;
+      debugMicStatus_ = "Playing recording";
+      redrawRequested_ = true;
+    } else if (aiAudioError_.length() > 0) {
+      debugMicRecording_ = false;
+      debugMicStatus_ = aiAudioError_;
+      aiVoiceTestMode_ = false;
       redrawRequested_ = true;
     }
   }
-  if (debugMicPlaying_ && !M5.Speaker.isPlaying()) {
+  if (debugMicPlaying_ && !aiVoiceTestPlaybackActive_ &&
+      !aiAudioOutputActive_) {
     debugMicPlaying_ = false;
+    aiVoiceTestMode_ = false;
     debugMicStatus_ = "Ready - press B to record";
     redrawRequested_ = true;
-  }
-  if (!debugMicRecording_ && !debugMicPlaying_ && debugMicBuffer_ &&
-      screen_ != Screen::Debug) {
-    free(debugMicBuffer_);
-    debugMicBuffer_ = nullptr;
-    debugMicSamples_ = 0;
   }
 }
 
@@ -10160,46 +10168,32 @@ void FireOS::startDebugMicTest() {
     debugMicStatus_ = "Microphone unavailable";
     return;
   }
-  if (!debugMicBuffer_) {
-    debugMicBuffer_ = static_cast<int16_t*>(ps_malloc(
-        kDebugMicSamples * sizeof(int16_t)));
-    if (!debugMicBuffer_)
-      debugMicBuffer_ = static_cast<int16_t*>(malloc(
-          kDebugMicSamples * sizeof(int16_t)));
-  }
-  if (!debugMicBuffer_) {
-    debugMicStatus_ = "Not enough memory";
-    return;
-  }
-  debugMicSamples_ = 0;
-  if (!fireStartMicCapture(debugMicBuffer_, kDebugMicSamples,
-                           kDebugMicSampleRate)) {
-    debugMicStatus_ = "Microphone capture unavailable";
+  aiVoiceTestMode_ = true;
+  if (!startAiRecording()) {
+    aiVoiceTestMode_ = false;
+    debugMicStatus_ = aiAudioError_.length() > 0 ? aiAudioError_
+                                                 : "Microphone capture unavailable";
     return;
   }
   debugMicStartedAt_ = millis();
   debugMicRecording_ = true;
   debugMicPlaying_ = false;
-  debugMicStatus_ = "Recording 0/3 sec";
+  debugMicStatus_ = "Recording - press B to stop";
 }
 
 void FireOS::stopDebugMicTest() {
   if (!debugMicRecording_) return;
-  fireStopMicCapture();
+  finishAiRecording();
   debugMicStatus_ = "Stopping recording";
 }
 
 void FireOS::releaseDebugTestAudio() {
-  if (debugMicRecording_) fireStopMicCapture();
-  if (debugMicRecording_ || fireMicCaptureRunning()) fireReleaseMicCapture();
+  if (debugMicRecording_ || debugMicPlaying_ || aiVoiceTestMode_)
+    cancelConversationTurn("READY", false);
   debugMicRecording_ = false;
-  if (debugMicPlaying_) M5.Speaker.stop();
-  debugMicPlaying_ = M5.Speaker.isPlaying();
-  if (!debugMicPlaying_ && debugMicBuffer_) {
-    free(debugMicBuffer_);
-    debugMicBuffer_ = nullptr;
-    debugMicSamples_ = 0;
-  }
+  debugMicPlaying_ = false;
+  aiVoiceTestMode_ = false;
+  debugMicStatus_ = "Press B to record";
 }
 
 void FireOS::cleanupDebugTests() {

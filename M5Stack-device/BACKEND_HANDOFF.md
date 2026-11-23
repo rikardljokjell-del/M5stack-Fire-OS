@@ -520,10 +520,15 @@ Implemented against `M5Stack-backend/docs/DEVICE_FIX_ERROR_HANDOFF.md`.
   outside the Lua callback at controlled cadence. The 12 ms callback limit was
   not increased.
 - IMU freshness uses the existing 50 Hz OS-owned `M5.Imu.update()` loop.
+- APP ERROR shows live Wi-Fi and backend connection state and keeps retrying
+  through the normal OS connection loop. After Fix is pressed, the action
+  label changes to `VENT...` immediately.
+- Debug microphone testing now reuses the stable AI Developer voice-test
+  capture/playback lifecycle instead of a separate direct I²S lifecycle.
 
 Verification on 2026-11-23: `m5stack-fire-ble` built successfully (RAM 1.4%,
-flash 29.2%, binary 1,920,880 bytes, SHA256
-`7024fb22733bae535189c1b9d21093860e8bbafbf571133b0e3163219e31489d`). The
+flash 29.2%, binary 1,921,248 bytes, SHA256
+`fc39b946dbf952c0e784ba55846625accdcec0f25283068a7c082b58bb73e28b`). The
 image was flashed to COM3 at 921600 baud after one interrupted upload attempt;
 flash hashes were verified and the device reached `FIRE OS started` without a
 reset loop. The complete physical crash -> repair -> download -> install
