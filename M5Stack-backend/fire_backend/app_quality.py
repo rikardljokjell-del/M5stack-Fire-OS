@@ -1,5 +1,5 @@
 """Permanent first-delivery and visual standards, independent of user reminders."""
-from typing import Literal
+from typing import Literal,Annotated
 
 from pydantic import Field
 
@@ -179,7 +179,11 @@ without freezing. Preserve useful state/settings where the actual API permits;
 do not claim persistent SD storage when unavailable. The result must feel made
 for FIRE OS, not like a shrunken desktop app.
 
-Hardware tool invariants: queue accepted short inputs without overwriting them.
+Input handling may be immediate or use a small bounded FIFO. Preserve accepted
+queued inputs without overwriting them. At saturation, explicitly reject NEW
+input with visible busy feedback before acknowledgement. A bounded queue is
+correct; never require an unbounded queue or lossless acceptance of all raw
+presses. Invalid actions may be ignored. Hardware tool invariants:
 Keep selected/setpoint values separate from confirmed physical output. A failed
 write or stop must leave an explicit unknown/not-confirmed state, never a claimed
 success. Busy means another owner denied the lease, not that the pin is free.
@@ -202,6 +206,10 @@ each frame. Provide test_sequences which actually exercise each instrument.
 class ReviewIssue(StrictModel):
     category: Literal["requirements", "runtime", "rendering", "performance", "design", "controls", "settings", "recovery"]
     description: str = Field(min_length=1, max_length=1000)
+    evidence_scope: Literal['source','pc_test','device'] = Field(default='source',
+        description='Evidence for this concrete blocking defect. Historical device observations for a DIFFERENT source belong in verification_notes, not blocking issues.')
+    source_sha256: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$',
+        description='Exact source checksum to which the blocking defect applies. Use backend candidate_sha256 for candidate source defects.')
 
 
 class AppReview(StrictModel):
@@ -230,6 +238,8 @@ class FireAppReview(AppReview):
     error_recovery_ok: bool = Field(strict=True)
     audio_level_ok: bool = Field(default=True,strict=True)
     repair_summary: str = Field(default="",max_length=1200)
+    verification_notes: list[Annotated[str,Field(max_length=500)]] = Field(default_factory=list,max_length=4,
+        description='Nonblocking limits of evidence, such as changed source awaiting physical timing verification. Never claim physical success.')
 
     @property
     def approved(self):

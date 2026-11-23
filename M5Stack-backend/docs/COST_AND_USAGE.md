@@ -190,3 +190,14 @@ Apper sorteres nyest opprettet/oppdatert først, én rad per app. Siste pakkes
 publiseringstid brukes; eldre pakker uten tidsfelt bruker den uforanderlige
 pakkefilens endringstid. Tilgang, valgt versjon og oppfriskning av kostnadstall
 endrer ikke rekkefølgen. Versjonsvelgeren og appens samlede kostnad beholdes.
+
+
+## Unngå retting i ring (Vardensaga)
+
+Kodekontroll skiller nå historisk fysisk feil fra ny kandidat med backend-
+beregnet SHA256. Beviskonflikt utløser én kontroll av samme kode, ikke en ny
+hel omskriving. Beste lokalt testede kilde beholdes ved prosa/syntaksregresjon
+og finnes igjen ved Resume. Små målrettede rettelser, fast funksjonsomfang og
+realistisk begrenset knappkø skal redusere antall runder uten å fjerne tester.
+Se [årsaksrapporten](VARDENSAGA_REVIEW_AND_GENERATION.md). Modellvalg og
+brukerens deaktiverte pris-/tokenbegrensninger er ikke endret.

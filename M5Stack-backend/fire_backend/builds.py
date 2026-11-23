@@ -29,6 +29,7 @@ from .capabilities import CapabilityError
 from .usage import UsageBudgetError
 from .jobs import apply_context,mark_context_applied,require_current_context,ContextChanged
 from .generation_errors import GenerationResponseError
+from .build_strategy import POLICY as DEVELOPMENT_POLICY,VERSION as DEVELOPMENT_VERSION,RepairBaseline,evidence_for,review_conflicts,retained_baseline
 
 
 def sha256(data):
@@ -263,6 +264,7 @@ class Builder:
             context += VISUAL_POLICY
         if APP_QUALITY_POLICY not in context:
             context += APP_QUALITY_POLICY
+        if DEVELOPMENT_POLICY not in context:context+=DEVELOPMENT_POLICY
         ux_contract=experience_contract(capabilities)
         context+="\nBackend-authored FIRE experience contract:\n"+json.dumps(ux_contract,ensure_ascii=False)
         from .quality import Quality
@@ -282,6 +284,7 @@ class Builder:
             "dependencies": {n: metadata.version(n) for n in ("openai", "lupa", "pydantic")},
             "max_corrections": max_corrections,
             "experience_contract":ux_contract,
+            "development_policy_version":DEVELOPMENT_VERSION,
         }
         if len(canonical(request)) > self.settings.fire_max_build_kb * 1024:
             raise ValueError("Per-build disk limit exceeded")
@@ -303,12 +306,21 @@ class Builder:
                 previous = archive.read(f"apps/{base['manifest']['id']}/main.lua").decode("utf-8")
         if continuing:
             prior_source=folder/f'attempt-{offset}.lua'
-            if offset and prior_source.is_file() and prior_source.stat().st_size<=100000:
-                previous=prior_source.read_text(encoding='utf-8')
             checkpoint=build['resume_checkpoint']
+            malformed=any(x in (checkpoint.get('last_validation_error') or '') for x in ('LuaSyntaxError','syntax error','Unterminated Lua'))
+            if offset and not malformed and prior_source.is_file() and prior_source.stat().st_size<=100000:
+                previous=prior_source.read_text(encoding='utf-8')
             last_error=checkpoint.get('last_validation_error') or checkpoint.get('error') or last_error
+            retained=retained_baseline(folder,offset)
+            if retained:
+                previous=retained[0]
+                build['repair_baseline_sha256']=sha256(previous.encode('utf-8'))
+                last_error=dumps({'primary_error':last_error,'retained_source_sha256':build['repair_baseline_sha256'],
+                    'historical_review_advice_not_current_evidence':retained[1].correction(),
+                    'instruction':'Continue from this locally tested source. Inspect actual code; historical reviewer claims must be checked against current backend source identity and development policy.'})
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
+            baseline=RepairBaseline(previous,last_error)
             seen_sources=set();seen_failures=set()
             for cycle_attempt in range(max_corrections+1) if max_corrections is not None else count():
                 attempt=offset+cycle_attempt
@@ -328,9 +340,10 @@ class Builder:
                 api_version=(capabilities or {}).get("api_version",BASE_API)
                 payload = generated.main_lua.encode("utf-8")
                 source_hash=sha256(payload)
-                if max_corrections is None and source_hash in seen_sources:
+                candidate_key=(source_hash,sha256(canonical([s.model_dump() for s in generated.test_sequences])))
+                if max_corrections is None and candidate_key in seen_sources:
                     raise GenerationResponseError('ai_no_progress','AI gjentar samme appkode uten å rette feilen. Plan og siste kontrollfunn er bevart; velg Resume for å fortsette.')
-                seen_sources.add(source_hash)
+                seen_sources.add(candidate_key)
                 if len(payload) > 100000:
                     raise ValueError("Generated source exceeds limit")
                 self.store.reserve(len(payload) * 3 + 32768)
@@ -350,6 +363,7 @@ class Builder:
                 await progress("validating", 35, build_text('validating'))
                 await progress("compiling", 50, build_text('compiling'))
                 await progress("testing", 65, build_text('testing'))
+                local_passed=False;review=None
                 try:
                     require_current_context(self.store,build,context_revision)
                     generated=generated.model_copy(update={'required_services':service_closure(generated.required_services,api_version)})
@@ -367,6 +381,14 @@ class Builder:
                         "hardware":(capabilities or {}).get("hardware") or {},
                         "require_io_coverage":self.settings.fire_ai_mode=="openai",
                         **({"experience_policy_version":UX_POLICY_VERSION} if self.settings.fire_ai_mode=="openai" else {})}, self.store, build_id)
+                    local_passed=True
+                    result['source_identity']=evidence_for(self.store,project['id'],generated.main_lua)
+                    profiles=result.get('profiles',[])
+                    self.store.write(folder/f'validation-{attempt+1}.json',{
+                        'source_sha256':source_hash,'local_checks_passed':True,'physical_verified':False,
+                        'profiles_run':[{k:p[k] for k in ('profile','scenario') if k in p} for p in profiles],
+                        'peak_budgets':{key:max((p.get(key,0) for p in profiles),default=result.get(key,0))
+                            for key in ('max_callback_operations','max_callback_text_bytes','max_callback_display_work','max_callback_rgb_calls')}})
                     candidate_meta['local_validated']=True
                     self.store.write(folder/f'candidate-{attempt+1}.json',candidate_meta)
                     await progress("testing",75,build_text('testing',progress=75))
@@ -378,6 +400,13 @@ class Builder:
                         from .ai import MockProvider
                         reviewer=MockProvider().review
                     review=await self.provider_call(build,'testing',progress,reviewer,summary,context,generated,result)
+                    conflicts=review_conflicts(review,result['source_identity'],require_source=self.settings.fire_ai_mode=='openai')
+                    if conflicts:
+                        self.store.write(folder/f'review-{attempt+1}-evidence-conflict.json',{'review':review.model_dump(),'conflicts':conflicts})
+                        result['review_correction']={'conflicts':conflicts,'instruction':'Re-evaluate THIS SAME candidate against backend source_identity. Different-source device history is not a failure of this candidate. Keep all concrete source/local-test defects; place unmeasured physical timing in verification_notes.'}
+                        review=await self.provider_call(build,'testing',progress,reviewer,summary,context,generated,result)
+                        if review_conflicts(review,result['source_identity'],require_source=self.settings.fire_ai_mode=='openai'):
+                            raise GenerationResponseError('ai_review_evidence','Kodekontrollen blander kildeversjoner. Den lokalt testede koden er bevart; ingen ny omskriving eller utestet levering er gjort. Velg Resume for å fortsette kodekontrollen.')
                     review_data=self.store.redactor.value(review.model_dump())
                     if self.settings.fire_ai_mode=="mock" and not isinstance(review,FireAppReview):
                         # Limited offline fixtures are explicitly identified; no live UX claim.
@@ -395,7 +424,7 @@ class Builder:
                     result.update(pre_delivery_review_required=True,pre_delivery_review=review_record)
                     break
                 except ContextChanged as error:
-                    seen_sources.discard(source_hash)
+                    seen_sources.discard(candidate_key)
                     previous=generated.main_lua;last_error=str(error)
                     self.store.log(build_id,last_error)
                     if cycle_attempt==max_corrections:raise ValueError('Ny kontekst venter, men rettingsgrensen er nådd. Fortsett i Aktivitet med konteksten.') from error
@@ -406,17 +435,25 @@ class Builder:
                     # its remote review was interrupted.
                     candidate_meta['local_validated']=False
                     self.store.write(folder/f'candidate-{attempt+1}.json',candidate_meta)
-                    last_error, previous = str(error) or "Lua worker timeout", generated.main_lua
-                    build["last_validation_error"]=self.store.redactor.text(last_error)[:2400]
+                    failure=str(error) or "Lua worker timeout"
+                    feedback=baseline.failure(generated.main_lua,failure,local_passed=local_passed,review=review)
+                    if 'I/O coverage missing' in failure:
+                        feedback['test_sequences']=[s.model_dump() for s in generated.test_sequences]
+                        feedback['instruction']='Preserve working previous_code. Correct the bounded test sequences to START and exercise the missing operations; do not remove app features.'
+                    previous=baseline.source
+                    last_error=dumps(feedback)
+                    self.store.write(folder/f'strategy-{attempt+1}.json',feedback)
+                    build['repair_baseline_sha256']=feedback['repair_baseline_sha256']
+                    build["last_validation_error"]=self.store.redactor.text(failure)[:2400]
                     self.store.put("builds",build_id,build)
-                    Quality(self.store).record_validation(build, generated.main_lua, last_error)
-                    self.store.log(build_id, f"Attempt {attempt + 1} failed: {last_error}")
-                    fingerprint=re.sub(r'\b\d+\b','#',' '.join(last_error.casefold().split()))
+                    Quality(self.store).record_validation(build, generated.main_lua, failure)
+                    self.store.log(build_id, f"Attempt {attempt + 1} failed: {failure}")
+                    fingerprint=re.sub(r'\b\d+\b','#',' '.join(failure.casefold().split()))
                     if max_corrections is None and fingerprint in seen_failures:
                         raise GenerationResponseError('ai_no_progress','AI løser ikke det samme kontrollfunnet etter retting. Ingen utestet app er levert. Plan og feil er bevart; velg Resume.') from error
                     seen_failures.add(fingerprint)
                     if cycle_attempt == max_corrections:
-                        raise ValueError(f"Build failed after {max_corrections} corrections: " + last_error) from error
+                        raise ValueError(f"Build failed after {max_corrections} corrections: " + failure) from error
             await progress("packaging", 85, build_text('packaging'))
             version = project.get("next_version", 1)
             manifest = Manifest(
