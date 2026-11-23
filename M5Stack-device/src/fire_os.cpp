@@ -6161,6 +6161,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
   if (buildId.length() > 0) aiBuildId_ = buildId;
   if (type == "build_jobs") {
     buildJobCount_ = 0;
+    bool activeBuildFound = false;
     const int jobsAt = message.indexOf("\"jobs\"");
     int cursor = jobsAt >= 0 ? message.indexOf('{', jobsAt) : -1;
     while (cursor >= 0 && buildJobCount_ < 4) {
@@ -6170,8 +6171,35 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       buildJobIds_[buildJobCount_] = jsonStringField(item, "build_id");
       buildJobNames_[buildJobCount_] = jsonStringField(item, "name");
       buildJobStatuses_[buildJobCount_] = jsonStringField(item, "status");
+      const String phase = jsonStringField(item, "phase");
+      const String messageText = jsonStringField(item, "message");
+      const bool finished = buildJobStatuses_[buildJobCount_] == "ready" ||
+                            buildJobStatuses_[buildJobCount_] == "failed" ||
+                            buildJobStatuses_[buildJobCount_] == "cancelled";
+      const bool active = buildJobIds_[buildJobCount_].length() > 0 &&
+                          !finished &&
+                          (buildJobStatuses_[buildJobCount_].length() > 0 ||
+                           phase.length() > 0);
+      if (active && !activeBuildFound) {
+        activeBuildFound = true;
+        aiBuildId_ = buildJobIds_[buildJobCount_];
+        buildProgress_ = static_cast<uint8_t>(
+            constrain(jsonIntField(item, "progress"), 0, 100));
+        aiBuildProgress_ = buildProgress_;
+        buildPhase_ = phase;
+        buildStatusMessage_ = messageText;
+        aiWorkflowText_ = messageText.length() > 0
+                              ? messageText
+                              : phase.length() > 0 ? phase : "Bygger...";
+        aiWorkflowState_ = 4;
+        aiDeveloperMode_ = 2;
+        backgroundBuildActive_ = true;
+      }
       if (buildJobIds_[buildJobCount_].length() > 0) ++buildJobCount_;
       cursor = message.indexOf('{', end + 1);
+    }
+    if (!activeBuildFound && !buildNoticeActive_) {
+      backgroundBuildActive_ = false;
     }
     aiResumeAvailable_ = buildJobCount_ > 0;
     redrawRequested_ = true;
