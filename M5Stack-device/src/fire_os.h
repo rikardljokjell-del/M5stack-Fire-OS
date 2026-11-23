@@ -155,6 +155,9 @@ class FireOS {
   bool wifiEnabled_ = false;
   uint8_t wifiMode_ = 0;  // 0=Auto, 1=On, 2=Off
   bool wifiTimeSync_ = false;
+  bool backendBootPending_ = false;
+  bool backendBootAttempted_ = false;
+  uint32_t backendBootAttemptedAt_ = 0;
   bool timeSyncPending_ = false;
   bool timeSyncConfigured_ = false;
   uint32_t timeSyncStarted_ = 0;
@@ -888,6 +891,7 @@ class FireOS {
                     uint8_t stepCount, bool selected, uint16_t accent,
                     bool editing = false);
   void drawWifiIcon(int32_t x, int32_t y, uint8_t state);
+  void drawBackendIcon(int32_t x, int32_t y, bool connected);
   void drawBluetoothIcon(int32_t x, int32_t y, bool enabled);
   void drawBatteryIcon(int32_t x, int32_t y, int level, bool charging);
   int batteryLevel() const;

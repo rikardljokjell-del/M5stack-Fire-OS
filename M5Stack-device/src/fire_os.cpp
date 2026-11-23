@@ -1090,6 +1090,10 @@ void FireOS::begin() {
   if (wifiTimeSync_) {
     startTimeSync();
   }
+  backendBootPending_ = backendClient_ && backendClient_->configured() &&
+                        wifiMode_ != 2;
+  backendBootAttempted_ = false;
+  backendBootAttemptedAt_ = 0;
 
   M5.Display.setRotation(0);
   M5.Display.setBrightness(brightness_);
@@ -1213,6 +1217,7 @@ void FireOS::update() {
   serviceLuaHardwareJobs();
   reverseTransport_.service(WiFi.status() == WL_CONNECTED &&
                             backendClient_ && backendClient_->configured());
+  updateTimeSync();
   updateBackend();
   updateAiAudio();
   updateDebugTests();
@@ -1222,7 +1227,6 @@ void FireOS::update() {
     firmwareStorage_->service(WiFi.status() == WL_CONNECTED, sdReady_);
   if (githubFirmware_)
     githubFirmware_->service(WiFi.status() == WL_CONNECTED, sdReady_);
-  updateTimeSync();
   manageDisplayPower();
   if (carouselAnimating_) {
     const uint32_t now = millis();
@@ -6236,6 +6240,18 @@ void FireOS::updateLuaApp() {
 
 void FireOS::updateBackend() {
   if (!backendClient_) return;
+  if (wifiMode_ == 2) {
+    if (backendClient_->active()) backendClient_->disconnect();
+    backendBootPending_ = false;
+    return;
+  }
+  if (backendBootPending_ && timeSyncPending_) {
+    if (backendClient_->active()) backendClient_->disconnect();
+    return;
+  }
+  const bool bootCheck = backendBootPending_ &&
+                         WiFi.status() == WL_CONNECTED &&
+                         !backendBootAttempted_;
   const bool backendDemand = screen_ == Screen::AiDeveloper ||
                               screen_ == Screen::AiApi ||
                               screen_ == Screen::LuaApp ||
@@ -6244,6 +6260,8 @@ void FireOS::updateBackend() {
                               screen_ == Screen::Firmware ||
                                luaRepairRequested_ || luaRepairId_.length() > 0 ||
                                backgroundBuildActive_ || buildNoticeActive_ ||
+                               (wifiMode_ == 1 && backendClient_->configured()) ||
+                               backendBootPending_ || bootCheck ||
                               (packageManager_ && packageManager_->busy()) ||
                               (firmwareStorage_ && firmwareStorage_->busy()) ||
                               (githubFirmware_ && githubFirmware_->busy()) ||
@@ -6260,6 +6278,11 @@ void FireOS::updateBackend() {
     requestWifi(true);
   }
   backendClient_->service(WiFi.status() == WL_CONNECTED);
+  if (bootCheck) {
+    backendBootAttempted_ = true;
+    backendBootAttemptedAt_ = millis();
+    backendBootPending_ = false;
+  }
   serviceLuaRepair();
   if (luaRepairStatusQueryPending_ && backendClient_->sessionReady()) {
     if (backendClient_->appRepairStatus(luaRepairId_, luaErrorAppId_))
@@ -7553,6 +7576,10 @@ void FireOS::updateWifiState() {
       wifiConnectActive_ = false;
       wifiStatus_ = "Connection failed: check password/network (" +
                     wifiFailureReason(status) + ")";
+      if (backendBootPending_ && wifiMode_ == 0) {
+        backendBootPending_ = false;
+        backendBootAttempted_ = true;
+      }
     }
   }
 
@@ -7592,6 +7619,7 @@ void FireOS::updateTimeSync() {
     if (wifiSsid_.length() == 0) {
       timeSyncPending_ = false;
       timeSyncConfigured_ = false;
+      backendBootPending_ = false;
       timeSyncStatus_ = "Connect Wi-Fi to sync time";
       return;
     }
@@ -7607,6 +7635,7 @@ void FireOS::updateTimeSync() {
     if (millis() - timeSyncStarted_ > 45000) {
       timeSyncPending_ = false;
       timeSyncConfigured_ = false;
+      backendBootPending_ = false;
       timeSyncStatus_ = "Wi-Fi time sync timed out";
     }
     return;
@@ -7633,6 +7662,7 @@ void FireOS::updateTimeSync() {
         timeSyncStatus_ = "Last Wi-Fi sync: " + timeSyncLast_;
         timeSyncPending_ = false;
         timeSyncConfigured_ = false;
+        backendBootPending_ = false;
         if (wifiMode_ == 0) requestWifi(false);
       }
     }
@@ -7640,6 +7670,7 @@ void FireOS::updateTimeSync() {
     timeSyncStatus_ = "Connect to Wi-Fi for time sync";
     timeSyncPending_ = false;
     timeSyncConfigured_ = false;
+    backendBootPending_ = false;
   }
 }
 
@@ -8708,6 +8739,8 @@ void FireOS::drawStatusBar(const char* title) {
                                    wifiSetupActive_)
                                       ? 1
                                       : 0;
+  drawBackendIcon(232, 5,
+                  backendClient_ && backendClient_->sessionReady());
   drawWifiIcon(252, 6, wifiState);
   drawBluetoothIcon(276, 5, bluetoothEnabled_);
   drawBatteryIcon(298, 6, batteryLevel(), batteryCharging());
@@ -10618,6 +10651,13 @@ void FireOS::refreshBatteryStatus() const {
   batteryLevelCached_ = M5.Power.getBatteryLevel();
   batteryChargingCached_ =
       M5.Power.isCharging() == m5::Power_Class::is_charging;
+}
+
+void FireOS::drawBackendIcon(int32_t x, int32_t y, bool connected) {
+  const uint16_t color = connected ? kGreen : kMuted;
+  ui.drawCircle(x + 4, y + 6, 3, color);
+  ui.drawCircle(x + 10, y + 6, 3, color);
+  ui.drawLine(x + 6, y + 4, x + 8, y + 8, color);
 }
 
 void FireOS::drawWifiIcon(int32_t x, int32_t y, uint8_t state) {
