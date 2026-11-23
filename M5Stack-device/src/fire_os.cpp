@@ -212,6 +212,17 @@ void writeFireRgbRaw(uint8_t red, uint8_t green, uint8_t blue,
 }
 #endif
 
+void writeRgbForDebug(uint8_t red, uint8_t green, uint8_t blue,
+                      uint8_t brightness) {
+#ifdef FIRE_OS_BLE
+  writeFireRgbRaw(red, green, blue, brightness);
+#else
+  M5.Led.setBrightness(brightness);
+  M5.Led.setAllColor(red, green, blue);
+  M5.Led.display();
+#endif
+}
+
 
 #ifdef FIRE_OS_BLE
 constexpr char kBluetoothServiceUuid[] =
@@ -1156,6 +1167,7 @@ void FireOS::update() {
   updateWifiState();
   updateBluetoothScan();
   serviceLuaHardwareJobs();
+  updateDebugTests();
   reverseTransport_.service(WiFi.status() == WL_CONNECTED &&
                             backendClient_ && backendClient_->configured());
   updateBackend();
@@ -3951,7 +3963,8 @@ void FireOS::pollButtons() {
 void FireOS::onButton(uint8_t index, bool longPress) {
   redrawRequested_ = true;
   const bool conversationAudio = screen_ == Screen::AiDeveloper && index == 1;
-  if (!conversationAudio && !aiAudioOutputActive_)
+  const bool debugAudio = screen_ == Screen::Debug && detailIndex_ == 4;
+  if (!conversationAudio && !debugAudio && !aiAudioOutputActive_)
     playButtonSound(index, longPress);
   if (longPress) {
     if (screen_ == Screen::FileExplorer && index == 1 && !sdPreview_ &&
@@ -4064,9 +4077,32 @@ void FireOS::onButton(uint8_t index, bool longPress) {
     return;
   }
   if (screen_ == Screen::Debug) {
-    // Debug is a read-only two-page overview. A/C browse pages; B simply
-    // refreshes the live status values. Long C remains the global Back action.
-    if (index == 0 || index == 2) detailIndex_ = index == 0 ? 0 : 1;
+    // Debug is a five-page overview/test area. A/C browse pages, while B is
+    // reserved for the active test on the current test page.
+    constexpr uint8_t kDebugPageCount = 5;
+    if (index == 0) {
+      detailIndex_ = (detailIndex_ + kDebugPageCount - 1) % kDebugPageCount;
+    } else if (index == 2) {
+      detailIndex_ = (detailIndex_ + 1) % kDebugPageCount;
+    } else if (index == 1 && detailIndex_ == 3) {
+      debugRgbIndex_ = (debugRgbIndex_ + 1) % 7;
+      const uint8_t colors[7][3] = {{0, 0, 0},       {255, 0, 0},
+                                    {0, 180, 0},      {0, 80, 255},
+                                    {255, 160, 0},   {180, 0, 255},
+                                    {255, 255, 255}};
+      const uint8_t* color = colors[debugRgbIndex_];
+      writeRgbForDebug(color[0], color[1], color[2], debugRgbBrightness_);
+    } else if (index == 1 && detailIndex_ == 4) {
+      if (debugMicRecording_) {
+        stopDebugMicTest();
+      } else if (debugMicPlaying_) {
+        M5.Speaker.stop();
+        debugMicPlaying_ = false;
+        debugMicStatus_ = "Playback stopped";
+      } else {
+        startDebugMicTest();
+      }
+    }
     return;
   }
 
@@ -4181,6 +4217,33 @@ void FireOS::onButton(uint8_t index, bool longPress) {
 
 void FireOS::onDoubleClick(uint8_t index) {
   redrawRequested_ = true;
+  if (screen_ == Screen::Debug && index == 1 && detailIndex_ == 3) {
+    static constexpr uint8_t kBrightness[] = {40, 80, 120, 180, 255};
+    uint8_t current = 0;
+    while (current + 1 < sizeof(kBrightness) / sizeof(kBrightness[0]) &&
+           kBrightness[current] != debugRgbBrightness_)
+      ++current;
+    debugRgbBrightness_ =
+        kBrightness[(current + 1) % (sizeof(kBrightness) / sizeof(kBrightness[0]))];
+    const uint8_t colors[7][3] = {{0, 0, 0},       {255, 0, 0},
+                                  {0, 180, 0},      {0, 80, 255},
+                                  {255, 160, 0},   {180, 0, 255},
+                                  {255, 255, 255}};
+    const uint8_t* color = colors[debugRgbIndex_];
+    writeRgbForDebug(color[0], color[1], color[2], debugRgbBrightness_);
+    return;
+  }
+  if (screen_ == Screen::Debug && index == 1 && detailIndex_ == 4) {
+    if (debugMicRecording_)
+      stopDebugMicTest();
+    else if (debugMicPlaying_) {
+      M5.Speaker.stop();
+      debugMicPlaying_ = false;
+      debugMicStatus_ = "Playback stopped";
+    } else
+      startDebugMicTest();
+    return;
+  }
   playButtonSound(index, false);
   if (doubleClickAction_[index] >= kBaseDoubleClickActionCount) {
     const uint8_t appIndex = doubleClickAction_[index] -
@@ -4241,6 +4304,7 @@ void FireOS::playButtonSound(uint8_t index, bool longPress) {
 }
 
 void FireOS::open(Screen screen) {
+  if (screen_ == Screen::Debug && screen != Screen::Debug) cleanupDebugTests();
   // Any OS navigation from a running Lua app is an app exit, including
   // configurable double-click shortcuts. Home/Back use their own path, but
   // this guard closes the remaining routes through one cleanup boundary.
@@ -4408,6 +4472,7 @@ void FireOS::startMainSlide(uint8_t nextIndex, int8_t direction) {
 
 void FireOS::back() {
   if (screen_ == Screen::Main) return;
+  if (screen_ == Screen::Debug) cleanupDebugTests();
   if (screen_ == Screen::AiDeveloper &&
       (aiAudioCaptureActive_ || aiAudioOutputActive_ ||
        aiVoiceTestPlaybackActive_)) {
@@ -4419,6 +4484,7 @@ void FireOS::back() {
 }
 
 void FireOS::home() {
+  if (screen_ == Screen::Debug) cleanupDebugTests();
   if (screen_ == Screen::AiDeveloper &&
       (aiAudioCaptureActive_ || aiAudioOutputActive_ ||
        aiVoiceTestPlaybackActive_)) {
@@ -4429,6 +4495,7 @@ void FireOS::home() {
 }
 
 void FireOS::goToBootApp() {
+  if (screen_ == Screen::Debug) cleanupDebugTests();
   if (screen_ == Screen::Bluetooth) closeBluetoothSettings();
   // The current Boot setting is Default. Keep this single routing point so a
   // future installed-app boot target cannot create a second Home behavior.
@@ -4441,6 +4508,7 @@ void FireOS::goToBootApp() {
 }
 
 void FireOS::openQuickSettings() {
+  if (screen_ == Screen::Debug) cleanupDebugTests();
   if (screen_ == Screen::Bluetooth) closeBluetoothSettings();
   previousScreen_ = screen_;
   quickIndex_ = 0;
@@ -9727,68 +9795,249 @@ void FireOS::drawPlaceholder() {
   drawFooter("", "", "BACK  C");
 }
 
+void FireOS::updateDebugTests() {
+  if (debugMicRecording_) {
+    if (fireMicCaptureFailed()) {
+      fireReleaseMicCapture();
+      debugMicRecording_ = false;
+      debugMicSamples_ = 0;
+      debugMicStatus_ = "Microphone capture failed";
+    } else if (!fireMicCaptureRunning()) {
+      const size_t captured =
+          min(fireMicCapturedSamples(), static_cast<size_t>(kDebugMicSamples));
+      if (!fireReleaseMicCapture()) {
+        debugMicRecording_ = false;
+        debugMicSamples_ = 0;
+        debugMicStatus_ = "Microphone stop failed";
+      } else {
+        debugMicRecording_ = false;
+        debugMicSamples_ = captured;
+        if (captured == 0 || !M5.Speaker.isEnabled() ||
+            !M5.Speaker.playRaw(debugMicBuffer_, captured,
+                                kDebugMicSampleRate, false, 1, 0, true)) {
+          debugMicSamples_ = 0;
+          debugMicStatus_ = "Playback failed";
+        } else {
+          debugMicPlaying_ = true;
+          debugMicStatus_ = "Playing recording";
+        }
+      }
+      redrawRequested_ = true;
+    } else {
+      debugMicStatus_ =
+          "Recording " + String((millis() - debugMicStartedAt_) / 1000) +
+          "/" + String(kDebugMicSeconds) + " sec";
+      redrawRequested_ = true;
+    }
+  }
+  if (debugMicPlaying_ && !M5.Speaker.isPlaying()) {
+    debugMicPlaying_ = false;
+    debugMicStatus_ = "Ready - press B to record";
+    redrawRequested_ = true;
+  }
+  if (!debugMicRecording_ && !debugMicPlaying_ && debugMicBuffer_ &&
+      screen_ != Screen::Debug) {
+    free(debugMicBuffer_);
+    debugMicBuffer_ = nullptr;
+    debugMicSamples_ = 0;
+  }
+}
+
+void FireOS::startDebugMicTest() {
+  if (!M5.Mic.isEnabled()) {
+    debugMicStatus_ = "Microphone unavailable";
+    return;
+  }
+  if (!debugMicBuffer_) {
+    debugMicBuffer_ = static_cast<int16_t*>(ps_malloc(
+        kDebugMicSamples * sizeof(int16_t)));
+    if (!debugMicBuffer_)
+      debugMicBuffer_ = static_cast<int16_t*>(malloc(
+          kDebugMicSamples * sizeof(int16_t)));
+  }
+  if (!debugMicBuffer_) {
+    debugMicStatus_ = "Not enough memory";
+    return;
+  }
+  debugMicSamples_ = 0;
+  if (!fireStartMicCapture(debugMicBuffer_, kDebugMicSamples,
+                           kDebugMicSampleRate)) {
+    debugMicStatus_ = "Microphone capture unavailable";
+    return;
+  }
+  debugMicStartedAt_ = millis();
+  debugMicRecording_ = true;
+  debugMicPlaying_ = false;
+  debugMicStatus_ = "Recording 0/3 sec";
+}
+
+void FireOS::stopDebugMicTest() {
+  if (!debugMicRecording_) return;
+  fireStopMicCapture();
+  debugMicStatus_ = "Stopping recording";
+}
+
+void FireOS::releaseDebugTestAudio() {
+  if (debugMicRecording_) fireStopMicCapture();
+  if (debugMicRecording_ || fireMicCaptureRunning()) fireReleaseMicCapture();
+  debugMicRecording_ = false;
+  if (debugMicPlaying_) M5.Speaker.stop();
+  debugMicPlaying_ = M5.Speaker.isPlaying();
+  if (!debugMicPlaying_ && debugMicBuffer_) {
+    free(debugMicBuffer_);
+    debugMicBuffer_ = nullptr;
+    debugMicSamples_ = 0;
+  }
+}
+
+void FireOS::cleanupDebugTests() {
+  releaseDebugTestAudio();
+  writeRgbForDebug(0, 0, 0, 0);
+  debugRgbIndex_ = 0;
+}
+
 void FireOS::drawDebug() {
   drawStatusBar("Debug");
-  drawText(16, 38, detailIndex_ == 0 ? "Core hardware" : "Ports & services",
-           kMuted, 1);
   if (!sdReady_ && millis() - sdLastProbe_ > 2000) initSdCard();
   auto statusColor = [](const String& status) -> uint16_t {
     if (status == "ENABLED") return kCyan;
     if (status == "READY") return kGreen;
+    if (status.indexOf('%') >= 0) return kCyan;
     if (status == "DISABLED" || status == "NOT PRESENT" ||
         status == "UNAVAILABLE")
       return kMuted;
     return kOrange;
   };
+  auto drawTitle = [&](const char* title, const char* subtitle) {
+    ui.setTextDatum(MC_DATUM);
+    drawText(160, 34, title, kCyan, 2, kBg);
+    drawText(160, 45, subtitle, kMuted, 1, kBg);
+    ui.setTextDatum(TL_DATUM);
+  };
   auto drawStatusRow = [&](uint8_t row, const String& label,
                            const String& status) {
-    const int y = 48 + row * 18;
+    const int y = 56 + row * 24;
+    drawText(16, y, label, kMuted, 2, kBg);
+    ui.setTextDatum(MR_DATUM);
+    drawText(307, y, status, statusColor(status), 2, kBg);
+    ui.setTextDatum(TL_DATUM);
+  };
+  auto drawValueRow = [&](uint8_t row, const String& label,
+                          const String& value) {
+    const int y = 57 + row * 22;
     drawText(16, y, label, kMuted, 1, kBg);
     ui.setTextDatum(MR_DATUM);
-    drawText(307, y, status, statusColor(status), 1, kBg);
+    drawText(307, y, value, kText, 1, kBg);
+    ui.setTextDatum(TL_DATUM);
+  };
+  auto drawValueAt = [&](int y, const String& label, const String& value) {
+    drawText(96, y, label, kMuted, 1, kBg);
+    ui.setTextDatum(MR_DATUM);
+    drawText(307, y, value, kText, 1, kBg);
     ui.setTextDatum(TL_DATUM);
   };
 
-  if (detailIndex_ == 0) {
-    drawStatusRow(0, "LCD", "READY");
-    drawStatusRow(1, "Buttons", "READY");
-    drawStatusRow(2, "IMU", M5.Imu.isEnabled() ? "ENABLED" : "UNAVAILABLE");
-    drawStatusRow(3, "Microphone", M5.Mic.isEnabled() ? "ENABLED" : "READY");
-    drawStatusRow(4, "Speaker",
-                  M5.Speaker.isEnabled() ? "ENABLED" : "UNAVAILABLE");
-    drawStatusRow(5, "RGB", "READY");
-    drawStatusRow(6, "Wi-Fi", wifiMode_ == 2
-                                  ? "DISABLED"
-                                  : wifiEnabled_ ? "ENABLED" : "READY");
+  if (detailIndex_ < 3) {
+    drawTitle("Core hardware", detailIndex_ == 0
+                                  ? "Device"
+                                  : detailIndex_ == 1 ? "Connectivity & ports"
+                                                      : "Storage & Lua API");
+    if (detailIndex_ == 0) {
+      drawStatusRow(0, "LCD", "READY");
+      drawStatusRow(1, "Buttons", "READY");
+      drawStatusRow(2, "IMU", M5.Imu.isEnabled() ? "ENABLED" : "UNAVAILABLE");
+      drawStatusRow(3, "Microphone", M5.Mic.isEnabled() ? "ENABLED" : "READY");
+      drawStatusRow(4, "Speaker",
+                    M5.Speaker.isEnabled() ? "ENABLED" : "UNAVAILABLE");
+      drawStatusRow(5, "RGB", "READY");
+    } else if (detailIndex_ == 1) {
+      drawStatusRow(0, "Wi-Fi", wifiMode_ == 2
+                                    ? "DISABLED"
+                                    : wifiEnabled_ ? "ENABLED" : "READY");
 #ifdef FIRE_OS_BLE
-    drawStatusRow(7, "Bluetooth", bluetoothMode_ == 2
-                                      ? "DISABLED"
-                                      : bluetoothEnabled_ ? "ENABLED" : "READY");
+      drawStatusRow(1, "Bluetooth", bluetoothMode_ == 2
+                                        ? "DISABLED"
+                                        : bluetoothEnabled_ ? "ENABLED" : "READY");
 #else
-    drawStatusRow(7, "Bluetooth", "UNAVAILABLE");
+      drawStatusRow(1, "Bluetooth", "UNAVAILABLE");
 #endif
+      drawStatusRow(2, "GPIO / B", "READY");
+      drawStatusRow(3, "UART / B", "READY");
+      drawStatusRow(4, "I2C / POGO A", "READY");
+      // G16/G17 are reserved by FIRE PSRAM and are not exposed to Lua.
+      drawStatusRow(5, "Port C", "DISABLED");
+    } else {
+      drawStatusRow(0, "SD card", sdReady_ ? "READY" : "NOT PRESENT");
+      drawStatusRow(1, "SPI / VSPI", sdReady_ ? "BUSY (SD)" : "READY");
+      int level = batteryLevel();
+      String battery = level >= 0 ? String(level) + "%" : "UNAVAILABLE";
+      if (level >= 0) battery += batteryCharging() ? " CHG" : " BAT";
+      drawStatusRow(2, "Battery", battery);
+      drawStatusRow(3, "Lua API / display", "READY");
+      drawStatusRow(4, "Lua API / audio", "READY");
+      drawStatusRow(5, "Lua API / I/O", "READY");
+    }
+    ui.setTextDatum(MR_DATUM);
+    drawText(307, 193, "READY = FW/API", kMuted, 1, kBg);
+    ui.setTextDatum(TL_DATUM);
+  } else if (detailIndex_ == 3) {
+    drawTitle("Hardware tests", "Buttons and RGB");
+    drawStatusRow(0, "Button A", buttons_[0].down ? "DOWN" : "UP");
+    drawStatusRow(1, "Button B", buttons_[1].down ? "DOWN" : "UP");
+    drawStatusRow(2, "Button C", buttons_[2].down ? "DOWN" : "UP");
+    static const char* const colors[] = {"OFF", "RED", "GREEN", "BLUE",
+                                         "ORANGE", "PURPLE", "WHITE"};
+    const uint8_t percent = static_cast<uint16_t>(debugRgbBrightness_) * 100 / 255;
+    drawStatusRow(3, "RGB", String(colors[debugRgbIndex_]) + " " +
+                               String(percent) + "%");
+    drawText(16, 178, "B: next color   2xB: brightness", kMuted, 1, kBg);
+    drawText(16, 194, "Press A/C for previous/next page", kMuted, 1, kBg);
   } else {
-    const String sdStatus = sdReady_ ? "READY" : "NOT PRESENT";
-    const String spiStatus = sdReady_ ? "BUSY (SD)" : "READY";
-    drawStatusRow(0, "SD card", sdStatus);
-    drawStatusRow(1, "GPIO B G26", "READY");
-    drawStatusRow(2, "UART B G36/26", "READY");
-    drawStatusRow(3, "I2C/POGO A G21/22", "READY");
-    // G16/G17 are reserved by the FIRE's PSRAM and are not exposed to Lua.
-    drawStatusRow(4, "Port C G16/17", "DISABLED");
-    drawStatusRow(5, "SPI VSPI/SD", spiStatus);
-    int level = batteryLevel();
-    String battery = level >= 0 ? String(level) + "%" : "UNAVAILABLE";
-    if (level >= 0) battery += batteryCharging() ? " CHG" : " BAT";
-    drawStatusRow(6, "Battery", battery);
-    drawStatusRow(7, "Lua API", "READY");
+    drawTitle("Hardware tests", "IMU, microphone and ports");
+    m5::imu_data_t imu{};
+    const bool imuReady = M5.Imu.isEnabled();
+    if (imuReady) M5.Imu.getImuData(&imu);
+    ui.drawRoundRect(12, 55, 70, 64, 5, kPanel);
+    ui.drawRect(18, 61, 58, 50, kMuted);
+    ui.drawLine(47, 63, 47, 109, kMuted);
+    ui.drawLine(21, 86, 73, 86, kMuted);
+    int bubbleX = 47;
+    int bubbleY = 86;
+    if (imuReady) {
+      bubbleX += constrain(static_cast<int>(imu.accel.x * 24.0f), -22, 22);
+      bubbleY -= constrain(static_cast<int>(imu.accel.y * 20.0f), -18, 18);
+      ui.fillCircle(bubbleX, bubbleY, 7, kCyan);
+    }
+    ui.setTextDatum(MC_DATUM);
+    drawText(47, 115, imuReady ? "TILT" : "N/A", kText, 1, kPanel);
+    ui.setTextDatum(TL_DATUM);
+    drawValueAt(57, "Accel g", imuReady
+                                   ? String(imu.accel.x, 2) + "  " +
+                                         String(imu.accel.y, 2) + "  " +
+                                         String(imu.accel.z, 2)
+                                   : "UNAVAILABLE");
+    drawValueAt(79, "Gyro dps", imuReady
+                                  ? String(imu.gyro.x, 1) + "  " +
+                                        String(imu.gyro.y, 1) + "  " +
+                                        String(imu.gyro.z, 1)
+                                  : "UNAVAILABLE");
+    float temperature = 0.0f;
+    drawValueAt(101, "IMU temp", imuReady && M5.Imu.getTemp(&temperature)
+                                   ? String(temperature, 1) + " C"
+                                   : "UNAVAILABLE");
+    drawValueRow(3, "Mic test", debugMicStatus_);
+    analogReadResolution(12);
+    drawValueRow(4, "Port B raw", String("G26=") + String(digitalRead(26)) +
+                                       "  G36 ADC=" + String(analogRead(36)));
+    drawValueRow(5, "I2C raw", String("G21=") + String(digitalRead(21)) +
+                                   "  G22=" + String(digitalRead(22)));
+    drawText(16, 190, "B: record/stop/play mic test", kMuted, 1, kBg);
   }
   ui.setTextDatum(MR_DATUM);
-  drawText(307, 190, "READY = FW/API", kMuted, 1, kBg);
-  ui.setTextDatum(TL_DATUM);
-  drawText(16, 190, String("Page ") + String(detailIndex_ + 1) + "/2",
+  drawText(307, 207, String("Page ") + String(detailIndex_ + 1) + "/5",
            kMuted, 1, kBg);
-  drawFooter("Previous", "Refresh", "Next");
+  ui.setTextDatum(TL_DATUM);
+  drawFooter("Previous", detailIndex_ >= 3 ? "Test" : "Refresh", "Next");
 }
 
 void FireOS::drawSystemInfo() {

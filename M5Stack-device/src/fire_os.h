@@ -480,6 +480,19 @@ class FireOS {
   bool aiAudioDownloadStarted_ = false;
   bool aiConversationCancelPending_ = false;
 
+  static constexpr uint32_t kDebugMicSampleRate = 16000;
+  static constexpr uint32_t kDebugMicSeconds = 3;
+  static constexpr size_t kDebugMicSamples =
+      kDebugMicSampleRate * kDebugMicSeconds;
+  int16_t* debugMicBuffer_ = nullptr;
+  size_t debugMicSamples_ = 0;
+  uint32_t debugMicStartedAt_ = 0;
+  bool debugMicRecording_ = false;
+  bool debugMicPlaying_ = false;
+  String debugMicStatus_ = "Press B to record";
+  uint8_t debugRgbIndex_ = 0;
+  uint8_t debugRgbBrightness_ = 120;
+
   // One bounded diagnostic is retained across a temporary backend outage.
   // It is only sent for a package identity known to belong to this device.
   String pendingDiagnosticAppId_;
@@ -808,6 +821,11 @@ class FireOS {
   void drawAiDeveloper();
   void drawAiApi();
   void drawLuaApp();
+  void updateDebugTests();
+  void startDebugMicTest();
+  void stopDebugMicTest();
+  void releaseDebugTestAudio();
+  void cleanupDebugTests();
   void drawLevelRow(uint8_t row, const String& label, uint8_t step,
                     uint8_t stepCount, bool selected, uint16_t accent,
                     bool editing = false);
