@@ -74,6 +74,13 @@ constexpr size_t kBootMelodySampleCount = 3160;  // 395 ms at 8 kHz
 int8_t kBootMelodyPcm[kBootMelodySampleCount] = {};
 bool kBootMelodyPcmReady = false;
 
+String firmwareVersionLabel() {
+  String label = kFirmwareVersion;
+  if (label.startsWith("fire-os-"))
+    return "FIRE OS v" + label.substring(8);
+  return label;
+}
+
 void prepareBootMelody() {
   if (kBootMelodyPcmReady) return;
   struct Note {
@@ -8780,10 +8787,7 @@ void FireOS::drawFirmware() {
     return;
   }
   drawText(16, 34, "Running", kCyan, 1);
-  String runningLabel = kFirmwareVersion;
-  if (runningLabel.startsWith("fire-os-"))
-    runningLabel = "FIRE OS v" + runningLabel.substring(8);
-  drawText(16, 48, runningLabel, TFT_WHITE, 2);
+  drawText(16, 48, firmwareVersionLabel(), TFT_WHITE, 2);
 
   const uint8_t itemCount = 3;
   const uint8_t visible = min<uint8_t>(3, itemCount - firmwareOffset_);
@@ -9760,7 +9764,7 @@ void FireOS::drawSystemInfo() {
   charge += batteryCharging() ? "  CHG" : "  BAT";
   drawText(140, 158, charge, kText, 1);
   drawText(16, 178, "OS", kMuted, 1);
-  drawText(140, 178, "FIRE OS 0.1", kGreen, 1);
+  drawText(140, 178, firmwareVersionLabel(), kGreen, 1);
   drawFooter("", "", "BACK  C");
 }
 
