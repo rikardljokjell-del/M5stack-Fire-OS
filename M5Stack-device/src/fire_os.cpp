@@ -5399,7 +5399,7 @@ void FireOS::updateAiAudioOutput() {
         return;
       }
       aiAudioDownloadStarted_ = true;
-      aiWorkflowText_ = "DOWNLOADING AI VOICE";
+      aiWorkflowText_ = "Henter AI-svar";
       return;
     }
     if (!backendClient_->audioTransferFinished()) return;

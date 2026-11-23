@@ -530,8 +530,8 @@ Implemented against `M5Stack-backend/docs/DEVICE_FIX_ERROR_HANDOFF.md`.
   long raw backend messages are never cut mid-sentence on the 320x240 display.
 
 Verification on 2026-11-23: `m5stack-fire-ble` built successfully (RAM 1.4%,
-flash 29.2%, binary 1,922,784 bytes, SHA256
-`328463bc9d2732fe1953424758e03e43aa95865194997f7a52ae5966d226ae49`). The
+flash 29.2%, binary 1,922,768 bytes, SHA256
+`21b81d790ff1678afbf617a8cb352bad24f7d9b7a4770f98a5fa8dfefedcaf8e`). The
 image was flashed to COM3 at 921600 baud after one interrupted upload attempt;
 flash hashes were verified and the device reached `FIRE OS started` without a
 reset loop. The complete physical crash -> repair -> download -> install
