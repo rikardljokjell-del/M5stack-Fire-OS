@@ -1091,7 +1091,7 @@ void FireOS::begin() {
     startTimeSync();
   }
   backendBootPending_ = backendClient_ && backendClient_->configured() &&
-                        wifiMode_ != 2;
+                        wifiMode_ != 2 && backendMode_ != 2;
   backendBootAttempted_ = false;
   backendBootAttemptedAt_ = 0;
 
@@ -1357,6 +1357,7 @@ void FireOS::loadSettings() {
   wifiMode_ = preferences.isKey("wifi_mode")
                   ? min<uint8_t>(preferences.getUChar("wifi_mode", 0), 2)
                   : (legacyWifi ? 1 : 0);
+  backendMode_ = min<uint8_t>(preferences.getUChar("backend_mode", 0), 2);
   wifiTimeSync_ = preferences.getBool("wifi_time_sync", false);
   timeSyncLast_ = preferences.getString("wifi_time_last", "");
   wifiEnabled_ = false;
@@ -1439,6 +1440,7 @@ void FireOS::saveSettings() {
   preferences.putUChar("volume_step", volumeStep_);
   preferences.putBool("wifi", wifiEnabled_);
   preferences.putUChar("wifi_mode", wifiMode_);
+  preferences.putUChar("backend_mode", backendMode_);
   preferences.putBool("wifi_time_sync", wifiTimeSync_);
   preferences.putString("wifi_time_last", timeSyncLast_);
   preferences.putString("wifi_ssid", wifiSsid_);
@@ -4265,6 +4267,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
         helpPage_ = 0;
         open(Screen::Help);
       } else if (settingsIndex_ == 14) {
+        detailIndex_ = 0;
         open(Screen::AiApi);
       } else if (settingsIndex_ == 15) {
         powerIndex_ = 0;
@@ -6238,9 +6241,25 @@ void FireOS::updateLuaApp() {
   if (luaAppActive_) flushLuaRgb();
 }
 
+void FireOS::applyBackendMode() {
+  if (backendMode_ == 2) {
+    backendBootPending_ = false;
+    backendBootAttempted_ = true;
+    if (backendClient_ && backendClient_->active()) backendClient_->disconnect();
+    backendStatus_ = "Backend sync off";
+    return;
+  }
+  if (backendClient_ && backendClient_->configured() && wifiMode_ != 2) {
+    // Auto performs one lightweight boot check; On remains demanded by
+    // updateBackend() until the user changes the policy again.
+    backendBootPending_ = true;
+    backendBootAttempted_ = false;
+  }
+}
+
 void FireOS::updateBackend() {
   if (!backendClient_) return;
-  if (wifiMode_ == 2) {
+  if (backendMode_ == 2 || wifiMode_ == 2) {
     if (backendClient_->active()) backendClient_->disconnect();
     backendBootPending_ = false;
     return;
@@ -6260,7 +6279,7 @@ void FireOS::updateBackend() {
                               screen_ == Screen::Firmware ||
                                luaRepairRequested_ || luaRepairId_.length() > 0 ||
                                backgroundBuildActive_ || buildNoticeActive_ ||
-                               (wifiMode_ == 1 && backendClient_->configured()) ||
+                               (backendMode_ == 1 && backendClient_->configured()) ||
                                backendBootPending_ || bootCheck ||
                               (packageManager_ && packageManager_->busy()) ||
                               (firmwareStorage_ && firmwareStorage_->busy()) ||
@@ -7058,14 +7077,18 @@ void FireOS::handleAiApiButton(uint8_t index) {
     if (index == 1 || index == 2) stopWifiSetup();
     return;
   }
-  constexpr uint8_t kCount = 3;
+  constexpr uint8_t kCount = 4;
   if (index == 0) {
     detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
   } else if (index == 2) {
     detailIndex_ = (detailIndex_ + 1) % kCount;
   } else if (detailIndex_ == 0) {
+    backendMode_ = (backendMode_ + 1) % 3;
+    saveSettings();
+    applyBackendMode();
+  } else if (detailIndex_ == 1) {
     startAiApiSetup();
-  } else if (detailIndex_ == 2) {
+  } else if (detailIndex_ == 3) {
     back();
   }
 }
@@ -7815,7 +7838,7 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
                               backendDeviceId_, kFirmwareVersion);
     backendStatus_ = backendClient_->status();
   }
-  if (wifiMode_ != 2 && backendHost_.length() > 0 &&
+  if (wifiMode_ != 2 && backendMode_ != 2 && backendHost_.length() > 0 &&
       backendToken_.length() >= 24) {
     // Backend configuration is an explicit app dependency. Auto mode may
     // keep Wi-Fi off at boot, so request it when the backend is configured.
@@ -8317,16 +8340,21 @@ void FireOS::handleQuickButton(uint8_t index) {
         saveSettings();
         break;
       case 4:
-        open(Screen::FileExplorer);
+        backendMode_ = (backendMode_ + 1) % 3;
+        saveSettings();
+        applyBackendMode();
         break;
       case 5:
+        open(Screen::FileExplorer);
+        break;
+      case 6:
         powerActionIndex_ = 0;
         open(Screen::PowerActions);
         break;
-      case 6:
+      case 7:
         open(Screen::Settings);
         break;
-      case 7:
+      case 8:
         screen_ = previousScreen_;
         break;
     }
@@ -8536,6 +8564,10 @@ void FireOS::resetSettings() {
   mainVisible_[4] = true;
   wifiEnabled_ = false;
   wifiMode_ = 0;
+  backendMode_ = 0;
+  backendBootPending_ = false;
+  backendBootAttempted_ = false;
+  if (backendClient_ && backendClient_->active()) backendClient_->disconnect();
   wifiTimeSync_ = false;
   timeSyncPending_ = false;
   timeSyncConfigured_ = false;
@@ -8988,7 +9020,7 @@ void FireOS::drawSettings() {
       "Date / Time",       "Display & Sound", "Wi-Fi",       "Bluetooth",
       "File Explorer",     "Boot",             "Firmware",      "Menu Layout",
       "Shortcuts",         "App Manager",      "Debug",         "System Info",
-      "Help",              "Factory Reset",    "AI settings",   "Power",
+      "Help",              "Factory Reset",    "Backend / AI",   "Power",
       "Back",
   };
   drawStatusBar("Settings");
@@ -9868,7 +9900,7 @@ void FireOS::drawAiDeveloper() {
 }
 
 void FireOS::drawAiApi() {
-  drawStatusBar("AI settings");
+  drawStatusBar("Backend / AI");
   if (wifiSetupActive_) {
     ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
     drawText(24, 41, "Backend config", TFT_WHITE, 2, kPanel);
@@ -9884,10 +9916,14 @@ void FireOS::drawAiApi() {
     drawFooter("", "Close", "");
     return;
   }
-  drawRow(0, "Backend config", detailIndex_ == 0);
-  drawRow(1, "Connection status", detailIndex_ == 1,
+  const String backendModeLabel = backendMode_ == 0
+                                      ? "Auto"
+                                      : backendMode_ == 1 ? "On" : "Off";
+  drawRow(0, "Mode", detailIndex_ == 0, backendModeLabel);
+  drawRow(1, "Backend config", detailIndex_ == 1);
+  drawRow(2, "Connection status", detailIndex_ == 2,
           backendClient_ && backendClient_->configured() ? backendStatus_ : "Not configured");
-  drawRow(2, "Back", detailIndex_ == 2);
+  drawRow(3, "Back", detailIndex_ == 3);
   String host = backendHost_.length() > 0 ? backendHost_ : "not set";
   if (host.length() > 24) host = host.substring(0, 21) + "...";
   String device = backendDeviceId_.length() > 0 ? backendDeviceId_ : "not set";
@@ -10240,13 +10276,29 @@ void FireOS::drawQuickSettings() {
     bluetoothValue = "Disconnected (" + bluetoothModeLabel + ")";
   }
   if (bluetoothValue.length() > 21) bluetoothValue = bluetoothValue.substring(0, 21);
+  const String backendModeLabel = backendMode_ == 0
+                                      ? "Auto"
+                                      : backendMode_ == 1 ? "On" : "Off";
+  String backendValue;
+  if (backendMode_ == 2) {
+    backendValue = "Off";
+  } else if (wifiMode_ == 2) {
+    backendValue = "Wi-Fi Off";
+  } else if (backendClient_ && backendClient_->sessionReady()) {
+    backendValue = "Connected (" + backendModeLabel + ")";
+  } else if (backendClient_ && backendClient_->active()) {
+    backendValue = "Connecting (" + backendModeLabel + ")";
+  } else {
+    backendValue = "Disconnected (" + backendModeLabel + ")";
+  }
+  if (backendValue.length() > 21) backendValue = backendValue.substring(0, 21);
   const String sdValue = sdStorageLabel();
 
   auto drawQuickRow = [&](uint8_t item, const String& label,
                           const String& value) {
-    const int y = 105 + static_cast<int>(item - 2) * 17;
+    const int y = 101 + static_cast<int>(item - 2) * 15;
     const bool selected = quickIndex_ == item;
-    if (selected) ui.fillRoundRect(10, y - 3, 300, 18, 5, kCyan);
+    if (selected) ui.fillRoundRect(10, y - 2, 300, 15, 5, kCyan);
     drawText(20, y + 1, label, selected ? kBg : kText, 1,
              selected ? kCyan : kPanel);
     if (value.length() > 0) {
@@ -10258,10 +10310,11 @@ void FireOS::drawQuickSettings() {
   };
   drawQuickRow(2, "Wi-Fi", wifiValue);
   drawQuickRow(3, "Bluetooth", bluetoothValue);
-  drawQuickRow(4, "SD card", sdValue);
-  drawQuickRow(5, "Power", "");
-  drawQuickRow(6, "All settings", "");
-  drawQuickRow(7, "Back", "");
+  drawQuickRow(4, "Backend-sync", backendValue);
+  drawQuickRow(5, "SD card", sdValue);
+  drawQuickRow(6, "Power", "");
+  drawQuickRow(7, "All settings", "");
+  drawQuickRow(8, "Back", "");
   drawFooter("", quickEditing_ ? "Adjust" : "Select", "");
 }
 

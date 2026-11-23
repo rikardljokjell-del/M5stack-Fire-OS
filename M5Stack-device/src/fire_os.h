@@ -104,7 +104,7 @@ class FireOS {
   static constexpr uint8_t kMaxLuaApps = 32;
   static constexpr uint8_t kMainCount = kSystemMainCount + kMaxLuaApps;
   static constexpr uint8_t kSettingsCount = 17;
-  static constexpr uint8_t kQuickCount = 8;
+  static constexpr uint8_t kQuickCount = 9;
   static constexpr uint8_t kPowerCount = 6;
   static constexpr uint8_t kPowerActionCount = 4;
   static constexpr uint8_t kMaxBluetoothDevices = 32;
@@ -154,6 +154,7 @@ class FireOS {
   bool factoryResetArmed_ = false;
   bool wifiEnabled_ = false;
   uint8_t wifiMode_ = 0;  // 0=Auto, 1=On, 2=Off
+  uint8_t backendMode_ = 0;  // 0=Auto, 1=On, 2=Off
   bool wifiTimeSync_ = false;
   bool backendBootPending_ = false;
   bool backendBootAttempted_ = false;
@@ -820,6 +821,7 @@ class FireOS {
   String luaDiagnosticsJson(const char* phase) const;
   String audioDiagnosticsJson(const char* phase) const;
   void updateBackend();
+  void applyBackendMode();
   void handleBackendMessage(const String& message);
   void handleBackgroundBuildMessage(const String& message);
   void requestBackgroundBuildJobs();
