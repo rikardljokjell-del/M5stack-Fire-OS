@@ -186,6 +186,16 @@ class OpenAIProvider:
             "Inspect the actual source for missing features, state/index/reset bugs, native API assumptions, "
             "expensive host/string work, resource/async error paths and blank/clipped/incoherent screens. "
             "Evaluate the visual layout from its drawing code; do not pretend you saw a rendered screenshot. "
+            "IMU profiles supply unit-g vectors: flat (0,0,1), tilt (-.5,.5,sqrt(.5)), vertical (1,0,0), "
+            "zero (0,0,0); calibration presses B at1s on tilt. Recovery calibrates tilt, then zero at2-4s, "
+            "vertical at4-6s, then restores tilt, with invalid B attempts at3/5s. "
+            "Motion changes flat to positive tilt at2s, negative tilt at4s, then flat at6s with NO buttons; "
+            "use its observed output to check live measurements, sign changes, cache invalidation and return to level. "
+            "Tolerance uses pitch2deg "
+            "and A at1s,C at3/5s. imu_scenes record actual bounded screen text/grid cells and all10 RGB values "
+            "at checkpoints, not screenshots. Grid cells encode palette indices as ASCII48+index. "
+            "Judge results against this app's purpose; these are sensor fixtures, not universal UI expectations. "
+            "Comments or model-written test descriptions are not executed tests or evidence. "
             "Require a coherent, attractive and readable design for this particular app within its API/budget. "
             "Report only concrete actionable release defects, not speculative faults or optional features. "
             "Give precise corrections and locations; do not return replacement code or ask the user to debug. "
@@ -197,6 +207,9 @@ class OpenAIProvider:
             "If correcting a known failure, put a concise factual description of the source correction and "
             "its regression check in repair_summary; do not claim physical verification or proven root cause. "
             "An unimplemented sound toggle is not a pass. Missing sound service must be unavailable with no playback. "
+            "Check audio_level_ok explicitly: primary music/melody defaults to channel gain255/255 under OS master, "
+            "not a hidden low constant such as44. Lower gain must be an intentional labelled attenuation choice "
+            "or quieter secondary cue. Do not claim real loudness from synthetic job success. "
             "Approve only if EVERY named check passes with no concrete unresolved issues.",
             input=json.dumps({"confirmed_app":summary,"candidate":generated.model_dump(),"pc_validation":validation},ensure_ascii=False),
             text_format=FireAppReview,store=False,max_output_tokens=4000,

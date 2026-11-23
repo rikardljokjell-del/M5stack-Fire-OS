@@ -10,10 +10,11 @@ from difflib import SequenceMatcher
 
 
 REGRESSION_CHECKS = {
+    "audio_level":"Inspect primary channel gain255 under OS master, enable sound before playback tests, verify mute/stop and physically check audible output separately.",
     "rendering": "Exercise complete frames while waiting, paused and game-over; reject blank updates, clipped output and invalid clear order.",
     "bounds": "Exercise screen edges, empty/full collections, reset and extreme values; assert valid integer arguments and indices.",
     "nil": "Exercise initialization, empty/full data, collisions and repeated reset; never index absent state.",
-    "budget": "Measure per-callback output/text/work and bounded allocations; cache render inputs and inspect expensive native host calls.",
+    "budget": "Measure per-callback output/text/work, including cold first-frame grid cells and RGB calls; cap grid cells128 and RGB writes1, cache render inputs and inspect blocking native host calls. PC pass is not physical timing proof.",
     "api": "Check every call against negotiated signatures, dependencies and resource permissions, including aliases and operational errors.",
     "text": "Exercise longest labels and numeric values within text byte/footprint limits and supported glyphs.",
     "runtime": "Exercise all controls, restart, long sessions and interrupted operations; preserve requirements and inspect untested branches.",
@@ -62,7 +63,7 @@ def source_delta(before,after,previous_validation=None,candidate_validation=None
         return {m[1]:source[m.start():starts[i+1].start() if i+1<len(starts) else len(source)] for i,m in enumerate(starts)}
     before_functions,after_functions=functions(before),functions(after)
     changed=sorted(name for name in before_functions.keys()|after_functions.keys() if before_functions.get(name)!=after_functions.get(name))[:16]
-    metric_names=("max_callback_operations","max_callback_display_work","max_callback_text_bytes","app_memory_peak","max_io_calls","max_io_bytes")
+    metric_names=("max_callback_operations","max_callback_display_work","max_callback_text_bytes","max_callback_grid_cells","max_callback_rgb_calls","app_memory_peak","max_io_calls","max_io_bytes")
     def metrics(validation):
         validation=validation or {}
         profiles=validation.get("profiles") or [validation]

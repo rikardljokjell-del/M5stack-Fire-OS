@@ -68,6 +68,8 @@ class AppLifecycle(AppManager):
         return next((p for candidate in candidates for p in versions if p["id"] == candidate), versions[0])
 
     def backend_delete_check(self, project, *, ignore_session_id=None):
+        if self.repairs.active_project(project['id']):
+            return False,'Appen repareres i bakgrunnen. Vent til reparasjonen er ferdig før sletting.'
         device_id = project.get("owner_device_id")
         active=[s for s in self.sessions.values() if not s.stopped and s.project_id==project["id"] and s.id!=ignore_session_id]
         if any(s.desktop_device_id for s in active):

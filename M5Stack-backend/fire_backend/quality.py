@@ -28,10 +28,11 @@ def name_words(text):
     return {stem(w) for w in words if w not in {"app", "appen", "program", "programmet"}}
 
 RULES = {
+    "audio_level":"Primary audio uses relative channel gain255/255 by default under OS master/mute. Do not mistake byte gain for percentage or hide near-muted defaults; exercise sound-enabled playback and immediate stop.",
     "rendering": VISUAL_POLICY,
     "bounds": "Clamp display coordinates and RGB values; use finite integers and keep moving objects within screen bounds.",
     "nil": "Initialize state before callbacks. Check table indices, empty lists and missing values, including after reset and collisions.",
-    "budget": "Keep callbacks short and bounded: at most 24 output operations, 256 text bytes and 120000 display-work units per callback. Cache text/rotation/state transformations outside the hot rendering path. Simplify a complete visible scene instead of splitting its drawing across updates. Cap tables/loops. PC budgets are risk proxies, not ESP32 timing guarantees; native callbacks must account for host calls and preemption.",
+    "budget": "Keep callbacks short and bounded: at most 24 output operations, 256 text bytes and 120000 display-work units per callback. Cache text/rotation/state transformations outside the hot rendering path. At most ONE rgb.set per callback: the current native adapter synchronously sends the WHOLE strip. Queue changed LEDs across updates; never resend unchanged colours. At most 128 cumulative grid cells, INCLUDING black cells; native grid performs fillRect per cell. Exercise the cold first frame with real rendering and initial RGB together. Simplify a complete visible scene instead of splitting its drawing across updates. Cap tables/loops. PC budgets are risk proxies, not ESP32 timing guarantees; native callbacks must account for host calls and preemption.",
     "api": "Use only declared fire APIs and the restricted base/math functions. Do not assume standard Lua libraries exist.",
     "text": "Display strings must fit 80 UTF-8 bytes. Format numbers safely without relying on unavailable string APIs.",
     "runtime": "Exercise init, update, reset, each button held and rapid input across the full advertised runtime. Inspect all branches.",
@@ -41,6 +42,7 @@ RULES = {
 
 def failure_class(message):
     text = message.lower()
+    if any(word in text for word in ("audio_level_ok","audio gain","lydstyrke","inaudible")):return "audio_level"
     if "design:" in text or "visual_quality_ok" in text:return "design"
     if "visual frame" in text or any(word in text for word in ("flimr", "flimmer", "flicker", "blank frame")): return "rendering"
     if any(word in text for word in ("bounds", "integer", "range", "coordinate")): return "bounds"
@@ -139,7 +141,7 @@ class Quality:
         if any(c.get("provenance")=="observed_native_source_failure" and c.get("source_sha256")==source_hash for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a live app with an observed native runtime failure. Make a substantive repair before release.")
         if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id")
-               and c.get("provenance")!="device_installation" for c in self.store.list("quality")):
+               and c.get("provenance") not in {"device_installation","package_contract"} for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a version reported broken. Make a substantive repair before release.")
 
     def repair_target(self, service, session, text, *, source="text", continuing_repair=False):
@@ -333,6 +335,13 @@ def require_deliverable(package):
     if package.get("validation",{}).get("suite") != "release-v4":
         raise ValueError("Denne eldre pakken mangler utvidet kjøretidstest. Velg appen og be om reparasjon/ny bygging før levering.")
     validation=package.get("validation",{})
+    if validation.get("native_host_policy"):
+        from .rendering import NATIVE_HOST_POLICY
+        profiles=validation.get("profiles") or []
+        if (validation["native_host_policy"]!=NATIVE_HOST_POLICY or not profiles or
+                any(type(p.get("max_callback_rgb_calls")) is not int or not 0<=p["max_callback_rgb_calls"]<=1 or
+                    type(p.get("max_callback_grid_cells")) is not int or not 0<=p["max_callback_grid_cells"]<=128 for p in profiles)):
+            raise ValueError("Appversjonen mangler bestått kontroll av native RGB-/grid-belastning.")
     if validation.get("pre_delivery_review_required"):
         review=validation.get("pre_delivery_review") or {}
         from .app_quality import AppReview

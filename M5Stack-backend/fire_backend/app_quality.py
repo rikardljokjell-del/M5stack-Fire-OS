@@ -25,9 +25,10 @@ def experience_contract(capabilities=None):
         "game_audio_available":sound,"rgb_available":"rgb" in services,
         "game_audio_required":True,
         "os_settings":{"volume":"OS master/mute authoritative; app gain can only attenuate","backlight":"OS-owned; apps must not override"},
+        "audio_gain":{"default":255,"maximum":255,"meaning":"relative channel gain, NOT OS volume percent","master_zero":"silent"},
         "text":"fixed textSize1, black background; no font/size/transparent-text API; use supported geometry/grid for larger hierarchy",
         "limits":{"lua_bytes":caps.get("max_memory",131072),"callback_ms":12,"display_calls":24,
-                  "text_bytes":256,"display_work":120000},
+                  "text_bytes":256,"display_work":120000,"rgb_calls":1,"grid_cells":128,"grid_pixels":32768},
         "lifetime":"until user exits" if caps.get("max_runtime_ms")==0 else "legacy advertised positive lifetime only",
     }
 
@@ -41,6 +42,13 @@ timeouts/disconnection, unavailable/busy hardware and resource cleanup. Preserve
 every agreed feature. Do not replace a requested game/tool with a generic demo.
 Never rely on the user to discover bugs or ask for repair. Resolve known risks
 before delivery; backend validation and an independent review follow generation.
+For IMU tools, compute from real accel axes in g and handle zero/invalid gravity,
+vertical orientation and calibration recovery. Backend runs flat, known tilt,
+invalid/vertical, calibration and recovery fixtures and records actual screen/RGB
+output. Do not append unexecuted external test scripts as proof. Predecode bitmap
+glyphs once; do not repeatedly parse their strings while rebuilding live numbers.
+Keep the complete normal measurement scene within the SAME callback budget as
+the error screen; a cheap error-only path is not normal-operation coverage.
 
 Every app must look deliberately designed for a 320x240 handheld screen:
 - Choose a coherent visual direction suited to this app: a restrained background,
@@ -103,6 +111,19 @@ toggle cannot unmute OS; app gain may only attenuate the current OS master level
 with OS zero always silent. Changes to OS settings take effect during playback;
 app exit leaves OS settings unchanged. Speaker volume arguments are app gain,
 never permission to bypass OS master. Native adapters must enforce this too.
+Default app/channel gain MUST be 255/255 for primary melody, music and ordinary
+app audio. OS master volume already controls listening loudness. Do not mistake
+0..255 gain for 0..100 percent or silently choose 20/44/64 as a 'comfortable'
+default: that adds severe extra attenuation and may be almost inaudible. Make
+melodies pleasant through notes, rhythm and restrained arrangement, not a hidden
+near-muted channel. Lower gain is appropriate only for an explicitly labelled
+user attenuation setting or deliberately quieter secondary cues. Keep mute
+separate and respect OS master zero; never raise the OS volume to compensate.
+Review primary playback's actual gain argument/default, not merely whether a
+tone job was submitted. A successful PC job does not prove physical loudness.
+Audio test_sequences must explicitly enable the initially muted sound setting,
+start playback and mute/stop again. Menu-only or sound-off animations are not
+evidence that sound was exercised; inspect jobs_started for actual speaker jobs.
 
 FIRE-specific interaction standard (fire-experience-v2), mandatory for ALL apps:
 Physical left=A, middle=B, right=C. In every menu/list/settings screen A means
@@ -202,6 +223,7 @@ class FireAppReview(AppReview):
     game_experience_ok: bool = Field(strict=True)
     settings_and_effects_ok: bool = Field(strict=True)
     error_recovery_ok: bool = Field(strict=True)
+    audio_level_ok: bool = Field(default=True,strict=True)
     repair_summary: str = Field(default="",max_length=1200)
 
     @property
@@ -211,7 +233,7 @@ class FireAppReview(AppReview):
     @staticmethod
     def fire_checks():
         return ("controls_ok","os_gestures_preserved","layout_readability_ok",
-                "game_experience_ok","settings_and_effects_ok","error_recovery_ok")
+                "game_experience_ok","settings_and_effects_ok","error_recovery_ok","audio_level_ok")
 
     def correction(self):
         failed=[name for name in self.fire_checks() if not getattr(self,name)]

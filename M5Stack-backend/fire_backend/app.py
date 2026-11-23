@@ -160,6 +160,7 @@ def create_app(settings=None, provider=None):
         builds = service.store.list("builds")
         return {"sessions": sessions, "devices": service.store.list("devices"),
                 "builds": builds[-20:], "apps": service.app_library(),
+                "repairs":[service.repairs.public(j) for j in sorted(service.store.list('repairs'),key=lambda j:j['updated_at'],reverse=True)[:16]],
                 "firmware":service.firmware.catalog(),
                 "physical_verified": False, "transport": service.reverse_tcp.status()}
 

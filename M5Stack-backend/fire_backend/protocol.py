@@ -112,7 +112,7 @@ async def dispatch(service, session, event):
         return duplicate
     try:
         result = await handle(service, session, event)
-        if session.target == "device":
+        if session.target == "device" and not (isinstance(result,dict) and result.get('status')=='identity_conflict'):
             with contextlib.suppress(OSError,ValueError):
                 service.quality.feedback(session,event)
     except (ValueError, KeyError, PermissionError, FileNotFoundError) as error:
@@ -127,6 +127,9 @@ async def dispatch(service, session, event):
 
 async def handle(service, session, event):
     name = event.event
+    if name=='app_repair_prepare':return await service.repairs.prepare(session,event)
+    if name=='app_repair_status':return await service.repairs.status(session,event)
+    if name=='build_confirm' and event.repair_id:return await service.repairs.confirm(session,event)
     if name == "firmware_store_result":
         return service.firmware.receipt(session,event)
     if name in {"app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm"}:
@@ -143,6 +146,20 @@ async def handle(service, session, event):
         project = service.store.get("projects", package["project_id"])
         if session.target != "device" or project.get("owner_device_id") != session.device_id or package["manifest"]["id"] != event.app_id:
             raise PermissionError("Diagnostic package scope mismatch")
+        source=service.repairs.source(package)
+        if (event.sha256 and event.sha256!=package['manifest']['checksum'] or
+                event.diagnostics and event.diagnostics.source_bytes is not None and event.diagnostics.source_bytes!=len(source.encode('utf-8'))):
+            # Preserve the report, but never blame a different immutable source.
+            report={'id':event.event_id,'device_id':session.device_id,'app_id':event.app_id,
+                    'reported_package_id':event.package_id,'reported_source_sha256':event.sha256,
+                    'message':event.message,'error_code':event.error_code,
+                    'diagnostics':event.diagnostics.model_dump(exclude_none=True) if event.diagnostics else {},
+                    'reported_at':time.time(),'status':'identity_conflict'}
+            service.store.put('diagnostics',report['id'],report,critical=True)
+            await service.emit(session,{'type':'repair_available','app_id':event.app_id,'package_id':None,
+                'reported_package_id':event.package_id,'identity_conflict':True})
+            await service.request_inventory(session)
+            return {'status':'identity_conflict','report_id':event.event_id}
         case = service.quality.record(project_id=project["id"],package_id=package["id"],device_id=session.device_id,
             source_hash=package["manifest"]["checksum"],message=event.error_code+": "+(event.message or ""),provenance="device_diagnostic")
         device=service.device_record(session)

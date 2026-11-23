@@ -61,7 +61,7 @@ def validate_api(source, services, api_version="fire-lua-0.1"):
 
 
 HARNESS = r'''
-local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms = ...
+local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms, native_guard = ...
 local sequence_index, next_input_ms = 1,16
 local compile, hook = load, debug.sethook
 local count, total, elapsed = 0, 0, 0
@@ -69,6 +69,7 @@ local callback_ops, callback_work, peak_ops, peak_work = 0,0,0,0
 local callback_phase, clear_count, visible_ops, background = "",0,0,0
 local text_bytes, peak_text_bytes = 0,0
 local grid_pixels, peak_grid_pixels = 0,0
+local grid_cells,peak_grid_cells,rgb_calls,peak_rgb_calls=0,0,0,0
 local min_update_draws, update_count, peak_clears = nil,0,0
 local frames_run = 0
 local os_suppressed, os_suspended, os_exited, os_navigation = 0,0,false,""
@@ -76,6 +77,28 @@ local host_baseline, app_memory_peak = 0,0
 local has_display = string.match(services,"display") ~= nil
 local trace, trace_count = {}, 0
 local button = ""
+local imu_reads=0
+local scenes, led_state, scene = {},{},nil
+local checkpoints={400,1400,3400,5400,7400}
+local next_checkpoint=1
+local function imu_value()
+  if profile=="imu_motion" then
+    if elapsed<2000 or elapsed>=6000 then return {x=0,y=0,z=1} end
+    local sign=elapsed<4000 and 1 or -1
+    return {x=-0.5*sign,y=0.5*sign,z=math.sqrt(0.5)}
+  end
+  if profile=="imu_flat" then return {x=0,y=0,z=1} end
+  if profile=="imu_tilt" or profile=="imu_calibration" then return {x=-0.5,y=0.5,z=math.sqrt(0.5)} end
+  if profile=="imu_vertical" then return {x=1,y=0,z=0} end
+  if profile=="imu_zero" then return {x=0,y=0,z=0} end
+  if profile=="imu_tolerance" then return {x=-math.sin(math.pi/90),y=0,z=math.cos(math.pi/90)} end
+  if profile=="imu_recovery" then
+    if elapsed>=2000 and elapsed<4000 then return {x=0,y=0,z=0} end
+    if elapsed>=4000 and elapsed<6000 then return {x=1,y=0,z=0} end
+    return {x=-0.5,y=0.5,z=math.sqrt(0.5)}
+  end
+  return {x=0.5*math.sin(elapsed/1000),y=0.5*math.cos(elapsed/1000),z=math.sqrt(0.75)}
+end
 local function integer(v, lo, hi)
   if type(v) ~= "number" or v ~= v or v < lo or v > hi then
     error("API argument outside bounds")
@@ -89,6 +112,12 @@ local function record(name, ...)
   total = total + 1
   callback_ops=callback_ops+1
   local a,b,c,d=...
+  if name=="rgb" then
+    rgb_calls=rgb_calls+1;peak_rgb_calls=math.max(peak_rgb_calls,rgb_calls)
+    if native_guard and rgb_calls>1 then error("Native host RGB budget exceeded: at most ONE rgb.set per callback; each call synchronously transmits the whole strip. Queue changes across updates.") end
+  end
+  if scene and name=="text" and #scene.texts<12 then scene.texts[#scene.texts+1]=c end
+  if scene and name=="fill_circle" and #scene.circles<4 then scene.circles[#scene.circles+1]={x=a,y=b,r=c} end
   if profile and has_display and callback_phase=="on_button" and name~="rgb" then
     error("Visual frame: on_button must change state only; render in update")
   end
@@ -112,6 +141,8 @@ local function record(name, ...)
   elseif name=="circle" then work=math.ceil(7*c)
   elseif name=="fill_circle" then work=math.ceil(math.pi*c*c)
   elseif name=="grid" then
+    grid_cells=grid_cells+select(5,...)*select(6,...);peak_grid_cells=math.max(peak_grid_cells,grid_cells)
+    if native_guard and grid_cells>128 then error("Native host grid cell budget exceeded: at most 128 TOTAL cells per callback, including black cells. Compact cached glyphs/boards; a low pixel area alone is insufficient.") end
     work=c*d*select(5,...)*select(6,...)
     grid_pixels=grid_pixels+work;peak_grid_pixels=math.max(peak_grid_pixels,grid_pixels)
     if profile and grid_pixels>32768 then error("Native grid raster budget exceeded; compact the complete board and merge static/dynamic cells") end
@@ -180,6 +211,10 @@ if api_version=="fire-lua-0.2" then
       if palette[index+1]~=background then ink=palette[index+1] end
     end
     if count~=cols*rows then error("Grid data must be dense") end
+    if scene and #scene.grids<2 then
+      local digits={};for i=1,#cells do digits[i]=string.char(48+cells[i]) end
+      scene.grids[#scene.grids+1]={x=x,y=y,cols=cols,rows=rows,cells=table.concat(digits)}
+    end
     record("grid",x,y,w,h,cols,rows,ink)
   end
 end
@@ -189,8 +224,9 @@ local available = {
   rgb = {set=function(i,r,g,b)
     whole(i,0,9); whole(r,0,255); whole(g,0,255); whole(b,0,255)
     record("rgb",i,r,g,b)
+    led_state[i]=r*65536+g*256+b
   end},
-  imu = {accel=function() return {x=math.sin(elapsed/1000),y=math.cos(elapsed/1000),z=1} end},
+  imu = {accel=function() imu_reads=imu_reads+1;return imu_value() end},
   buttons = {pressed=function(b)
     if b~="A" and b~="B" and b~="C" then error("Unknown button") end
     return b==button
@@ -235,6 +271,7 @@ local function call(fn, ...)
   callback_ops,callback_work=0,0
   text_bytes=0
   grid_pixels=0
+  grid_cells,rgb_calls=0,0
   if hardware then hardware.begin_callback() end
   clear_count,visible_ops,background=0,0,0
   hook(quota,"",1000)
@@ -267,12 +304,27 @@ for frame=1,frames do
   elapsed=elapsed+dt
   if elapsed>memory_ms then error("Runtime budget exceeded") end
   local suspend_update=false
+  if profile and string.sub(profile,1,4)=="imu_" and next_checkpoint<=#checkpoints and elapsed>=checkpoints[next_checkpoint] then
+    scene={at_ms=elapsed,texts={},grids={},circles={},leds={}}
+  else scene=nil end
   if sequence and #sequence>0 then
     button=""
     if sequence_index<=#sequence and elapsed>=next_input_ms then
       button=sequence[sequence_index];sequence_index=sequence_index+1;next_input_ms=elapsed+interval_ms
       if env.on_button then callback_phase="on_button";call(env.on_button,button,"pressed") end
     end
+  elseif profile and string.sub(profile,1,4)=="imu_" then
+    button=""
+    local event=false
+    if (profile=="imu_calibration" or profile=="imu_recovery") and elapsed-dt<1000 and elapsed>=1000 then event=true end
+    if profile=="imu_recovery" and ((elapsed-dt<3000 and elapsed>=3000) or (elapsed-dt<5000 and elapsed>=5000)) then event=true end
+    if (profile=="imu_vertical" or profile=="imu_zero") and elapsed-dt<1000 and elapsed>=1000 then event=true end
+    local selected="B"
+    if profile=="imu_tolerance" then
+      if elapsed-dt<1000 and elapsed>=1000 then event=true;selected="A" end
+      if (elapsed-dt<3000 and elapsed>=3000) or (elapsed-dt<5000 and elapsed>=5000) then event=true;selected="C" end
+    end
+    if event and env.on_button then callback_phase="on_button";call(env.on_button,selected,"pressed") end
   elseif profile=="os_long_a" or profile=="os_long_b" or profile=="os_long_c" then
     -- Synthetic OS-owned gesture: raw state exists before ownership is claimed,
     -- but a consumed hold never becomes an application short-press callback.
@@ -323,13 +375,18 @@ for frame=1,frames do
     call(env.update,dt)
     frames_run=frames_run+1
   end
+  if scene then
+    for i=0,9 do scene.leds[i+1]=led_state[i] or 0 end
+    scenes[#scenes+1]=scene;next_checkpoint=next_checkpoint+1
+  end
   if profile and elapsed>=memory_ms then break end
 end
 return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,max_callback_operations=peak_ops,max_callback_display_work=peak_work,
         min_update_draws=min_update_draws or 0,update_count=update_count,max_callback_clears=peak_clears,max_callback_text_bytes=peak_text_bytes,
         hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,
         os_reserved_callbacks_suppressed=os_suppressed,os_updates_suspended=os_suspended,os_exited=os_exited,os_navigation=os_navigation,
-        max_callback_grid_pixels=peak_grid_pixels}
+        max_callback_grid_pixels=peak_grid_pixels,max_callback_grid_cells=peak_grid_cells,max_callback_rgb_calls=peak_rgb_calls,
+        imu_reads=imu_reads,imu_scenes=scenes}
 '''
 
 
@@ -366,13 +423,20 @@ def simulate(request):
     factory=lua.execute((Path(__file__).parent/"data/hardware_sim.lua").read_text(encoding="utf-8")) if api_version=="fire-lua-0.2" else None
     result = lua.execute(HARNESS, source, ",".join(services), max_ms,
                          (max_ms+15)//16 if request.get("profile") else min(180, max_ms // 16), request.get("profile"),
-                         max(20000, max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory,lua.table_from(sequence),interval)
+                         max(20000, max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory,lua.table_from(sequence),interval,
+                         request.get("native_host_policy")=="fire-native-host-v1")
     trace = []
     for i in range(1, len(result["trace"]) + 1):
         command = result["trace"][i]
         trace.append([command[j] for j in range(1, len(command) + 1)])
     hardware_metrics=result["hardware_metrics"]
     resources_used={kind:[values[i] for i in range(1,len(values)+1)] for kind,values in hardware_metrics["resources_used"].items()} if hardware_metrics else {}
+    def unpack(value):
+        if hasattr(value,"items"):
+            keys=list(value.keys())
+            if keys and all(type(k) is int for k in keys):return [unpack(value[k]) for k in sorted(keys)]
+            return {k:unpack(v) for k,v in value.items()} if keys else []
+        return value
     return {"ok": True, "syntax": "passed", "api_validation": "passed",
             "frames": result["frames"], "elapsed_ms": result["elapsed_ms"],
             "api_operations": result["api_operations"], "trace": trace,
@@ -380,6 +444,8 @@ def simulate(request):
             "min_update_draws":result["min_update_draws"],"update_count":result["update_count"],"max_callback_clears":result["max_callback_clears"],
             "max_callback_text_bytes":result["max_callback_text_bytes"],"resources_used":resources_used,
             "max_callback_grid_pixels":result["max_callback_grid_pixels"],
+            "max_callback_grid_cells":result["max_callback_grid_cells"],"max_callback_rgb_calls":result["max_callback_rgb_calls"],
+            "imu_reads":result["imu_reads"],"imu_scenes":unpack(result["imu_scenes"]),
             "hardware_simulated":api_version=="fire-lua-0.2","app_memory_peak":result["app_memory_peak"],"max_io_calls":hardware_metrics["max_io_calls"] if hardware_metrics else 0,
             "max_io_bytes":hardware_metrics["max_io_bytes"] if hardware_metrics else 0,"max_jobs":hardware_metrics["max_jobs"] if hardware_metrics else 0,
             "io_calls":dict(hardware_metrics["calls"].items()) if hardware_metrics else {},
