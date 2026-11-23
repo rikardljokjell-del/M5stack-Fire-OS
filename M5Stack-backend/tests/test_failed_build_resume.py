@@ -59,8 +59,8 @@ async def test_device_failed_job_resumes_after_reboot_without_paid_call_and_need
         await dispatch(b,fresh,confirm)  # Exact event replay cannot start another job.
         await asyncio.wait_for(task,10)
         new=b.store.get('builds',fresh.build_id)
-        assert new['retry_of']==build['id'] and new['status']=='ready'
-        assert b.store.get('builds',build['id'])['status']=='failed'
+        assert new['id']==build['id'] and new['status']=='ready'
+        assert new['run_history'][0]['status']=='failed' and new['resume_count']==1
         assert new['project_id']==build['project_id'] and p.calls==2
         assert not any(c['kind']=='run' for c in b.store.list('commands'))
     finally:await b.close()
@@ -141,4 +141,19 @@ async def test_old_failed_notice_cannot_replace_an_active_job_after_reconnect(tm
         peer.events.clear();await b.build_notices(s)
         notices=[e for e in peer.events if e['type']=='build_job_status']
         assert [e['build_id'] for e in notices]==['build-current']
+    finally:await b.close()
+
+
+async def test_concurrently_completed_resume_still_requires_matching_confirmation(tmp_path):
+    from fire_backend.service import Conflict
+    p=FailsOnce();b=Backend(configured(tmp_path),p)
+    try:
+        s,_,build,_=await failed_job(b,p)
+        await b.restore_failed_build(s,build)
+        completed={**build,'status':'ready'}
+        b.store.put('builds',build['id'],completed)
+        with pytest.raises(Conflict):await b.confirm_build(s,'proposal-wrong')
+        s.stopped=True
+        with pytest.raises(Conflict):await b.confirm_build(s,s.proposal_id)
+        assert p.calls==1 and len(b.store.list('builds'))==1
     finally:await b.close()

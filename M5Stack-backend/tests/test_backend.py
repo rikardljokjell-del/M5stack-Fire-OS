@@ -57,8 +57,8 @@ async def test_confirmations_and_package_integrity(settings):
             await service.confirm_run(session, "build-wrong")
         proposal = session.proposal_id
         build = await service.confirm_build(session, proposal)
-        with pytest.raises(Conflict):
-            await service.confirm_build(session, proposal)
+        assert (await service.confirm_build(session, proposal))['id']==build['id']
+        assert len(service.store.list('builds'))==1
         await session.task
         assert session.state == State.ready_to_run
         package = service.store.get("packages", session.package_id)

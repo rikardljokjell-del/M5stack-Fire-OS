@@ -69,9 +69,10 @@ class Jobs:
 
     def snapshot(self):
         rows=[];projects={p['id']:p for p in self.store.list('projects')};usage=self.service.usage.records()
+        costs=self.service.usage.build_costs()
         for b in self.store.list('builds'):
             p=projects.get(b['project_id'],{});record=context_record(self.store,b['id'])
-            error=b.get('error','');active=b['status'] in ACTIVE
+            active=b['status'] in ACTIVE;error=b.get('error','') if not active else ''
             failure=build_failure(self.store,b) if error else {}
             rows.append({'id':b['id'],'build_id':b['id'],'project_id':b['project_id'],'name':p.get('name','App'),
                 'operation':b.get('operation','repair' if b.get('repair_of') else 'update' if b.get('repair_job_id') else 'build'),
@@ -88,7 +89,8 @@ class Jobs:
                 'phase_seconds':b.get('phase_seconds',{}),'package_id':b.get('package_id'),
                 'can_add_context':active and b.get('phase') not in CLOSED,
                 'context':record,'context_pending':record['revision']>record['applied_revision'],
-                'estimated_usd':sum(u['estimated_usd'] for u in usage if u.get('build_id')==b['id']),
+                'estimated_usd':costs.get(b['id'],{}).get('estimated_usd',0),
+                'cost_detail':costs.get(b['id'],{}),'resume_count':b.get('resume_count',0),
                 'usage_unknown':sum(u['usage_source']=='reservation' for u in usage if u.get('build_id')==b['id'])})
         for repair in self.store.list('repairs'):
             if not repair.get('build_id') and repair['status'] in {'queued','awaiting_confirmation'}:

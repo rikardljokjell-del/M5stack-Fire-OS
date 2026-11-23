@@ -272,6 +272,21 @@ class UsageLedger:
                 'unknown_usage_requests': sum(r['usage_source'] == 'reservation' for r in records),
                 'pending_requests': sum(r['status'] == 'pending' for r in records)}
 
+    def build_costs(self):
+        """Job lifetime, including continuations and separately marked legacy estimates."""
+        with self.lock:
+            records=self.records();grouped={}
+            for record in records:
+                if record.get('build_id'):grouped.setdefault(record['build_id'],[]).append(record)
+            result={key:{**self._totals(rows),'recorded_usd':self._totals(rows)['estimated_usd']}
+                for key,rows in grouped.items()}
+            from .historical_costs import totals
+            for key,history in totals(self.store,records,'build_id').items():
+                row=result.setdefault(key,{**self._totals([]),'recorded_usd':0})
+                row['historical_estimate']=history
+                row['estimated_usd']+=history['estimated_usd']
+            return result
+
     def snapshot(self):
         with self.lock:
             records = self.records()

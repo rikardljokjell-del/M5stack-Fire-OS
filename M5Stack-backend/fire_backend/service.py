@@ -174,10 +174,13 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             device_id = project.get("owner_device_id")
             device = devices.get(device_id, {})
             manifest = package["manifest"]
+            archive=self.store.path('packages',package['id'],'.zip')
+            updated_at=package.get('created_at') or (archive.stat().st_mtime if archive.is_file() else 0)
             presence = self.app_presence(device, manifest["id"])
             absent = presence.get("state") in {"deleted", "missing"}
             can_delete, block_reason = self.backend_delete_check(project) if project else (False, "Prosjektet finnes ikke.")
             apps.append({"app_id": manifest["id"], "name": manifest["name"], "version": manifest["version"],
+                         "updated_at":updated_at,
                          "api_version":manifest.get("api_version","fire-lua-0.1"),
                          "quality": package.get("quality", {}), "validation_suite": package.get("validation",{}).get("suite"),
                          "project_id": package["project_id"], "package_id": package["id"], "mode": package["mode"], "device_id": device_id,
@@ -192,7 +195,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                          "running": bool(not absent and device.get("online") and device.get("runtime_status") == "running"
                                          and device.get("running_package_id") == package["id"]),
                          "physical_verified": False})
-        return apps
+        return sorted(apps,key=lambda a:(a['updated_at'],a['project_id'],a['version']),reverse=True)
 
     async def install_saved(self, session, package_id):
         if session.target=='device':await self.release_foreground(session)
@@ -243,7 +246,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
 
     def snapshot(self, session):
         return {"session_id": session.id, "device_id": session.device_id,
-                "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1"],
+                "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1","repair_cancel_v1"],
                 "resumed_from_build_id":session.resumed_from_build_id,
                 "project_id": session.project_id, "state": session.state,
                 "proposal_id": session.proposal_id, "package_id": session.package_id,
@@ -544,7 +547,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                                   "summary": session.summary, "pending_commands": [self.command_message(c) for c in self.pending_commands(session)],
                                   "device": self.device_view(session) if session.target == "device" else None})
         if session.target=='device':
-            jobs=sorted((j for j in self.store.list('repairs') if j['device_id']==session.device_id),key=lambda j:j['updated_at'],reverse=True)
+            jobs=sorted((j for j in self.store.list('repairs') if j['device_id']==session.device_id),key=lambda j:(j['status'] in {'queued','building'},j['updated_at']),reverse=True)
             for job in jobs[:4]:await self.repairs.emit(session,job)
             await self.build_notices(session)
 
@@ -841,8 +844,26 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             await cancel_turn(self,session)
 
     async def confirm_build(self, session, proposal_id):
+        if session.stopped:raise Conflict('Samtalen er avsluttet.')
         if session.conversation_mode == "chat":
             raise Conflict("Velg Lag/endre app før du bygger en app.")
+        # A second press/another event ID must only reattach to the consumed
+        # proposal, never enqueue another paid execution.
+        if session.build_id and proposal_id:
+            prior=self.store.get('builds',session.build_id)
+            if (prior.get('confirmed_proposal_id')==proposal_id and prior['status'] in {'queued','building'}
+                    and (self.build_entry(prior['id']) or session.task and not session.task.done())):
+                return prior
+        continuing=self.store.get('builds',session.resumed_from_build_id) if session.resumed_from_build_id else None
+        if continuing and continuing['project_id']!=session.project_id:
+            raise Conflict('Resume tilhører en annen app.')
+        if continuing and continuing['status']!='failed':
+            if not proposal_id or proposal_id!=session.proposal_id:
+                raise Conflict('No matching build proposal')
+            if session.target=='device':
+                await self.resume_build(session,continuing)
+                return continuing
+            raise Conflict('Jobben er allerede gjenopptatt. Åpne den aktive jobben.')
         if (session.stopped or not session.install_permitted or session.lock.locked() or (self.build_lock.locked() and session.target!='device')
                 or session.state != State.awaiting_build_confirmation
                 or not proposal_id or proposal_id != session.proposal_id):
@@ -851,7 +872,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         device_job=session.target=='device'
         if device_job and len(self.device_builds)>=8:raise Conflict('Byggekøen er full. Prøv igjen.')
         if not device_job:await self.build_lock.acquire()
-        build_id = new_id("build")
+        build_id = continuing['id'] if continuing else new_id("build")
         build = {"id": build_id, "project_id": session.project_id, "session_id": session.id,
                  "status": "building", "phase": "preparing", "progress": 0,
                  "summary": session.summary, "confirmed_proposal_id": proposal_id, "attempts": 0}
@@ -860,9 +881,29 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                      operation='repair' if session.repair_context else 'update' if session.app_mode=='update' else 'new',
                      resume_context={'history':bounded_history(copy.deepcopy(session.history)),
                                      'summary':session.summary,'app_mode':session.app_mode,'base_package_id':session.base_package_id})
-        if session.resumed_from_build_id:
-            build['retry_of']=session.resumed_from_build_id
-            session.resumed_from_build_id=None
+        if continuing:
+            from .jobs import apply_context,context_record
+            prior_summary,_=apply_context(self.store,continuing,1)
+            checkpoint={k:copy.deepcopy(continuing.get(k)) for k in ('status','error','error_code','last_validation_error',
+                'attempts','generation_attempt','max_attempts','max_corrections','summary','resume_context','phase_seconds')}
+            checkpoint['ended_at']=time.time()
+            checkpoint['context']=context_record(self.store,build_id)
+            build={**continuing,**build,'created_at':continuing.get('created_at',time.time()),
+                'resume_count':continuing.get('resume_count',0)+1,
+                'resume_from_attempt':continuing.get('attempts',0),
+                'attempts':continuing.get('attempts',0),
+                'run_history':continuing.get('run_history',[])+[checkpoint],
+                'resume_checkpoint':checkpoint,'resumed_at':time.time(),
+                'error':'','error_code':'','phase_started_at':None,'package_id':None}
+            if session.summary==prior_summary:
+                build['summary']=continuing['summary']  # notes remain revisioned, not duplicated
+            else:
+                self.store.put('job_context',build_id,{'id':build_id,'revision':0,'applied_revision':0,'notes':[]})
+            for key in ('delivery_error','retry_at','timed_out_phase','notice_ack','reused_candidate_from'):
+                build.pop(key,None)
+        session.resumed_from_build_id=None
+        corrections=self.settings.fire_max_corrections or None
+        build.update(max_corrections=corrections,max_attempts=(build['attempts']+corrections+1 if corrections is not None else None),notice_pending=True)
         if session.repair_context:
             build.update(repair_context=json.dumps(session.repair_context), repair_of=session.repair_context["package_id"])
         if session.target == "device":
@@ -870,6 +911,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         try:
             if hasattr(self, "audio"):
                 self.audio.cancel(session)
+            session.last_error=''
+            session.progress={}
             worker=session
             if session.target=='device':
                 worker=replace(session,id=new_id('session'),device_id=new_id('pc'),target='pc_simulation',
@@ -902,8 +945,10 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             raise
         if device_job:
             session.progress={'type':'build_progress','build_id':build_id,'phase':'queued','progress':0,
+                              'resume_count':build.get('resume_count',0),
                               'message':build_text('queued'),'eta_seconds':None,'status_text_version':STATUS_TEXT_VERSION}
             await self.emit(session,session.progress)
+            await self.repairs.build_progress(build)
         return build
 
     async def build_job(self, session, build):
@@ -935,6 +980,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             build['phase_started_at']=now
             session.progress = {"type": "build_progress", "build_id": build["id"], "phase": phase,
                                 "progress": percent, "message": message, "eta_seconds": None,
+                                "resume_count":build.get('resume_count',0),
                                 "attempt":build.get('generation_attempt',1),"total":build.get('max_attempts',4),"status_text_version":STATUS_TEXT_VERSION}
             if phase=='failed':
                 from .generation_errors import build_failure
@@ -942,6 +988,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 session.progress['diagnostic_message']=session.progress['diagnostic_message'][:240]
             build.update(phase=phase, progress=percent)
             self.store.put("builds", build["id"], build, critical=phase == "failed")
+            await self.repairs.build_progress(build)
             if phase == "testing":
                 await build_state(State.testing)
             elif phase in {"generating", "validating", "compiling", "packaging"}:
@@ -996,7 +1043,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 await self.offer_install(session, package)
             elif follower():
                 await self.offer_install(follower(),package)
-            if build.get('background'):
+            if build.get('owner_device_id'):
                 await self.notify_build_ready(build)
         except BaseException as error:
             if not isinstance(error, (Exception, asyncio.CancelledError)):

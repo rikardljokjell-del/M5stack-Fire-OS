@@ -131,6 +131,7 @@ async def handle(service, session, event):
         return await service.build_event(session,event)
     if name=='app_repair_prepare':return await service.repairs.prepare(session,event)
     if name=='app_repair_status':return await service.repairs.status(session,event)
+    if name=='app_repair_cancel':return await service.repairs.cancel(session,event)
     if name=='build_confirm' and event.repair_id:return await service.repairs.confirm(session,event)
     if name == "firmware_store_result":
         return service.firmware.receipt(session,event)

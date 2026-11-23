@@ -29,6 +29,21 @@ call per callback, at most 128 total grid CELLS and 32768 grid pixels per callba
 rgb.set currently transmits the whole ten-LED strip synchronously, not just one
 pixel. Queue desired colours and advance one changed pixel per update; do not
 rewrite unchanged LEDs. Both bars must settle over bounded successive frames.
+Use a single RGB output helper, called ONCE from update, including menu/paused
+states. init/on_button may update desired colours but must NOT call rgb.set.
+Reference pattern (adapt desired values; preserve one physical call per callback):
+local wanted, sent, cursor = {}, {}, 0
+local function rgb_tick()
+  for step=1,10 do
+    local i=cursor; cursor=(cursor+1)%10
+    local c=wanted[i]
+    if c and sent[i]~=c then
+      fire.rgb.set(i,c[1],c[2],c[3]); sent[i]=c; return
+    end
+  end
+end
+Assign a NEW colour table when a desired colour changes; do not mutate a sent
+table. Never call rgb_tick twice, or combine it with another direct rgb.set.
 Native grid calls invoke fillRect once per cell INCLUDING black/empty cells;
 count cells as well as pixels. Precompute glyphs and cached display values;
 prefer compact large integer readouts plus precise native text where useful.

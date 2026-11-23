@@ -121,3 +121,61 @@ Backend-oppdateringen publiseres separat etter denne handoveren.
 Rapporter firmware-commit, build/flash-resultat og hvilke fysiske prøver som
 faktisk er gjennomført i M5Stack-device/BACKEND_HANDOFF.md. Ikke kall hele
 flyten fysisk verifisert før reboot, popup, Åpne/Run og Avbryt er prøvd på FIRE.
+
+
+## Tillegg: feilretting fra App error (nyeste brukerkrav)
+
+A korttrykk = Minimer, C korttrykk = Avbryt, også i feilrettingsvinduet.
+Dette gjelder både kø før bygg-ID er tildelt og aktiv generering/testing.
+Minimer må ikke sende cancel_turn/session-stop som kansellerer reparasjonsjobben.
+Det er trygt å lukke bare UI/tilhørende samtaleside: Repairs-worker eies av PC.
+
+- Behold repair_id, app_id, rapportert package_id/versjon og eventuell build_id
+  i en global jobbcache. Ingen manuell omvalg av appen ved gjenåpning.
+- Før build_id finnes, bruk app_repair_status og repair_id for status.
+  Etterpå kan normal build_job_status brukes for topplinjen. Ikke mist
+  repair_id når build_id kommer; to identiteter beskriver samme feilretting.
+- Backend annonserer repair_cancel_v1 og støtter NY additiv device-event:
+  {event:"app_repair_cancel", repair_id:"repair-...", ...vanlig v0.2-envelope}.
+  Krever autentisert riktig device/session/boot/event_id. C sender denne,
+  slik at den også fungerer mens reparasjonen står i kø UTEN build_id.
+  Svaret er vanlig app_repair_status med status=cancelled, phase=cancelled,
+  message="Byggingen ble avbrutt". Gjentakelse er idempotent. Et bygg som
+  allerede rakk å publiseres svarer ready og beholder pakken; Cancel sletter
+  aldri en testet app. Ikke send til eldre backend uten repair_cancel_v1.
+- A lukker reparasjonsvinduet, viser hovedmenyen og beholder oppgaven.
+  Vis kort status/fremdrift midt i topplinjen slik som vanlig appbygging.
+- AI Developer får øverste inngang Resume feilretting hvis en reparasjon er
+  aktiv/ferdig. Åpne samme reparasjonsvindu og hent app_repair_status med
+  lagret repair_id. Ved mistet lokal ID etter reboot: session_snapshot sender
+  eide reparasjoner, aktive først; byggkatalogen gir build_id/project_id.
+  Ikke opprett ny prepare/confirm bare for å vise pågående feilretting.
+- build_jobs har operation=repair og backend-utvidelsen repair_id for bygg som
+  tilhører en feilretting. Bruk koblingen for å åpne riktig vindu fra Resume.
+- Hvis Run ikke er mulig før installasjon, vis Åpne/Installer først og Run
+  etter korrekt receipt. Ingen gammel boot-kommando kan gjenbrukes.
+
+Tillegg til fysisk testmatrise: feil i kjent app -> Fix error -> A Minimer ->
+progresjon i topplinjen -> Resume feilretting -> samme repair_id/status.
+Gjenta med reboot i På/Auto og med C både før build_id, midt i generering,
+under test og akkurat ved ferdigstilling. C stopper bare valgt reparasjon,
+og ingen annen appjobb. Ferdigvarsel vises også for minimert feilretting.
+
+## Tillegg: appliste
+
+Backendens Windows-appliste er nå kronologisk, sist opprettet/oppdatert øverst.
+Hvis firmware presenterer backendlisten: bevar samme forståelige nyest-først-
+rekkefølge og én rad per app med versjonsvalg. Ikke sorter tilfeldige app-ID-er
+eller appnavn som erstatning for tid. Backend leverer updated_at på PC-bibliotekets
+versjonsrader; avtale ekstra devicekatalogfelt før dere krever dem i firmware.
+
+
+## Supplerende backendfunn fra siste levende RPG-jobb
+
+Et genereringsforsøk returnerte norsk bekreftelsestekst i main_lua i stedet
+for Lua-kode: modellen ba om build_confirm etter at backend allerede hadde
+validert denne. Lua-testen stoppet korrekt denne kandidaten. Backend skiller
+nå uttrykkelig autorisert kodegenereringsfase fra brukerens dialogfase, og
+kodefeltets skjema krever bare komplett Lua. Dette gir ingen ekstra rettighet
+til installasjon eller kjøring: run_confirm er fortsatt separat og obligatorisk.
+Firmware skal ikke be om ny bekreftelse for hvert automatisk rettingsforsøk.

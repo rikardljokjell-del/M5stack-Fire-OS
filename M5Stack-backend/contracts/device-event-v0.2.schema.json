@@ -404,6 +404,7 @@
         "app_backend_delete_confirm",
         "app_repair_prepare",
         "app_repair_status",
+        "app_repair_cancel",
         "build_background",
         "build_jobs",
         "build_notice_ack",
@@ -1061,6 +1062,26 @@
         ],
         "properties": {
           "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_repair_cancel"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "repair_id"
+        ],
+        "properties": {
+          "repair_id": {
             "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
             "type": "string"
           }

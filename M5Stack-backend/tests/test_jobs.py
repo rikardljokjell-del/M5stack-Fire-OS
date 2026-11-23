@@ -116,6 +116,8 @@ def test_job_ui_shows_errors_and_context_without_losing_draft(tmp_path,monkeypat
           'progress':0,'error':'billing/quota limit','error_status':'Kontroller API-kontoen','context_pending':True,
           'context':{'notes':[{'text':'Større tekst'}]},'can_add_context':False,'can_resume':True,'build_id':'build-one'}]}
         ui.job_prompt.insert('1.0','Behold dette utkastet');ui.render_jobs()
+        assert 'cost' in ui.job_table['columns']
+        assert ui.job_table.item('build-one','values')[-1]=='$0.0000'
         assert 'STOPPÅRSAK' in ui.job_detail.get('1.0','end') and 'Større tekst' in ui.job_detail.get('1.0','end')
         assert ui.job_prompt.get('1.0','end').strip()=='Behold dette utkastet'
         assert str(ui.job_send.cget('state'))=='disabled'

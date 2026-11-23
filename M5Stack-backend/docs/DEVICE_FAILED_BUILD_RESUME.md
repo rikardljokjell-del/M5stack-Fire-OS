@@ -4,6 +4,9 @@ Backend-oppdrag 23. november 2026. Endre firmware hos device-agenten;
 backend-agenten endrer bare `M5Stack-backend/`. Ingen flashing er utført her.
 Dette beskriver backend-kontrakten som leveres sammen med oppdraget.
 
+Nyeste samlede instruks: [DEVICE_BUILD_CONTINUATION_HANDOFF.md](DEVICE_BUILD_CONTINUATION_HANDOFF.md).
+Den inkluderer samme jobb-ID ved gjenopptak, boot-status, ferdigpopup og avbryt/minimer feilretting.
+
 ## Hendelsen som avdekket problemet
 
 `build-a5ab57cfbc8444cca5f5` gjaldt et RPG-spill. GPT-6 Luna brukte 8000
@@ -14,7 +17,7 @@ teksten «OpenAI code response incomplete or refused» skilte ikke disse årsake
 
 Backend endrer generering til lav resonnering og større, modelltilpasset
 svarrom. Et avkuttet svar får maksimalt ett ekstra forsøk med mer plass,
-fortsatt innen eksisterende kostnadsgrenser. Hver respons måles separat.
+Kostnads- og ekstra svartak er nå av som standard; 0 betyr ingen fast grense. Hver respons måles separat.
 Avslag eller konto-/betalingsfeil utløser ikke slike gjentakelser.
 
 ## Påkrevd brukerflyt på FIRE
@@ -32,9 +35,9 @@ Avslag eller konto-/betalingsfeil utløser ikke slike gjentakelser.
    A sender vanlig `build_confirm` med den nye gjeldende `proposal_id`.
    B lar brukeren beskrive endringen gjennom eksisterende dialogflyt.
    C lukker bare visningen. Ingen jobb eller plan slettes.
-6. Etter bekreftelse opprettes et nytt bygg med `retry_of=<gammel build_id>`.
-   Følg den nye jobb-ID-en i all fremdrift, bakgrunn, Resume og varsling.
-   Den gamle feilen bevares som historikk, ikke som en aktiv bygger.
+6. Etter bekreftelse fortsetter SAMME build_id. Følg samme jobb i fremdrift,
+   bakgrunn, Resume og varsling. resume_count øker; forsøk og kostnader samles.
+   Den gamle feilen bevares i run_history og ryddes fra aktiv feilvisning.
 7. En ferdig jobb følger vanlig installasjonskvittering og eksplisitt RUN.
    Resume eller feilretting skal ikke omgå install-/run-kontrakten.
 
@@ -109,7 +112,7 @@ setter workflow til 0 og resten tolkes som aktiv bygging. Utvid dette:
 - Simulert tokenavkutt viser riktig norsk årsak, ikke generisk «mislyktes».
 - Mislykket ny app uten pakke kan åpnes fra Resume etter reboot/reconnect.
 - Åpning av Resume utløser ingen betalt generering. A med gjeldende proposal-ID
-  starter akkurat ett nytt bygg. Dobbelklikk/replay starter ikke to.
+  fortsetter samme jobb én gang. Dobbelklikk/replay starter ikke to.
 - Dialog, samme prosjekt, appvalg og manuelle tillegg beholdes ved Resume.
 - B Endre fungerer før nytt forsøk. C Tilbake beholder jobben.
 - Kostnads-/konto-/nettfeil vises med årsak og kan åpnes for justering.

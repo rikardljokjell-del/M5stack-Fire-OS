@@ -115,6 +115,18 @@ class Repairs:
             if peer and not peer.stopped and peer.device_id==job['device_id']:
                 with contextlib.suppress(Exception):await self.emit(peer,job)
 
+    async def build_progress(self,build):
+        """Keep repair identity/status correct when its same build is resumed."""
+        if not build.get('repair_job_id'):return
+        job=self.store.get('repairs',build['repair_job_id'])
+        job.update(build_id=build['id'],phase=build['phase'],progress=build['progress'],
+            status=build['status'],attempt=build.get('generation_attempt',0),total=build.get('max_attempts'))
+        if build['status']=='ready':
+            package=self.store.get('packages',build['package_id'])
+            job.update(package_id=package['id'],version=package['manifest']['version'])
+        if build['status']=='failed':job['message']=build.get('error','')
+        self.save(job);await self.notify(job)
+
     async def prepare(self,session,event):
         project,failed,latest,identity,warnings=self.resolve(session,event)
         capabilities=session.capabilities or self.service.device_record(session).get('capabilities')
@@ -170,6 +182,39 @@ class Repairs:
                         'message':repair_text({'status':'not_found'}),'status_text_version':STATUS_TEXT_VERSION}
                 await self.service.emit(session,result);return result
             job=max(jobs,key=lambda j:j['updated_at'])
+        return await self.emit(session,job)
+
+    async def cancel(self,session,event):
+        """Cancel this repair even while it is waiting without a build ID."""
+        job=self.owned(session,event.repair_id)
+        if job['status'] in {'ready','cancelled','unavailable'}:
+            return await self.emit(session,job)
+        entry=self.service.build_entry(job.get('build_id')) if job.get('build_id') else None
+        task=self.tasks.get(job['id']) or (entry['task'] if entry else None)
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):await task
+        self.tasks.pop(job['id'],None)
+        self.workers.pop(job['id'],None)
+        job=self.store.get('repairs',job['id'])
+        # Publication may win the race. A tested package is preserved and
+        # offered normally; cancellation cannot revoke or delete it.
+        if job.get('build_id'):
+            build=self.store.get('builds',job['build_id'])
+            if task and task.done() and build['status'] in ACTIVE:
+                self.service.device_builds.pop(build['id'],None)
+                build.update(status='failed',phase='failed',error='Build cancelled')
+                self.store.put('builds',build['id'],build,critical=True)
+            if build['status']=='ready':
+                package=self.store.get('packages',build['package_id'])
+                job.update(status='ready',phase='ready',progress=100,package_id=package['id'],version=package['manifest']['version'])
+                self.save(job)
+                return await self.emit(session,job)
+            if session.build_id==build['id']:
+                session.task=None;session.build_id=None;session.progress={}
+                await self.service.state(session,State.idle)
+        job.update(status='cancelled',phase='cancelled',progress=0,message='Reparasjonen ble avbrutt.')
+        self.save(job);await self.notify(job)
         return await self.emit(session,job)
 
     async def run(self,job_id):

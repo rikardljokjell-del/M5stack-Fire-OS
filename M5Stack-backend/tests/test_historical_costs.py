@@ -46,6 +46,7 @@ def test_actual_measurement_replaces_matching_operation_without_double_count(tmp
     artifact(m);backfill(m.store,100)
     old=m.project_costs()['app-old']['historical_estimate']['estimated_usd']
     ticket=m.begin('generate','gpt-6.2-astra',10,10,build_id='build-old')
+    imported=m.store.get('usage',ticket);imported['started_at']=10;m.store.put('usage',ticket,imported)
     actual=m.finish(ticket,{'input_tokens':10,'output_tokens':10})['estimated_usd']
     row=m.project_costs()['app-old']
     assert row['recorded_usd']==actual
