@@ -46,7 +46,8 @@ class AppTestSequence(StrictModel):
 
 class GeneratedApp(StrictModel):
     name: str = Field(min_length=1, max_length=32)
-    main_lua: str = Field(min_length=1, max_length=100_000)
+    main_lua: str = Field(min_length=1, max_length=100_000,
+        description="Complete executable Lua source only. No prose, Markdown, progress text or requests for confirmation.")
     required_services: list[str] = Field(max_length=24,
         description="Bare Lua service names, e.g. display, buttons, rgb. Never fire.display or permission names.",
         json_schema_extra={"items":{"type":"string","enum":sorted(ALL_SERVICES)}})
@@ -245,7 +246,7 @@ class DeviceDiagnostics(StrictModel):
 class DeviceEvent(StrictModel):
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel"]
     build_id: str | None = Field(default=None,pattern=ID_PATTERN)
     notification_action: Literal['open','dismiss'] | None = None
     repair_id: str | None = Field(default=None,pattern=ID_PATTERN)
@@ -308,6 +309,7 @@ class DeviceEvent(StrictModel):
                 "listen_start": ("turn_id",), "listen_stop": ("turn_id",),
                 "app_diagnostic": ("app_id", "package_id", "error_code"),
                 "app_repair_prepare": ("app_id",),
+                "app_repair_cancel": ("repair_id",),
                 "build_background": ("build_id",),"build_resume": ("build_id",),"build_cancel": ("build_id",),
                 "build_notice_ack": ("build_id","notification_action"),
                 "audio_playback_started": ("audio_id", "turn_id"), "audio_playback_finished": ("audio_id", "turn_id"),

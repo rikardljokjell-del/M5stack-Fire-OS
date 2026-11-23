@@ -393,8 +393,12 @@ and manual notes, without generating content. `build_resumed` returns
 `state=awaiting_build_confirmation`, a fresh `proposal_id`, `can_retry=true`,
 `package_id=null`, `history_restored=true`, and previous failure information.
 An ordinary `build_proposal` follows; full notes stay server-side to preserve
-the 8 KiB control-event limit. A new explicit `build_confirm` starts a new build
-with `retry_of=<failed build_id>`. Merely opening Resume never spends tokens.
+the 8 KiB control-event limit. A new explicit `build_confirm` continues the SAME build_id. Failed execution
+metadata is appended to run_history, source/test artifacts keep their attempt
+numbers, and attempts continue upward. The latest source and validation error
+are supplied to correction; locally passed source can be revalidated/reviewed
+without regeneration when its identity/context still match. Existing legacy
+retry_of children remain readable but new confirmations do not create them. Merely opening Resume never spends tokens.
 Repeat Resume before confirmation reuses the pending proposal. Event replay
 cannot consume the same confirmation twice. Old failures cannot replace active
 progress on reconnect. See [device handoff](DEVICE_FAILED_BUILD_RESUME.md).
@@ -418,3 +422,40 @@ Transient provider failures retry the same generation/review up to four times
 with bounded exponential backoff/jitter, respecting Retry-After. Quota/billing/auth
 errors are not replayed. Waiting shows Venter på AI-kapasitet and consumes no Lua
 correction. All compile/runtime/review/delivery gates remain authoritative.
+
+
+### Durable continuation and boot discovery (2026-11-23)
+
+`build_progress`/`build_job_status` include resume_count (0 initially). A job
+can transition failed -> queued -> building -> ready with the SAME build_id.
+Firmware must clear prior active errors on queued/building/ready, even if the ID
+does not change; older resume_count events cannot overwrite the current run.
+`build_resumed.progress` remains an object; top-level phase, status,
+progress_percent and resume_count are additive scalar fields for device UI.
+`build_progress.progress` and job-view progress remain numeric percentages.
+
+Boot/session snapshots discover owned active jobs including foreground jobs,
+even if a Background acknowledgement was lost. Catalogs prioritize building
+before queued; progress pushes retain deterministic order. Pending completion
+notices also cover jobs whose Background message was lost and repeat until
+explicit open/dismiss ACK. Firmware owns the On/Auto/Off connection policy;
+backend never initiates an outbound device event without an authenticated
+session. Auto must finish the boot job query before dropping an idle connection.
+See DEVICE_BUILD_CONTINUATION_HANDOFF.md for the firmware state machine and tests.
+
+
+### Cancel/minimize device-error repair (`repair_cancel_v1`)
+
+A short press minimizes the repair UI without cancelling the PC task. Restore
+by app_repair_status(repair_id); session snapshots prioritize active repairs.
+Once assigned, build job views include repair_id and operation=repair so Resume
+can restore the same repair UI. Top-bar progress and ready notices use normal
+build lifecycle events. A queued repair need not have a build_id yet.
+
+C explicitly sends app_repair_cancel with repair_id and the standard v0.2
+identity envelope. Only the owning device can cancel. It stops a prepared,
+queued or building repair, including a resumed build, and returns the ordinary
+app_repair_status with status/phase=cancelled. Repeated cancellation is safe.
+A publication which won the race returns ready; cancelling never deletes a
+completed tested package. Firmware must negotiate repair_cancel_v1 before
+using the new event. See the exported device-event schema and device handover.

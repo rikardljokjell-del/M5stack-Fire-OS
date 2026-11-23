@@ -255,6 +255,11 @@ class OpenAIProvider:
         response = await self.parsed(
             "generate", self.settings.openai_code_model,
             context + ("" if VISUAL_POLICY in context else VISUAL_POLICY) + ("" if APP_QUALITY_POLICY in context else APP_QUALITY_POLICY) + "\nGenerate a complete Lua app for this confirmed plan. "
+            "This is the backend CODE GENERATION stage, not the user dialogue. The backend has already "
+            "validated the explicit current build_confirm before invoking this operation. Generate and "
+            "repair the complete source now; do not ask for another build_confirm. main_lua must contain "
+            "only executable Lua source, never a confirmation request, prose, Markdown or a progress report. "
+            "Installation and running remain separate backend-controlled actions; do not claim either occurred. "
             "Follow the prototype API exactly. Return name, main_lua, required_services and test_sequences. "
             "For hardware tools provide up to six bounded A/B/C test_sequences that navigate real menus and START "
             "each operation (I2C scan, PWM configure/write, UART open/read/write etc), not just display its page. "

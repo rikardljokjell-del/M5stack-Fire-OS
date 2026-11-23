@@ -490,8 +490,8 @@ class DesktopUI:
         self.job_heading=self.label(page,"Henter jobber …","Heading.TLabel")
         self.job_heading.pack(anchor="w",pady=(0,7))
         table_frame=ttk.Frame(page);table_frame.pack(fill='x')
-        self.job_table=ttk.Treeview(table_frame,columns=('name','status','phase','progress'),show='headings',height=5,selectmode='browse')
-        for key,title,width in [('name','App / jobb',230),('status','Status',150),('phase','Arbeider med',260),('progress','Fremdrift',100)]:
+        self.job_table=ttk.Treeview(table_frame,columns=('name','status','phase','progress','cost'),show='headings',height=5,selectmode='browse')
+        for key,title,width in [('name','App / jobb',180),('status','Status',130),('phase','Arbeider med',230),('progress','Fremdrift',90),('cost','Cost (USD)',110)]:
             self.job_table.heading(key,text=title);self.job_table.column(key,width=width,minwidth=70)
         self.job_table.pack(side='left',fill='both',expand=True)
         table_scroll=ttk.Scrollbar(table_frame,command=self.job_table.yview)
@@ -537,7 +537,8 @@ class DesktopUI:
         self.job_heading.configure(text=f"{self.job_snapshot.get('active_count',0)} aktive jobber · velg en jobb for detaljer")
         labels={'queued':'I kø','building':'Arbeider','ready':'Ferdig','failed':'Stoppet / feilet','awaiting_confirmation':'Venter på bekreftelse',
             'awaiting_build_confirmation':'Venter på bygg','processing':'Behandler','listening':'Tar opp tale'}
-        values=[(r['id'],(r['name'],labels.get(r['status'],r['status']),r['message'],str(r['progress'])+'%')) for r in rows]
+        values=[(r['id'],(r['name'],labels.get(r['status'],r['status']),r['message'],str(r['progress'])+'%',
+            app_cost_text({'cost':r.get('estimated_usd',0),'cost_detail':r.get('cost_detail',{})}))) for r in rows]
         if values!=getattr(self,'job_table_values',None):
             selected=self.job_table.selection();self.job_table_values=values
             self.job_table.delete(*self.job_table.get_children())
@@ -565,6 +566,10 @@ class DesktopUI:
             notes=r.get('context',{}).get('notes',[])
             attempts=f"{r.get('attempt',0)}/{r['max_attempts']} forsøk" if r.get('max_attempts') else f"Forsøk {r.get('attempt',0)} · automatisk retting"
             lines=[r['name']+' · '+r['id'],r['message']+f" · {attempts} · anslått ${r.get('estimated_usd',0):.4f}"]
+            history=r.get('cost_detail',{}).get('historical_estimate')
+            if history:
+                lines.append(f"Historisk anslag: ${history['estimated_usd']:.2f} (scenario ${history['low_usd']:.2f}–${history['high_usd']:.2f}); "+', '.join(history['models']))
+            if r.get('resume_count'):lines.append(f"Fortsetter samme jobb · {r['resume_count']} gjenopptak · tidligere forsøk og kostnader er bevart.")
             if r.get('reused_candidate_from'):lines.append('Gjenbruker appkode fra '+r['reused_candidate_from']+'; tester og kontrollerer på nytt.')
             if r.get('retry_at'):lines.append('Neste AI-forsøk tidligst '+time.strftime('%H:%M:%S',time.localtime(r['retry_at'])))
             if r.get('error'):lines+=['STOPPÅRSAK: '+r.get('error_status',''),r['error']]
@@ -1184,7 +1189,7 @@ class DesktopUI:
             self.apps_rows = rows
             groups={}
             for app in apps:groups.setdefault(app["project_id"],[]).append(app)
-            for project_id,versions in sorted(groups.items(),key=lambda item:item[1][0]["name"].casefold()):
+            for project_id,versions in sorted(groups.items(),key=lambda item:(max(a.get('updated_at',0) for a in item[1]),item[0]),reverse=True):
                 app=max(versions,key=lambda a:int(a["version"].split(".")[-1]))
                 status = ("Slettet/borte fra FIRE" if app.get("device_presence") in {"deleted", "missing"} else
                           "Sperret etter feil" if app.get("quality",{}).get("blocked") else

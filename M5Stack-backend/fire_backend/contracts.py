@@ -10,7 +10,7 @@ from .api_registry import REGISTRY,API_CONTRACT,ALL_SERVICES
 REQUIRED = {
     "build_background":["build_id"],"build_resume":["build_id"],"build_cancel":["build_id"],
     "build_notice_ack":["build_id","notification_action"],
-    "app_repair_prepare":["app_id"],
+    "app_repair_prepare":["app_id"],"app_repair_cancel":["repair_id"],
     "app_download":["package_id"],
     "app_backend_delete_prepare":["delete_scope"],
     "app_backend_delete_confirm":["delete_id"],

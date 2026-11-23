@@ -132,7 +132,7 @@ def repair_text(job):
     if status=='ready':return TEXT['repair_ready']
     if status=='awaiting_confirmation':return TEXT['prepared']
     if status=='failed':return error_text(job.get('message',''))
-    if status in {'queued','interrupted','unavailable','not_found'}:return TEXT[status]
+    if status in {'queued','interrupted','unavailable','not_found','cancelled'}:return TEXT[status]
     if status=='building':
         return build_text(job.get('phase','preparing'),operation='repair',attempt=job.get('attempt',1),total=job.get('total',4),progress=job.get('progress',0))
     return TEXT['unknown']

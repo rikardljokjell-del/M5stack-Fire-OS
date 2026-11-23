@@ -100,16 +100,17 @@ def _part(operation, model, input_chars, output_chars, cap, reasoning):
             'input_chars': input_chars, 'output_chars': output_chars}
 
 
-def totals(store, records):
+def totals(store, records, group='project_id'):
     # A subsequently imported real measurement replaces that build/operation's
     # historical approximation instead of being added to it.
-    measured = {(r.get('build_id'), r.get('operation')) for r in records}
+    cutoff=store.get('usage','meta')['tracking_started_at']
+    measured = {(r.get('build_id'), r.get('operation')) for r in records if r.get('started_at',cutoff)<cutoff}
     grouped = {}
     for item in store.list('historical_costs'):
         parts = [p for p in item['parts'] if (item['build_id'], p['operation']) not in measured]
-        if not parts or not item.get('project_id'):
+        if not parts or not item.get(group):
             continue
-        row = grouped.setdefault(item['project_id'], {'estimated_usd': 0, 'low_usd': 0, 'high_usd': 0,
+        row = grouped.setdefault(item[group], {'estimated_usd': 0, 'low_usd': 0, 'high_usd': 0,
             'builds': 0, 'estimated_calls': 0, 'models': set(), 'coverage': item['coverage'], 'method': METHOD})
         row['builds'] += 1
         row['estimated_calls'] += len(parts)

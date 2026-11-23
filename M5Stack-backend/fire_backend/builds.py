@@ -189,24 +189,26 @@ class Builder:
         Scope, source checksum, full context/capabilities, original base and
         effective user requirements must match. Local tests and review run again.
         """
-        old_id=build.get('retry_of')
+        old_id=build['id'] if build.get('resume_checkpoint') else build.get('retry_of')
         if not old_id:return None
         try:
             old=self.store.get('builds',old_id)
-            if old['project_id']!=build['project_id'] or old['status']!='failed':return None
+            checkpoint=build.get('resume_checkpoint') if old_id==build['id'] else old
+            if old['project_id']!=build['project_id'] or checkpoint['status']!='failed':return None
             folder=self.store.path('builds',old_id,'')
-            meta_path=folder/f"candidate-{old.get('attempts',0)}.json"
+            source_attempt=checkpoint.get('attempts',0)
+            meta_path=folder/f"candidate-{source_attempt}.json"
             if meta_path.stat().st_size>8192:return None
             meta=json.loads(meta_path.read_text(encoding='utf-8'))
             if (not meta.get('local_validated') or meta['context_sha256']!=request['context_sha256'] or
                     meta['summary_sha256']!=sha256(summary.encode('utf-8')) or
                     meta['capabilities_sha256']!=sha256(canonical(request['capabilities'])) or
                     meta['base_package_id']!=request['base_package_id'] or meta['mode']!=request['mode']):return None
-            source_path=folder/f"attempt-{old['attempts']}.lua"
+            source_path=folder/f"attempt-{source_attempt}.lua"
             if source_path.stat().st_size>100000:return None
             source=source_path.read_bytes()
             if sha256(source)!=meta['source_sha256']:return None
-            plan_path=folder/f"test-plan-{old['attempts']}.json"
+            plan_path=folder/f"test-plan-{source_attempt}.json"
             if plan_path.stat().st_size>24000:return None
             return GeneratedApp(name=meta['name'],main_lua=source.decode('utf-8'),required_services=meta['required_services'],
                                 test_sequences=json.loads(plan_path.read_text(encoding='utf-8')))
@@ -253,7 +255,8 @@ class Builder:
         from .prompt_context import compact_repair_evidence,dumps
         build_id = build["id"]
         folder = self.store.path("builds", build_id, "")
-        folder.mkdir(exist_ok=False)
+        continuing=bool(build.get('resume_checkpoint'))
+        folder.mkdir(exist_ok=continuing)
         # Retained inputs allow revalidation/repackaging without another paid API call.
         context = context or self.context
         if VISUAL_POLICY not in context:
@@ -267,7 +270,8 @@ class Builder:
         learned_policy=Quality(self.store).policy()
         if learned_policy and learned_policy not in context:context+=learned_policy
         max_corrections=getattr(self.settings,'fire_max_corrections',0) or None
-        max_attempts=max_corrections+1 if max_corrections is not None else None
+        offset=build.get('resume_from_attempt',0) if continuing else 0
+        max_attempts=offset+max_corrections+1 if max_corrections is not None else None
         build.update(max_corrections=max_corrections,max_attempts=max_attempts)
         request = {
             "summary": build["summary"], "context": context, "capabilities": capabilities,
@@ -281,6 +285,8 @@ class Builder:
         }
         if len(canonical(request)) > self.settings.fire_max_build_kb * 1024:
             raise ValueError("Per-build disk limit exceeded")
+        if continuing and (folder/'request.json').is_file():
+            self.store.write(folder/f"request-before-resume-{build['resume_count']}.json",json.loads((folder/'request.json').read_text(encoding='utf-8')))
         self.store.write(folder / "request.json", request)
         last_error, previous = build.get("repair_context"), None
         if last_error:
@@ -295,18 +301,25 @@ class Builder:
             verify_archive(archive_path, base["manifest"], base["archive_sha256"])
             with zipfile.ZipFile(archive_path) as archive:
                 previous = archive.read(f"apps/{base['manifest']['id']}/main.lua").decode("utf-8")
+        if continuing:
+            prior_source=folder/f'attempt-{offset}.lua'
+            if offset and prior_source.is_file() and prior_source.stat().st_size<=100000:
+                previous=prior_source.read_text(encoding='utf-8')
+            checkpoint=build['resume_checkpoint']
+            last_error=checkpoint.get('last_validation_error') or checkpoint.get('error') or last_error
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
             seen_sources=set();seen_failures=set()
-            for attempt in range(max_attempts) if max_attempts is not None else count():
+            for cycle_attempt in range(max_corrections+1) if max_corrections is not None else count():
+                attempt=offset+cycle_attempt
                 summary,context_revision=apply_context(self.store,build,attempt+1)
                 build['generation_attempt']=attempt+1
                 operation='repair' if build.get('repair_of') or build.get('repair_job_id') else 'update' if project.get('latest_package') else 'new'
                 await progress("generating", min(25,10 + attempt * 3), build_text('generating',operation=operation,attempt=attempt+1,total=max_attempts))
-                generated=self.reusable_candidate(build,request,summary) if attempt==0 else None
+                generated=self.reusable_candidate(build,request,summary) if cycle_attempt==0 else None
                 if generated:
-                    build['reused_candidate_from']=build['retry_of']
-                    self.store.log(build_id,'Gjenbruker appkode fra '+build['retry_of']+'. Lokale tester og AI-kontroll kjøres på nytt.')
+                    build['reused_candidate_from']=build['id'] if continuing else build['retry_of']
+                    self.store.log(build_id,'Gjenbruker appkode fra '+build['reused_candidate_from']+'. Lokale tester og AI-kontroll kjøres på nytt.')
                 else:
                     generated = await self.provider_call(build,'generating',progress,self.provider.generate,summary, context, last_error, previous)
                 mark_context_applied(self.store,build_id,context_revision,attempt+1)
@@ -385,7 +398,7 @@ class Builder:
                     seen_sources.discard(source_hash)
                     previous=generated.main_lua;last_error=str(error)
                     self.store.log(build_id,last_error)
-                    if attempt==max_corrections:raise ValueError('Ny kontekst venter, men rettingsgrensen er nådd. Fortsett i Aktivitet med konteksten.') from error
+                    if cycle_attempt==max_corrections:raise ValueError('Ny kontekst venter, men rettingsgrensen er nådd. Fortsett i Aktivitet med konteksten.') from error
                 except (CapabilityError,UsageBudgetError,GenerationResponseError):
                     raise  # Regenerating Lua cannot implement a missing native driver.
                 except (ValueError, asyncio.TimeoutError) as error:
@@ -402,7 +415,7 @@ class Builder:
                     if max_corrections is None and fingerprint in seen_failures:
                         raise GenerationResponseError('ai_no_progress','AI løser ikke det samme kontrollfunnet etter retting. Ingen utestet app er levert. Plan og feil er bevart; velg Resume.') from error
                     seen_failures.add(fingerprint)
-                    if attempt == max_corrections:
+                    if cycle_attempt == max_corrections:
                         raise ValueError(f"Build failed after {max_corrections} corrections: " + last_error) from error
             await progress("packaging", 85, build_text('packaging'))
             version = project.get("next_version", 1)
@@ -421,6 +434,7 @@ class Builder:
             verify_archive(archive_path, manifest)
             package = {
                 "id": build_id, "project_id": project["id"], "build_id": build_id,
+                "created_at":time.time(),
                 "manifest": manifest, "archive_sha256": sha256(archive_path.read_bytes()),
                 "size_bytes": archive_path.stat().st_size,
                 "validation": {k: v for k, v in result.items() if k != "trace"},

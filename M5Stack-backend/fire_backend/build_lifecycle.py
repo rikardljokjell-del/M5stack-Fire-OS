@@ -40,9 +40,12 @@ class BuildLifecycle:
             try:require_deliverable(package);available=True
             except ValueError:message=TEXT['test_failed']
         return {'build_id':build['id'],'project_id':project['id'],'app_id':project.get('app_id'),
+                'operation':build.get('operation','new'),'repair_id':build.get('repair_job_id'),
                 'created_at':build.get('created_at',build.get('phase_started_at',0)),
                 'name':package['manifest']['name'] if package else project['name'],'status':status,'phase':phase,'progress':build.get('progress',0),
                 'message':message,'background':build.get('background',False),'package_id':package_id,
+                'resume_count':build.get('resume_count',0),'attempt':build.get('generation_attempt',build.get('attempts',0)),
+                'total':build.get('max_attempts'),
                 'version':package['manifest']['version'] if package else None,
                 'can_open':available or status=='failed' and bool(build.get('summary')) or status not in {'ready','failed'} and bool(self.build_entry(build['id'])),
                 'can_resume':status=='failed' and bool(build.get('summary')),
@@ -51,17 +54,22 @@ class BuildLifecycle:
 
     async def build_notices(self,session):
         if session.target!='device':return
-        owned=[b for b in self.store.list('builds') if b.get('owner_device_id')==session.device_id and b.get('background')]
+        # Boot/reconnect discovery must not depend on the user having pressed
+        # Background first. Foreground workers also survive a device reboot.
+        owned=[b for b in self.store.list('builds') if b.get('owner_device_id')==session.device_id]
         active=[b for b in owned if b['status'] not in {'ready','failed'}]
         failed=[b for b in owned if b['status']=='failed']
         # A historical failure must never overwrite a current build's progress.
         # All failures remain discoverable through the paged Resume catalog.
+        # Send queued jobs first and the running worker last, so a one-slot
+        # firmware status cache consistently retains actual running progress.
+        active.sort(key=lambda b:(b['status']!='queued',b.get('created_at',0)))
         visible=active or sorted(failed,key=lambda b:b.get('created_at',0),reverse=True)[:1]
         for build in visible:
             with contextlib.suppress(FileNotFoundError):
                 await self.emit(session,{'type':'build_job_status',**self.build_view(build)})
         pending=[b for b in self.store.list('builds') if b.get('owner_device_id')==session.device_id and
-                 b.get('background') and b['status']=='ready' and not b.get('notice_ack')]
+                 (b.get('background') or b.get('notice_pending')) and b['status']=='ready' and not b.get('notice_ack')]
         pending.sort(key=lambda b:b.get('created_at',0),reverse=True)
         for build in pending[:4]:
             try:
@@ -101,6 +109,8 @@ class BuildLifecycle:
                                     'summary':preview,'project_id':session.project_id,'plan_restored':True,
                                     'message':'Planen er bevart. Prøv igjen eller endre planen.'})
             return result
+        session.last_error=''
+        session.resumed_from_build_id=None
         snapshot=build.get('resume_context',{})
         if build['status']=='ready':
             package=self.store.get('packages',build['package_id']);require_deliverable(package)
@@ -143,6 +153,9 @@ class BuildLifecycle:
         result={'type':'build_resumed','build_id':build['id'],'project_id':session.project_id,
                 'base_package_id':session.base_package_id,'package_id':session.package_id,'state':session.state,
                 'progress':session.progress,'history_restored':True,'message':TEXT['resumed'],
+                'phase':session.progress.get('phase',build.get('phase')),
+                'progress_percent':session.progress.get('progress',build.get('progress',0)),
+                'status':self.store.get('builds',build['id'])['status'],'resume_count':build.get('resume_count',0),
                 'status_text_version':VERSION}
         await self.emit(session,result)
         return result
@@ -193,7 +206,7 @@ class BuildLifecycle:
             for b in builds:
                 try:rows.append(self.build_view(b))
                 except FileNotFoundError:continue
-            rows.sort(key=lambda v:(v['status'] not in {'ready','failed'},v['created_at']),reverse=True)
+            rows.sort(key=lambda v:({'building':3,'queued':2,'ready':1}.get(v['status'],0),v['created_at']),reverse=True)
             page=rows[event.offset:event.offset+4]
             reply={'type':'build_jobs','jobs':page,'offset':event.offset,
                    'next_offset':event.offset+4 if event.offset+4<len(rows) else None,

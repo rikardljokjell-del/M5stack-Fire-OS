@@ -132,8 +132,7 @@ Eldre dialog/tale uten måling er utelatt; slike kostnader fordeles ikke vilkår
 Historiske anslag lagres separat uten prompts, kildekode eller nøkler.
 De inngår i appens Cost, men aldri i dagens forbruk, budsjetter eller
 nullstillbare API-tellere. Sletting av versjoner/bygg og nullstilling bevarer
-anslagene. Senere registrert/importert bruk for samme bygg og operasjon erstatter
-hele denne operasjonens historiske anslag, slik at den ikke telles dobbelt.
+anslagene. Importert bruk med opprinnelig tidspunkt før målingens start erstatter samme bygg/operasjons historiske anslag. Nye målte fortsettelsesforsøk etter målingens start legges til, og sletter ikke eldre anslag.
 
 ## Resume og konkrete feilårsaker
 
@@ -144,8 +143,8 @@ aktiv som standard.
 
 Status og faktisk bruk leses før JSON parses. Avslag, avkutt og ugyldig
 svarstruktur skilles fra hverandre. Plan, dialog og manuelle tillegg beholdes.
-Velg Jobber -> Resume valgt jobb, endre planen eller bekreft et nytt bygg.
-Tidligere jobb og kostnad bevares; det nye bygget peker tilbake med retry_of.
+Velg Jobber -> Resume valgt jobb, endre planen eller bekreft videreføring av samme jobb.
+Prøv igjen fortsetter samme jobb-ID med bevarte forsøk, kilde, kontrollfunn og kostnad. Tidligere gjennomføringer arkiveres i run_history; ingen ny køjobb opprettes for samme bekreftelse.
 FIRE bruker samme flyt gjennom build_resume, med kort norsk årsak og separat
 begrenset diagnosefelt. Se DEVICE_FAILED_BUILD_RESUME.md.
 
@@ -163,8 +162,9 @@ modell, tokens, status og beregnet USD brukes for måling og appfordeling.
 
 ## Offisielle kilder
 
-Verifikasjon denne leveransen: hele testsuiten, 533 tester bestått. Deretter bestod
-9 målrettede historikktester, inkludert pakkekilde ved oppdatering. Windows-UI er visuelt kontrollert: alle fire felt har 0, svartak/beløpstak
+Verifikasjon denne leveransen: hele testsuiten, 545 tester bestått. Etter siste
+instruksjons-/bekreftelseskontroll bestod 25 målrettede regresjonstester.
+Windows-UI for jobbpriser og kronologisk appliste er også kontrollert. Windows-UI er visuelt kontrollert: alle fire felt har 0, svartak/beløpstak
 er av, Talesvar har egen bryter og Apper har Cost (USD). PC-profilen er migrert
 og /health svarer ok. Ingen betalte API-testkall er utført. Fysisk visning og
 lyd på FIRE etter denne oppdateringen er ikke bekreftet i disse testene.
@@ -176,3 +176,17 @@ lyd på FIRE etter denne oppdateringen er ikke bekreftet i disse testene.
 - [Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 - [Realtime svargrenser](https://developers.openai.com/api/reference/resources/realtime/client-events)
 - [Speech API og utgående modeller](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)
+
+
+## Jobber og kronologisk appliste (2026-11-23)
+
+Jobber har Cost (USD) direkte i listen. Det er livstidskostnaden for API-kall
+knyttet til den jobben, også feil og gjenopptak. Eldre lagrede bygg/kontroller
+får samme separate, tydelig merkede Astra-anslag som Apper. Detaljene oppgir
+modell og scenariointervall. Ufordelt tale/dialog tilhører appregnskapet og
+fordeles ikke vilkårlig mellom byggejobber. Nullstilling sletter ingen jobbpriser.
+
+Apper sorteres nyest opprettet/oppdatert først, én rad per app. Siste pakkes
+publiseringstid brukes; eldre pakker uten tidsfelt bruker den uforanderlige
+pakkefilens endringstid. Tilgang, valgt versjon og oppfriskning av kostnadstall
+endrer ikke rekkefølgen. Versjonsvelgeren og appens samlede kostnad beholdes.
