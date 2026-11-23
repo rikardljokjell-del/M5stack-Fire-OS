@@ -37,6 +37,10 @@ class DesktopUI:
         self.busy, self.closing = False, False
         self.snapshot = {"sessions": [], "devices": [], "builds": []}
         self.usage_snapshot = {}
+        self.job_snapshot = {}
+        self.job_rows = {}
+        self.job_drafts = {}
+        self.job_editor_target = None
         self.current_page = "Oversikt"
         self.network, self.firewall = "Kontrollerer nettverk …", False
         self.addresses = lan_addresses()
@@ -115,7 +119,7 @@ class DesktopUI:
         tk.Label(nav, text="FIRE", bg=NAV, fg="#ff8456", font=("Segoe UI Black", 28)).pack(anchor="w", padx=25, pady=(27, 0))
         tk.Label(nav, text="BACKEND", bg=NAV, fg="white", font=("Segoe UI", 12)).pack(anchor="w", padx=27, pady=(0, 32))
         self.nav_buttons = {}
-        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Bruk og kostnad", "Aktivitet", "Apper", "Firmware", "Innstillinger"):
+        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Bruk og kostnad", "Jobber", "Aktivitet", "Apper", "Firmware", "Innstillinger"):
             button = tk.Button(nav, text=name, command=lambda n=name: self.show(n), anchor="w", relief="flat",
                                bg=NAV, fg="#c1ccd9", activebackground="#293b51", activeforeground="white",
                                font=("Segoe UI", 12), padx=25, pady=10, bd=0, cursor="hand2")
@@ -145,6 +149,7 @@ class DesktopUI:
         self.transport_page(self.pages["Tilkobling"])
         self.openai_page(self.scroll_content(self.pages["OpenAI"]))
         self.usage_page(self.scroll_content(self.pages["Bruk og kostnad"]))
+        self.jobs_page(self.scroll_content(self.pages["Jobber"]))
         self.activity_page(self.pages["Aktivitet"])
         self.apps_page(self.pages["Apper"])
         self.firmware_page(self.pages["Firmware"])
@@ -402,6 +407,77 @@ class DesktopUI:
             +f"Cache lest/skrevet: {item.get('cached_tokens',0)}/{item.get('cache_write_tokens',0)} tokens. "
             +("Tokens rapportert av OpenAI; USD beregnet lokalt." if item.get('usage_source')=='provider' else
               "Anslag fra lydlengde." if item.get('usage_source')=='duration' else "Ufullstendig måling: konservativ kostnadsreserve beholdes."))
+
+    def jobs_page(self,page):
+        self.job_heading=self.label(page,"Henter jobber …","Heading.TLabel")
+        self.job_heading.pack(anchor="w",pady=(0,7))
+        self.job_table=ttk.Treeview(page,columns=('name','status','phase','progress'),show='headings',height=5,selectmode='browse')
+        for key,title,width in [('name','App / jobb',230),('status','Status',150),('phase','Arbeider med',260),('progress','Fremdrift',100)]:
+            self.job_table.heading(key,text=title);self.job_table.column(key,width=width,minwidth=70)
+        self.job_table.pack(fill='x')
+        self.job_table.bind('<<TreeviewSelect>>',lambda _:self.render_job_detail())
+        self.job_progress=ttk.Progressbar(page,maximum=100);self.job_progress.pack(fill='x',pady=8)
+        self.job_detail=tk.Text(page,height=11,wrap='word',font=('Segoe UI',10),bg='white',fg=INK,bd=0,padx=10,pady=8,state='disabled')
+        self.job_detail.pack(fill='x')
+        self.label(page,"Tillegg til utviklingen", "Heading.TLabel").pack(anchor='w',pady=(10,5))
+        self.job_prompt=tk.Text(page,height=3,wrap='word',font=('Segoe UI',11));self.job_prompt.pack(fill='x')
+        self.label(page,"Gjelder neste generering, ikke et modellkall som allerede pågår. Kan bruke ett av jobbens tillatte forsøk.\n"
+            "Ved ferdig/feilet jobb: åpne Aktivitet for videre utvikling. Ingen nye bygg starter fra dette tekstfeltet alene.",
+            "Muted.TLabel",wraplength=800).pack(anchor='w',pady=6)
+        self.job_send=ttk.Button(page,text='Legg til kontekst i valgt jobb',command=self.send_job_context,style='Accent.TButton')
+        self.job_send.pack(anchor='w')
+        ttk.Button(page,text='Åpne Aktivitet',command=lambda:self.show('Aktivitet')).pack(anchor='w',pady=7)
+
+    def send_job_context(self):
+        chosen=self.job_table.selection();row=self.job_rows.get(chosen[0]) if chosen else None
+        if not row or not row.get('can_add_context'):return
+        text=self.job_prompt.get('1.0','end').strip()
+        if not text:return
+        def done(value):
+            self.job_drafts[row['id']]=''
+            if self.job_editor_target==row['id']:self.job_prompt.delete('1.0','end')
+            self.notice.set(value['message'])
+        self.work(lambda:self.runtime.add_job_context(row['build_id'],text),done=done,message='Lagrer kontekst til jobben …')
+
+    def render_jobs(self):
+        rows=self.job_snapshot.get('jobs',[]);self.job_rows={r['id']:r for r in rows}
+        self.job_heading.configure(text=f"{self.job_snapshot.get('active_count',0)} aktive jobber · velg en jobb for detaljer")
+        labels={'queued':'I kø','building':'Arbeider','ready':'Ferdig','failed':'Stoppet / feilet','awaiting_confirmation':'Venter på bekreftelse',
+            'awaiting_build_confirmation':'Venter på bygg','processing':'Behandler','listening':'Tar opp tale'}
+        values=[(r['id'],(r['name'],labels.get(r['status'],r['status']),r['message'],str(r['progress'])+'%')) for r in rows]
+        if values!=getattr(self,'job_table_values',None):
+            selected=self.job_table.selection();self.job_table_values=values
+            self.job_table.delete(*self.job_table.get_children())
+            for key,value in values:self.job_table.insert('','end',iid=key,values=value)
+            if selected and selected[0] in self.job_rows:self.job_table.selection_set(selected[0])
+            elif values:self.job_table.selection_set(values[0][0])
+        self.render_job_detail()
+
+    def render_job_detail(self):
+        selected=self.job_table.selection();r=self.job_rows.get(selected[0]) if selected else None
+        target=r['id'] if r else None
+        if target!=self.job_editor_target:
+            if self.job_editor_target is not None:
+                self.job_drafts[self.job_editor_target]=self.job_prompt.get('1.0','end').strip()
+                self.job_prompt.delete('1.0','end')
+                self.job_prompt.insert('1.0',self.job_drafts.get(target,''))
+            self.job_editor_target=target
+        self.job_send.configure(text='Legg til kontekst: '+r['name'] if r else 'Legg til kontekst i valgt jobb')
+        self.job_send.configure(state='normal' if r and r.get('can_add_context') and not self.busy else 'disabled')
+        self.job_progress['value']=r.get('progress',0) if r else 0
+        text='Ingen bygg eller feilrettinger registrert.'
+        if r:
+            pending='VENTER på neste generering' if r.get('context_pending') else 'Tatt med i generering'
+            notes=r.get('context',{}).get('notes',[])
+            lines=[r['name']+' · '+r['id'],r['message']+f" · {r.get('attempt',0)}/{r.get('max_attempts','–')} forsøk · anslått ${r.get('estimated_usd',0):.4f}"]
+            if r.get('retry_at'):lines.append('Neste AI-forsøk tidligst '+time.strftime('%H:%M:%S',time.localtime(r['retry_at'])))
+            if r.get('error'):lines+=['STOPPÅRSAK: '+r.get('error_status',''),r['error']]
+            if r.get('last_validation_error'):lines+=['Siste kontrollfunn:',r['last_validation_error']]
+            lines+=['Plan:',r.get('summary','')]
+            if notes:lines+=['Manuell kontekst: '+pending]+[n['text'] for n in notes]
+            text='\n'.join(lines)
+        if text!=getattr(self,'job_detail_text',None):
+            self.job_detail_text=text;self.job_detail.configure(state='normal');self.job_detail.delete('1.0','end');self.job_detail.insert('1.0',text);self.job_detail.configure(state='disabled')
 
     def activity_page(self, page):
         self.label(page, "Snakk med AI eller beskriv en app. B på FIRE starter et nytt opptak og avbryter forrige svar.", "Muted.TLabel").pack(anchor="w")
@@ -887,10 +963,14 @@ class DesktopUI:
 
     def poll(self):
         next_usage=0
+        next_jobs=0
         while not self.closing:
             if self.runtime.ready:
                 try:
                     self.queue.put(("snapshot", self.runtime.snapshot()))
+                    if time.monotonic()>=next_jobs:
+                        self.queue.put(("jobs",self.runtime.jobs()))
+                        next_jobs=time.monotonic()+2
                     if time.monotonic()>=next_usage:
                         self.queue.put(("usage",self.runtime.usage()))
                         next_usage=time.monotonic()+6
@@ -906,6 +986,8 @@ class DesktopUI:
                 break
             if kind == "snapshot":
                 self.snapshot = value
+            elif kind == "jobs":
+                self.job_snapshot=value
             elif kind == "usage":
                 self.usage_snapshot=value
             elif kind == "network":
@@ -945,6 +1027,7 @@ class DesktopUI:
                                                   foreground="#16825b" if ready else MUTED)
         self.summary_labels["api"].configure(text=mode + ("\nNøkkel lagret" if self.key_saved else "\nNøkkel mangler"))
         self.render_usage()
+        self.render_jobs()
         sessions = [s for s in self.snapshot["sessions"] if s["target"] == "device" and s.get("online") and ready]
         self.summary_labels["device"].configure(text=f"{len(sessions)} tilkoblet" if sessions else "Venter på FIRE")
         choices = [self.session_name(s) for s in self.snapshot["sessions"] if ready and (s.get("desktop_device_id") or s["target"]=="device" and s.get("online"))]

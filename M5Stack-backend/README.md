@@ -1,5 +1,10 @@
 # FIRE OS AI Developer backend 0.2
 
+[Jobber](docs/JOB_MONITOR.md) viser aktive bygg/feilrettinger, fremdrift,
+stopprosaker og manuell kontekst for neste generering. Oversikten hentes lokalt
+og bruker ingen betalte AI-kall.
+
+
 [Kostnad og bruk](docs/COST_AND_USAGE.md): nytt panel med USD-anslag,
 kostnadsdrivere, tokens/cache/lyd og nullstilling av visningsperioden. Sol og
 Realtime mini er standard, med én automatisk retting og lokale stoppgrenser

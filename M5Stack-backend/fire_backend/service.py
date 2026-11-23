@@ -111,6 +111,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         self.store.recover()
         from .repairs import Repairs
         self.repairs=Repairs(self)
+        from .jobs import Jobs
+        self.jobs=Jobs(self)
         from .firmware import Firmware
         self.firmware=Firmware(self)
         for command in self.store.list("commands"):
@@ -329,7 +331,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             context+=dialogue_policy(self.settings,session)
         project = self.store.get("projects", session.project_id)
         selected_base = session.base_package_id or project.get("latest_package")
-        summary = self.store.get("builds", selected_base).get("summary", "") if selected_base else ""
+        base_build=self.store.get('builds',selected_base) if selected_base else {}
+        summary=base_build.get('effective_summary',base_build.get('summary',''))
         context += "\nProject: " + json.dumps({"id": project["id"], "name": project["name"],
             "app_mode": session.app_mode, "base_package_id": selected_base, "last_confirmed_summary": summary})
         if selected_base:
@@ -946,6 +949,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         build_completed = False
         project_before = None
         try:
+            build['status']='building'
+            self.store.put('builds',build['id'],build)
             await build_state(State.building)
             await progress("preparing", 1, build_text('preparing'))
             async with asyncio.timeout(self.settings.fire_build_timeout_seconds):
@@ -954,8 +959,11 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 build_project = {**project, "latest_package": session.base_package_id}
                 package = await self.builder.build(build, build_project, progress, capabilities=session.capabilities,
                                                    context=self.context_for(session))
+            if build.get('effective_summary'):
+                build.setdefault('resume_context',{})['summary']=build['effective_summary']
+                session.summary=build['effective_summary']
             project.update(name=package["manifest"]["name"], app_id=package["manifest"]["id"], latest_package=package["id"],
-                           next_version=project["next_version"] + 1, last_confirmed_summary=build["summary"])
+                           next_version=project["next_version"] + 1, last_confirmed_summary=build.get('effective_summary',build["summary"]))
             self.store.put("projects", project["id"], project)
             if build.get("repair_of"):
                 self.quality.candidate(session.project_id, build["repair_of"], package["id"])

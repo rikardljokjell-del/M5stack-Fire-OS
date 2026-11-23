@@ -26,7 +26,7 @@ class Store:
         self.redactor = redactor
         self.max_bytes = max_bytes
         self.failure_reserve = min(65536, max_bytes // 8)
-        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio", "quality", "feedback", "app_deletions", "repairs", "diagnostics", "usage"):
+        for name in ("projects", "builds", "packages", "logs", "context", "templates", "sessions", "devices", "commands", "events", "audio", "quality", "feedback", "app_deletions", "repairs", "diagnostics", "usage", "job_context"):
             (self.root / name).mkdir(parents=True, exist_ok=True)
 
     def path(self, group: str, item_id: str, suffix=".json") -> Path:
@@ -81,6 +81,7 @@ class Store:
             if build["project_id"] == project_id:
                 build_id = build["id"]
                 self.path("builds", build_id).unlink(missing_ok=True)
+                self.path("job_context", build_id).unlink(missing_ok=True)
                 self.path("logs", build_id, ".log").unlink(missing_ok=True)
                 folder = self.path("builds", build_id, "")
                 if folder.exists():
@@ -108,6 +109,7 @@ class Store:
         self.path("packages",package["id"]).unlink(missing_ok=True)
         self.path("packages",package["id"],".zip").unlink(missing_ok=True)
         self.path("builds",package["build_id"]).unlink(missing_ok=True)
+        self.path("job_context",package["build_id"]).unlink(missing_ok=True)
         self.path("logs",package["build_id"],".log").unlink(missing_ok=True)
         if folder.exists():shutil.rmtree(folder)
         for group in ("quality","feedback","commands"):

@@ -142,6 +142,12 @@ class DesktopRuntime:
             return {"sessions": [], "devices": [], "builds": []}
         return self.request("GET", "/desktop/status")
 
+    def jobs(self):
+        return self.request("GET","/desktop/jobs")
+
+    def add_job_context(self,build_id,text):
+        return self.request("POST",f"/desktop/jobs/{build_id}/context",json={"text":text})
+
     def usage(self):
         return self.request("GET", "/desktop/usage")
 

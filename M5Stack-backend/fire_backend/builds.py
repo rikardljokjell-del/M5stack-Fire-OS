@@ -25,6 +25,7 @@ from .api_registry import BASE_API,HARDWARE_API,BASE_SERVICES,API_CONTRACT,servi
 from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VERSION,experience_contract
 from .capabilities import CapabilityError
 from .usage import UsageBudgetError
+from .jobs import apply_context,mark_context_applied,require_current_context,ContextChanged
 
 
 def sha256(data):
@@ -265,10 +266,12 @@ class Builder:
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
             for attempt in range(max_attempts):
+                summary,context_revision=apply_context(self.store,build,attempt+1)
                 build['generation_attempt']=attempt+1
                 operation='repair' if build.get('repair_of') or build.get('repair_job_id') else 'update' if project.get('latest_package') else 'new'
                 await progress("generating", 10 + attempt * 3, build_text('generating',operation=operation,attempt=attempt+1,total=max_attempts))
-                generated = await self.provider_call(build,'generating',progress,self.provider.generate,build["summary"], context, last_error, previous)
+                generated = await self.provider_call(build,'generating',progress,self.provider.generate,summary, context, last_error, previous)
+                mark_context_applied(self.store,build_id,context_revision,attempt+1)
                 # Redact before persisting, validating or packaging any model output.
                 generated = type(generated).model_validate(self.store.redactor.value(generated.model_dump()))
                 api_version=(capabilities or {}).get("api_version",BASE_API)
@@ -288,6 +291,7 @@ class Builder:
                 await progress("compiling", 50, build_text('compiling'))
                 await progress("testing", 65, build_text('testing'))
                 try:
+                    require_current_context(self.store,build,context_revision)
                     generated=generated.model_copy(update={'required_services':service_closure(generated.required_services,api_version)})
                     Quality(self.store).reject_known_failure(project["id"], sha256(payload))
                     if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
@@ -305,13 +309,14 @@ class Builder:
                         "require_io_coverage":self.settings.fire_ai_mode=="openai",
                         **({"experience_policy_version":UX_POLICY_VERSION} if self.settings.fire_ai_mode=="openai" else {})}, self.store, build_id)
                     await progress("testing",75,build_text('testing',progress=75))
+                    require_current_context(self.store,build,context_revision)
                     reviewer=getattr(self.provider,"review",None)
                     if reviewer is None:
                         if self.settings.fire_ai_mode!="mock":
                             raise ValueError("Pre-delivery review is required for live generation")
                         from .ai import MockProvider
                         reviewer=MockProvider().review
-                    review=await self.provider_call(build,'testing',progress,reviewer,build["summary"],context,generated,result)
+                    review=await self.provider_call(build,'testing',progress,reviewer,summary,context,generated,result)
                     review_data=self.store.redactor.value(review.model_dump())
                     if self.settings.fire_ai_mode=="mock" and not isinstance(review,FireAppReview):
                         # Limited offline fixtures are explicitly identified; no live UX claim.
@@ -324,9 +329,14 @@ class Builder:
                         "mode":"openai_source_review" if self.settings.fire_ai_mode=="openai" else "mock_fixture",
                         "checks":review.model_dump(),"physical_verified":False}
                     self.store.write(folder / f"review-{attempt+1}.json",review_record)
+                    require_current_context(self.store,build,context_revision)
                     if not review.approved:raise ValueError(review.correction())
                     result.update(pre_delivery_review_required=True,pre_delivery_review=review_record)
                     break
+                except ContextChanged as error:
+                    previous=generated.main_lua;last_error=str(error)
+                    self.store.log(build_id,last_error)
+                    if attempt==max_corrections:raise ValueError('Ny kontekst venter, men rettingsgrensen er nådd. Fortsett i Aktivitet med konteksten.') from error
                 except (CapabilityError,UsageBudgetError):
                     raise  # Regenerating Lua cannot implement a missing native driver.
                 except (ValueError, asyncio.TimeoutError) as error:

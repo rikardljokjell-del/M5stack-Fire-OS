@@ -169,6 +169,16 @@ def create_app(settings=None, provider=None):
     async def desktop_usage(service: Backend = Depends(backend)):
         return service.usage.snapshot()
 
+    @app.get('/desktop/jobs', dependencies=[Depends(desktop_auth)])
+    async def desktop_jobs(service: Backend = Depends(backend)):
+        return service.jobs.snapshot()
+
+    @app.post('/desktop/jobs/{build_id}/context', dependencies=[Depends(desktop_auth)])
+    async def job_context(build_id: str,request: Request,service: Backend = Depends(backend)):
+        data=await request.json()
+        if not isinstance(data,dict) or set(data)!={'text'}:raise HTTPException(422,'Expected text')
+        return service.jobs.context(build_id,data['text'])
+
     @app.post('/desktop/usage/reset', dependencies=[Depends(desktop_auth)])
     async def reset_desktop_usage(request: Request, service: Backend = Depends(backend)):
         body = await request.body()
