@@ -47,7 +47,9 @@ class AppTestSequence(StrictModel):
 class GeneratedApp(StrictModel):
     name: str = Field(min_length=1, max_length=32)
     main_lua: str = Field(min_length=1, max_length=100_000)
-    required_services: list[str] = Field(max_length=24)
+    required_services: list[str] = Field(max_length=24,
+        description="Bare Lua service names, e.g. display, buttons, rgb. Never fire.display or permission names.",
+        json_schema_extra={"items":{"type":"string","enum":sorted(ALL_SERVICES)}})
     test_sequences: list[AppTestSequence] = Field(default_factory=list,max_length=6)
 
     @field_validator("name")
@@ -56,6 +58,17 @@ class GeneratedApp(StrictModel):
         if not value.strip() or any(ord(c) < 32 for c in value):
             raise ValueError("Appnavnet mÃ¥ vÃ¦re kort, lesbart og uten kontrolltegn")
         return " ".join(value.split())
+
+    @field_validator("required_services",mode="before")
+    @classmethod
+    def candidate_service_names(cls,value):
+        # AI candidates may confuse a Lua namespace with a service ID. This
+        # lossless spelling fix grants no new service and never applies to
+        # manifests or device capabilities, which retain strict validation.
+        if isinstance(value,list):
+            return [item[5:] if isinstance(item,str) and item.startswith('fire.') and item[5:] in ALL_SERVICES
+                    else item for item in value]
+        return value
 
     @field_validator("required_services")
     @classmethod

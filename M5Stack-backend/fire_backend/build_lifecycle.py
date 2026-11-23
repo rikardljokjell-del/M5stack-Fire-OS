@@ -7,6 +7,8 @@ import time
 from .models import State
 from .status_text import VERSION,TEXT,build_text,error_text
 from .quality import require_deliverable
+from .generation_errors import build_failure
+from .storage import new_id
 
 
 class BuildLifecycle:
@@ -31,6 +33,9 @@ class BuildLifecycle:
         package_id=build.get('package_id') if status=='ready' else None
         package=self.store.get('packages',package_id) if package_id else None
         available=False
+        failed=build_failure(self.store,build) if status=='failed' else {}
+        if failed:failed['diagnostic_message']=failed['diagnostic_message'][:240]
+        if failed:message=failed['error_status']
         if package:
             try:require_deliverable(package);available=True
             except ValueError:message=TEXT['test_failed']
@@ -39,15 +44,22 @@ class BuildLifecycle:
                 'name':package['manifest']['name'] if package else project['name'],'status':status,'phase':phase,'progress':build.get('progress',0),
                 'message':message,'background':build.get('background',False),'package_id':package_id,
                 'version':package['manifest']['version'] if package else None,
-                'can_open':available or status not in {'ready','failed'} and bool(self.build_entry(build['id'])),
+                'can_open':available or status=='failed' and bool(build.get('summary')) or status not in {'ready','failed'} and bool(self.build_entry(build['id'])),
+                'can_resume':status=='failed' and bool(build.get('summary')),
+                **failed,
                 'status_text_version':VERSION,'physical_verified':False}
 
     async def build_notices(self,session):
         if session.target!='device':return
-        for build in self.store.list('builds'):
-            if build.get('owner_device_id')==session.device_id and build.get('background') and build['status'] not in {'ready','failed'}:
-                with contextlib.suppress(FileNotFoundError):
-                    await self.emit(session,{'type':'build_job_status',**self.build_view(build)})
+        owned=[b for b in self.store.list('builds') if b.get('owner_device_id')==session.device_id and b.get('background')]
+        active=[b for b in owned if b['status'] not in {'ready','failed'}]
+        failed=[b for b in owned if b['status']=='failed']
+        # A historical failure must never overwrite a current build's progress.
+        # All failures remain discoverable through the paged Resume catalog.
+        visible=active or sorted(failed,key=lambda b:b.get('created_at',0),reverse=True)[:1]
+        for build in visible:
+            with contextlib.suppress(FileNotFoundError):
+                await self.emit(session,{'type':'build_job_status',**self.build_view(build)})
         pending=[b for b in self.store.list('builds') if b.get('owner_device_id')==session.device_id and
                  b.get('background') and b['status']=='ready' and not b.get('notice_ack')]
         pending.sort(key=lambda b:b.get('created_at',0),reverse=True)
@@ -71,6 +83,24 @@ class BuildLifecycle:
 
     async def resume_build(self,session,build):
         from .models import DeviceEvent
+        if build['status']=='failed':
+            await self.restore_failed_build(session,build)
+            result={'type':'build_resumed','build_id':build['id'],'project_id':session.project_id,
+                    'state':session.state,'proposal_id':session.proposal_id,'package_id':None,
+                    'progress':session.progress,'history_restored':True,'can_retry':True,
+                    'phase':'failed','progress_percent':0,
+                    'message':build_failure(self.store,build)['error_status'],
+                    'status_text_version':VERSION,**{**build_failure(self.store,build),'diagnostic_message':session.last_error}}
+            await self.emit(session,result)
+            # Full manual notes stay on the backend; never overflow the 8 KiB
+            # control-message limit when reopening a heavily refined plan.
+            preview=build['summary']
+            if len(preview.encode('utf-8'))>4000:
+                preview='Fortsett den lagrede appplanen. Hele planen og alle tillegg er bevart i backend.'
+            await self.emit(session,{'type':'build_proposal','proposal_id':session.proposal_id,
+                                    'summary':preview,'project_id':session.project_id,'plan_restored':True,
+                                    'message':'Planen er bevart. Prøv igjen eller endre planen.'})
+            return result
         snapshot=build.get('resume_context',{})
         if build['status']=='ready':
             package=self.store.get('packages',build['package_id']);require_deliverable(package)
@@ -116,6 +146,44 @@ class BuildLifecycle:
                 'status_text_version':VERSION}
         await self.emit(session,result)
         return result
+
+    async def restore_failed_build(self,session,build):
+        """Restore context only. A fresh explicit build_confirm authorizes spending."""
+        project=self.store.get('projects',build['project_id'])
+        owner=session.device_id if session.target=='device' else session.desktop_device_id
+        if not owner or project.get('owner_device_id')!=owner or build.get('owner_device_id',owner)!=owner:
+            raise PermissionError('Build belongs to another device')
+        if build['status']!='failed' or not build.get('summary'):
+            raise ValueError('Velg en mislykket jobb med lagret plan.')
+        if session.resumed_from_build_id==build['id'] and session.state==State.awaiting_build_confirmation:
+            return
+        await self.release_foreground(session)
+        if session.target=='device':self.require_app_choice_idle(session)
+        elif session.lock.locked() or session.operation_task or session.task and not session.task.done():
+            raise ValueError('Fullfør eller avbryt PC-jobben før Resume.')
+        snapshot=build.get('resume_context',{})
+        base=snapshot.get('base_package_id')
+        if base:
+            package=self.store.get('packages',base)
+            if package['project_id']!=project['id']:raise ValueError('Basisversjonen tilhører en annen app.')
+        from .jobs import apply_context
+        summary,_=apply_context(self.store,build,1)
+        session.project_id=project['id'];session.summary=summary
+        session.history=copy.deepcopy(snapshot.get('history',[]))
+        session.app_mode='update' if base else 'new';session.base_package_id=base
+        session.package_id=None;session.build_id=build['id'];session.task=None
+        session.conversation_mode='develop';session.install_permitted=True
+        session.resumed_from_build_id=build['id'];session.proposal_id=new_id('proposal')
+        if build.get('repair_context'):
+            import json
+            session.repair_context=json.loads(build['repair_context'])
+        else:session.repair_context=None
+        session.last_error=build_failure(self.store,build)['diagnostic_message'][:240]
+        session.progress={'type':'build_progress','build_id':build['id'],'phase':'failed','progress':0,
+                          'message':build_failure(self.store,build)['error_status'],'can_resume':True,
+                          **build_failure(self.store,build),'status_text_version':VERSION}
+        await self.state(session,State.awaiting_build_confirmation)
+        self.persist(session)
 
     async def build_event(self,session,event):
         if event.event=='build_jobs':

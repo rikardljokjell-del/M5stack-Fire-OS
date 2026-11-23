@@ -109,16 +109,23 @@ def test_job_ui_shows_errors_and_context_without_losing_draft(tmp_path,monkeypat
         ui=DesktopUI(root,DesktopStore(tmp_path,MemoryVault()))
         ui.job_snapshot={'active_count':0,'jobs':[{'id':'build-one','name':'Prøve','status':'failed','message':'Kontroller API-kontoen',
           'progress':0,'error':'billing/quota limit','error_status':'Kontroller API-kontoen','context_pending':True,
-          'context':{'notes':[{'text':'Større tekst'}]},'can_add_context':False}]}
+          'context':{'notes':[{'text':'Større tekst'}]},'can_add_context':False,'can_resume':True,'build_id':'build-one'}]}
         ui.job_prompt.insert('1.0','Behold dette utkastet');ui.render_jobs()
         assert 'STOPPÅRSAK' in ui.job_detail.get('1.0','end') and 'Større tekst' in ui.job_detail.get('1.0','end')
         assert ui.job_prompt.get('1.0','end').strip()=='Behold dette utkastet'
         assert str(ui.job_send.cget('state'))=='disabled'
+        assert str(ui.job_resume.cget('state'))=='normal'
         second={**ui.job_snapshot['jobs'][0],'id':'build-two','name':'Annen app'}
         ui.job_snapshot['jobs'].append(second);ui.render_jobs()
         ui.job_table.selection_set('build-two');ui.render_job_detail()
         assert not ui.job_prompt.get('1.0','end').strip()
         ui.job_table.selection_set('build-one');ui.render_job_detail()
         assert ui.job_prompt.get('1.0','end').strip()=='Behold dette utkastet'
+        result={'session_id':'session-restored','desktop_device_id':'fire-01','resumed_from_build_id':'build-one'}
+        monkeypatch.setattr(ui,'show',lambda _:None)
+        monkeypatch.setattr(ui,'refresh_now',lambda:None)
+        ui.choose_pc_session(result)
+        assert ui.prompt.get('1.0','end').strip()=='Behold dette utkastet'
+        assert 'sirkel som beveger seg' not in ui.prompt.get('1.0','end')
 
     finally:root.destroy()

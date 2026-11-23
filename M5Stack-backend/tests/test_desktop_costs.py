@@ -80,7 +80,8 @@ def test_usage_screen_renders_reported_and_uncertain_requests_without_paid_calls
             'today':{'requests':2,'estimated_usd':.08},'lifetime':{'requests':4,'estimated_usd':.1},
             'limits':{'daily_usd':2,'daily_remaining_usd':1.92},
             'by_operation':[{'operation':'generate','requests':1,'input_tokens':300,'output_tokens':200,'estimated_usd':.02}],
-            'recent':[{'id':'usage-one','model':'gpt-6.2-sol','operation':'generate','status':'completed','usage_source':'provider','input_tokens':300,'output_tokens':200,'cached_tokens':100,'estimated_usd':.02,'started_at':1795420000},
+            'recent':[{'id':'usage-one','model':'gpt-6.2-sol','operation':'generate','status':'failed','usage_source':'provider','input_tokens':300,'output_tokens':200,'cached_tokens':100,'estimated_usd':.02,'started_at':1795420000,
+                      'reasoning_tokens':200,'max_output_tokens':24000,'reasoning_effort':'low','failure_code':'ai_output_limit'},
                       {'id':'usage-two','model':'gpt-realtime-2.1-mini','operation':'speech','status':'cancelled','usage_source':'reservation','input_tokens':200,'output_tokens':0,'estimated_usd':.06,'started_at':1795420001}]}
         ui.render_usage()
         assert '$0.0800' in ui.usage_totals['since_reset'].cget('text')
@@ -88,6 +89,9 @@ def test_usage_screen_renders_reported_and_uncertain_requests_without_paid_calls
         assert 'Kodebygging' in str(ui.usage_groups['by_operation'].item(ui.usage_groups['by_operation'].get_children()[0])['values'])
         ui.usage_recent.selection_set('usage-two');ui.render_usage_detail()
         assert 'reserve beholdes' in ui.usage_detail.cget('text')
+        ui.usage_recent.selection_set('usage-one');ui.render_usage_detail()
+        assert 'Intern resonnering: 200 av 200' in ui.usage_detail.cget('text')
+        assert 'AI-svaret ble avkuttet' in ui.usage_detail.cget('text')
         ui.economy_profile();assert ui.models['review_model'].get()=='gpt-6-luna'
         assert ui.collect().daily_budget_usd==2
     finally:root.destroy()

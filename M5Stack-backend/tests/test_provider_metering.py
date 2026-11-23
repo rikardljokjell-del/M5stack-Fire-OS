@@ -61,7 +61,7 @@ async def test_real_sdk_records_returned_usage_cache_and_attribution(tmp_path, m
         assert body['model']==row['model']==model
         assert body['prompt_cache_options']=={'mode':'explicit','ttl':'30m'}
         assert body['input'][0]['content'][0]['prompt_cache_breakpoint']=={'mode':'explicit'}
-        assert body['reasoning']=={'effort':'medium'}
+        assert body['reasoning']=={'effort':'low'}
         assert 'sk-metering-private-test' not in p.usage_ledger.store.path('usage',row['id']).read_text()
     finally:
         usage_scope.reset(token);await p.close()

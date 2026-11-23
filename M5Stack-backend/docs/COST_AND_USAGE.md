@@ -65,6 +65,47 @@ kvaliteten på nye Luna-genererte apper er ikke fysisk verifisert på FIRE.
 
 ## Bruk og kostnad
 
+### Svarrom og automatisk gjenoppretting
+
+RPG-jobben `build-a5ab57cfbc8444cca5f5` avdekket at den tidligere grensen på
+8 000 outputtokens ble brukt helt til intern resonnering, uten synlig appkode.
+Den brukte USD 0,00571425. Grensen inkluderte både resonnering og synlig svar,
+og den generelle feilmeldingen skjulte forskjellen på avkutt og avslag.
+
+Generering bruker nå **low** resonnering. Luna-modellene får 24 000 outputtokens,
+øvrige kodemodeller 12 000. Kodekontroll får 6 000. Dette er maksimumsgrenser,
+ikke et mål på hvor mange tokens et normalt svar skal bruke. Et avkuttet svar
+kan forsøkes én gang til med dobbelt svarrom; GPT-6 Luna bruker da **none**
+resonnering. Ingen automatisk overgang til dyrere modell. Konto-/kredittfeil
+og modellavslag gjentas ikke. Avslag, avkutt og ugyldige svar får ulike årsaker.
+
+SDK-status og faktisk bruk leses før strukturert JSON parses, slik at også
+ufullstendig JSON får riktig forbruk og forklaring. Ugyldig svarstruktur kan
+formatrettes én gang med samme tokengrense. `required_services` oppgis med
+registryens enum i skjemaet; entydig AI-feilstaving som `fire.display` blir
+`display` uten et ekstra modellkall. Ukjente/dupliserte tjenester avvises fortsatt.
+Manifest, annonserte capabilities, Lua-tester og kodekontroll er like strenge.
+
+Alle forsøk må reservere innen dags-, jobb- og kallbudsjett. Et legitimt
+kostnadsstopp kan fortsatt kreve brukerens justering. Det er ingen ubegrenset
+retry-løkke. Pris/forbruk rapporterer resonnering som del av output, ikke i tillegg.
+Det holdes metadata om responsstatus, stoppårsak, svartak og resonneringsnivå;
+selve resonneringsteksten eller rå modellfeil lagres ikke i forbruksregnskapet.
+
+Ved feil velger man **Jobber → Resume valgt jobb**. Plan/dialog gjenopprettes i
+Aktivitet uten nytt modellkall; endre planen eller trykk Bygg for nytt forsøk.
+Tidligere jobb, kostnad og feil bevares. Ny jobb peker tilbake med `retry_of`.
+FIRE bruker samme flyt gjennom `build_resume`; visningsarbeid hos device-agenten
+er beskrevet i [DEVICE_FAILED_BUILD_RESUME.md](DEVICE_FAILED_BUILD_RESUME.md).
+
+Verifisert lokalt: hele testsuiten, 505 tester bestått. Den siste UI-justeringen
+for bevaring av utkast ved Resume er også kontrollert med egne Tk-tester.
+Windows-appen viser nå konkret årsak for de to historiske feilene (RPG-avkutt
+og `fire.display` i appformatet). RPG-jobbens prosjekt/dialog er gjenopprettet
+til byggebekreftelse uten betalt modellkall. Fysisk skjermvisning og nytt
+Luna-generert RPG på FIRE er ikke verifisert; dette krever device-oppdateringen
+og et brukerbekreftet bygg. Ingen betalte testkall ble gjort i denne endringen.
+
 Den nye siden viser:
 
 - anslått USD og antall kall siden nullstilling, i dag og siden målingen startet;

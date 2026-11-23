@@ -179,6 +179,11 @@ def create_app(settings=None, provider=None):
         if not isinstance(data,dict) or set(data)!={'text'}:raise HTTPException(422,'Expected text')
         return service.jobs.context(build_id,data['text'])
 
+    @app.post('/desktop/jobs/{build_id}/resume', dependencies=[Depends(desktop_auth)])
+    async def resume_job(build_id: str,request: Request,service: Backend = Depends(backend)):
+        if await request.json()!={}:raise HTTPException(422,'Expected empty request')
+        return await service.jobs.resume(build_id)
+
     @app.post('/desktop/usage/reset', dependencies=[Depends(desktop_auth)])
     async def reset_desktop_usage(request: Request, service: Backend = Depends(backend)):
         body = await request.body()

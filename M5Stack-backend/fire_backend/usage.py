@@ -188,7 +188,7 @@ class UsageLedger:
             self.store.put('usage', record['id'], record, critical=True)
             return record['id']
 
-    def finish(self, record_id, usage=None, *, status='completed', request_id=None, duration_seconds=None):
+    def finish(self, record_id, usage=None, *, status='completed', request_id=None, duration_seconds=None, response_meta=None):
         if status not in {'completed', 'failed', 'cancelled', 'unknown'}:
             raise ValueError('Unknown usage request status')
         with self.lock:
@@ -197,6 +197,8 @@ class UsageLedger:
                 return record  # Completion/replay must not charge twice.
             tokens = _tokens(usage, record.get('cache_write_ttl'))
             record.update(status=status, finished_at=self.clock(), request_id=_safe_id(request_id))
+            if response_meta:
+                record.update({k:response_meta[k] for k in ('provider_status','incomplete_reason','failure_code','max_output_tokens','reasoning_effort') if k in response_meta})
             if record['model'] in MINUTE_RATES:
                 seconds = _finite(duration_seconds, record['audio_seconds'])
                 if seconds and status == 'completed':
