@@ -2,6 +2,7 @@
 
 #include <base64.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include "fire_lua_runtime.h"
 #include "fire_json_guard.h"
 #include "fire_ws_handshake.h"
@@ -904,10 +905,16 @@ void FireBackendClient::readFrames() {
   // pause drawing and button handling for up to two seconds.
   constexpr size_t kMaxBytesPerService = 2048;
   size_t processed = 0;
-  while (client->available() && processed < kMaxBytesPerService) {
+  const int64_t readStartedUs = esp_timer_get_time();
+  const auto withinBudget = [&]() {
+    return processed < kMaxBytesPerService &&
+           esp_timer_get_time() - readStartedUs < 10000;
+  };
+  // Cooperative I/O budget. A native message callback cannot be preempted;
+  // its duration is measured separately below rather than hidden/reset.
+  while (withinBudget() && client->available()) {
     if (receiveStage_ == ReceiveStage::Header) {
-      while (receiveHeaderBytes_ < 2 && client->available() &&
-             processed < kMaxBytesPerService) {
+      while (receiveHeaderBytes_ < 2 && withinBudget() && client->available()) {
         const int value = client->read();
         if (value < 0) return;
         if (receiveHeaderBytes_ == 0) {
@@ -954,7 +961,7 @@ void FireBackendClient::readFrames() {
 
     if (receiveStage_ == ReceiveStage::ExtendedLength) {
       while (receiveExtendedBytes_ < receiveExtendedNeeded_ &&
-             client->available() && processed < kMaxBytesPerService) {
+             withinBudget() && client->available()) {
         const int value = client->read();
         if (value < 0) return;
         receiveExtended_[receiveExtendedBytes_++] = static_cast<uint8_t>(value);
@@ -976,8 +983,7 @@ void FireBackendClient::readFrames() {
     }
 
     if (receiveStage_ == ReceiveStage::Mask) {
-      while (receiveMaskBytes_ < sizeof(receiveMask_) && client->available() &&
-             processed < kMaxBytesPerService) {
+      while (receiveMaskBytes_ < sizeof(receiveMask_) && withinBudget() && client->available()) {
         const int value = client->read();
         if (value < 0) return;
         receiveMask_[receiveMaskBytes_++] = static_cast<uint8_t>(value);
@@ -988,17 +994,24 @@ void FireBackendClient::readFrames() {
     }
 
     if (receiveStage_ == ReceiveStage::Payload) {
-      while (receivePayloadBytes_ < receiveLength_ && client->available() &&
-             processed < kMaxBytesPerService) {
-        const int value = client->read();
-        if (value < 0) return;
-        const uint8_t decoded = static_cast<uint8_t>(value) ^
-                                (receiveMasked_
-                                     ? receiveMask_[receivePayloadBytes_ & 3]
-                                     : 0);
-        frameBuffer_ += static_cast<char>(decoded);
-        ++receivePayloadBytes_;
-        ++processed;
+      while (receivePayloadBytes_ < receiveLength_ && withinBudget()) {
+        const int available = client->available();
+        if (available <= 0) return;
+        uint8_t block[256];
+        const size_t amount = min<size_t>(sizeof(block), min<size_t>(available,
+            min<size_t>(receiveLength_ - receivePayloadBytes_, kMaxBytesPerService - processed)));
+        const int received = client->read(block, amount);
+        if (received <= 0) return;
+        if (receiveMasked_)
+          for (int index = 0; index < received; ++index)
+            block[index] ^= receiveMask_[(receivePayloadBytes_ + index) & 3];
+        if (!frameBuffer_.concat(reinterpret_cast<const char*>(block), received)) {
+          disconnect();
+          setState(State::Offline, "Backend frame allocation failed");
+          return;
+        }
+        receivePayloadBytes_ += received;
+        processed += received;
       }
       if (receivePayloadBytes_ < receiveLength_) return;
       if (receiveOpcode_ == 0x0) {
@@ -1075,6 +1088,10 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
                                       : "Backend connected (Direct)");
       }
     }
+    const int64_t callbackStartedUs = esp_timer_get_time();
     messageCallback_(callbackContext_, message);
+    const int64_t callbackUs = esp_timer_get_time() - callbackStartedUs;
+    if (callbackUs >= 10000)
+      Serial.printf("FIRE backend callback_us=%lu\n", static_cast<unsigned long>(callbackUs));
   }
 }
