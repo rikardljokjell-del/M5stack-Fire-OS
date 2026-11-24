@@ -187,15 +187,24 @@ En vanlig Nabu Casa-URL videresender ikke automatisk MQTT.
 
 Kjør veiviseren med `site=camper` i en ny mappe. Installer pakken på riktig HA
 og bruk profilens egne adresser/legitimasjoner. Ikke bland Home/Camper-filer.
-For flere steder med forskjellige HA-installasjoner er oppsettet identisk.
-På samme HA må pakkene ha forskjellige filnavn, eksempelvis
-`fire_home_home.yaml` og `fire_home_camper.yaml`.
+For flere steder med forskjellige HA-installasjoner **og forskjellige brokere**
+er dette en rett frem, separat installasjon per sted.
 
-For flere enheter på samme broker må passord/ACL og HA-pakker **slås sammen**;
-ikke overskriv eksisterende config. Veiviseren leverer ett site/device-par per
-kjøring. Endrer du kortmappingen, behold eksisterende brokernøkler og kopier
-bare den nye HA-pakken etter kontroll. Ikke distribuer nye tilfeldige nøkler
-med mindre du faktisk vil pare enheten på nytt.
+**Home og Camper på samme HA/broker krever ett koordinert felles oppsett.**
+Det er ikke tilstrekkelig å gi to HA-pakker forskjellige filnavn. Veiviseren
+leverer ett site/device-par per kjøring og lager nye tilfeldige passord/CA hver
+gang. Samme enhets-ID gjenbruker brukernavnene, og to standardtjenester prøver
+dessuten å bruke de samme portene 8883/9001.
+
+Et felles oppsett må bruke én broker/Compose-tjeneste, riktig felles CA og
+koordinerte innlogginger, samlet ACL for begge profiler, eventuelt samlet bridge
+og separate HA-pakkefilnavn. Ikke legg de to genererte brokeroppsettene over
+hverandre. For Rikards eventuelle fremtidige Camper på felles broker klargjøres
+denne standardkonfigurasjonen når HA-installasjon/brokertype er avklart.
+
+Endrer du bare kortmappingen, behold eksisterende brokernøkler og kopier bare
+den nye HA-pakken etter kontroll. Ikke distribuer nye tilfeldige nøkler med
+mindre du faktisk vil pare enheten på nytt.
 
 Forny LAN-serversertifikatet før ett år har gått, uten å endre CA eller passord:
 
@@ -218,8 +227,11 @@ python -m home_assistant.broker_smoke --broker-exe /usr/sbin/mosquitto
 
 Skriptet bruker tilfeldige localhost-porter, testbrukere og lokale sertifikater,
 og terminerer testprosessen etterpå. Det kontrollerer faktisk listener-isolasjon,
-TLS og ACL. Det kontakter aldri din HA. Offentlig WSS, ekte HA-automatiseringer
-og fysisk FIRE må testes separat. Se `VERIFICATION.md` for faktisk teststatus.
+TLS og ACL. Det kontakter aldri din HA. Offentlig WSS, HA-automatiseringer med
+dine entiteter og fysisk FIRE må testes i ditt oppsett. En separat grønn Linux-
+kontroll har også kjørt den genererte pakken i faktisk Home Assistant med
+syntetiske standardentiteter, inkludert omstart og gammel retained forespørsel.
+Se `VERIFICATION.md` for konkrete resultater og gjenværende tester.
 
 Kilder: [HA MQTT](https://www.home-assistant.io/integrations/mqtt/),
 [HA packages](https://www.home-assistant.io/docs/configuration/packages/),

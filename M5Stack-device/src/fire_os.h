@@ -10,6 +10,9 @@
 #include "fire_github_firmware.h"
 #include "fire_lua_package_manager.h"
 #include "fire_reverse_transport.h"
+#include "fire_home.h"
+#include "fire_ota.h"
+#include "fire_setup_portal.h"
 
 class DateTimeService {
  public:
@@ -86,6 +89,7 @@ class FireOS {
     AiDeveloper,
     AiApi,
     LuaApp,
+    Home,
   };
 
   struct ButtonState {
@@ -100,7 +104,7 @@ class FireOS {
   };
 
   static constexpr uint8_t kButtonCount = 3;
-  static constexpr uint8_t kSystemMainCount = 5;
+  static constexpr uint8_t kSystemMainCount = 6;
   static constexpr uint8_t kMaxLuaApps = 32;
   static constexpr uint8_t kMainCount = kSystemMainCount + kMaxLuaApps;
   static constexpr uint8_t kSettingsCount = 17;
@@ -125,7 +129,14 @@ class FireOS {
   DateTimeService dateTime_;
 
   uint8_t mainIndex_ = 0;
-  bool mainVisible_[kMainCount] = {true, true, true, true, true};
+  bool mainVisible_[kMainCount] = {true, true, true, true, true, true};
+  FireHome homeApp_;
+  FireOta ota_;
+  uint32_t otaRebootAt_ = 0;
+  FireSetupPortal setupPortal_;
+  bool portalApplying_ = false, portalReconnect_ = false;
+  uint32_t portalCloseAt_ = 0, wifiBeginAt_ = 0;
+  uint32_t wifiSetupStartedAt_ = 0;
   bool luaMenuSelected_[kMaxLuaApps] = {};
   bool luaMenuPicker_ = false;
   uint8_t luaMenuSelection_ = 0;
@@ -506,6 +517,14 @@ class FireOS {
   bool buildNoticeActive_ = false;
   String buildNoticeId_;
   String buildNoticeAckedId_;
+  String buildNoticePendingId_;
+  String buildNoticePendingAction_;
+  String buildNoticePendingEvent_;
+  uint32_t buildNoticeLastSendAt_ = 0;
+  uint32_t maxLoopUs_ = 0;
+  uint32_t maxLoopGapUs_ = 0, diagnosticsAt_ = 0;
+  int64_t lastLoopStartedUs_ = 0;
+  uint32_t minLargestInternal_ = UINT32_MAX;
   String buildNoticeName_;
   String buildNoticeMessage_ = "Appen er klar";
   uint8_t buildProgress_ = 0;

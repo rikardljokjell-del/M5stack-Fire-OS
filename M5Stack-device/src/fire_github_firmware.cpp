@@ -1,4 +1,5 @@
 #include "fire_github_firmware.h"
+#include <WiFi.h>
 
 namespace {
 constexpr char kGithubHost[] = "raw.githubusercontent.com";
@@ -76,13 +77,12 @@ void FireGithubFirmwareManager::setCallbacks(void* context,
 }
 
 void FireGithubFirmwareManager::emitStatus(const String& value) {
-  status_ = value;
-  if (statusCallback_) statusCallback_(callbackContext_, status_);
+  io_.status(value);
 }
 
 void FireGithubFirmwareManager::emitResult(bool manifest, bool ok,
                                             const String& message) {
-  if (resultCallback_) resultCallback_(callbackContext_, manifest, ok, message);
+  io_.result(manifest, ok, "", "", message);
 }
 
 bool FireGithubFirmwareManager::startManifest() {
@@ -98,7 +98,7 @@ bool FireGithubFirmwareManager::startManifest() {
   clockSyncRequested_ = false;
   state_ = State::Connecting;
   emitStatus("GitHub: connecting");
-  return true;
+  return launch();
 }
 
 bool FireGithubFirmwareManager::startDownload(uint8_t index,
@@ -110,6 +110,8 @@ bool FireGithubFirmwareManager::startDownload(uint8_t index,
   manifestMode_ = false;
   overwriteExisting_ = overwriteExisting;
   selectedIndex_ = index;
+  expectedHash_ = hashes_[index];
+  expectedSize_ = sizes_[index];
   requestPath_ = String(kGithubFirmwarePrefix) + names_[index];
   headerBuffer_ = "";
   manifestBody_ = "";
@@ -119,7 +121,7 @@ bool FireGithubFirmwareManager::startDownload(uint8_t index,
   clockSyncRequested_ = false;
   state_ = State::Connecting;
   emitStatus("GitHub: downloading " + names_[index]);
-  return true;
+  return launch();
 }
 
 void FireGithubFirmwareManager::releaseClient() {
@@ -177,29 +179,17 @@ uint32_t FireGithubFirmwareManager::jsonUintField(const String& json,
 }
 
 bool FireGithubFirmwareManager::parseManifest() {
-  const int filesAt = manifestBody_.indexOf("\"files\"");
-  if (filesAt < 0) return false;
-  uint8_t parsed = 0;
-  int cursor = manifestBody_.indexOf('{', filesAt);
-  while (cursor >= 0 && parsed < kMaxEntries) {
-    const int end = manifestBody_.indexOf('}', cursor);
-    if (end < 0) break;
-    const String object = manifestBody_.substring(cursor, end + 1);
-    const String name = jsonStringField(object, "name");
-    const String hash = jsonStringField(object, "sha256");
-    const uint32_t size = jsonUintField(object, "size_bytes");
-    if (validFilename(name) && validSha256(hash) && size > 0 &&
-        size <= kMaxBytes) {
-      names_[parsed] = name;
-      versions_[parsed] = jsonStringField(object, "version");
-      hashes_[parsed] = hash;
-      sizes_[parsed] = size;
-      ++parsed;
-    }
-    cursor = manifestBody_.indexOf('{', end + 1);
+  FireReleaseCatalog catalog;
+  entryCount_ = 0;
+  if (!fireVerifyCatalog(manifestBody_, catalog)) return false;
+  verifiedManifest_ = manifestBody_;
+  for (uint8_t i = 0; i < catalog.count; ++i) {
+    names_[i] = catalog.files[i].name; versions_[i] = catalog.files[i].version;
+    hashes_[i] = catalog.files[i].hash; sizes_[i] = catalog.files[i].size;
+    notes_[i] = catalog.files[i].notes;
   }
-  entryCount_ = parsed;
-  return entryCount_ > 0;
+  entryCount_ = catalog.count;
+  return true;
 }
 
 bool FireGithubFirmwareManager::prepareDownload(bool sdReady) {
@@ -305,30 +295,46 @@ void FireGithubFirmwareManager::finishDownload() {
   }
   stagedFile_.flush();
   stagedFile_.close();
-  if (!SD.rename(tempPath_, finalPath_)) {
-    if (overwriteExisting_ && SD.exists(finalPath_)) {
-      SD.remove(finalPath_);
-      if (SD.rename(tempPath_, finalPath_)) {
-        releaseClient();
-        state_ = State::Idle;
-        overwriteExisting_ = false;
-        emitStatus("GitHub firmware stored on SD");
-        emitResult(false, true, "stored on SD");
-        return;
-      }
-    }
-    fail("rename_failed", "Cannot activate GitHub firmware file");
-    return;
-  }
+  if (overwriteExisting_ && SD.exists(finalPath_)) SD.remove(finalPath_);
+  if (!SD.rename(tempPath_, finalPath_)) { fail("rename_failed", "Cannot activate GitHub firmware file"); return; }
   releaseClient();
   state_ = State::Idle;
   overwriteExisting_ = false;
+  File manifest = SD.open("/firmware/catalog-v2.json.part", FILE_WRITE);
+  if (!manifest || manifest.print(verifiedManifest_) != verifiedManifest_.length()) {
+    if (manifest) manifest.close(); fail("catalog_write", "Cannot save signed catalog"); return;
+  }
+  manifest.close();
+  if (SD.exists("/firmware/catalog-v2.json")) SD.remove("/firmware/catalog-v2.json");
+  if (!SD.rename("/firmware/catalog-v2.json.part", "/firmware/catalog-v2.json")) {
+    fail("catalog_activate", "Cannot activate signed catalog"); return;
+  }
   emitStatus("GitHub firmware stored on SD");
   emitResult(false, true, "stored on SD");
 }
 
 void FireGithubFirmwareManager::service(bool wifiConnected, bool sdReady) {
-  if (!busy()) return;
+  io_.wifi = wifiConnected; io_.sd = sdReady;
+  if (io_.poll(status_) && statusCallback_) statusCallback_(callbackContext_, status_);
+  if (!io_.running && io_.completed.exchange(false) && resultCallback_)
+    resultCallback_(callbackContext_, io_.kind, io_.ok, io_.message);
+}
+bool FireGithubFirmwareManager::launch() {
+  io_.running = true;
+  if (xTaskCreate(task, "fire-github", 16384, this, 1, nullptr) == pdPASS) return true;
+  state_ = State::Idle; io_.running = false; emitStatus("Cannot start firmware worker"); return false;
+}
+void FireGithubFirmwareManager::task(void* context) {
+  auto* self = static_cast<FireGithubFirmwareManager*>(context);
+  // Initial wifi/sd values come from the last UI service tick.
+  while (self->state_ != State::Idle) {
+    self->serviceWorker(WiFi.isConnected(), SD.cardType() != CARD_NONE); delay(2);
+  }
+  self->io_.running.store(false, std::memory_order_release);
+  vTaskDelete(nullptr);
+}
+void FireGithubFirmwareManager::serviceWorker(bool wifiConnected, bool sdReady) {
+  if (state_ == State::Idle) return;
   if (!wifiConnected) {
     fail("wifi_disconnected", "Wi-Fi disconnected");
     return;
@@ -349,19 +355,18 @@ void FireGithubFirmwareManager::service(bool wifiConnected, bool sdReady) {
       fail("clock_unset", "Device clock is not synchronized");
       return;
     }
-    client_.setCACert(kGithubRootCertificates);
+    client_.secure(true);
     client_.setTimeout(5);
     if (!client_.connect(kGithubHost, 443, 5000)) {
-      char error[96] = {};
-      client_.lastError(error, sizeof(error));
-      fail("connect_failed", String("GitHub TLS connection failed") +
-                                 (error[0] ? String(": ") + error : String()));
+      if (client_.connecting() || client_.stopping()) return;
+      fail("connect_failed", "GitHub TLS connection failed");
       return;
     }
-    client_.print("GET " + requestPath_ +
+    const String request = "GET " + requestPath_ +
                   " HTTP/1.1\r\nHost: " + String(kGithubHost) +
                   "\r\nUser-Agent: FIRE-OS-Firmware\r\nAccept: */*\r\n"
-                  "Connection: close\r\n\r\n");
+                  "Connection: close\r\n\r\n";
+    if (client_.print(request) != request.length()) { fail("request_failed", "Cannot queue complete HTTP request"); return; }
     state_ = State::Headers;
     lastDataAt_ = millis();
     return;

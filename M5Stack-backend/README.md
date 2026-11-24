@@ -1,14 +1,22 @@
 # FIRE OS AI Developer backend 0.2
 
+Oppdatert 24. november 2026: **FIRE Studio** er et responsivt webgrensesnitt i
+samme backendprosess. Åpne det med **Åpne FIRE Studio ↗** i Windows-programmet.
+Se [oppsett for PC, mobil og HTTPS/WSS](docs/WEB_STUDIO_SETUP.md) og
+[aktuell leveranse/verifikasjon](docs/DELIVERY_2026-11-24.md).
+Home går direkte til MQTT ved HA; se [Home-oppsettet](home_assistant/README.md).
+Firmwareoversikten er nå kun lesbar GitHub-metadata; FIRE håndterer oppdatering.
+
 [Jobber](docs/JOB_MONITOR.md) viser aktive bygg/feilrettinger, fremdrift,
 stopprosaker og manuell kontekst for neste generering. Oversikten hentes lokalt
 og bruker ingen betalte AI-kall.
 
 
 [Kostnad og bruk](docs/COST_AND_USAGE.md): nytt panel med USD-anslag,
-kostnadsdrivere, tokens/cache/lyd og nullstilling av visningsperioden. Sol og
-Realtime mini er standard, med én automatisk retting og lokale stoppgrenser
-per kall, bygg og dag. Måling starter ved oppdateringen; eldre kostnader
+kostnadsdrivere, tokens/cache/lyd og nullstilling av visningsperioden.
+Realtime mini brukes til dialog/tale; Luna er standard for kode/kontroll.
+Ekstra penge- og svartak er avslått som standard, med 0 i grensefeltene og
+automatisk retting. Måling starter ved oppdateringen; eldre kostnader
 rekonstrueres ikke som faktiske målinger.
 
 [Device-handoff: bakgrunnsbygg og Resume](docs/DEVICE_BACKGROUND_BUILD_HANDOFF.md)
@@ -152,7 +160,9 @@ FIRE_AUDIO_ENABLED=true
 
 Hver fysisk enhet bruker sitt eget token og kan bare opptre som sin egen ID.
 Admin-tokenet gir lesing/administrasjon, men kan ikke starte en fysisk sesjon ved
-å utgi seg for å være enheten. LAN-binding krever admin-token med minst 24 tegn;
+å utgi seg for å være enheten. Ekte OpenAI-kontroll krever admin-token også på
+loopback; Windows-programmet administrerer det automatisk. Bare eksplisitt lokal
+mock-modus kan brukes anonymt. LAN-binding krever admin-token med minst 24 tegn;
 enhetstoken er separat og minst 24 tegn. Autorisasjon sendes i headeren
 `Authorization: Bearer TOKEN`, aldri URL. Ikke bruk OpenAI-nøkkelen som enhetstoken.
 
@@ -185,7 +195,7 @@ avklares i firmware og testes fysisk. AI-genererte Lua-apper bruker aldri .bin/O
 | FIRE_SPEECH_ENABLED | true | Kun hørbare AI-svar; false beholder mikrofon, transkripsjon og tekst |
 | FIRE_AI_MODE | openai | openai eller eksplisitt mock |
 | FIRE_BACKEND_HOST / PORT | 127.0.0.1 / 8765 | HTTP og WebSocket |
-| FIRE_BACKEND_TOKEN | tom | Admin-/PC-token; kreves på LAN |
+| FIRE_BACKEND_TOKEN | tom | Admin-/PC-token; kreves for ekte OpenAI-kontroll og LAN |
 | FIRE_DEVICE_TOKENS | {} | JSON: enhets-ID til unikt token |
 | FIRE_REVERSE_HOST / PORT / DEVICE_ID | tom / 8766 / tom | Valgfri PC → FIRE-bro; lokal FIRE-adresse og konfigurert ID |
 | FIRE_WORKSPACE | workspace | Lokal filbasert lagring |

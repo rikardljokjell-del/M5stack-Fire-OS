@@ -141,7 +141,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             raise ValueError("Basisversjon krever valgt app.")
         peers=[s for s in self.sessions.values() if not s.stopped and s.desktop_device_id==device_id]
         for peer in peers:
-            if peer.lock.locked() or peer.operation_task or (peer.task and not peer.task.done()):
+            if peer.lock.locked() or (peer.operation_task and not peer.operation_task.done()) or (peer.task and not peer.task.done()):
                 raise Conflict("Fullfør eller avbryt PC-samtalen før du bytter app.")
         if len(self.sessions)-len(peers)>=self.settings.fire_max_sessions:
             raise Conflict("Maximum active sessions reached")

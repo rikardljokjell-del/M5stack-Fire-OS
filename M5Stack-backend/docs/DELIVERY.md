@@ -1,5 +1,12 @@
 # Backend 0.2 – leveranse og verifisering
 
+**Historisk leveranserapport.** For nåværende backend per 24. november 2026,
+se [aktuell leveranse](DELIVERY_2026-11-24.md) og
+[FIRE Studio-oppsett](WEB_STUDIO_SETUP.md). Testtall og påstanden om uendret
+device nedenfor gjelder tidspunktet for den opprinnelige leveransen. Den
+pågående samordnede leveransen har en separat device-agent. Nye backendtester
+og nettleserprøver er ikke fysisk verifikasjon av ny firmware, HA eller Cloudflare.
+
 Arbeidsområde: `M5Stack-backend/` i rikardljokjell-del/M5stack-Fire-OS.
 Eksisterende FastAPI-/WebSocket-/OpenAI-/Lua-/ZIP-arkitektur er videreført.
 `M5Stack-device/` er lest fra Git, men ingen enhetsfiler er endret, bygget eller flashet.

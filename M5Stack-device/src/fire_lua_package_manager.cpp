@@ -2,6 +2,7 @@
 #include "fire_lua_runtime.h"
 
 #include <esp_system.h>
+#include <WiFi.h>
 
 namespace {
 constexpr uint32_t kHeaderTimeoutMs = 5000;
@@ -73,8 +74,7 @@ void FireLuaPackageManager::setCallbacks(void* context, StatusCallback status,
 }
 
 void FireLuaPackageManager::emitStatus(const String& value) {
-  status_ = value;
-  if (statusCallback_) statusCallback_(callbackContext_, status_);
+  io_.status(value);
 }
 
 bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
@@ -83,17 +83,23 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
                                           const String& installId,
                                           const String& expectedHash,
                                           uint32_t expectedSize) {
-  if (busy() || host.length() == 0 || token.length() < 24 || url.length() == 0 ||
-      packageId.length() == 0 || expectedHash.length() != 64 || expectedSize == 0)
+  if (busy() || !fireNetworkEndpointValid(host) || token.length() < 24 || !fireRelativePath(url) ||
+      packageId.length() == 0 || packageId.length() > 96 || expectedHash.length() != 64 || expectedSize == 0 || expectedSize > 1048576)
     return false;
-  host_ = host;
-  port_ = port == 0 ? 8765 : port;
+  for (size_t i = 0; i < packageId.length(); ++i)
+    if (!(isalnum(static_cast<unsigned char>(packageId[i])) || packageId[i] == '-' || packageId[i] == '_')) return false;
+  for (size_t i = 0; i < expectedHash.length(); ++i) if (!isxdigit(static_cast<unsigned char>(expectedHash[i]))) return false;
+  host_ = fireNetworkHost(host);
+  secureEndpoint_ = fireNetworkTls(host, port);
+  client_.secure(secureEndpoint_);
+  port_ = port == 0 ? (secureEndpoint_ ? 443 : 8765) : port;
   token_ = token;
   url_ = url;
   packageId_ = packageId;
   installId_ = installId;
   expectedHash_ = expectedHash;
   expectedSize_ = expectedSize;
+  reverseGeneration_ = reverseTransport_ ? reverseTransport_->generation() : 0;
   installedPath_ = "";
   received_ = 0;
   contentLength_ = 0;
@@ -103,28 +109,50 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
   mbedtls_sha256_starts_ret(&sha256_, 0);
   state_ = State::Connecting;
   emitStatus("Connecting for download");
+  io_.running = true;
+  if (xTaskCreate(task, "fire-package", 16384, this, 1, nullptr) != pdPASS) {
+    mbedtls_sha256_free(&sha256_); state_ = State::Idle; io_.running = false; return false;
+  }
   return true;
 }
 
 void FireLuaPackageManager::service(bool wifiConnected) {
-  if (!busy()) return;
+  io_.wifi = wifiConnected;
+  if (io_.poll(status_) && statusCallback_) statusCallback_(callbackContext_, status_);
+  if (!io_.running && io_.completed.exchange(false) && resultCallback_)
+    resultCallback_(callbackContext_, io_.ok, io_.first, io_.second, io_.message);
+}
+void FireLuaPackageManager::task(void* context) {
+  auto* self = static_cast<FireLuaPackageManager*>(context);
+  while (self->state_ != State::Idle) { self->serviceWorker(WiFi.isConnected()); delay(2); }
+  self->io_.running.store(false, std::memory_order_release); vTaskDelete(nullptr);
+}
+void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
+  if (state_ == State::Idle) return;
+  if (reverseClient_ && reverseTransport_ && reverseTransport_->cancelled(reverseClient_)) { fail("Reverse connection cancelled"); return; }
   if (!wifiConnected) {
     fail("Wi-Fi disconnected during download");
     return;
   }
   if (state_ == State::Connecting) {
-    if (reverseTransport_) reverseClient_ = reverseTransport_->acquire();
+    if (millis() - lastDataAt_ > 18000) {
+      fail("Backend download connection timeout");
+      return;
+    }
+    if (!secureEndpoint_ && reverseTransport_ && !reverseClient_) reverseClient_ = reverseTransport_->acquire(reverseGeneration_);
     WiFiClient* client = activeClient();
     if (!reverseClient_) {
       client_.setTimeout(1200);
       if (!client_.connect(host_.c_str(), port_, 1200)) {
+        if (client_.connecting() || client_.stopping()) return;
         fail("Backend download connection failed");
         return;
       }
     }
-    client->print("GET " + url_ + " HTTP/1.1\r\nHost: " + host_ + ":" +
+    const String request = "GET " + url_ + " HTTP/1.1\r\nHost: " + host_ + ":" +
                   String(port_) + "\r\nAuthorization: Bearer " + token_ +
-                  "\r\nConnection: close\r\n\r\n");
+                  "\r\nConnection: close\r\n\r\n";
+    if (client->print(request) != request.length()) { fail("Cannot send complete package request"); return; }
     state_ = State::Headers;
     lastDataAt_ = millis();
     emitStatus("Waiting for package");
@@ -132,7 +160,8 @@ void FireLuaPackageManager::service(bool wifiConnected) {
   }
   if (state_ == State::Headers) {
     WiFiClient* client = activeClient();
-    while (client->available() && headerBuffer_.length() < 8192)
+    size_t headerBudget = 2048;
+    while (client->available() && headerBuffer_.length() < 8192 && headerBudget--)
       headerBuffer_ += static_cast<char>(client->read());
     const int end = headerBuffer_.indexOf("\r\n\r\n");
     if (end < 0) {
@@ -228,10 +257,7 @@ void FireLuaPackageManager::finishDownload() {
   }
   if (SD.exists(path)) SD.remove(path);
   mbedtls_sha256_free(&sha256_);
-  if (resultCallback_) {
-    resultCallback_(callbackContext_, ok, packageId_, archiveHash,
-                    ok ? String("installed") : reason);
-  }
+  io_.result(false, ok, packageId_, archiveHash, ok ? String("installed") : reason);
   emitStatus(ok ? "Package installed" : reason);
 }
 
@@ -247,8 +273,8 @@ void FireLuaPackageManager::fail(const String& reason) {
   if (SD.exists(path)) SD.remove(path);
   mbedtls_sha256_free(&sha256_);
   state_ = State::Idle;
-  status_ = reason;
-  if (resultCallback_) resultCallback_(callbackContext_, false, packageId_, "", reason);
+  emitStatus(reason);
+  io_.result(false, false, packageId_, "", reason);
 }
 
 uint16_t FireLuaPackageManager::read16(File& file) {
@@ -319,6 +345,9 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
     const uint32_t uncompressed = read32(archive);
     const uint16_t nameLength = read16(archive);
     const uint16_t extraLength = read16(archive);
+    if (!nameLength || nameLength > 160 || static_cast<uint64_t>(archive.position()) + nameLength + extraLength + compressed > archive.size()) {
+      reason = "Invalid ZIP entry bounds"; return false;
+    }
     String name;
     for (uint16_t index = 0; index < nameLength; ++index) name += static_cast<char>(archive.read());
     archive.seek(archive.position() + extraLength);

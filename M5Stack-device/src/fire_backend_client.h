@@ -5,6 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "fire_reverse_transport.h"
+#include "fire_async_client.h"
 
 class FireBackendClient {
  public:
@@ -32,7 +33,7 @@ class FireBackendClient {
   bool beginAudioDownload(const String& url, uint8_t* buffer, size_t capacity);
   void cancelAudioTransfer();
   bool audioTransferActive() const { return audioTransferRunning_; }
-  bool audioTransferFinished() const { return audioTransferFinished_; }
+  bool audioTransferFinished() const { return !audioTransferRunning_ && audioTransferFinished_; }
   bool audioTransferOk() const { return audioTransferOk_; }
   size_t audioTransferLength() const { return audioTransferLength_; }
 
@@ -70,7 +71,8 @@ class FireBackendClient {
   bool buildJobs(uint32_t offset = 0);
   bool buildResume(const String& buildId);
   bool buildCancel(const String& buildId);
-  bool buildNoticeAck(const String& buildId, const String& action);
+  bool buildNoticeAck(const String& buildId, const String& action,
+                      const String& stableEventId = String());
   bool appStop();
   bool deviceInstallResult(const String& installId, const String& packageId,
                            bool ok, const String& archiveHash,
@@ -102,8 +104,9 @@ class FireBackendClient {
 
  private:
   enum class State : uint8_t { Offline, Connecting, Handshake, Connected };
-  WiFiClient client_;
-  WiFiClient audioClient_;
+  FireAsyncClient client_;
+  FireAsyncClient audioClient_;
+  bool secureEndpoint_ = true;
   FireReverseTransport* reverseTransport_ = nullptr;
   WiFiClient* transportClient_ = nullptr;
   WiFiClient* audioTransportClient_ = nullptr;
@@ -130,19 +133,27 @@ class FireBackendClient {
   enum class AudioTransfer : uint8_t { None, Upload, Download };
   AudioTransfer audioTransfer_ = AudioTransfer::None;
   TaskHandle_t audioTask_ = nullptr;
-  volatile bool audioTransferRunning_ = false;
-  volatile bool audioTransferFinished_ = false;
-  volatile bool audioTransferOk_ = false;
-  volatile bool audioTransferCancel_ = false;
-  volatile size_t audioTransferLength_ = 0;
+  std::atomic<bool> audioTransferRunning_{false};
+  std::atomic<bool> audioTransferFinished_{false};
+  std::atomic<bool> audioTransferOk_{false};
+  std::atomic<bool> audioTransferCancel_{false};
+  std::atomic<size_t> audioTransferLength_{0};
   String audioTransferTurnId_;
   String audioTransferUrl_;
   const uint8_t* audioTransferUploadData_ = nullptr;
   uint8_t* audioTransferDownloadBuffer_ = nullptr;
   size_t audioTransferBytes_ = 0;
+  // Immutable for the lifetime of one audio task, including config changes.
+  String audioHost_, audioToken_, audioSession_;
+  uint16_t audioPort_ = 0;
+  bool audioSecure_ = true;
+  FireReverseTransport* audioReverse_ = nullptr;
+  uint32_t audioReverseGeneration_ = 0;
+  void snapshotAudioEndpoint();
   static void audioTaskEntry(void* context);
   void runAudioTransfer();
   String handshakeBuffer_;
+  String expectedAccept_;
   String frameBuffer_;
   enum class ReceiveStage : uint8_t { Header, ExtendedLength, Mask, Payload };
   ReceiveStage receiveStage_ = ReceiveStage::Header;
@@ -167,7 +178,8 @@ class FireBackendClient {
   StateCallback stateCallback_ = nullptr;
 
   String eventId(const char* prefix);
-  bool sendEvent(const String& event, const String& fields = String());
+  bool sendEvent(const String& event, const String& fields = String(),
+                 const String& stableEventId = String());
   bool sendFrame(uint8_t opcode, const uint8_t* data, size_t length);
   void setState(State state, const String& status);
   void resetReceiveFrame();

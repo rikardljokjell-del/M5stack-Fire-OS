@@ -1,64 +1,85 @@
-# Status – FIRE OS AI Developer backend 0.2
+# Leveransestatus – 24. november 2026
 
-Backend videreutvikles kun i `M5Stack-backend/`. Firmware i `M5Stack-device/`
-eies av den separate firmwareagenten. Backendarbeidet har ikke endret, bygget
-eller flashet enhetskoden. Firmwarekilden er gjennomgått i skrivebeskyttet modus.
+Samlet arbeid følger [godkjent plan](DELIVERY_PLAN.md). Bruk
+[oppsettsveiledningen](SETUP.md) som inngang. Dette dokumentet skiller kildekode,
+lokale tester og faktisk fysisk verifikasjon.
 
-## Implementert
+## Status nå
 
-- Windows-program med skrivebordsikon, start/stopp, sikker nøkkellagring,
-  API-test, modeller, nettverksoppsett, enhetsstatus og tekst til tilkoblet FIRE.
-  Se [Windows-veiledning](M5Stack-backend/docs/WINDOWS_APP.md).
+Leveransen er under sluttføring. FIRE Studio, sikker offentlig backendinngang
+og det direkte HA-oppsettet er implementert. Enhetsagenten ferdigstiller native
+Home, sikker nettverkstransport og OTA med uavhengig recovery. Ingen ny firmware
+er flashet på en fysisk FIRE i denne leveransen.
 
-- Protokoll 0.2 og JSON-skjemaer publisert tidlig for firmwareintegrasjon.
-- Direkte OpenAI Realtime/Responses, varig samtalehistorikk og prosjektkode ved endringer.
-- Avgrenset WAV-opplasting, transkripsjon, PCM-talesvar, avbrudd og opprydding.
-- Egne enhetstokener, eierskapskontroll og varige operasjons-/hendelses-ID-er.
-- Testet pakke, installert pakke og faktisk rapportert appstart skilles.
-- Korrelert installasjon/start/healthy/stopp/rollback og historikk per enhet/prosjekt.
-- Lua-kapabiliteter, minnegrenser, ZIP-kontroller og tidligere fungerende versjoner beholdes.
-- Mock-/PC-klient og enhetsemulator; én lokal backendprosess uten database/Docker.
-- Tilpasset BACKEND_HANDOFF.md og enhetskilde 069ea09e: faktisk sesjonsprofil,
-  gyldig oppstart uten lyd, tydelig tekststatus og uavhengige lydflagg.
-- Samme-boot-gjenoppkobling uten resume-hint bevarer samtale og forslag.
-- Oppdatert maskinvarekontekst og Lua-kontroll: heltall, konturer, uniform RGB,
-  OS-uptime og bare pressed-callback. PC-støtte gir ingen ekstra enhetstjenester.
+| Område | Implementert / lokalt kontrollert | Gjenstående bevis |
+| --- | --- | --- |
+| FIRE Studio | PC-/mobilvisning, innstillinger, samtale, bekreftet appbygg, jobber, bibliotek, kostnader og lesbar GitHub-firmwareoversikt | Ny fysisk FIRE og live offentlig oppsett |
+| Offentlig backend | Separate browser-/deviceverter, Access-JWT, engangspålogging lokalt, sesjon/CSRF/Origin og egne enhetstokener | Brukerens domene, konto og tunnel |
+| Jobber og samtale | Samme lagring som Windows-programmet, frakoblet apputvikling, eksplisitt BUILD/RUN og sikker omstart | Nettbrudd/tale/installasjon med ny fysisk firmware |
+| Direkte Home | Native HA-pakke, streng mapping/etiketter, kommando-/replaykontroll, separat MQTT-innlogging lokalt/eksternt, veiviser og importfil | Faktisk HA, ekte broker og fysisk FIRE |
+| Firmware/recovery | Under ferdigstilling i deviceprosjektet | Endelig bygg/pakke/signatur og fysisk oppstart/feil/recovery |
 
-## Verifisert
+## Testbevis
 
-- **108 tester bestått**, inkludert handoff, Windows-konfigurasjon, sikker
-  nøkkellagring, lokal tilgangskontroll, oppstart/stopp/restart og portkonflikt.
-  `pip check` uten feil.
-- **4/4 PC-smoke-flyter** mot faktisk lokal server.
-- **5/5 enhetsemulerte flyter**, inkludert syntetisk lydtransport og kvitteringer.
-- **4/4 flyter mot den pakkede Windows-exe-en**, med native lydflagg false,
-  tekst fra desktop, pakket Lua-worker og korrelerte kvitteringer. Ingen ekte FIRE.
-- Windows-program og skrivebordsikon er opprettet lokalt. OpenAI-nøkkel kan
-  legges inn i programmet. Windows kan be om nettverkstilgang/administrator-
-  godkjenning; denne dialogen håndteres av brukeren.
-- Windows Application Control blokkerte siste usignerte exe-pakke. Aktivt
-  skrivebordsikon bruker installert pythonw.exe og samme GUI uten terminal.
-  Ingen sikkerhetsinnstillinger er endret for å kjøre usignert program.
-- Firmwaremappen skal være identisk med GitHub-basen ved backendpublisering.
+- Faktisk nettleser mot isolert lokal mockserver: innlogging, forslag,
+  eksplisitt bygging, ferdig jobb, bibliotek, offline installasjonsavvisning,
+  innstillingslagring og GitHub-oversikt. Mobilbredde 390 px uten horisontalt
+  sideoverløp; ingen nettleserfeil i kontrollen. Bildene i docs/images/ er fra
+  denne testen. Produksjonsinnstillinger og OpenAI er ikke brukt i den.
+- **665 backendtester bestått** på frosset kode (286,39 sekunder). Én
+  Starlette TestClient-deprecation-advarsel; ingen feil. Dette inkluderer de
+  nye JWT-/token-/CSRF-/Origin-kontrollene, offline utvikling, nedlastingsvern,
+  omstart og eksisterende reverse TCP-transport.
+  Totalen inkluderer 51 Home-tester, 31 tester av migreringsverktøyet og fem
+  kontroller av den avgrensede diagnoseinnsamlingen.
+- Home: 51 målrettede tester bestått, inkludert genererte scriptsekvenser i
+  en Jinja-sandbox og faktiske strenge OpenSSL-håndtrykk. I tillegg er ekte
+  Home Assistant-kjøring bestått som beskrevet nedenfor.
+- Enhetens faktiske C++-headere for bytekø og JSON-kontroll er kompilert og
+  begge testprogrammene kjørt grønt med g++ på Ubuntu. Inkluderer køgrenser,
+  samtidige lese-/skriveoperasjoner, telleroverløp over 4 GiB, dybde-/token-
+  grenser og ugyldig UTF-8. [Kontrollkjøring](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45419590919),
+  kilde `76fd1127fde01019f4480a3e19b8460e72a0d740`. Dette er vertstester,
+  ikke ESP32-kjøring eller fysisk nettverkslast.
+- Ekte lokal backendstart og kontrollert omstart er prøvd i isolert mockprofil.
+  Konfigurasjon og tokenlagring ble bevart; gammel browsersesjon avvist.
+- Det eksisterende Windows-programmet ble deretter startet kontrollert på
+  nytt etter kontroll av null aktive jobber/samtaler. Konfigurasjonsfil og
+  OpenAI-/admin-/enhetsnøkler ble bevart. Ny `/ui/` svarer. Ingen betalt
+  produksjonsforespørsel ble sendt som del av kontrollen.
+- Forsøk på faktisk standard Mosquitto på denne Windows-maskinen ble blokkert
+  av Windows Code Integrity for mosquitto_common.dll. Ingen sikkerhetsregel
+  ble omgått. Isolert broker-røyketest er levert for egnet HA-/Linux-vert.
 
-## Gjenstår før ferdig fysisk løsning
+Ekte Mosquitto-kontroll er **bestått på Ubuntu** hos GitHub Actions: lokal TLS
+med navnekontroll, WebSocket, separate listenerpassord, eksakte ACL-er og
+avvisning av forfalsket state, remote→local og generell HA-lesing.
+[Kontrollkjøring](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45419590750),
+brokerjobb 138535122608. Windows-blokkeringen gjelder det lokale forsøket.
+**Ekte Home Assistant 2026.11.3 er også bestått**, med den genererte pakken,
+syntetiske enheter og ekte MQTT. Dekker faktiske handlinger/ACK, etiketter,
+fjernbryter, ugyldige/utløpte/dupliserte meldinger, øktverdier, automation-reload
+og en ny HA-prosess med gammel retained-forespørsel uten gjentatt handling.
+[Endelig Home-kontroll](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45422781786),
+kilde `17d7a7a68ed19913ba769828917e2d07d3a5abf1`.
+Se [detaljert Home-bevis](M5Stack-backend/home_assistant/VERIFICATION.md).
+Brukerens egne entiteter, offentlig Cloudflare/WSS og fysisk FIRE er fortsatt
+åpne sluttkontroller.
 
-1. Sette OpenAI-nøkkel på PC og verifisere faktisk modell-/kontotilgang, norsk tale og kodegenerering. Nøkkelen er fortsatt ikke satt; live-kontroll rapporterer not_run.
-2. Enhetskilden har nå protokollklient, Lua-runtime, OS-adaptere og SD-pakkehåndtering. Kildegjennomgangen fant gjenstående feil i Lua-kallrekkefølge, ZIP-parser, HTTP-headerlesing, ressursgrenser og versjonsaktivering; se handoff-oppfølgingen.
-3. Teste hele flyten på en fysisk M5Stack FIRE, inkludert lyd, minne, avbrudd, appstart og rollback.
+## Tidligere bevis
 
-Mock-transkripsjon/testtone og enhetsemulering er ikke ekte OpenAI eller fysisk
-integrasjon. Nyeste gjennomgåtte kilde df06c65 har I2S/WAV-opplasting og annonserer
-audio_input=true/audio_output=false. Mikrofonflyten må testes fysisk; avspilling
-og full stopp-/rollbackflyt må ferdigstilles og testes på fysisk FIRE.
-AI-genererte Lua-apper bruker en separat kontrakt og aldri OTA/flashing.
+Ekte OpenAI-dialog, kodegenerering og validert Lua-pakke er prøvd tidligere i
+prosjektet. Tidligere fysisk kontroll bekreftet pakkeinstallasjon, men avdekket
+en RUN-feil; dette er ikke bevis for at den nye leveransen fungerer fysisk.
+Se [E2E-status](M5Stack-backend/docs/E2E_STATUS.md) og deviceprosjektets historikk
+for de eksakte avgrensningene. Den gamle påstanden om at nøkkel aldri var satt,
+eller at enhetskilden aldri var endret, gjelder ikke lenger.
 
-Start fra repo-roten: `.\M5Stack-backend\start.ps1 -Mock`.
-Ingen automatisk Windows-oppstart er installert. Nettverkstilgang styres av
-Windows-dialogen og programmets brannmurknapp med administratorgodkjenning.
+## Samles til slutt hos brukeren
 
-Se [protokoll](M5Stack-backend/docs/PROTOCOL-v0.2.md),
-[Lua-API](M5Stack-backend/docs/LUA_API.md),
-[leveranserapport](M5Stack-backend/docs/DELIVERY.md) og
-[drift](M5Stack-backend/docs/OPERATIONS.md). Konkrete kildefunn og backendtilpasninger:
-[handoff-oppfølging](M5Stack-backend/docs/DEVICE_HANDOFF_RESPONSE.md).
+Domene/Cloudflare-innlogging, HA-installasjonstype/MQTT-vert, valgte entiteter,
+førstegangs USB-migrering og fysiske tester. Dette hindrer ikke ferdigstilling
+av kode, pakker, dokumentasjon og lokale kontroller.
+
+Produksjonsklar fysisk drift påstås først etter kontroll av oppstart,
+nettbrudd, norsk tale, minne/respons, Home med Windows av og uavhengig recovery.

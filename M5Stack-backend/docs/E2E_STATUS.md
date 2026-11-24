@@ -1,5 +1,11 @@
 # Tale til lagret FIRE-app – status 22. november 2026
 
+**Historikk fra 22. november.** Aktuell 24. november-status ligger i
+[DELIVERY_2026-11-24.md](DELIVERY_2026-11-24.md). Ny FIRE Studio/webtilgang og
+native Home-/GitHub-retning erstatter tidligere normalflyt for firmwarefiler.
+Fysiske observasjoner nedenfor gjelder de oppgitte eldre versjonene, ikke
+automatisk den nye firmware-/Cloudflare-/HA-leveransen.
+
 Seneste fysiske tillegg: ekte firmwarefil fra device-agentens f0ecdee/f1d884a
 ble sendt over reverse TCP. FIRE kvitterte stored med riktig SHA256 for
 1 836 160 bytes i /firmware/fire-f13163c2148a0c67.bin. Ingen flashing ble

@@ -5,6 +5,8 @@
 #include <WiFiClient.h>
 #include <mbedtls/sha256.h>
 #include "fire_reverse_transport.h"
+#include "fire_async_client.h"
+#include "fire_io_mailbox.h"
 
 class FireLuaPackageManager {
  public:
@@ -21,16 +23,21 @@ class FireLuaPackageManager {
                      const String& installId, const String& expectedHash,
                      uint32_t expectedSize);
   void service(bool wifiConnected);
-  bool busy() const { return state_ != State::Idle; }
+  bool busy() const { return io_.busy(); }
   const String& status() const { return status_; }
   const String& installedPath() const { return installedPath_; }
 
  private:
   enum class State : uint8_t { Idle, Connecting, Headers, Downloading, Verify };
   State state_ = State::Idle;
-  WiFiClient client_;
+  FireIoMailbox io_;
+  static void task(void* context);
+  void serviceWorker(bool wifiConnected);
+  FireAsyncClient client_;
+  bool secureEndpoint_ = true;
   FireReverseTransport* reverseTransport_ = nullptr;
   WiFiClient* reverseClient_ = nullptr;
+  uint32_t reverseGeneration_ = 0;
   File archive_;
   String host_;
   uint16_t port_ = 8765;

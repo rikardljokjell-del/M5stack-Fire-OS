@@ -51,6 +51,8 @@ class DesktopUI:
     def __init__(self, root, store):
         self.root, self.store = root, store
         self.runtime = DesktopRuntime()
+        self.runtime.config_store = store
+        self.loaded_config = store.config.model_dump()
         self.queue = queue.Queue()
         self.busy, self.closing = False, False
         self.snapshot = {"sessions": [], "devices": [], "builds": []}
@@ -155,6 +157,7 @@ class DesktopUI:
         bar.pack(fill="x")
         self.title = self.label(bar, "Oversikt", "Title.TLabel")
         self.title.pack(side="left")
+        ttk.Button(bar, text="Åpne FIRE Studio ↗", command=self.open_web).pack(side="right", padx=8)
         self.stop_button = ttk.Button(bar, text="Stopp", command=self.stop)
         self.stop_button.pack(side="right", padx=(8, 0))
         self.start_button = ttk.Button(bar, text="Start backend", command=self.start, style="Accent.TButton")
@@ -801,32 +804,28 @@ class DesktopUI:
                       message="Sender valgt app til FIRE for installasjon …")
 
     def firmware_page(self,page):
-        self.label(page,"Firmware på FIRE", "Heading.TLabel").pack(anchor="w",pady=(0,10))
+        self.label(page,"Firmware fra GitHub", "Heading.TLabel").pack(anchor="w",pady=(0,10))
         self.firmware_status=self.label(page,"Venter på enhetsstatus …",wraplength=800)
         self.firmware_status.pack(anchor="w",pady=(0,14))
-        self.label(page,"Firmwarefiler på PC", "Heading.TLabel").pack(anchor="w",pady=(0,8))
-        self.firmware_table=ttk.Treeview(page,columns=("name","version","size","status"),show="headings",height=7,selectmode="browse")
-        for name,title,width in (("name","Fil",220),("version","Versjon",140),("size","Størrelse",90),("status","SD-overføring",240)):
+        self.label(page,"FIRE henter og kontrollerer firmware direkte fra GitHub. Denne oversikten er kun lesbar.",
+                   "Muted.TLabel",wraplength=800).pack(anchor="w",pady=10)
+        self.firmware_table=ttk.Treeview(page,columns=("version","name","status"),show="headings",height=7)
+        for name,title,width in (("version","Versjon",160),("name","Utgivelse",280),("status","Kontroll",260)):
             self.firmware_table.heading(name,text=title);self.firmware_table.column(name,width=width,minwidth=60)
         self.firmware_table.pack(fill="both",expand=True)
-        grid=ttk.Frame(page);grid.pack(fill="x",pady=10)
-        self.field(grid,0,"Versjon / byggnavn",self.firmware_version)
-        row=ttk.Frame(page);row.pack(fill="x",pady=8)
-        ttk.Button(row,text="Legg til firmware.bin …",command=self.upload_firmware,style="Accent.TButton").pack(side="left")
-        self.firmware_send_button=ttk.Button(row,text="Send valgt fil til /firmware",command=self.send_firmware)
-        self.firmware_send_button.pack(side="left",padx=8)
-        self.label(page,"Filer lagres på SD-kortet i /firmware. En lagret fil er ikke installert firmware.\n"
-                   "Installert versjon over vises fra FIREs egen tilkoblingsmelding. Overføring starter ingen flashing.","Muted.TLabel",wraplength=800).pack(anchor="w",pady=10)
+        ttk.Button(page,text="Hent GitHub-oversikt",command=self.refresh_firmware).pack(anchor="w",pady=12)
 
-    def upload_firmware(self):
-        path=filedialog.askopenfilename(parent=self.root,title="Velg ESP32 firmware.bin",filetypes=[("ESP32 firmware","*.bin")])
-        if not path:return
-        version=self.firmware_version.get().strip() or Path(path).stem
-        self.work(lambda:self.runtime.upload_firmware(path,version),message="Legger firmwarefilen til på PC …")
+    def refresh_firmware(self):
+        def done(value):
+            self.github_firmware=value
+            self.render_firmware(self.runtime.ready)
+        self.work(lambda:self.runtime.request("GET","/desktop/firmware-catalog"),done=done,message="Henter versjonsinformasjon fra GitHub …")
 
-    def send_firmware(self):
-        selected=self.firmware_table.selection()
-        if selected:self.work(lambda:self.runtime.send_firmware(selected[0],self.device_id.get()),message="Sender firmwarefil til SD-kortet …")
+    def open_web(self):
+        import webbrowser
+        self.work(lambda:self.runtime.request("POST","/desktop/web-login",json={}),
+                  done=lambda value:webbrowser.open(self.runtime.base_url+value['path']),
+                  message="Åpner FIRE Studio i nettleseren …")
 
     def settings_page(self, page):
         grid = ttk.Frame(page)
@@ -880,7 +879,15 @@ class DesktopUI:
                       cost_profile_version=COST_PROFILE_VERSION,
                       **{name:var.get().strip() for name,var in self.cost_limits.items()},
                       **{name: var.get().strip() for name, var in self.models.items()})
-        return DesktopConfig.model_validate(values)
+        candidate = DesktopConfig.model_validate(values).model_dump()
+        current = self.store.config.model_dump()
+        initial = getattr(self, "loaded_config", current)
+        for name, value in list(candidate.items()):
+            if value == initial.get(name):
+                candidate[name] = current[name]
+            elif current[name] != initial.get(name) and current[name] != value:
+                raise ValueError("Innstillingen er endret i FIRE Studio. Åpne Windows-programmet på nytt før du endrer samme felt.")
+        return DesktopConfig.model_validate(candidate)
 
     def work(self, function, done=None, message="Arbeider …"):
         if self.busy:
@@ -1271,26 +1278,14 @@ class DesktopUI:
 
     def render_firmware(self,ready):
         device=next((d for d in self.snapshot["devices"] if d["id"]==self.device_id.get()),{})
-        caps=device.get("capabilities") or {}
-        online=ready and device.get("online")
-        version=caps.get("firmware_version","Ukjent")
-        support=online and caps.get("firmware_storage",False)
-        self.firmware_status.configure(text="Installert versjon ("+("rapportert av tilkoblet FIRE" if online else "sist rapportert; FIRE er frakoblet")+"): "+version+"\n"+
-            ("Mottak til /firmware er tilgjengelig." if support else "Denne enhetsversjonen kan ikke motta firmwarefiler ennå. Device-agenten må legge til SD-mottak; se GitHub-instruksen."))
-        firmware=self.snapshot.get("firmware",{})
-        jobs=firmware.get("transfers",[])
-        view=[]
-        for item in firmware.get("files",[]):
-            job=next((j for j in jobs if j["firmware_id"]==item["id"] and j["device_id"]==self.device_id.get()),{})
-            status={"stored":"Lagret i /firmware (kvittert)","pending":"Overfører …","failed":"Overføring feilet","expired":"Tidsavbrudd","unknown":"Ukjent etter omstart"}.get(job.get("status"),"Kun lagret på PC")
-            view.append((item["id"],item["filename"],item["version"],f"{item['size_bytes']/1024:.0f} KB",status))
+        version=(device.get("capabilities") or {}).get("firmware_version","Ukjent")
+        catalog=getattr(self,"github_firmware",{})
+        self.firmware_status.configure(text="Firmware ("+("rapportert av tilkoblet FIRE" if ready and device.get("online") else "sist rapportert")+"): "+version+"\n"+catalog.get("error",""))
+        view=[(str(i),r['version'],r['name'],"Kontrolleres av FIRE" if r.get('signed') else "Metadata; ikke signaturverifisert") for i,r in enumerate(catalog.get('releases',[]))]
         if view!=getattr(self,"firmware_view",None):
-            selected=self.firmware_table.selection();self.firmware_view=view
+            self.firmware_view=view
             self.firmware_table.delete(*self.firmware_table.get_children())
             for item_id,*values in view:self.firmware_table.insert("","end",iid=item_id,values=values)
-            if selected and selected[0] in {v[0] for v in view}:self.firmware_table.selection_set(selected[0])
-            elif view:self.firmware_table.selection_set(view[0][0])
-        self.firmware_send_button.configure(state="normal" if support and view and not self.busy else "disabled")
 
     def close(self):
         if self.closing:

@@ -1,0 +1,43 @@
+name: FIRE firmware checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'codex/**']
+    paths: ['M5Stack-device/**', '.github/workflows/firmware-checks.yml']
+  pull_request:
+    paths: ['M5Stack-device/**', '.github/workflows/firmware-checks.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install platformio==6.2.0 cryptography==50.0.2
+      - name: Native guards and release tests
+        run: |
+          python -m unittest discover -s M5Stack-device/tests -p 'test_*.py' -v
+      - name: Normal firmware with Bluetooth and audio
+        run: pio run --project-dir M5Stack-device -e m5stack-fire-ble
+      - name: Independent factory recovery
+        run: pio run --project-dir M5Stack-device -e fire-recovery
+      - name: Button-aware rollback bootloader
+        run: pio run --project-dir M5Stack-device/recovery/bootloader
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fire-unsigned-${{ github.sha }}
+          if-no-files-found: warn
+          path: |
+            M5Stack-device/.pio/build/*/firmware.bin
+            M5Stack-device/.pio/build/*/firmware.elf
+            M5Stack-device/.pio/build/*/firmware.map
+            M5Stack-device/.pio/build/*/partitions.bin
+            M5Stack-device/recovery/bootloader/.pio/build/*/bootloader.bin
+            M5Stack-device/recovery/bootloader/.pio/build/*/bootloader.elf
+            M5Stack-device/recovery/bootloader/.pio/build/*/partitions.bin
+            M5Stack-device/recovery/bootloader/sdkconfig.*

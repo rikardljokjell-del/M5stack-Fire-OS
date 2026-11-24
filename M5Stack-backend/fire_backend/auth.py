@@ -9,7 +9,10 @@ def principal(settings, authorization):
     for device_id, token in settings.device_tokens().items():
         if hmac.compare_digest(supplied.encode(), ("Bearer " + token).encode()):
             return device_id
-    if not admin and not supplied and settings.fire_backend_host in {"127.0.0.1", "localhost", "::1"}:
+    # Anonymous access is strictly an offline mock convenience. A real OpenAI
+    # backend never infers administrator rights from loopback/proxy placement.
+    if (not admin and not supplied and settings.fire_ai_mode == "mock" and not settings.fire_public_enabled
+            and settings.fire_backend_host in {"127.0.0.1", "localhost", "::1"}):
         return "admin"
     raise PermissionError("Authentication required")
 

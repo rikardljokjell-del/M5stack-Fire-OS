@@ -3,6 +3,9 @@
 #include <base64.h>
 #include <esp_system.h>
 #include "fire_lua_runtime.h"
+#include "fire_json_guard.h"
+#include "fire_ws_handshake.h"
+#include <mbedtls/sha1.h>
 
 namespace {
 constexpr size_t kMaxFrameBytes = 8192;
@@ -65,8 +68,11 @@ void FireBackendClient::configure(const String& host, uint16_t port,
                                   const String& token, const String& deviceId,
                                   const String& firmwareVersion) {
   disconnect();
-  host_ = host;
-  port_ = port == 0 ? 8765 : port;
+  secureEndpoint_ = fireNetworkTls(host, port);
+  host_ = fireNetworkEndpointValid(host) ? fireNetworkHost(host) : String();
+  client_.secure(secureEndpoint_);
+  audioClient_.secure(secureEndpoint_);
+  port_ = port == 0 ? (secureEndpoint_ ? 443 : 8765) : port;
   token_ = token;
   if (deviceId.length() > 0) deviceId_ = deviceId;
   if (firmwareVersion.length() > 0) firmwareVersion_ = firmwareVersion;
@@ -125,22 +131,18 @@ void FireBackendClient::setState(State state, const String& status) {
 
 void FireBackendClient::disconnect() {
   cancelAudioTransfer();
-  const uint32_t audioDeadline = millis() + 500;
-  while (audioTransferRunning_ &&
-         static_cast<int32_t>(millis() - audioDeadline) < 0)
-    delay(1);
+  // Cancellation includes DNS/TCP/TLS that has not connected yet.
+  client_.stop();
+  audioClient_.stop();
+  // Audio worker owns its connection until cancellation completes.
   if (transportClient_ && reverseTransport_) {
     reverseTransport_->release(transportClient_);
     transportClient_ = nullptr;
-  } else if (client_.connected()) {
-    client_.stop();
   }
   usingReverseTransport_ = false;
-  if (audioTransportClient_ && reverseTransport_) {
+  if (!audioTransferRunning_ && audioTransportClient_ && reverseTransport_) {
     reverseTransport_->release(audioTransportClient_);
     audioTransportClient_ = nullptr;
-  } else if (audioClient_.connected()) {
-    audioClient_.stop();
   }
   handshakeBuffer_ = "";
   frameBuffer_ = "";
@@ -171,40 +173,50 @@ void FireBackendClient::resetReceiveFrame() {
 bool FireBackendClient::uploadAudio(const String& turnId,
                                     const uint8_t* wavData,
                                     size_t wavLength) {
-  if (!connected() || sessionId_.length() == 0 || !wavData || wavLength == 0 ||
+  if (audioTransferCancel_ || audioSession_.length() == 0 || !wavData || wavLength == 0 ||
       wavLength > 524288) {
     return false;
   }
   WiFiClient* audio = nullptr;
-  if (reverseTransport_) audioTransportClient_ = reverseTransport_->acquire();
+  if (!audioSecure_ && audioReverse_) audioTransportClient_ = audioReverse_->acquire(audioReverseGeneration_);
   if (audioTransportClient_) {
     audio = audioTransportClient_;
   } else {
     audioClient_.stop();
-    if (!audioClient_.connect(host_.c_str(), port_)) return false;
+    audioClient_.secure(audioSecure_);
+    if (!audioClient_.connectBlocking(audioHost_.c_str(), audioPort_, 15000, &audioTransferCancel_)) return false;
     audio = &audioClient_;
   }
   auto closeAudio = [&]() {
-    if (audioTransportClient_ && reverseTransport_) {
-      reverseTransport_->release(audioTransportClient_);
+    if (audioTransportClient_ && audioReverse_) {
+      audioReverse_->release(audioTransportClient_);
       audioTransportClient_ = nullptr;
     } else {
       audioClient_.stop();
     }
   };
-  const String path = "/sessions/" + sessionId_ + "/audio/" + turnId;
-  audio->print("POST " + path + " HTTP/1.1\r\nHost: " + host_ + ":" +
-               String(port_) + "\r\nAuthorization: Bearer " + token_ +
+  const String path = "/sessions/" + audioSession_ + "/audio/" + turnId;
+  const String request = "POST " + path + " HTTP/1.1\r\nHost: " + audioHost_ + ":" +
+               String(audioPort_) + "\r\nAuthorization: Bearer " + audioToken_ +
                "\r\nContent-Type: audio/wav\r\nContent-Length: " +
-               String(wavLength) + "\r\nConnection: close\r\n\r\n");
+               String(wavLength) + "\r\nConnection: close\r\n\r\n";
+  if (audioTransferCancel_ || audio->print(request) != request.length()) { closeAudio(); return false; }
   size_t offset = 0;
   while (offset < wavLength) {
-    if (audioTransferCancel_) {
+    if (audioTransferCancel_ || (audioTransportClient_ && audioReverse_ && audioReverse_->cancelled(audioTransportClient_))) {
       closeAudio();
       return false;
     }
     const size_t amount = min<size_t>(2048, wavLength - offset);
-    if (audio->write(wavData + offset, amount) != amount) {
+    const uint32_t writeStarted = millis();
+    size_t written = 0;
+    while (written < amount && !audioTransferCancel_ && audio->connected() &&
+           millis() - writeStarted < 5000) {
+      const size_t count = audio->write(wavData + offset + written, amount - written);
+      written += count;
+      if (!count) delay(2);
+    }
+    if (written != amount) {
       closeAudio();
       return false;
     }
@@ -214,7 +226,7 @@ bool FireBackendClient::uploadAudio(const String& turnId,
   String response;
   while (millis() < deadline && audio->connected() &&
          response.indexOf("\r\n\r\n") < 0) {
-    if (audioTransferCancel_) {
+    if (audioTransferCancel_ || (audioTransportClient_ && audioReverse_ && audioReverse_->cancelled(audioTransportClient_))) {
       closeAudio();
       return false;
     }
@@ -229,34 +241,36 @@ bool FireBackendClient::uploadAudio(const String& turnId,
 bool FireBackendClient::downloadAudio(const String& url, uint8_t* buffer,
                                       size_t capacity, size_t& length) {
   length = 0;
-  if (!sessionReady() || url.length() == 0 || !buffer || capacity == 0)
+  if (audioTransferCancel_ || !audioSession_.length() || !fireRelativePath(url) || !buffer || capacity == 0)
     return false;
   WiFiClient* audio = nullptr;
-  if (reverseTransport_) audioTransportClient_ = reverseTransport_->acquire();
+  if (!audioSecure_ && audioReverse_) audioTransportClient_ = audioReverse_->acquire(audioReverseGeneration_);
   if (audioTransportClient_) {
     audio = audioTransportClient_;
   } else {
     audioClient_.stop();
-    if (!audioClient_.connect(host_.c_str(), port_)) return false;
+    audioClient_.secure(audioSecure_);
+    if (!audioClient_.connectBlocking(audioHost_.c_str(), audioPort_, 15000, &audioTransferCancel_)) return false;
     audio = &audioClient_;
   }
   auto closeAudio = [&]() {
-    if (audioTransportClient_ && reverseTransport_) {
-      reverseTransport_->release(audioTransportClient_);
+    if (audioTransportClient_ && audioReverse_) {
+      audioReverse_->release(audioTransportClient_);
       audioTransportClient_ = nullptr;
     } else {
       audioClient_.stop();
     }
   };
 
-  audio->print("GET " + url + " HTTP/1.1\r\nHost: " + host_ + ":" +
-               String(port_) + "\r\nAuthorization: Bearer " + token_ +
-               "\r\nConnection: close\r\n\r\n");
+  const String request = "GET " + url + " HTTP/1.1\r\nHost: " + audioHost_ + ":" +
+               String(audioPort_) + "\r\nAuthorization: Bearer " + audioToken_ +
+               "\r\nConnection: close\r\n\r\n";
+  if (audioTransferCancel_ || audio->print(request) != request.length()) { closeAudio(); return false; }
   String headers;
   const uint32_t headerDeadline = millis() + 5000;
   while (millis() < headerDeadline && audio->connected() &&
          headers.length() < 8192 && headers.indexOf("\r\n\r\n") < 0) {
-    if (audioTransferCancel_) {
+    if (audioTransferCancel_ || (audioTransportClient_ && audioReverse_ && audioReverse_->cancelled(audioTransportClient_))) {
       closeAudio();
       return false;
     }
@@ -293,7 +307,7 @@ bool FireBackendClient::downloadAudio(const String& url, uint8_t* buffer,
   length = initial;
   const uint32_t bodyDeadline = millis() + 20000;
   while (length < contentLength && millis() < bodyDeadline) {
-    if (audioTransferCancel_) {
+    if (audioTransferCancel_ || (audioTransportClient_ && audioReverse_ && audioReverse_->cancelled(audioTransportClient_))) {
       closeAudio();
       return false;
     }
@@ -315,6 +329,7 @@ bool FireBackendClient::beginAudioUpload(const String& turnId,
   if (audioTransferRunning_ || !wavData || wavLength == 0 ||
       wavLength > 524288 || !sessionReady())
     return false;
+  snapshotAudioEndpoint();
   audioTransfer_ = AudioTransfer::Upload;
   audioTransferTurnId_ = turnId;
   audioTransferUrl_ = "";
@@ -340,6 +355,7 @@ bool FireBackendClient::beginAudioDownload(const String& url, uint8_t* buffer,
   if (audioTransferRunning_ || !buffer || capacity == 0 || !sessionReady() ||
       url.length() == 0)
     return false;
+  snapshotAudioEndpoint();
   audioTransfer_ = AudioTransfer::Download;
   audioTransferTurnId_ = "";
   audioTransferUrl_ = url;
@@ -364,6 +380,11 @@ void FireBackendClient::cancelAudioTransfer() {
   if (!audioTransferRunning_) return;
   audioTransferCancel_ = true;
 }
+void FireBackendClient::snapshotAudioEndpoint() {
+  audioHost_ = host_; audioPort_ = port_; audioToken_ = token_;
+  audioSession_ = sessionId_; audioSecure_ = secureEndpoint_; audioReverse_ = reverseTransport_;
+  audioReverseGeneration_ = audioReverse_ ? audioReverse_->generation() : 0;
+}
 
 void FireBackendClient::audioTaskEntry(void* context) {
   auto* client = static_cast<FireBackendClient*>(context);
@@ -383,10 +404,11 @@ void FireBackendClient::runAudioTransfer() {
   }
   audioTransferLength_ = length;
   audioTransferOk_ = ok && !audioTransferCancel_;
-  audioTransferFinished_ = true;
-  audioTransferRunning_ = false;
   audioTask_ = nullptr;
   audioTransfer_ = AudioTransfer::None;
+  audioTransferFinished_ = true;
+  // Publish idle only after every old-task write. A new task may start at once.
+  audioTransferRunning_.store(false, std::memory_order_release);
 }
 
 String FireBackendClient::eventId(const char* prefix) {
@@ -418,26 +440,32 @@ bool FireBackendClient::sendFrame(uint8_t opcode, const uint8_t* data,
                      static_cast<uint8_t>(esp_random())};
   memcpy(header + headerLength, mask, sizeof(mask));
   headerLength += sizeof(mask);
-  if (client->write(header, headerLength) != headerLength) return false;
+  if (length > 8192) return false;
+  // Reserve the entire frame before queueing even the header. There is only
+  // one producer for this stream, so the worker can only increase free space.
+  if (!usingReverseTransport_ && !client_.canWrite(headerLength + length))
+    return false;
+  if (client->write(header, headerLength) != headerLength) { disconnect(); return false; }
   uint8_t chunk[256];
   size_t offset = 0;
   while (offset < length) {
     const size_t amount = min(sizeof(chunk), length - offset);
     for (size_t index = 0; index < amount; ++index)
       chunk[index] = data[offset + index] ^ mask[(offset + index) & 3];
-    if (client->write(chunk, amount) != amount) return false;
+    if (client->write(chunk, amount) != amount) { disconnect(); return false; }
     offset += amount;
   }
   return true;
 }
 
-bool FireBackendClient::sendEvent(const String& event, const String& fields) {
+bool FireBackendClient::sendEvent(const String& event, const String& fields,
+                                  const String& stableEventId) {
   // Protocol 0.2 requires session_id on every event after session_start.
   // Do not emit a malformed listen/build event while the server's
   // session_started message is still in flight.
   if (!sessionReady()) return false;
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
-                   eventId("evt") + "\",\"device_id\":\"" +
+                   (stableEventId.length() ? jsonEscape(stableEventId) : eventId("evt")) + "\",\"device_id\":\"" +
                    jsonEscape(deviceId_) + "\",\"event\":\"" + event +
                    "\",\"boot_id\":\"" + jsonEscape(bootId_) + "\"";
   if (sessionId_.length() > 0)
@@ -602,12 +630,13 @@ bool FireBackendClient::buildCancel(const String& buildId) {
 }
 
 bool FireBackendClient::buildNoticeAck(const String& buildId,
-                                       const String& action) {
+                                       const String& action,
+                                       const String& stableEventId) {
   if (buildId.length() == 0 || (action != "open" && action != "dismiss"))
     return false;
   return sendEvent("build_notice_ack", ",\"build_id\":\"" +
                    jsonEscape(buildId) + "\",\"notification_action\":\"" +
-                   jsonEscape(action) + "\"");
+                   jsonEscape(action) + "\"", stableEventId);
 }
 
 bool FireBackendClient::appStop() { return sendEvent("app_stop"); }
@@ -738,6 +767,7 @@ bool FireBackendClient::audioPlaybackFailed(const String& audioId,
 bool FireBackendClient::ping() { return sendEvent("ping"); }
 
 void FireBackendClient::service(bool wifiConnected) {
+  if (transportClient_ && reverseTransport_ && reverseTransport_->cancelled(transportClient_)) disconnect();
   if (!configured()) {
     if (state_ != State::Offline || status_ != "Backend not configured")
       setState(State::Offline, "Backend not configured");
@@ -752,7 +782,7 @@ void FireBackendClient::service(bool wifiConnected) {
     if (millis() < reconnectAt_) return;
     reconnectAt_ = millis() + 3000;
     WiFiClient* client = nullptr;
-    if (reverseTransport_) transportClient_ = reverseTransport_->acquire();
+    if (!secureEndpoint_ && reverseTransport_) transportClient_ = reverseTransport_->acquire();
     if (transportClient_) {
       client = transportClient_;
       usingReverseTransport_ = true;
@@ -768,6 +798,7 @@ void FireBackendClient::service(bool wifiConnected) {
       client->setTimeout(1200);
     }
     if (!usingReverseTransport_ && !client->connect(host_.c_str(), port_, 1200)) {
+      if (client_.connecting() || client_.stopping()) { state_ = State::Offline; reconnectAt_ = 0; return; }
       transportClient_ = nullptr;
       setState(State::Offline, "Backend connection failed");
       return;
@@ -775,10 +806,14 @@ void FireBackendClient::service(bool wifiConnected) {
     uint8_t randomKey[16];
     for (uint8_t& value : randomKey) value = static_cast<uint8_t>(esp_random());
     const String key = base64::encode(randomKey, sizeof(randomKey));
-    client->print("GET /ws/device HTTP/1.1\r\nHost: " + host_ + ":" +
+    const String proof = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    uint8_t digest[20]; mbedtls_sha1_ret(reinterpret_cast<const uint8_t*>(proof.c_str()), proof.length(), digest);
+    expectedAccept_ = base64::encode(digest, sizeof(digest));
+    const String request = "GET /ws/device HTTP/1.1\r\nHost: " + host_ + ":" +
                   String(port_) + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " +
                   key + "\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer " +
-                  token_ + "\r\n\r\n");
+                  token_ + "\r\n\r\n";
+    if (client->print(request) != request.length()) { disconnect(); return; }
     handshakeBuffer_ = "";
     handshakeStartedAt_ = millis();
     setState(State::Handshake, "Authenticating backend");
@@ -814,13 +849,7 @@ void FireBackendClient::handleHandshake() {
     if (handshakeBuffer_.endsWith("\r\n\r\n")) break;
   }
   if (handshakeBuffer_.indexOf("\r\n\r\n") < 0) return;
-  String handshakeHeaders = handshakeBuffer_.substring(0, handshakeBuffer_.indexOf("\r\n\r\n"));
-  String lowerHandshake = handshakeHeaders;
-  lowerHandshake.toLowerCase();
-  if (!handshakeBuffer_.startsWith("HTTP/1.1 101") ||
-      lowerHandshake.indexOf("upgrade: websocket") < 0 ||
-      lowerHandshake.indexOf("connection: upgrade") < 0 ||
-      lowerHandshake.indexOf("sec-websocket-accept:") < 0) {
+  if (!fireWsAccepted(handshakeBuffer_.c_str(), handshakeBuffer_.length(), expectedAccept_.c_str())) {
     disconnect();
     setState(State::Offline, "Backend handshake rejected");
     return;
@@ -833,7 +862,7 @@ void FireBackendClient::handleHandshake() {
                         jsonEscape(bootId_) +
                         "\",\"capabilities\":{\"api_version\":\"fire-lua-0.2\",\"api_contract\":\"" +
                         FireLuaRuntime::hardwareApiContract() +
-                        "\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\",\"jobs\",\"gpio\",\"pwm\",\"i2c\",\"uart\",\"adc\",\"dac\",\"spi\",\"sd\",\"rtc\",\"speaker\"],\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":[64],\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":true,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
+                        "\",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\",\"jobs\",\"gpio\",\"pwm\",\"i2c\",\"uart\",\"adc\",\"dac\",\"spi\",\"sd\",\"rtc\",\"speaker\"],\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":[64],\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":false,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
                         jsonEscape(firmwareVersion_) + "\"}";
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +
@@ -1015,6 +1044,9 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
   } else if (opcode == 0xA) {
     lastPongAt_ = millis();
   } else if (opcode == 0x1 && messageCallback_) {
+    if (!fireJsonSafe(reinterpret_cast<const char*>(data), length, kMaxFrameBytes)) {
+      disconnect(); setState(State::Offline, "Invalid backend message"); return;
+    }
     String message;
     message.reserve(length);
     for (size_t index = 0; index < length; ++index) message += static_cast<char>(data[index]);

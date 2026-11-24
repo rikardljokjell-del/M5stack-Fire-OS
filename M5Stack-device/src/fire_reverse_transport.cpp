@@ -17,6 +17,7 @@ void FireReverseTransport::configure(const String& deviceId,
 }
 
 void FireReverseTransport::stop() {
+  accepting_ = false; ++generation_;
   if (listening_) server_.stop();
   listening_ = false;
   for (uint8_t index = 0; index < kMaxConnections; ++index)
@@ -25,10 +26,13 @@ void FireReverseTransport::stop() {
 
 void FireReverseTransport::resetSlot(uint8_t index) {
   if (index >= kMaxConnections) return;
-  slots_[index].client.stop();
-  slots_[index].authLine = "";
-  slots_[index].acceptedAt = 0;
-  slots_[index].state = SlotState::Empty;
+  Slot& slot = slots_[index];
+  slot.cancelled = true;
+  SlotState before = slot.state;
+  if (before == SlotState::InUse || before == SlotState::Maintenance ||
+      !slot.state.compare_exchange_strong(before, SlotState::Maintenance)) return;
+  slot.client.stop(); slot.authLine = ""; slot.acceptedAt = 0;
+  slot.state = SlotState::Empty;
 }
 
 void FireReverseTransport::service(bool wifiConnected) {
@@ -40,26 +44,34 @@ void FireReverseTransport::service(bool wifiConnected) {
   if (!listening_) {
     server_.begin();
     listening_ = true;
+    accepting_ = true;
   }
 
   for (uint8_t index = 0; index < kMaxConnections; ++index) {
-    if (slots_[index].state == SlotState::Empty) continue;
-    if (!slots_[index].client.connected()) {
-      resetSlot(index);
-      continue;
-    }
-    if (slots_[index].state == SlotState::Authenticating)
+    const SlotState state = slots_[index].state;
+    if (state == SlotState::Empty || state == SlotState::InUse || state == SlotState::Maintenance) continue;
+    if (state == SlotState::Authenticating) {
+      if (!slots_[index].client.connected()) { resetSlot(index); continue; }
       serviceAuthentication(index);
+    } else {
+      SlotState ready = SlotState::Ready;
+      if (slots_[index].state.compare_exchange_strong(ready, SlotState::Maintenance)) {
+        if (slots_[index].client.connected()) slots_[index].state = SlotState::Ready;
+        else { slots_[index].client.stop(); slots_[index].state = SlotState::Empty; }
+      }
+    }
   }
 
   WiFiClient incoming = server_.available();
   if (!incoming) return;
   for (uint8_t index = 0; index < kMaxConnections; ++index) {
-    if (slots_[index].state != SlotState::Empty) continue;
+    SlotState empty = SlotState::Empty;
+    if (!slots_[index].state.compare_exchange_strong(empty, SlotState::Maintenance)) continue;
     slots_[index].client = incoming;
     slots_[index].client.setNoDelay(true);
     slots_[index].authLine = "";
     slots_[index].acceptedAt = millis();
+    slots_[index].cancelled = false;
     slots_[index].state = SlotState::Authenticating;
     return;
   }
@@ -81,11 +93,12 @@ void FireReverseTransport::serviceAuthentication(uint8_t index) {
     ++processed;
     if (value == '\n') {
       if (authenticate(slot.authLine)) {
-        slot.client.print(
+        const String response =
             "{\"type\":\"reverse_ready\",\"version\":1,\"device_id\":\"" +
-            deviceId_ + "\"}\n");
-        slot.state = SlotState::Ready;
+            deviceId_ + "\"}\n";
+        if (slot.client.print(response) != response.length()) { resetSlot(index); return; }
         slot.authLine = "";
+        slot.state = SlotState::Ready;
       } else {
         resetSlot(index);
       }
@@ -99,12 +112,15 @@ void FireReverseTransport::serviceAuthentication(uint8_t index) {
   }
 }
 
-WiFiClient* FireReverseTransport::acquire() {
+WiFiClient* FireReverseTransport::acquire(uint32_t expectedGeneration) {
+  const uint32_t generation = generation_;
+  if (!accepting_ || (expectedGeneration && expectedGeneration != generation)) return nullptr;
   for (uint8_t index = 0; index < kMaxConnections; ++index) {
-    if (slots_[index].state == SlotState::Ready &&
-        slots_[index].client.connected()) {
-      slots_[index].state = SlotState::InUse;
-      return &slots_[index].client;
+    SlotState ready = SlotState::Ready;
+    if (slots_[index].state.compare_exchange_strong(ready, SlotState::InUse)) {
+      auto* client = &slots_[index].client;
+      if (!accepting_ || generation != generation_ || slots_[index].cancelled || !client->connected()) { release(client); continue; }
+      return client;
     }
   }
   return nullptr;
@@ -114,7 +130,11 @@ void FireReverseTransport::release(WiFiClient* client) {
   if (!client) return;
   for (uint8_t index = 0; index < kMaxConnections; ++index) {
     if (&slots_[index].client == client) {
-      resetSlot(index);
+      // The borrower alone closes and clears an InUse socket. UI stop only
+      // marks it cancelled, so no object is reassigned beneath an I/O worker.
+      if (slots_[index].state != SlotState::InUse) return;
+      slots_[index].client.stop(); slots_[index].authLine = ""; slots_[index].acceptedAt = 0;
+      slots_[index].cancelled = false; slots_[index].state = SlotState::Empty;
       return;
     }
   }
@@ -122,9 +142,13 @@ void FireReverseTransport::release(WiFiClient* client) {
 
 bool FireReverseTransport::hasReadyConnection() {
   for (Slot& slot : slots_) {
-    if (slot.state == SlotState::Ready && slot.client.connected()) return true;
+    if (accepting_ && slot.state == SlotState::Ready) return true;
   }
   return false;
+}
+bool FireReverseTransport::cancelled(WiFiClient* client) const {
+  for (const Slot& slot : slots_) if (&slot.client == client) return slot.cancelled;
+  return true;
 }
 
 bool FireReverseTransport::authenticate(const String& line) const {

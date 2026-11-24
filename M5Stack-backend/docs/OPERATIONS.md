@@ -1,6 +1,17 @@
 # Lokal Windows-drift
 
+Vanlig Windows-bruk: start `start-ui.ps1` og velg **Åpne FIRE Studio ↗**.
+Se [PC-/mobiloppsettet](WEB_STUDIO_SETUP.md). Windows-programmet og Studio bruker
+samme DesktopStore/Windows Credential Manager; de leser ikke CLI-innstillingene
+i `.env`. API-nøkkel er write-only i Studio. Offentlig HTTPS/WSS krever separate
+browser-/device-verter og validert Access-innlogging, aldri proxy-/loopback-tillit.
+USB-migrering er et separat, eksplisitt verktøy; se [USB_MIGRATION.md](USB_MIGRATION.md).
+
 ## Før ekte bruk
+
+Punktene under gjelder kommandolinjeutgaven. Ekte OpenAI-kontroll krever et eget
+admin-token også når serveren lytter på loopback. Anonym tilgang gjelder bare
+eksplisitt lokal mock-modus. Windows-programmet lager og lagrer admin-tokenet selv.
 
 1. Installer Python 3.11+ og bruk start.ps1 fra backendmappen.
 2. Kopier .env.example til .env og sett OpenAI-nøkkelen KUN på PC.

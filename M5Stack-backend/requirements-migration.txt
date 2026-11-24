@@ -1,0 +1,9 @@
+# Optional, only for deliberate USB preflight/migration. Not a backend runtime dependency.
+esptool==4.5.1
+pyserial==3.5
+cryptography==50.0.2
+bitstring==5.0.0
+tibs==2.0.2
+ecdsa==0.19.2
+reedsolo==1.6.0
+six==1.17.0

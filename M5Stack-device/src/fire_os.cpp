@@ -4,6 +4,7 @@
 #include <M5Unified.h>
 #ifdef FIRE_OS_BLE
 #include <driver/rmt.h>
+#include <hal/rmt_ll.h>
 #endif
 #include <utility/led/LED_Strip_Class.hpp>
 #include <Preferences.h>
@@ -13,6 +14,7 @@
 #include <WebServer.h>
 #include <driver/gpio.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <esp_sleep.h>
 #include <esp_ota_ops.h>
 #include <sys/time.h>
@@ -21,6 +23,7 @@
 #include <math.h>
 #include <string.h>
 #include <mbedtls/sha256.h>
+#include <cJSON.h>
 #ifdef FIRE_OS_BLE
 #include <NimBLEDevice.h>
 #endif
@@ -47,7 +50,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.1";
+constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc1";
 constexpr uint32_t kFirmwareBootGuardMs = 15000;
 constexpr uint32_t kLuaServiceDisplay = 1u << 0;
 constexpr uint32_t kLuaServiceButtons = 1u << 1;
@@ -135,10 +138,11 @@ Preferences* firePreferences = nullptr;
 #define preferences (*firePreferences)
 M5Canvas* uiCanvas = nullptr;
 #define ui (*uiCanvas)
-WebServer* fireWifiSetupServer = nullptr;
-#define wifiSetupServer (*fireWifiSetupServer)
 FireOS* activeFireOs = nullptr;
 bool bluetoothRadioReady = false;
+bool fireRgbReady = false;
+bool fireRgbInFlight = false;
+uint32_t fireRgbTimeouts = 0;
 
 void configureFireRgbStrip() {
 #ifdef FIRE_OS_BLE
@@ -148,13 +152,18 @@ void configureFireRgbStrip() {
   config.channel = RMT_CHANNEL_0;
   config.gpio_num = GPIO_NUM_15;
   config.clk_div = 2;
-  config.mem_block_num = 1;
+  // Ten RGB LEDs need 241 words including reset. Four hardware blocks hold
+  // the complete frame, so the RMT peripheral needs no refill ISR/driver task.
+  // FIRE OS owns RMT channel 0 and memory blocks 0..3; Lua never owns RMT.
+  config.mem_block_num = 4;
   config.tx_config.loop_en = false;
   config.tx_config.carrier_en = false;
   config.tx_config.idle_output_en = true;
   config.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
-  rmt_config(&config);
-  rmt_driver_install(config.channel, 0, 0);
+  fireRgbReady = rmt_config(&config) == ESP_OK;
+  rmt_ll_enable_tx_end_interrupt(&RMT, 0, false);
+  rmt_ll_enable_tx_err_interrupt(&RMT, 0, false);
+  rmt_ll_enable_tx_thres_interrupt(&RMT, 0, false);
 #else
   auto bus = std::make_shared<m5::LedBus_RMT>();
   auto busConfig = bus->getConfig();
@@ -175,6 +184,12 @@ void configureFireRgbStrip() {
 
 #ifdef FIRE_OS_BLE
 void writeFireRgbArray(const uint8_t values[10][3], uint8_t brightness) {
+  if (!fireRgbReady) return;
+  // A preceding hardware frame normally finishes in <400 us. Never wait for
+  // an unbounded driver semaphore, or disable interrupts for LED timing.
+  const int64_t waiting = esp_timer_get_time();
+  while (fireRgbInFlight && !RMT.int_raw.ch0_tx_end && esp_timer_get_time() - waiting < 600) {}
+  if (fireRgbInFlight && !RMT.int_raw.ch0_tx_end) { ++fireRgbTimeouts; return; }
   static rmt_item32_t items[10 * 24 + 1];
   uint16_t item = 0;
   for (uint8_t pixel = 0; pixel < 10; ++pixel) {
@@ -197,7 +212,11 @@ void writeFireRgbArray(const uint8_t values[10][3], uint8_t brightness) {
   items[item].duration0 = 2000;
   items[item].level1 = 0;
   items[item].duration1 = 0;
-  rmt_write_items(RMT_CHANNEL_0, items, item + 1, true);
+  if (rmt_fill_tx_items(RMT_CHANNEL_0, items, item + 1, 0) != ESP_OK) return;
+  rmt_ll_tx_reset_pointer(&RMT, 0);
+  rmt_ll_clear_tx_end_interrupt(&RMT, 0);
+  rmt_ll_tx_start(&RMT, 0);
+  fireRgbInFlight = true;
 }
 
 void writeFireRgbRaw(uint8_t red, uint8_t green, uint8_t blue,
@@ -701,117 +720,6 @@ String wifiFailureReason(wl_status_t status) {
   }
 }
 
-void handleWifiSetupRoot() {
-  const String token = wifiSetupServer.arg("token");
-  if (activeFireOs == nullptr || !activeFireOs->wifiSetupTokenValid(token)) {
-    wifiSetupServer.send(403, "text/plain", "Invalid or missing setup token");
-    return;
-  }
-  const bool backendSetup = activeFireOs->aiApiSetupActive();
-  const String html = backendSetup
-      ? "<!doctype html><html><meta name='viewport' content='width=device-width'><title>FIRE OS backend</title><style>body{font-family:sans-serif;max-width:480px;margin:24px auto;padding:0 16px}input{width:100%;padding:10px;margin:6px 0 16px;box-sizing:border-box}button{padding:12px 18px}</style><body><h2>FIRE OS AI backend</h2><p>Empty fields keep their current value. Use the PC IP address and its device token.</p><form method='post' action='/save'><label>Backend host/IP</label><input name='host' autocomplete='off'><label>Backend port</label><input name='port' inputmode='numeric' autocomplete='off'><label>Device token</label><input name='backend_token' type='password' autocomplete='off'><label>Device ID</label><input name='device' autocomplete='off'><input type='hidden' name='token' value='" + token + "'><button type='submit'>Save backend</button></form></body></html>"
-      :
-      "<!doctype html><html><meta name='viewport' content='width=device-width'>"
-      "<title>FIRE OS setup</title><style>body{font-family:sans-serif;max-width:480px;"
-      "margin:24px auto;padding:0 16px}input{width:100%;padding:10px;margin:6px 0 16px;"
-      "box-sizing:border-box}button{padding:12px 18px}</style><body>"
-      "<h2>FIRE OS setup</h2><p>Leave a field empty to keep its current value.</p>"
-      "<form method='post' action='/save'><label>Wi-Fi SSID</label>"
-      "<input name='ssid' autocomplete='off'><label>Wi-Fi password</label>"
-      "<input name='password' type='password' autocomplete='off'>"
-      "<input type='hidden' name='token' value='" +
-      token + "'><button type='submit'>Save</button></form></body></html>";
-  wifiSetupServer.send(200, "text/html", html);
-}
-
-void handleWifiSetupSave() {
-  if (activeFireOs == nullptr) {
-    wifiSetupServer.send(500, "text/plain", "OS unavailable");
-    return;
-  }
-  if (!activeFireOs->wifiSetupTokenValid(wifiSetupServer.arg("token"))) {
-    wifiSetupServer.send(403, "text/plain", "Invalid setup token");
-    return;
-  }
-  if (activeFireOs->aiApiSetupActive()) {
-    const bool saved = activeFireOs->saveBackendSetupFields(
-        wifiSetupServer.arg("host"), wifiSetupServer.arg("port"),
-        wifiSetupServer.arg("backend_token"), wifiSetupServer.arg("device"));
-    if (!saved) {
-      wifiSetupServer.send(400, "text/plain", "Invalid backend configuration");
-      return;
-    }
-  } else {
-    const String ssid = wifiSetupServer.arg("ssid");
-    const String password = wifiSetupServer.arg("password");
-    const String apiKey = wifiSetupServer.arg("api");
-    activeFireOs->saveMobileSetupFields(ssid, password, apiKey);
-  }
-  wifiSetupServer.send(200, "text/html",
-                       "<html><body><h2>Saved</h2><p>FIRE OS kept empty fields "
-                       "unchanged. You can close this page.</p></body></html>");
-  if (activeFireOs->aiApiSetupActive()) activeFireOs->finishBackendSetup();
-}
-
-void handleWifiBackendProvision() {
-  if (activeFireOs == nullptr) {
-    wifiSetupServer.send(500, "text/plain", "OS unavailable");
-    return;
-  }
-  if (!activeFireOs->aiApiSetupActive()) {
-    wifiSetupServer.send(403, "text/plain",
-                         "Backend provisioning is not active");
-    return;
-  }
-
-  // The provisioning URL is only accepted while the temporary, password-
-  // protected FIRE-Setup network is active.  An optional setup token is
-  // accepted as an additional check when a QR generator includes it, but the
-  // backend token itself is never logged or rendered back in the response.
-  const String setupToken = wifiSetupServer.arg("token");
-  if (setupToken.length() > 0 &&
-      !activeFireOs->wifiSetupTokenValid(setupToken)) {
-    wifiSetupServer.send(403, "text/plain", "Invalid setup token");
-    return;
-  }
-
-  const String host = wifiSetupServer.arg("host");
-  const String port = wifiSetupServer.arg("port");
-  const String deviceId = wifiSetupServer.arg("device").length() > 0
-                              ? wifiSetupServer.arg("device")
-                              : wifiSetupServer.arg("device_id");
-  const String backendToken = wifiSetupServer.arg("backend_token");
-  const long parsedPort = port.toInt();
-
-  if (host.length() == 0 || parsedPort < 1 || parsedPort > 65535 ||
-      deviceId.length() == 0 || backendToken.length() < 24) {
-    wifiSetupServer.send(
-        400, "text/html",
-        "<html><meta name='viewport' content='width=device-width'>"
-        "<body><h2>Invalid backend setup</h2>"
-        "<p>The QR code must contain PC address, port, device ID and a valid "
-        "device token.</p><p>Return to the FIRE OS screen and scan a new "
-        "backend QR code.</p></body></html>");
-    return;
-  }
-
-  // Send the acknowledgement before stopping the temporary AP.  This gives
-  // the phone a useful result page even though saving the settings closes the
-  // setup network immediately afterwards.
-  wifiSetupServer.send(
-      200, "text/html",
-      "<html><meta name='viewport' content='width=device-width'>"
-      "<body><h2>Backend saved</h2>"
-      "<p>FIRE OS saved the PC address, port, device ID and token.</p>"
-      "<p>You can return to FIRE OS. It will connect to the backend when Wi-Fi "
-      "is available.</p></body></html>");
-  if (!activeFireOs->saveBackendSetupFields(host, port, backendToken, deviceId)) {
-    wifiSetupServer.send(400, "text/plain", "Invalid backend configuration");
-    return;
-  }
-  activeFireOs->finishBackendSetup();
-}
-
 void writeWavHeader(uint8_t* data, uint32_t payloadBytes,
                     uint32_t sampleRate) {
   const uint32_t riffSize = 36 + payloadBytes;
@@ -1040,6 +948,8 @@ const char* DateTimeService::timezoneRule() const {
 }
 
 void FireOS::begin() {
+  fireInitTrust();
+  homeApp_.begin();
   activeFireOs = this;
   Serial.begin(115200);
   auto config = M5.config();
@@ -1066,7 +976,6 @@ void FireOS::begin() {
   micConfig.noise_filter_level = 0;
   M5.Mic.config(micConfig);
   firePreferences = new Preferences();
-  fireWifiSetupServer = new WebServer(80);
 #ifdef FIRE_OS_BLE
   bluetoothPeripheralAddressPtr = new String();
 #endif
@@ -1160,7 +1069,7 @@ void FireOS::begin() {
   backendBootAttemptedAt_ = 0;
   backendBootSyncWaiting_ = backendBootPending_;
   backendBootJobsReceived_ = false;
-  backendBootSyncStartedAt_ = millis();
+  backendBootSyncStartedAt_ = 0;
   buildJobsRetryCount_ = 0;
   buildJobsRequestAt_ = 0;
 
@@ -1188,6 +1097,9 @@ void FireOS::begin() {
 }
 
 void FireOS::update() {
+  const int64_t loopStartedUs = esp_timer_get_time();
+  if (lastLoopStartedUs_) maxLoopGapUs_ = max(maxLoopGapUs_, static_cast<uint32_t>(min<int64_t>(60000000, loopStartedUs - lastLoopStartedUs_)));
+  lastLoopStartedUs_ = loopStartedUs;
   M5.update();
   // M5Unified updates button state in M5.update(), but the IMU data register
   // is refreshed separately. Keep one bounded 50 Hz update for the Debug view
@@ -1222,6 +1134,11 @@ void FireOS::update() {
 #endif
   updateBootFeedback();
   updateFirmwareBootGuard();
+  if (ota_.busy() || ota_.finished()) {
+    firmwareMessage_ = ota_.message();
+    if (!ota_.busy()) { if (ota_.succeeded()) otaRebootAt_ = millis(); ota_.acknowledge(); }
+  }
+  if (otaRebootAt_ && millis() - otaRebootAt_ >= 750) ESP.restart();
   if (screen_ == Screen::AiDeveloper &&
       (!backendClient_ || !backendClient_->configured()))
     updateAiDeveloperMock();
@@ -1280,7 +1197,38 @@ void FireOS::update() {
       path = firmwarePaths_[firmwareSelection_];
     if (path.length() == 0 || !installFirmwareFile(path)) redrawRequested_ = true;
   }
-  if (wifiSetupActive_) wifiSetupServer.handleClient();
+  if (auto* request = setupPortal_.take()) {
+    const bool provision = request->operation == FireSetupPortal::Operation::Provision;
+    bool ok = wifiSetupActive_ && !portalCloseAt_ && setupPortal_.current(*request) &&
+        ((provision && aiApiSetupActive_ && !request->token.length()) || wifiSetupTokenValid(request->token));
+    String response = "Ugyldig oppsett eller lukket oppsettsokt";
+    portalApplying_ = true;
+    if (ok && request->operation == FireSetupPortal::Operation::Home) {
+      ok = homeApp_.configure(request->config, response);
+      if (ok) response = "Home-oppsett lagret og kontrollert.";
+    } else if (ok && (provision || request->operation == FireSetupPortal::Operation::Backend)) {
+      ok = aiApiSetupActive_ && saveBackendSetupFields(request->host, request->port, request->secret, request->device);
+      if (ok) { response = "Backend-oppsett lagret."; finishBackendSetup(); }
+      else response = "Ugyldig backend-oppsett";
+    } else if (ok) {
+      saveMobileSetupFields(request->ssid, request->password, "");
+      response = "Wi-Fi-oppsett lagret.";
+    }
+    portalApplying_ = false; setupPortal_.complete(ok, response);
+  }
+  if (portalCloseAt_ && setupPortal_.replied() && millis() - portalCloseAt_ >= 100) {
+    const bool reconnect = portalReconnect_;
+    stopWifiSetup();
+    if (reconnect && wifiMode_ != 2) beginWifiConnection();
+  }
+  if (wifiSetupActive_ && millis() - wifiSetupStartedAt_ > 600000) stopWifiSetup();
+  if (homeApp_.configured() && screen_ == Screen::Home && wifiMode_ != 2 &&
+      WiFi.status() != WL_CONNECTED && !wifiConnectActive_ && wifiSsid_.length())
+    requestWifi(true);
+  homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2);
+  if (homeApp_.takeSetupRequest()) {
+    startWifiSetup(); homeApp_.setupHint(wifiSetupPassword_);
+  }
   updateWifiState();
   updateBluetoothScan();
   serviceLuaHardwareJobs();
@@ -1333,6 +1281,19 @@ void FireOS::update() {
     redrawRequested_ = true;
   }
   // Keep button sampling responsive while still yielding to Wi-Fi/BLE tasks.
+  maxLoopUs_ = max(maxLoopUs_, static_cast<uint32_t>(min<int64_t>(
+      60000000, esp_timer_get_time() - loopStartedUs)));
+  if (millis() - diagnosticsAt_ >= 30000) {
+    diagnosticsAt_ = millis();
+    const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    const uint32_t largest = heap_caps_get_largest_free_block(caps);
+    minLargestInternal_ = min(minLargestInternal_, largest);
+    Serial.printf("FIRE diag loop_us=%lu gap_us=%lu callback_us=%lu heap=%u min_heap=%u largest=%u min_largest=%lu stack=%u rgb_timeouts=%lu\n",
+        (unsigned long)maxLoopUs_, (unsigned long)maxLoopGapUs_,
+        (unsigned long)(luaRuntime_ ? luaRuntime_->maxCallbackUs() : 0),
+        heap_caps_get_free_size(caps), heap_caps_get_minimum_free_size(caps), largest,
+        (unsigned long)minLargestInternal_, uxTaskGetStackHighWaterMark(nullptr), (unsigned long)fireRgbTimeouts);
+  }
   delay(5);
 }
 
@@ -1706,150 +1667,34 @@ void FireOS::scanFirmwareFiles() {
 }
 
 bool FireOS::handlePendingFirmwareBoot() {
-  if (!preferences.getBool("fw_pending", false)) return false;
-  if (safeMode_) {
-    preferences.putBool("fw_pending", false);
-    preferences.remove("fw_attempts");
-    preferences.remove("fw_target");
-    saveSettings();
-    return false;
-  }
-
-  const esp_partition_t* running = esp_ota_get_running_partition();
-  const String target = preferences.getString("fw_target", "");
-  if (!running || target.length() == 0 || target != running->label) {
-    // A normal USB flash or an unrelated boot invalidates the pending marker.
-    preferences.putBool("fw_pending", false);
-    preferences.remove("fw_attempts");
-    preferences.remove("fw_target");
-    saveSettings();
-    return false;
-  }
-
-  const uint8_t attempts = preferences.getUChar("fw_attempts", 0);
-  if (attempts >= 1) {
-    const esp_partition_t* previous =
-        esp_ota_get_next_update_partition(nullptr);
-    if (previous && previous != running &&
-        esp_ota_set_boot_partition(previous) == ESP_OK) {
-      preferences.putBool("fw_pending", false);
-      preferences.remove("fw_attempts");
-      preferences.remove("fw_target");
-      saveSettings();
-      Serial.println("FIRE firmware boot guard: reverting to previous slot");
-      delay(250);
-      ESP.restart();
-      return true;
-    }
-    // Do not trap the device in a rollback loop if the partition table cannot
-    // provide a previous slot. Continue with the image and clear the marker.
-    preferences.putBool("fw_pending", false);
-    preferences.remove("fw_attempts");
-    preferences.remove("fw_target");
-    saveSettings();
-    return false;
-  }
-
-  preferences.putUChar("fw_attempts", 1);
-  saveSettings();
-  firmwareBootGuardActive_ = true;
+  const auto* running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+  firmwareBootGuardActive_ = running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
+                             state == ESP_OTA_IMG_PENDING_VERIFY;
   firmwareBootGuardStarted_ = millis();
-  Serial.println("FIRE firmware boot guard: validation window started");
+  // Legacy NVS counters cannot replace or override bootloader rollback state.
+  preferences.remove("fw_pending"); preferences.remove("fw_attempts"); preferences.remove("fw_target");
   return false;
 }
 
 void FireOS::updateFirmwareBootGuard() {
-  if (!firmwareBootGuardActive_ ||
-      millis() - firmwareBootGuardStarted_ < kFirmwareBootGuardMs)
-    return;
-  preferences.putBool("fw_pending", false);
-  preferences.remove("fw_attempts");
-  preferences.remove("fw_target");
-  saveSettings();
-  firmwareBootGuardActive_ = false;
-  Serial.println("FIRE firmware boot guard: image accepted");
+  if (!firmwareBootGuardActive_ || millis() - firmwareBootGuardStarted_ < kFirmwareBootGuardMs) return;
+  // Local health only: unavailable internet/PC is not a broken firmware.
+  const bool healthy = uiCanvas && M5.Display.width() == 320 && M5.Display.height() == 240 &&
+      ESP.getFreeHeap() > 32768 && millis() - lastDrawAt_ < 1000;
+  if (!healthy) { esp_ota_mark_app_invalid_rollback_and_reboot(); return; }
+  if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+    firmwareBootGuardActive_ = false;
+    Serial.println("FIRE OTA local self-test accepted; network/physical matrix not implied");
+  }
 }
 
 bool FireOS::installFirmwareFile(const String& path) {
-  if (!sdReady_ && !initSdCard()) {
-    firmwareMessage_ = "SD card not detected";
-    return false;
-  }
-  if (!path.startsWith("/firmware/") || path.indexOf("..") >= 0 ||
-      path.indexOf('\\') >= 0 || path.length() > 80 ||
-      (firmwareStorage_ && firmwareStorage_->busy())) {
-    firmwareMessage_ = "Firmware install unavailable";
-    return false;
-  }
-
-  const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
-  File source = SD.open(path, FILE_READ);
-  uint32_t imageOffset = 0;
-  uint32_t imageSize = 0;
-  const bool validImage = source &&
-                          inspectExternalImage(source, imageOffset, imageSize,
-                                               true);
-  if (!source || !target || !validImage || imageSize > target->size) {
-    source.close();
-    firmwareMessage_ = !target ? "No OTA slot available"
-                               : validImage ? "Firmware is too large"
-                                            : "Invalid FIRE firmware image";
-    return false;
-  }
-  if (!source.seek(imageOffset)) {
-    source.close();
-    firmwareMessage_ = "Cannot read firmware image";
-    return false;
-  }
-
-  esp_ota_handle_t handle = 0;
-  if (esp_ota_begin(target, imageSize, &handle) != ESP_OK) {
-    source.close();
-    firmwareMessage_ = "OTA install could not start";
-    return false;
-  }
-  uint8_t buffer[4096];
-  uint32_t remaining = imageSize;
-  bool ok = true;
-  while (remaining > 0) {
-    const size_t request = min<size_t>(sizeof(buffer), remaining);
-    const size_t amount = source.read(buffer, request);
-    if (amount == 0 || esp_ota_write(handle, buffer, amount) != ESP_OK) {
-      ok = false;
-      break;
-    }
-    remaining -= amount;
-    if ((remaining & 0xFFFFU) == 0) {
-      firmwareMessage_ = "Flashing " +
-                         String((imageSize - remaining) * 100UL / imageSize) +
-                         "%";
-      redrawRequested_ = true;
-      delay(1);
-    }
-  }
-  source.close();
-  if (!ok) {
-    esp_ota_abort(handle);
-    firmwareMessage_ = "Flash failed; current OS retained";
-    return false;
-  }
-  if (esp_ota_end(handle) != ESP_OK || remaining != 0) {
-    firmwareMessage_ = "Firmware verification failed";
-    return false;
-  }
-  if (esp_ota_set_boot_partition(target) != ESP_OK) {
-    firmwareMessage_ = "Could not select new firmware";
-    return false;
-  }
-
-  preferences.putBool("fw_pending", true);
-  preferences.putUChar("fw_attempts", 0);
-  preferences.putString("fw_target", target->label);
-  saveSettings();
-  firmwareMessage_ = "Firmware installed; restarting";
-  delay(350);
-  ESP.restart();
-  return true;
+  if ((!sdReady_ && !initSdCard()) || ota_.busy()) return false;
+  const bool started = ota_.start(path);
+  firmwareMessage_ = started ? "Kontrollerer firmware" : "Ugyldig firmwarevalg";
+  redrawRequested_ = true;
+  return started;
 }
 
 String FireOS::sdParentPath(const String& path) const {
@@ -2736,6 +2581,7 @@ uint16_t FireOS::luaI2cScanCallback(void* context, int bus,
   }
   if (!os->luaI2cStarted_) {
     Wire.begin(21, 22, 400000);
+    Wire.setTimeOut(3);
     os->luaI2cStarted_ = true;
   }
   const uint16_t jobId = os->createLuaJob(LuaJobKind::I2cScan, error);
@@ -2754,6 +2600,7 @@ uint16_t FireOS::luaI2cReadCallback(void* context, int bus, int address,
   }
   if (!os->luaI2cStarted_) {
     Wire.begin(21, 22, 400000);
+    Wire.setTimeOut(3);
     os->luaI2cStarted_ = true;
   }
   const uint16_t jobId = os->createLuaJob(LuaJobKind::I2cRead, error);
@@ -2775,6 +2622,7 @@ uint16_t FireOS::luaI2cWriteCallback(void* context, int bus, int address,
   }
   if (!os->luaI2cStarted_) {
     Wire.begin(21, 22, 400000);
+    Wire.setTimeOut(3);
     os->luaI2cStarted_ = true;
   }
   const uint16_t jobId = os->createLuaJob(LuaJobKind::I2cWrite, error);
@@ -3314,7 +3162,7 @@ void FireOS::serviceLuaHardwareJobs() {
     }
     if (job.kind == LuaJobKind::I2cScan) {
       uint8_t processed = 0;
-      while (job.step < 127 && processed++ < 4) {
+      while (job.step < 127 && processed++ < 2) {
         const uint8_t address = static_cast<uint8_t>(job.step++);
         Wire.beginTransmission(address);
         if (Wire.endTransmission() == 0 && job.addressCount < 126)
@@ -3964,58 +3812,14 @@ bool FireOS::inspectExternalImage(File& file, uint32_t& imageOffset,
 
 bool FireOS::installExternalApp(const String& path, bool rebootAfterInstall,
                                 bool makeBootApp) {
-  const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
-  File source = SD.open(path, FILE_READ);
-  uint32_t imageOffset = 0;
-  uint32_t imageSize = 0;
-  const bool validImage = source &&
-                          inspectExternalImage(source, imageOffset, imageSize,
-                                               true);
-  if (!source || !target || !validImage || imageSize > target->size) {
-    source.close();
-    externalAppMessage_ = validImage ? "Rejected: app too large"
-                                     : "Rejected: incompatible .bin";
+  (void)rebootAfterInstall; (void)makeBootApp;
+  // Legacy native-app images must not bypass signed OS OTA or replace a
+  // rollback slot. AI/local apps use the restricted Lua package runtime.
+  if (!path.startsWith("/firmware/fire-")) {
+    externalAppMessage_ = "Bruk Lua-apper eller signert firmware";
     return false;
   }
-  if (!source.seek(imageOffset)) {
-    source.close();
-    externalAppMessage_ = "Cannot read app image";
-    return false;
-  }
-  esp_ota_handle_t handle = 0;
-  if (esp_ota_begin(target, imageSize, &handle) != ESP_OK) {
-    source.close();
-    externalAppMessage_ = "Install could not start";
-    return false;
-  }
-  uint8_t buffer[4096];
-  bool ok = true;
-  uint32_t remaining = imageSize;
-  while (remaining > 0) {
-    const size_t request = min<size_t>(sizeof(buffer), remaining);
-    const size_t amount = source.read(buffer, request);
-    if (amount == 0 || esp_ota_write(handle, buffer, amount) != ESP_OK) {
-      ok = false;
-      break;
-    }
-    remaining -= amount;
-  }
-  source.close();
-  if (esp_ota_end(handle) != ESP_OK) ok = false;
-  if (ok && esp_ota_set_boot_partition(target) != ESP_OK) ok = false;
-  if (!ok) {
-    externalAppMessage_ = "Install failed; FIRE OS retained";
-    return false;
-  }
-  if (rebootAfterInstall) {
-    if (makeBootApp) {
-      selectedBootAppPath_ = path;
-      saveSettings();
-    }
-    ESP.restart();
-  }
-  externalAppMessage_ = "Installed to inactive slot";
-  return true;
+  return installFirmwareFile(path);
 }
 
 bool FireOS::launchSelectedBootApp() {
@@ -4155,11 +3959,12 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   }
 
   if (buildNoticeActive_) {
-    if (index == 0) {
+    if (index == 1) {
       const String noticeBuild = buildNoticeId_;
-      if (backendClient_ && noticeBuild.length() > 0)
-        backendClient_->buildNoticeAck(noticeBuild, "open");
-      buildNoticeAckedId_ = noticeBuild;
+      buildNoticePendingId_ = noticeBuild;
+      buildNoticePendingAction_ = "open";
+      buildNoticePendingEvent_ = "";
+      buildNoticeLastSendAt_ = 0;
       buildNoticeActive_ = false;
       open(Screen::AiDeveloper);
       aiBuildId_ = noticeBuild;
@@ -4167,13 +3972,16 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       aiWorkflowState_ = 4;
       aiWorkflowText_ = "Resume bygging";
     } else if (index == 2) {
-      if (backendClient_ && buildNoticeId_.length() > 0)
-        backendClient_->buildNoticeAck(buildNoticeId_, "dismiss");
-      buildNoticeAckedId_ = buildNoticeId_;
+      buildNoticePendingId_ = buildNoticeId_;
+      buildNoticePendingAction_ = "dismiss";
+      buildNoticePendingEvent_ = "";
+      buildNoticeLastSendAt_ = 0;
       buildNoticeActive_ = false;
     }
     return;
   }
+
+  if (screen_ == Screen::Home) { homeApp_.button(index); return; }
 
   if (screen_ == Screen::DateTime) {
     handleDateTimeButton(index);
@@ -4325,6 +4133,8 @@ void FireOS::onButton(uint8_t index, bool longPress) {
         open(Screen::Power);
       } else if (mainIndex_ == 3) {
         open(Screen::FileExplorer);
+      } else if (mainIndex_ == 5) {
+        open(Screen::Home);
       } else if (mainIndex_ >= kSystemMainCount) {
         const uint8_t appIndex = mainIndex_ - kSystemMainCount;
         if (appIndex < luaAppCount_)
@@ -4656,6 +4466,11 @@ void FireOS::startMainSlide(uint8_t nextIndex, int8_t direction) {
 }
 
 void FireOS::back() {
+  if (screen_ == Screen::Home) {
+    if (!homeApp_.back()) home();
+    redrawRequested_ = true;
+    return;
+  }
   if (screen_ == Screen::Main) return;
   if (screen_ == Screen::Debug) cleanupDebugTests();
   if (screen_ == Screen::AiDeveloper &&
@@ -6135,6 +5950,12 @@ void FireOS::writeLuaErrorSnapshot(const String& errorCode,
                 jsonEscapeField(backendClient_ ? backendClient_->bootId()
                                                 : String("boot-local")) +
                 "\",\"uptime_ms\":" + String(millis()) +
+                ",\"max_loop_us\":" + String(maxLoopUs_) +
+                ",\"max_loop_gap_us\":" + String(maxLoopGapUs_) +
+                ",\"min_internal_heap\":" + String(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)) +
+                ",\"largest_internal_block\":" + String(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)) +
+                ",\"max_callback_us\":" + String(luaRuntime_ ? luaRuntime_->maxCallbackUs() : 0) +
+                ",\"instructions\":" + String(luaRuntime_ ? luaRuntime_->instructionCount() : 0) +
                 ",\"app_id\":\"" + jsonEscapeField(luaErrorAppId_) +
                 "\",\"app_version\":\"" +
                 jsonEscapeField(luaErrorAppVersion_) +
@@ -6492,7 +6313,8 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       incomingResumeCount < aiBuildResumeCount_) {
     return;
   }
-  if (incomingResumeCount >= 0) aiBuildResumeCount_ = incomingResumeCount;
+  if (incomingResumeCount >= 0 && (!independentNotice || buildId == aiBuildId_))
+    aiBuildResumeCount_ = incomingResumeCount;
   if (type == "build_progress" || type == "build_job_status" ||
       type == "build_resumed") {
     const String status = jsonStringField(message, "status");
@@ -6573,6 +6395,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       backgroundBuildActive_ = true;
     }
   } else if (type == "build_ready_notice") {
+    if (buildId == buildNoticePendingId_) return;
     if (buildId.length() > 0 && buildId == buildNoticeAckedId_) {
       redrawRequested_ = true;
       return;
@@ -6582,6 +6405,30 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     buildNoticeName_ = jsonStringField(message, "name");
     buildNoticeMessage_ = jsonStringField(message, "message");
     if (buildNoticeMessage_.length() == 0) buildNoticeMessage_ = "Appen er klar";
+  } else if (type == "build_notice_closed" || type == "event_ack") {
+    bool acknowledged = type == "build_notice_closed" &&
+        buildId == buildNoticePendingId_ &&
+        jsonStringField(message, "action") == buildNoticePendingAction_;
+    if (type == "event_ack" && buildNoticePendingEvent_.length() &&
+        jsonStringField(message, "event_id") == buildNoticePendingEvent_) {
+      cJSON* root = cJSON_Parse(message.c_str());
+      const cJSON* status = cJSON_GetObjectItemCaseSensitive(root, "status");
+      const cJSON* result = cJSON_GetObjectItemCaseSensitive(root, "result");
+      const cJSON* kind = cJSON_GetObjectItemCaseSensitive(result, "type");
+      const cJSON* id = cJSON_GetObjectItemCaseSensitive(result, "build_id");
+      const cJSON* action = cJSON_GetObjectItemCaseSensitive(result, "action");
+      acknowledged = cJSON_IsString(status) &&
+          (!strcmp(status->valuestring, "accepted") || !strcmp(status->valuestring, "duplicate")) &&
+          cJSON_IsString(kind) && !strcmp(kind->valuestring, "build_notice_closed") &&
+          cJSON_IsString(id) && buildNoticePendingId_ == id->valuestring &&
+          cJSON_IsString(action) && buildNoticePendingAction_ == action->valuestring;
+      cJSON_Delete(root);
+    }
+    if (acknowledged) {
+      buildNoticeAckedId_ = buildNoticePendingId_;
+      buildNoticePendingId_ = "";
+      buildNoticePendingEvent_ = "";
+    }
   } else if (type == "build_backgrounded") {
     backgroundBuildActive_ = true;
     aiWorkflowText_ = "Bygger i bakgrunnen";
@@ -6591,12 +6438,6 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     aiWorkflowState_ = 0;
     aiBuildRetryPending_ = false;
     aiWorkflowText_ = "Bygging avbrutt";
-  } else if (type == "event_ack") {
-    const String event = jsonStringField(message, "event");
-    if (event == "build_background") {
-      backgroundBuildActive_ = true;
-      aiWorkflowText_ = "Bygger i bakgrunnen";
-    }
   }
   redrawRequested_ = true;
 }
@@ -6634,7 +6475,7 @@ void FireOS::applyBackendMode() {
     // updateBackend() until the user changes the policy again.
     backendBootPending_ = true;
     backendBootSyncWaiting_ = true;
-    backendBootSyncStartedAt_ = millis();
+    backendBootSyncStartedAt_ = 0;
     backendBootJobsReceived_ = false;
     backendBootAttempted_ = false;
   }
@@ -6648,10 +6489,9 @@ void FireOS::updateBackend() {
     backendBootSyncWaiting_ = false;
     return;
   }
-  if ((backendBootPending_ || backendBootSyncWaiting_) && timeSyncPending_) {
-    if (backendClient_->active()) backendClient_->disconnect();
-    return;
-  }
+  // Time sync has its own deadline. Never make backend discovery depend on NTP.
+  if (backendBootSyncWaiting_ && WiFi.status() == WL_CONNECTED &&
+      backendBootSyncStartedAt_ == 0) backendBootSyncStartedAt_ = millis();
   const bool bootCheck = backendBootPending_ &&
                          WiFi.status() == WL_CONNECTED &&
                          !backendBootAttempted_;
@@ -6663,6 +6503,7 @@ void FireOS::updateBackend() {
                               screen_ == Screen::Firmware ||
                                luaRepairRequested_ || luaRepairId_.length() > 0 ||
                                backgroundBuildActive_ || buildNoticeActive_ ||
+                               buildNoticePendingId_.length() > 0 ||
                                (backendMode_ == 1 && backendClient_->configured()) ||
                                backendBootPending_ || backendBootSyncWaiting_ ||
                                bootCheck ||
@@ -6682,6 +6523,15 @@ void FireOS::updateBackend() {
     requestWifi(true);
   }
   backendClient_->service(WiFi.status() == WL_CONNECTED);
+  if (buildNoticePendingId_.length() && backendClient_->sessionReady() &&
+      (!buildNoticeLastSendAt_ || millis() - buildNoticeLastSendAt_ >= 3000)) {
+    if (!buildNoticePendingEvent_.length())
+      buildNoticePendingEvent_ = "notice-" + backendClient_->bootId() + "-" +
+                                 String(esp_random(), HEX);
+    if (backendClient_->buildNoticeAck(buildNoticePendingId_,
+          buildNoticePendingAction_, buildNoticePendingEvent_))
+      buildNoticeLastSendAt_ = millis();
+  }
   if (luaRepairCancelPending_ && backendClient_->sessionReady() &&
       luaRepairId_.length() > 0) {
     if (backendClient_->appRepairCancel(luaRepairId_)) {
@@ -6702,7 +6552,7 @@ void FireOS::updateBackend() {
     backendBootAttempted_ = true;
     backendBootAttemptedAt_ = millis();
   }
-  if (backendBootSyncWaiting_ &&
+  if (backendBootSyncWaiting_ && backendBootSyncStartedAt_ != 0 &&
       millis() - backendBootSyncStartedAt_ >= 15000) {
     // A boot sync must not hold the UI forever when the PC is offline or the
     // backend does not answer build_jobs. Normal screen demand can reconnect.
@@ -6863,6 +6713,10 @@ void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
   if (type == "session_started") {
+    // An event's identity is bound to its session. Retry the user's pending
+    // notice choice with a fresh event after reauthentication.
+    buildNoticePendingEvent_ = "";
+    buildNoticeLastSendAt_ = 0;
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
     failedBuildResumeSupported_ =
         message.indexOf("failed_build_resume_v1") >= 0;
@@ -7112,48 +6966,11 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "firmware_store_request") {
-    const String transferId = jsonStringField(message, "transfer_id");
-    const String firmwareId = jsonStringField(message, "firmware_id");
-    const String filename = jsonStringField(message, "filename");
-    const String sdPath = jsonStringField(message, "sd_path");
-    const String url = jsonStringField(message, "download_url");
-    const String expectedHash = jsonStringField(message, "sha256");
-    const uint32_t expectedSize =
-        static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
-    const uint32_t expiresAt =
-        static_cast<uint32_t>(jsonIntField(message, "expires_at"));
-    const String commandBoot = jsonStringField(message, "boot_id");
-    firmwareMessage_ = "Firmware request received";
-    if (commandBoot.length() > 0 && backendClient_ &&
-        commandBoot != backendClient_->bootId()) {
-      firmwareMessage_ = "Firmware request is stale";
-      return;
-    }
-    if (!backendCommandUnexpired(expiresAt)) {
-      firmwareMessage_ = "Firmware request expired";
-      if (backendClient_ && transferId.length() > 0 && firmwareId.length() > 0)
-        backendClient_->firmwareStoreResult(
-            transferId, firmwareId, false, "", "expired", "Request expired");
-      return;
-    }
-    const bool accepted =
-        firmwareStorage_ && backendClient_ && backendClient_->sessionReady() &&
-        firmwareStorage_->startRequest(
-            backendHost_, backendPort_, backendToken_, url, transferId,
-            firmwareId, filename, sdPath, expectedHash, expectedSize,
-            expiresAt);
-    if (!accepted) {
-      firmwareMessage_ = firmwareStorage_
-                             ? firmwareStorage_->errorMessage()
-                             : String("Firmware storage unavailable");
-      if (backendClient_ && transferId.length() > 0 && firmwareId.length() > 0)
-        backendClient_->firmwareStoreResult(
-            transferId, firmwareId, false, "",
-            firmwareStorage_ && firmwareStorage_->errorCode().length() > 0
-                ? firmwareStorage_->errorCode()
-                : "storage_unavailable",
-            firmwareMessage_);
-    }
+    const String transfer = jsonStringField(message, "transfer_id");
+    const String firmware = jsonStringField(message, "firmware_id");
+    if (backendClient_ && transfer.length() && firmware.length())
+      backendClient_->firmwareStoreResult(transfer, firmware, false, "", "unsupported", "Use the device signed GitHub catalog");
+    firmwareMessage_ = "Firmware hentes direkte fra GitHub";
     redrawRequested_ = true;
     return;
   }
@@ -7990,14 +7807,17 @@ void FireOS::beginWifiConnection() {
   WiFi.setAutoReconnect(true);
   // Force a fresh association so a corrected password is used immediately.
   WiFi.disconnect(false, false);
-  delay(75);
-  WiFi.begin(wifiSsid_.c_str(), wifiPassword_.c_str());
+  wifiBeginAt_ = millis();
   wifiConnectActive_ = true;
   wifiOperationStarted_ = millis();
   wifiStatus_ = "Connecting to " + wifiSsid_;
 }
 
 void FireOS::updateWifiState() {
+  if (wifiBeginAt_ && millis() - wifiBeginAt_ >= 75) {
+    wifiBeginAt_ = 0;
+    if (wifiEnabled_ && wifiMode_ != 2) WiFi.begin(wifiSsid_.c_str(), wifiPassword_.c_str());
+  }
   const wl_status_t status = WiFi.status();
   if (wifiScanActive_) {
     const int result = WiFi.scanComplete();
@@ -8058,6 +7878,12 @@ void FireOS::startTimeSync() {
 
 void FireOS::updateTimeSync() {
   if (!timeSyncPending_) return;
+  if (millis() - timeSyncStarted_ >= 45000) {
+    timeSyncPending_ = false;
+    timeSyncConfigured_ = false;
+    timeSyncStatus_ = "Time sync timed out";
+    return;
+  }
   if (wifiMode_ == 2) {
     timeSyncPending_ = false;
     timeSyncConfigured_ = false;
@@ -8112,8 +7938,7 @@ void FireOS::updateTimeSync() {
         timeSyncStatus_ = "Last Wi-Fi sync: " + timeSyncLast_;
         timeSyncPending_ = false;
         timeSyncConfigured_ = false;
-        backendBootPending_ = false;
-        if (wifiMode_ == 0) requestWifi(false);
+        // Keep Wi-Fi available for independent backend/Home discovery.
       }
     }
   } else if (millis() - timeSyncStarted_ > 15000) {
@@ -8125,40 +7950,41 @@ void FireOS::updateTimeSync() {
 }
 
 void FireOS::startWifiSetup() {
-  wifiSetupPassword_ = "fire-connect-2026";
-  wifiSetupToken_ = String(static_cast<unsigned long>(esp_random()), HEX);
+  char secret[33]; for (uint8_t i = 0; i < 4; ++i) snprintf(secret + i * 8, 9, "%08lx", (unsigned long)esp_random());
+  wifiSetupToken_ = secret; wifiSetupPassword_ = "fire-" + wifiSetupToken_.substring(0, 12);
   aiApiSetupActive_ = false;
 
   WiFi.setHostname("M5Stack-FIRE");
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPsetHostname("M5Stack-FIRE");
   WiFi.softAP("FIRE-Setup", wifiSetupPassword_.c_str());
-  wifiSetupServer.on("/", HTTP_GET, handleWifiSetupRoot);
-  wifiSetupServer.on("/save", HTTP_POST, handleWifiSetupSave);
-  wifiSetupServer.begin();
-  wifiSetupActive_ = true;
+  wifiSetupActive_ = setupPortal_.open(false, wifiSetupToken_, homeApp_.setupPage());
+  portalCloseAt_ = 0; portalReconnect_ = false;
+  if (!wifiSetupActive_) { WiFi.softAPdisconnect(true); wifiStatus_ = "Kunne ikke starte oppsett"; return; }
+  wifiSetupStartedAt_ = millis();
   wifiStatus_ = "FIRE-Setup " + WiFi.softAPIP().toString();
 }
 
 void FireOS::startAiApiSetup() {
   if (wifiSetupActive_) stopWifiSetup();
-  wifiSetupPassword_ = "fire-connect-2026";
-  wifiSetupToken_ = String(static_cast<unsigned long>(esp_random()), HEX);
+  char secret[33]; for (uint8_t i = 0; i < 4; ++i) snprintf(secret + i * 8, 9, "%08lx", (unsigned long)esp_random());
+  wifiSetupToken_ = secret; wifiSetupPassword_ = "fire-" + wifiSetupToken_.substring(0, 12);
   aiApiSetupActive_ = true;
   WiFi.setHostname("M5Stack-FIRE");
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPsetHostname("M5Stack-FIRE");
   WiFi.softAP("FIRE-Setup", wifiSetupPassword_.c_str());
-  wifiSetupServer.on("/", HTTP_GET, handleWifiSetupRoot);
-  wifiSetupServer.on("/save", HTTP_POST, handleWifiSetupSave);
-  wifiSetupServer.on("/provision", HTTP_GET, handleWifiBackendProvision);
-  wifiSetupServer.begin();
-  wifiSetupActive_ = true;
+  wifiSetupActive_ = setupPortal_.open(true, wifiSetupToken_, homeApp_.setupPage());
+  portalCloseAt_ = 0; portalReconnect_ = false;
+  if (!wifiSetupActive_) { WiFi.softAPdisconnect(true); wifiStatus_ = "Kunne ikke starte oppsett"; return; }
+  wifiSetupStartedAt_ = millis();
 }
 
 void FireOS::stopWifiSetup() {
   if (!wifiSetupActive_) return;
-  wifiSetupServer.stop();
+  if (portalApplying_) { portalCloseAt_ = millis(); return; }
+  setupPortal_.close();
+  portalCloseAt_ = 0; portalReconnect_ = false;
   WiFi.softAPdisconnect(true);
   wifiSetupActive_ = false;
   aiApiSetupActive_ = false;
@@ -8190,6 +8016,7 @@ void FireOS::saveWifiCredentials(const String& ssid, const String& password) {
     wifiSavedPassword_[0] = password;
   }
   saveSettings();
+  if (portalApplying_) { portalReconnect_ = true; stopWifiSetup(); return; }
   stopWifiSetup();
   beginWifiConnection();
 }
@@ -8236,6 +8063,7 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
   const String nextToken = token.length() > 0 ? token : backendToken_;
   const String nextDevice = deviceId.length() > 0 ? deviceId : backendDeviceId_;
   uint32_t nextPort = backendPort_;
+  if (!port.length() && host.length() && host != backendHost_ && fireNetworkTls(host, 0)) nextPort = 443;
   if (port.length() > 0) {
     if (port.length() > 5) return false;
     uint32_t parsed = 0;
@@ -8247,7 +8075,7 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
     if (parsed == 0) return false;
     nextPort = parsed;
   }
-  if (!validText(nextHost, 128, true) || !validText(nextToken, 128, false) ||
+  if (!fireNetworkEndpointValid(nextHost) || !validText(nextToken, 128, false) ||
       nextToken.length() < 24 || !validDeviceId(nextDevice))
     return false;
 
@@ -8269,7 +8097,7 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
       backendToken_.length() >= 24) {
     // Backend configuration is an explicit app dependency. Auto mode may
     // keep Wi-Fi off at boot, so request it when the backend is configured.
-    requestWifi(true);
+    if (portalApplying_) portalReconnect_ = true; else requestWifi(true);
   }
   return true;
 }
@@ -9084,7 +8912,8 @@ void FireOS::setWifi(bool enabled) {
 void FireOS::draw() {
   lastDrawAt_ = millis();
   redrawRequested_ = false;
-  if (screen_ == Screen::FileExplorer && sdImagePreview_ && sdImageRendered_) {
+  if (screen_ == Screen::FileExplorer && sdImagePreview_ && sdImageRendered_ &&
+      !buildNoticeActive_) {
     return;
   }
   ui.fillSprite(kBg);
@@ -9096,7 +8925,7 @@ void FireOS::draw() {
   }
   if (buildNoticeActive_) drawBuildNoticeOverlay();
   ui.pushSprite(0, 0);
-  if (screen_ == Screen::FileExplorer && sdImagePreview_) {
+  if (screen_ == Screen::FileExplorer && sdImagePreview_ && !buildNoticeActive_) {
     M5.Display.fillRect(0, 28, 320, 188, kBg);
     bool drawn = false;
     if (!sdImageBuffer_ || sdImageBufferSize_ == 0) {
@@ -9127,6 +8956,10 @@ void FireOS::drawScreen(Screen screen) {
   switch (screen) {
     case Screen::Main:
       drawMain();
+      break;
+    case Screen::Home:
+      homeApp_.draw(ui);
+      ui.setFont(nullptr);
       break;
     case Screen::Apps:
       drawApps();
@@ -9377,6 +9210,7 @@ void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size) {
                 : item == 2 ? "Power"
                 : item == 3 ? "Files"
                 : item == 4 ? "AI Developer"
+                : item == 5 ? "Home"
                 : (item - kSystemMainCount < luaAppCount_
                        ? luaAppDisplayNames_[item - kSystemMainCount]
                        : String("App"));
@@ -11107,7 +10941,7 @@ void FireOS::drawDebug() {
       drawStatusRow(2, "Battery", battery);
       drawStatusRow(3, "Lua API / display", "READY");
       drawStatusRow(4, "Lua API / audio", "READY");
-      drawStatusRow(5, "Lua API / I/O", "READY");
+      drawStatusRow(5, "Loop max us", String(maxLoopUs_));
     }
     ui.setTextDatum(MR_DATUM);
     drawText(307, 193, "READY = FW/API", kMuted, 1, kBg);

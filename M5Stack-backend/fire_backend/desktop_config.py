@@ -27,6 +27,11 @@ class DesktopConfig(BaseModel):
     credential_namespace: str = Field(default_factory=lambda: uuid.uuid4().hex, pattern=r"^[a-f0-9]{32}$")
     mode: str = Field(default="mock", pattern=r"^(mock|openai)$")
     allow_lan: bool = True
+    public_enabled: bool = False
+    web_origin: str = ""
+    device_host: str = ""
+    access_issuer: str = ""
+    access_audience: str = ""
     transport: Literal["direct", "reverse_tcp"] = "direct"
     reverse_host: str = ""
     reverse_port: int = Field(default=8766, ge=1024, le=65535)
@@ -59,6 +64,10 @@ class DesktopConfig(BaseModel):
 
     @model_validator(mode="after")
     def reverse_target(self):
+        if self.public_enabled:
+            Settings(_env_file=None, fire_public_enabled=True, fire_web_origin=self.web_origin,
+                     fire_device_host=self.device_host, fire_access_issuer=self.access_issuer,
+                     fire_access_audience=self.access_audience, fire_backend_token="validation-only-credential-123456")
         if self.transport == "reverse_tcp" and not self.reverse_host:
             raise ValueError("Oppgi FIREs egen Wi-Fi-adresse for omvendt TCP.")
         if self.reverse_device_id and self.reverse_device_id not in self.device_ids:
@@ -209,6 +218,9 @@ class DesktopStore:
                         fire_workspace=Path(config.workspace), fire_ai_mode=config.mode, fire_audio_enabled=config.audio_enabled,
                         fire_speech_enabled=config.speech_enabled,
                         fire_desktop_enabled=True,
+                        fire_public_enabled=config.public_enabled, fire_web_origin=config.web_origin,
+                        fire_device_host=config.device_host, fire_access_issuer=config.access_issuer,
+                        fire_access_audience=config.access_audience,
                         fire_reverse_host=config.reverse_host if config.transport == "reverse_tcp" else "",
                         fire_reverse_port=config.reverse_port,
                         fire_reverse_device_id=(config.reverse_device_id or config.device_ids[0]) if config.transport == "reverse_tcp" else "",

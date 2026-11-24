@@ -4,4 +4,10 @@
 .vscode/ipch/
 *.bin
 managed_components/
+.secrets/
+.tools/
+test-results/
+recovery/bootloader/.pio/
+recovery/bootloader/sdkconfig*
+!recovery/bootloader/sdkconfig.defaults
 

@@ -5,6 +5,9 @@
 #include <time.h>
 #include <WiFiClientSecure.h>
 #include <mbedtls/sha256.h>
+#include "fire_async_client.h"
+#include "fire_release.h"
+#include "fire_io_mailbox.h"
 
 // Reads the public, device-compatible firmware catalog from the FIRE OS
 // repository and downloads a selected image to /firmware. The URL and host
@@ -24,11 +27,12 @@ class FireGithubFirmwareManager {
   bool startDownload(uint8_t index, bool overwriteExisting = false);
   void service(bool wifiConnected, bool sdReady);
 
-  bool busy() const { return state_ != State::Idle; }
+  bool busy() const { return io_.busy(); }
   const String& status() const { return status_; }
-  uint8_t entryCount() const { return entryCount_; }
+  uint8_t entryCount() const { return io_.running ? 0 : entryCount_; }
   const String& entryName(uint8_t index) const { return names_[index]; }
   const String& entryVersion(uint8_t index) const { return versions_[index]; }
+  const String& entryNotes(uint8_t index) const { return notes_[index]; }
   uint32_t entrySize(uint8_t index) const { return sizes_[index]; }
 
  private:
@@ -49,7 +53,11 @@ class FireGithubFirmwareManager {
   static constexpr uint32_t kTransferTimeoutMs = 300000;
 
   State state_ = State::Idle;
-  WiFiClientSecure client_;
+  FireIoMailbox io_;
+  bool launch();
+  static void task(void* context);
+  void serviceWorker(bool wifiConnected, bool sdReady);
+  FireAsyncClient client_;
   File stagedFile_;
   bool manifestMode_ = false;
   bool overwriteExisting_ = false;
@@ -57,6 +65,8 @@ class FireGithubFirmwareManager {
   uint8_t entryCount_ = 0;
   String names_[kMaxEntries];
   String versions_[kMaxEntries];
+  String notes_[kMaxEntries];
+  String verifiedManifest_;
   String hashes_[kMaxEntries];
   uint32_t sizes_[kMaxEntries] = {};
 

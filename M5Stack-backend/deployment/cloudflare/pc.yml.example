@@ -1,0 +1,21 @@
+# Copy outside the repository. Replace ALL capitalized placeholders.
+# No credentials/token values belong in this tracked example.
+tunnel: TUNNEL_UUID
+credentials-file: C:\Users\WINDOWS_USER\.cloudflared\TUNNEL_UUID.json
+ingress:
+  - hostname: studio.YOUR_DOMAIN
+    service: http://127.0.0.1:8765
+    originRequest:
+      httpHostHeader: studio.YOUR_DOMAIN
+      connectTimeout: 5s
+      access:
+        required: true
+        teamName: ACCESS_TEAM
+        audTag:
+          - ACCESS_APPLICATION_AUDIENCE
+  - hostname: fire.YOUR_DOMAIN
+    service: http://127.0.0.1:8765
+    originRequest:
+      httpHostHeader: fire.YOUR_DOMAIN
+      connectTimeout: 5s
+  - service: http_status:404

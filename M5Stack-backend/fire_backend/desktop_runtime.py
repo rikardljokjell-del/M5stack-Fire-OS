@@ -62,6 +62,7 @@ class LogBuffer(logging.Handler):
 
 class DesktopRuntime:
     def __init__(self):
+        self.config_store = None
         self.thread = None
         self.server = None
         self.settings = None
@@ -85,11 +86,11 @@ class DesktopRuntime:
             raise ValueError("Legg inn API-nøkkel under OpenAI, eller velg testmodus.")
         self.settings, self.failure = settings, ""
         self.logs = LogBuffer(settings)
-        self.app = create_app(settings)
+        self.app = create_app(settings, config_store=self.config_store, restart_callback=self.restart_saved)
         control_host = "[::1]" if ":" in settings.fire_backend_host else ("127.0.0.1" if settings.fire_backend_host == "0.0.0.0" else settings.fire_backend_host)
         self.base_url = f"http://{control_host}:{settings.fire_backend_port}"
         config = uvicorn.Config(self.app, host=settings.fire_backend_host, port=settings.fire_backend_port,
-                                workers=1, access_log=False, ws_max_size=8192, log_config=None, loop="asyncio", http="h11")
+                                workers=1, access_log=False, ws_max_size=8192, log_config=None, loop="asyncio", http="h11", proxy_headers=False)
         self.server = uvicorn.Server(config)
         server = self.server
 
@@ -125,6 +126,16 @@ class DesktopRuntime:
             self.thread.join(timeout=12)
         if self.alive:
             raise ValueError("Backend avslutter fortsatt. Vent før du prøver igjen.")
+
+    def restart_saved(self):
+        """Called only after explicit browser apply and the backend's idle check."""
+        def restart():
+            try:
+                self.stop()
+                self.start(self.config_store.settings())
+            except Exception:
+                self.failure = "Omstart feilet. Åpne Windows-programmet og kontroller innstillingene."
+        threading.Thread(target=restart, name="FIRE controlled restart", daemon=True).start()
 
     def request(self, method, path, **kwargs):
         if not self.ready:

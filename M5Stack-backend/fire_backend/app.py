@@ -23,7 +23,7 @@ from .reverse_tcp import ReverseTCP
 from .device_http import DeviceFileResponse
 
 
-def create_app(settings=None, provider=None):
+def create_app(settings=None, provider=None, *, config_store=None, restart_callback=None):
     settings = settings or Settings()
 
     @asynccontextmanager
@@ -222,11 +222,15 @@ def create_app(settings=None, provider=None):
 
     @app.post("/desktop/firmware",dependencies=[Depends(desktop_auth)])
     async def firmware_upload(request: Request,service: Backend=Depends(backend)):
+        if settings.fire_public_enabled:
+            raise HTTPException(410, "Firmware hentes direkte fra GitHub på FIRE.")
         async with asyncio.timeout(60):
             return await service.firmware.upload(request.stream(),request.headers.get("x-firmware-name"),request.headers.get("x-firmware-version"))
 
     @app.post("/desktop/firmware/{firmware_id}/send",dependencies=[Depends(desktop_auth)])
     async def firmware_send(firmware_id: str,request: Request,service: Backend=Depends(backend)):
+        if settings.fire_public_enabled:
+            raise HTTPException(410, "Firmware hentes direkte fra GitHub på FIRE.")
         data=await request.json()
         if not isinstance(data,dict) or set(data)!={"device_id"}:raise HTTPException(422,"Expected device_id")
         return await service.firmware.send(firmware_id,data["device_id"])
@@ -434,6 +438,8 @@ def create_app(settings=None, provider=None):
     async def device(socket: WebSocket):
         try:
             identity = principal(settings, socket.headers.get("authorization"))
+            if getattr(socket.app.state, "restart_pending", False):
+                raise PermissionError("Backend is restarting")
             if socket.headers.get("origin"):
                 raise PermissionError("Browser Origin is not supported")
         except PermissionError:
@@ -457,6 +463,9 @@ def create_app(settings=None, provider=None):
                     await socket.close(code=1009)
                     break
                 try:
+                    if getattr(socket.app.state, "restart_pending", False):
+                        await socket.close(code=1012)
+                        break
                     event = DeviceEvent.model_validate_json(raw)
                     if event.event == "session_start":
                         if identity != "admin" and event.device_id != identity:
@@ -519,4 +528,6 @@ def create_app(settings=None, provider=None):
             if session and not session.stopped:
                 await service.detach(session, socket)
 
+    from .browser_api import install_browser
+    install_browser(app, settings, config_store, restart_callback)
     return app

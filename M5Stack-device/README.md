@@ -2,6 +2,15 @@
 
 Et modulært Arduino/PlatformIO-startprosjekt for M5Stack FIRE med M5Unified/M5GFX.
 
+## Ny testkandidat: 1.2.0-rc1
+
+Denne kandidaten legger til direkte Home, verifisert HTTPS/WSS, signert OTA og
+uavhengig redningsapp. Den er ikke fysisk sluttverifisert. Se
+[recovery/README.md](recovery/README.md) for bygg, migrering og redning, og
+[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for aktuelle byggbevis.
+Første installasjon krever den signerte engangspakken med full USB-backup.
+Vanlig PlatformIO Upload er sperret fordi den ville erstattet recovery-bootloaderen.
+
 ## Første OS-milepæl
 
 - Hovedmeny med Apps og Settings
@@ -20,21 +29,24 @@ Et modulært Arduino/PlatformIO-startprosjekt for M5Stack FIRE med M5Unified/M5G
 
 ## Bygg og last opp
 
-Åpne prosjektmappen i VS Code med PlatformIO installert. Velg miljøet `m5stack-fire` og bruk **Build** eller **Upload**. Prosjektet bruker 115200 baud for Serial Monitor.
+Åpne prosjektmappen i VS Code med PlatformIO installert. Velg miljøet
+`m5stack-fire-ble` og bruk **Build**. Prosjektet bruker 115200 baud for Serial Monitor.
 
 Fra terminal kan det bygges slik:
 
 ```text
-pio run -e m5stack-fire
-pio run -e m5stack-fire -t upload
+pio run -e m5stack-fire-ble
+pio run -e fire-recovery
 ```
 
-Hvis porten ikke oppdages automatisk, kan `upload_port = COMx` legges til i miljøet i [platformio.ini](platformio.ini). GPIO16/17 brukes ikke av prosjektet.
+Engangsmigreringen krever eksplisitt COM-port i USB-verktøyet. GPIO16/17 er
+reservert til FIREs PSRAM og skal ikke brukes av apper.
 
 ## Maskinvaremerknader
 
 - M5Unified initialiserer LCD, IMU, høyttaler og mikrofon. Hvis en komponent ikke finnes eller ikke støttes, viser testen dette i stedet for å stoppe programmet.
-- RGB-testen bruker de ti FIRE-LED-ene på GPIO15 via FastLED.
+- RGB-testen bruker de ti FIRE-LED-ene på GPIO15. BLE-bygget sender hele
+  rammen med RMT-maskinvaren; ingen timingbasert avbruddsstans brukes.
 - SD-testen bruker standard FIRE SPI-pinner og CS GPIO4.
 - Mikrofonopptaket er tre sekunder i 16 kHz mono og legges i PSRAM når det er tilgjengelig. Opptaket spilles av med M5Unified etterpå.
 - FIRE bruker IP5306 som strømstyring. Den rapporterer batterinivå i grove trinn (0/25/50/75/100 %) og har ingen spenningsmåling via dette grensesnittet. System-skjermen viser `CHG` eller `BAT`. IP5306 kan rapportere lading via direkte USB, mens M5GO-docken kan lade via base/pogo-pinner uten at samme ladesignal blir synlig for ESP32-en.
@@ -48,9 +60,13 @@ Kontrollkanalen bruker en ikke-blokkerende WebSocket-klient med eksplisitte
 bygge- og kjørebekreftelser.
 
 Lua-apper kjører lokalt fra SD-kortet under `/apps/<id>/`. Runtime-en bruker
-Lua 5.4-kjernen med begrensede `fire.display`, `fire.buttons`, `fire.rgb`,
-`fire.imu` og `fire.time`-tjenester. Apper får ikke direkte tilgang til GPIO,
-filer, radio, flash eller OS-innstillinger. Pakker må være ZIP_STORED og
+Lua 5.4-kjernen med begrensede, OS-eide tjenester og eksplisitte maskinvareressurser.
+Gjeldende tillatelser og grenser står i
+[`LUA_API.md`](../M5Stack-backend/docs/LUA_API.md) og
+[`HARDWARE_API_HANDOFF.md`](../M5Stack-backend/docs/HARDWARE_API_HANDOFF.md).
+Apper får ikke vilkårlig tilgang til maskinvare, filer, radio, flash eller
+OS-innstillinger. Rå native `.bin`-apper kan ikke omgå signert OS-oppdatering.
+Pakker må være ZIP_STORED og
 kontrolleres med ytre SHA256, manifest, Lua API-versjon og payload-checksum før
 de aktiveres.
 
@@ -83,11 +99,12 @@ Reproduserbart bygg:
 
 ```text
 pio run -e m5stack-fire-ble
-pio run -e m5stack-fire-ble -t upload --upload-port COM3
 pio device monitor -p COM3 -b 115200
 ```
 
-Siste firmwareartefakt ligger i repo-roten under `firmware/fire-os-1.1.bin`.
-Metadata og SHA-256 ligger i `firmware/index.json`. Full fysisk end-to-end-
+Historisk firmwareartefakt ligger under `firmware/fire-os-1.1.bin`.
+Den nye kandidaten bruker schema 2 og en egen signert migreringspakke;
+schema 1 eller en løs eldre binær godtas ikke av den nye OTA-flyten.
+Full fysisk end-to-end-
 test mot aktiv backend, failed-build retry og Vardensaga callback-timing er
 fortsatt eksplisitt merket som ikke verifisert i `BACKEND_HANDOFF.md`.

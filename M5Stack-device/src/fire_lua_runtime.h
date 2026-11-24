@@ -138,6 +138,7 @@ class FireLuaRuntime {
   size_t memoryUsed() const { return memoryUsed_; }
   uint32_t elapsedMs() const;
   uint32_t lastCallbackUs() const { return lastCallbackUs_; }
+  uint32_t maxCallbackUs() const { return maxCallbackUs_; }
   uint32_t frameCount() const { return frames_; }
   size_t sourceBytes() const { return sourceBytes_; }
   static const char* hardwareApiContract();
@@ -158,6 +159,7 @@ class FireLuaRuntime {
   uint32_t callbackBudgetMs_ = kMaxCallbackMs;
   uint64_t callbackStartedUs_ = 0;
   uint32_t lastCallbackUs_ = 0;
+  uint32_t maxCallbackUs_ = 0;
   uint32_t frames_ = 0;
   size_t sourceBytes_ = 0;
   enum class CallbackPhase : uint8_t { None, Load, Init, Update, OnButton };
@@ -238,7 +240,7 @@ class FireLuaRuntime {
 
   bool callVoid(const char* function, int argumentCount = 0);
   void beginCallback(CallbackPhase phase, uint32_t budgetMs);
-  void finishCallback();
+  bool finishCallback();
   bool fail(const String& message);
   void clearState();
 };

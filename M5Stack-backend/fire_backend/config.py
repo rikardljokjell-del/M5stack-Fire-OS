@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     fire_audio_enabled: bool = False
     fire_speech_enabled: bool = True
     fire_desktop_enabled: bool = False
+    fire_public_enabled: bool = False
+    fire_web_origin: str = ""
+    fire_device_host: str = ""
+    fire_access_issuer: str = ""
+    fire_access_audience: str = ""
     fire_reverse_host: str = ""
     fire_reverse_port: int = Field(default=8766, ge=1024, le=65535)
     fire_reverse_device_id: str = Field(default="", pattern=r"^(?:[a-z0-9][a-z0-9_-]{0,63})?$")
@@ -57,6 +62,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def lan_requires_token(self):
+        if self.fire_public_enabled:
+            from urllib.parse import urlsplit
+            origin = urlsplit(self.fire_web_origin)
+            issuer = urlsplit(self.fire_access_issuer)
+            if (origin.scheme != "https" or not origin.hostname or origin.path or origin.query or origin.fragment
+                    or origin.username or origin.port not in (None, 443)
+                    or not re.fullmatch(r"[a-z0-9][a-z0-9.-]+", self.fire_device_host)
+                    or self.fire_device_host == origin.hostname
+                    or issuer.scheme != "https" or not issuer.hostname
+                    or not issuer.hostname.endswith(".cloudflareaccess.com")
+                    or issuer.path or issuer.query or issuer.fragment or issuer.username
+                    or issuer.port not in (None, 443) or not self.fire_access_audience
+                    or len(self.fire_backend_token.get_secret_value()) < 24):
+                raise ValueError("Public access requires distinct HTTPS browser/device hosts, Cloudflare issuer/audience and admin credential")
         try:
             tokens = self.device_tokens()
             if not isinstance(tokens, dict) or any(

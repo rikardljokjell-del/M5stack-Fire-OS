@@ -104,11 +104,12 @@ void FireLuaRuntime::instructionHook(lua_State* state, lua_Debug*) {
   auto* runtime = self(state);
   if (!runtime) return;
   runtime->instructions_ += 1000;
-  if (runtime->instructions_ > kMaxInstructionsPerCallback ||
-      (runtime->callbackBudgetMs_ > 0 &&
+  if (runtime->instructions_ > kMaxInstructionsPerCallback)
+    luaL_error(state, "app instruction budget exceeded");
+  if (runtime->callbackBudgetMs_ > 0 &&
        esp_timer_get_time() - runtime->callbackStartedUs_ >
-           static_cast<int64_t>(runtime->callbackBudgetMs_) * 1000)) {
-    luaL_error(state, "app callback budget exceeded");
+           static_cast<int64_t>(runtime->callbackBudgetMs_) * 1000) {
+    luaL_error(state, "app callback time budget exceeded");
   }
 }
 
@@ -549,6 +550,7 @@ void FireLuaRuntime::removeUnsafeGlobals(lua_State* state) {
 
 bool FireLuaRuntime::begin(const Host& host) {
   stop();
+  instructions_ = lastCallbackUs_ = maxCallbackUs_ = 0;
   host_ = host;
   lua_ = lua_newstate(allocator, this);
   if (!lua_) return fail("Lua memory unavailable");
@@ -577,7 +579,6 @@ void FireLuaRuntime::setMaxRuntimeMs(uint32_t maxRuntimeMs) {
 void FireLuaRuntime::beginCallback(CallbackPhase phase, uint32_t budgetMs) {
   callbackPhase_ = phase;
   callbackBudgetMs_ = budgetMs;
-  instructions_ = 0;
   frameStarted_ = millis();
   callbackStartedUs_ = static_cast<uint64_t>(esp_timer_get_time());
   ioCalls_ = 0;
@@ -585,11 +586,20 @@ void FireLuaRuntime::beginCallback(CallbackPhase phase, uint32_t budgetMs) {
   textBytes_ = 0;
 }
 
-void FireLuaRuntime::finishCallback() {
+bool FireLuaRuntime::finishCallback() {
   const int64_t elapsed = esp_timer_get_time() -
                           static_cast<int64_t>(callbackStartedUs_);
   const int64_t bounded = elapsed < 0 ? 0 : elapsed > 60000000 ? 60000000 : elapsed;
   lastCallbackUs_ = static_cast<uint32_t>(bounded);
+  maxCallbackUs_ = max(maxCallbackUs_, lastCallbackUs_);
+  // A native host call does not execute Lua instructions. Check again after
+  // return, even when fewer than 1000 further VM instructions were executed.
+  if (callbackBudgetMs_ && elapsed > static_cast<int64_t>(callbackBudgetMs_) * 1000) {
+    error_ = "app callback time budget exceeded";
+    state_ = State::Failed;
+    return false;
+  }
+  return true;
 }
 
 uint32_t FireLuaRuntime::elapsedMs() const {
@@ -630,7 +640,7 @@ bool FireLuaRuntime::loadSource(const uint8_t* source, size_t length) {
     finishCallback();
     return fail(String("Lua init chunk: ") + lua_tostring(lua_, -1));
   }
-  finishCallback();
+  if (!finishCallback()) return false;
   lua_getglobal(lua_, "init");
   if (!lua_isfunction(lua_, -1)) {
     lua_pop(lua_, 1);
@@ -641,7 +651,7 @@ bool FireLuaRuntime::loadSource(const uint8_t* source, size_t length) {
     finishCallback();
     return fail(String("Lua init: ") + lua_tostring(lua_, -1));
   }
-  finishCallback();
+  if (!finishCallback()) return false;
   lua_getglobal(lua_, "update");
   const bool hasUpdate = lua_isfunction(lua_, -1);
   lua_pop(lua_, 1);
@@ -679,7 +689,6 @@ void FireLuaRuntime::stop() {
   maxRuntimeMs_ = kDefaultRuntimeMs;
   callbackBudgetMs_ = kMaxCallbackMs;
   callbackStartedUs_ = 0;
-  lastCallbackUs_ = 0;
   frames_ = 0;
   sourceBytes_ = 0;
   callbackPhase_ = CallbackPhase::None;
@@ -702,8 +711,7 @@ bool FireLuaRuntime::callVoid(const char* function, int argumentCount) {
     finishCallback();
     return fail(String("Lua ") + function + ": " + lua_tostring(lua_, -1));
   }
-  finishCallback();
-  return true;
+  return finishCallback();
 }
 
 bool FireLuaRuntime::update(uint32_t dtMs) {
@@ -731,8 +739,7 @@ bool FireLuaRuntime::button(const char* name, const char* action) {
     finishCallback();
     return fail(String("Lua on_button: ") + lua_tostring(lua_, -1));
   }
-  finishCallback();
-  return true;
+  return finishCallback();
 }
 
 bool FireLuaRuntime::fail(const String& message) {
