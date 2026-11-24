@@ -108,6 +108,20 @@ komponentenes separate opphav står i utgivelsesbeviset.
 - [Maskinlesbart bevis med komponentkilder og målinger](firmware/fire-os-1.2.0-rc5-evidence.json),
   [device-rapport](M5Stack-device/DELIVERY_REPORT.md) og [firmwareoversikt](firmware/README.md).
 
+RC5 ble publisert på main `2e9f0f35634638655d143533bfc7227a8c8f2af2`.
+Alle seks offentlige filer — katalog, normalbinær, USB-arkiv, bevis,
+kontrollsummer og arkivert RC2-katalog — ble deretter hentet fra GitHub og
+sammenlignet byte for byte med leveransen. Alle svarte HTTP 200 med korrekt
+Content-Length, uten omdirigering eller komprimering. Begge nedlastede
+katalogsignaturer bestod kontroll. Dette er PC-bevis; fysisk nedlasting og
+oppdatering direkte fra FIRE gjenstår.
+
+Den eksisterende produksjonsbackenden svarte deretter HTTP 200 på både
+health og nettsiden. Etter naturlig utløp av femminutters mellomlagring viste
+firmwareoversikten **RC5 → RC2 → RC1 → 1.1**, `read_only=true` og tom
+katalogfeil. Ingen omstart, innstillingsendring, betalt AI-kall eller
+COM-tilgang ble brukt i denne sluttkontrollen.
+
 Cloudflare CLI 2026.11.2 er også hentet og SHA256-/versjonskontrollert lokalt.
 `scripts/cloudflare.ps1` bruker den lokale kopien. Ingen konto, tunnel, DNS
 eller offentlig tilgang er opprettet; det krever brukerens valgte oppsett.
