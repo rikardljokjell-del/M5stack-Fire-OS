@@ -538,3 +538,71 @@ reset loop. The complete physical crash -> repair -> download -> install
 receipt -> run flow, reconnect and double-press matrix still require a real
 crashing Lua package and running backend; they are not claimed as physically
 verified.
+
+## Build continuation, boot recovery and completion notices
+
+Implemented against `M5Stack-backend/docs/DEVICE_BUILD_CONTINUATION_HANDOFF.md`.
+
+- Boot/Auto backend sync now remains demanded until `build_jobs` is received or
+  a bounded 15-second timeout expires. Missing job responses are retried up to
+  two times with a five-second request timeout; the UI loop is never blocked.
+- `build_jobs` uses a string-aware bounded JSON object scanner, preserves job
+  error text/diagnostics/resume flags, and prefers a running/building job over
+  a queued job when several jobs are returned.
+- Same-job continuation preserves the build ID and accepts the valid
+  `failed -> queued -> building -> ready` sequence. Old failure text is cleared
+  when the same job resumes. `build_resumed` accepts both top-level
+  `progress_percent` and nested progress objects.
+- Resume counts reject older delayed events. A selected job does not suppress a
+  ready notice for another build ID; notices are deduplicated after local ACK.
+- The completion notice is rendered once as a final overlay on every normal OS
+  screen with `Åpne`/`Avbryt` hints. It does not auto-install or auto-run.
+
+Verification on 2026-11-23:
+
+- Firmware commit: `03bf3e2`.
+- `m5stack-fire-ble` build: passed; RAM 1.4%, flash 29.5%, binary
+  1,937,584 bytes.
+- Firmware SHA-256:
+  `B16B114807D892F88F016610BE91FDC7CEBA5C8605843FD1DEB44CFBA52001F0`.
+- Flash to COM3 at 921600 baud: passed; esptool hash verification passed.
+- Serial boot: passed through `M5.begin OK`, `RGB OK`, `SD OK`, `buttons OK`,
+  `DateTime OK`, `settings OK` and `FIRE OS started`; no reset loop observed.
+- Not physically verified in this run: live backend job during reboot, failed
+  job retry with same build ID, two simultaneous jobs, offline completion
+  notice, and `Åpne`/install/Run/Avbryt against a running backend. These remain
+  explicit physical acceptance tests and are not reported as complete.
+
+## Durable repair continuation and callback timing
+
+Implemented against the latest additions in
+`M5Stack-backend/docs/DEVICE_BUILD_CONTINUATION_HANDOFF.md`.
+
+- `repair_id`, repair status, phase, proposal/package identity, version,
+  message and progress are persisted locally and restored after reboot.
+- AI Developer exposes `Resume feilretting` for an active persisted repair.
+  Opening it requests status for the same `repair_id`; it does not call
+  `app_repair_prepare` again.
+- In the APP ERROR view, A minimizes without cancelling. C sends the additive
+  `app_repair_cancel` event only after `repair_cancel_v1` is advertised. The
+  pending cancel is retried after reconnect, and a cancelled repair is removed
+  from the local resume cache. No package is deleted or auto-run.
+- The device now clears a stale repair error when the same build resumes and
+  reports the runtime callback phase from the Lua runtime (`update`, `init`,
+  `on_button` or `load`) in the existing bounded DeviceDiagnostics fields.
+
+Verification on 2026-11-23:
+
+- Firmware commit: `c42143f`.
+- `m5stack-fire-ble` build: passed; RAM 1.4%, flash 29.5%, binary
+  1,941,568 bytes.
+- Firmware SHA-256:
+  `A596DB0C7B572C0DA1C2E102E209C789244E325E555A9D15551297CDB532EF67`.
+- Flash to COM3 at 921600 baud: passed; esptool hash verification passed.
+- Serial boot: passed through `M5.begin OK`, `RGB OK`, `SD OK`, `buttons OK`,
+  `DateTime OK`, `settings OK` and `FIRE OS started`; missing repair NVS keys
+  no longer produce boot log errors.
+- The Vardensaga package was not physically available for reproduction in this
+  run. Callback timing is instrumented and reported through existing fields,
+  but no claim is made that Vardensaga or the full repair-cancel/reconnect/
+  reboot matrix has been physically verified against a running backend.

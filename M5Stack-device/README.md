@@ -57,3 +57,37 @@ de aktiveres.
 Fysisk WebSocket-, tale- og installasjonsflyt må fortsatt verifiseres mot en
 kjørende PC-backend og enheten. PlatformIO-builden er kontrollert med miljøet
 `m5stack-fire-ble`.
+
+## Overtakelsesstatus for ny device-agent
+
+Kildekoden i denne mappen er den komplette FIRE OS-deviceimplementasjonen.
+Backendkoden ligger separat i `../M5Stack-backend/`; backendendringer skal
+ikke blandes inn i device-commits.
+
+Siste device-arbeid omfatter FIRE OS-meny og Settings, Wi-Fi/Bluetooth/
+Backend-sync, sikker boot, Lua 5.4-app-runtime, hardware-API-er,
+appinstallasjon, App Manager, File Explorer, firmwarehåndtering og AI
+Developer med WebSocket/Reverse TCP, lyd, bakgrunnsbygg, reboot/reconnect-
+Resume, failed-build retry og Lua-appreparasjon.
+
+Viktig dokumentasjon:
+
+- `BACKEND_HANDOFF.md`: implementasjonsstatus, firmwarehash og faktisk fysisk
+  verifisering.
+- `../M5Stack-backend/docs/DEVICE_BUILD_CONTINUATION_HANDOFF.md`: gjeldende
+  build-, boot- og repair-kontrakt.
+- `../M5Stack-backend/docs/PROTOCOL-v0.2.md`: device/backend-protokoll.
+- `../M5Stack-backend/docs/HARDWARE_API_HANDOFF.md`: Lua hardware-API.
+
+Reproduserbart bygg:
+
+```text
+pio run -e m5stack-fire-ble
+pio run -e m5stack-fire-ble -t upload --upload-port COM3
+pio device monitor -p COM3 -b 115200
+```
+
+Siste firmwareartefakt ligger i repo-roten under `firmware/fire-os-1.1.bin`.
+Metadata og SHA-256 ligger i `firmware/index.json`. Full fysisk end-to-end-
+test mot aktiv backend, failed-build retry og Vardensaga callback-timing er
+fortsatt eksplisitt merket som ikke verifisert i `BACKEND_HANDOFF.md`.

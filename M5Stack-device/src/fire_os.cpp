@@ -366,6 +366,45 @@ String jsonStringField(const String& json, const char* key) {
   return value;
 }
 
+int jsonObjectEnd(const String& json, int start) {
+  if (start < 0 || start >= json.length() || json[start] != '{') return -1;
+  int depth = 0;
+  bool inString = false;
+  bool escaped = false;
+  for (int index = start; index < json.length(); ++index) {
+    const char character = json[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character == '\\') {
+        escaped = true;
+      } else if (character == '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character == '"') {
+      inString = true;
+    } else if (character == '{') {
+      ++depth;
+    } else if (character == '}' && --depth == 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+String clipUtf8(const String& input, size_t maxBytes) {
+  if (input.length() <= maxBytes) return input;
+  if (maxBytes <= 3) return input.substring(0, maxBytes);
+  size_t end = maxBytes - 3;
+  while (end > 0 &&
+         (static_cast<uint8_t>(input[end]) & 0xC0U) == 0x80U) {
+    --end;
+  }
+  return input.substring(0, end) + "...";
+}
+
 String jsonEscapeField(const String& input) {
   String output;
   output.reserve(input.length() + 4);
@@ -473,6 +512,31 @@ bool jsonBoolField(const String& json, const char* key, bool fallback = false) {
   if (json.startsWith("true", start)) return true;
   if (json.startsWith("false", start)) return false;
   return fallback;
+}
+
+int buildProgressField(const String& json) {
+  int progress = jsonIntField(json, "progress_percent", -1);
+  if (progress >= 0) return progress;
+  const int progressAt = json.indexOf("\"progress\"");
+  if (progressAt < 0) return 0;
+  const int colon = json.indexOf(':', progressAt);
+  if (colon < 0) return 0;
+  int valueAt = colon + 1;
+  while (valueAt < json.length() &&
+         (json[valueAt] == ' ' || json[valueAt] == '\t' ||
+          json[valueAt] == '\r' || json[valueAt] == '\n'))
+    ++valueAt;
+  if (valueAt < json.length() && json[valueAt] == '{') {
+    const int end = jsonObjectEnd(json, valueAt);
+    if (end > valueAt) {
+      const String object = json.substring(valueAt, end + 1);
+      progress = jsonIntField(object, "percent", -1);
+      if (progress < 0) progress = jsonIntField(object, "progress", -1);
+      if (progress >= 0) return progress;
+    }
+    return 0;
+  }
+  return json.substring(valueAt).toInt();
 }
 
 bool luaManifestServiceMask(const String& manifest, uint32_t& mask) {
@@ -1090,6 +1154,15 @@ void FireOS::begin() {
   if (wifiTimeSync_) {
     startTimeSync();
   }
+  backendBootPending_ = backendClient_ && backendClient_->configured() &&
+                        wifiMode_ != 2 && backendMode_ != 2;
+  backendBootAttempted_ = false;
+  backendBootAttemptedAt_ = 0;
+  backendBootSyncWaiting_ = backendBootPending_;
+  backendBootJobsReceived_ = false;
+  backendBootSyncStartedAt_ = millis();
+  buildJobsRetryCount_ = 0;
+  buildJobsRequestAt_ = 0;
 
   M5.Display.setRotation(0);
   M5.Display.setBrightness(brightness_);
@@ -1213,6 +1286,7 @@ void FireOS::update() {
   serviceLuaHardwareJobs();
   reverseTransport_.service(WiFi.status() == WL_CONNECTED &&
                             backendClient_ && backendClient_->configured());
+  updateTimeSync();
   updateBackend();
   updateAiAudio();
   updateDebugTests();
@@ -1222,7 +1296,6 @@ void FireOS::update() {
     firmwareStorage_->service(WiFi.status() == WL_CONNECTED, sdReady_);
   if (githubFirmware_)
     githubFirmware_->service(WiFi.status() == WL_CONNECTED, sdReady_);
-  updateTimeSync();
   manageDisplayPower();
   if (carouselAnimating_) {
     const uint32_t now = millis();
@@ -1353,6 +1426,7 @@ void FireOS::loadSettings() {
   wifiMode_ = preferences.isKey("wifi_mode")
                   ? min<uint8_t>(preferences.getUChar("wifi_mode", 0), 2)
                   : (legacyWifi ? 1 : 0);
+  backendMode_ = min<uint8_t>(preferences.getUChar("backend_mode", 0), 2);
   wifiTimeSync_ = preferences.getBool("wifi_time_sync", false);
   timeSyncLast_ = preferences.getString("wifi_time_last", "");
   wifiEnabled_ = false;
@@ -1381,6 +1455,45 @@ void FireOS::loadSettings() {
   pendingDiagnosticJson_ = preferences.isKey("diag_meta")
                                ? preferences.getString("diag_meta", "")
                                : String();
+  luaRepairId_ = preferences.isKey("repair_id")
+                     ? preferences.getString("repair_id", "")
+                     : String();
+  luaRepairProjectId_ = preferences.isKey("repair_project")
+                            ? preferences.getString("repair_project", "")
+                            : String();
+  luaRepairProposalId_ = preferences.isKey("repair_proposal")
+                             ? preferences.getString("repair_proposal", "")
+                             : String();
+  luaRepairReadyPackageId_ = preferences.isKey("repair_package")
+                                ? preferences.getString("repair_package", "")
+                                : String();
+  luaRepairReadyVersion_ = preferences.isKey("repair_version")
+                              ? preferences.getString("repair_version", "")
+                              : String();
+  luaRepairStatus_ = preferences.isKey("repair_status")
+                         ? preferences.getString("repair_status", "")
+                         : String();
+  luaRepairPhase_ = preferences.isKey("repair_phase")
+                        ? preferences.getString("repair_phase", "")
+                        : String();
+  luaRepairMessage_ = preferences.isKey("repair_message")
+                          ? preferences.getString("repair_message", "")
+                          : String();
+  luaRepairProgress_ = preferences.getUChar("repair_progress", 0);
+  if (pendingDiagnosticAppId_.length() > 0) {
+    luaErrorAppId_ = pendingDiagnosticAppId_;
+    luaErrorPackageId_ = pendingDiagnosticPackageId_;
+    luaErrorCode_ = pendingDiagnosticErrorCode_;
+    luaAppError_ = pendingDiagnosticMessage_;
+    luaErrorDiagnostics_ = pendingDiagnosticJson_;
+  }
+  const bool persistedRepair = luaRepairId_.length() > 0 &&
+                               luaRepairStatus_ != "cancelled" &&
+                               luaRepairStatus_ != "failed" &&
+                               luaRepairStatus_ != "unavailable";
+  luaRepairRequested_ = persistedRepair;
+  luaRepairPrepareSent_ = persistedRepair;
+  luaRepairStatusQueryPending_ = persistedRepair;
   loadSavedWifiNetworks();
   bluetoothEnabled_ = false;
   bluetoothMode_ = 0;
@@ -1435,6 +1548,7 @@ void FireOS::saveSettings() {
   preferences.putUChar("volume_step", volumeStep_);
   preferences.putBool("wifi", wifiEnabled_);
   preferences.putUChar("wifi_mode", wifiMode_);
+  preferences.putUChar("backend_mode", backendMode_);
   preferences.putBool("wifi_time_sync", wifiTimeSync_);
   preferences.putString("wifi_time_last", timeSyncLast_);
   preferences.putString("wifi_ssid", wifiSsid_);
@@ -4045,6 +4159,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       const String noticeBuild = buildNoticeId_;
       if (backendClient_ && noticeBuild.length() > 0)
         backendClient_->buildNoticeAck(noticeBuild, "open");
+      buildNoticeAckedId_ = noticeBuild;
       buildNoticeActive_ = false;
       open(Screen::AiDeveloper);
       aiBuildId_ = noticeBuild;
@@ -4054,6 +4169,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
     } else if (index == 2) {
       if (backendClient_ && buildNoticeId_.length() > 0)
         backendClient_->buildNoticeAck(buildNoticeId_, "dismiss");
+      buildNoticeAckedId_ = buildNoticeId_;
       buildNoticeActive_ = false;
     }
     return;
@@ -4261,6 +4377,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
         helpPage_ = 0;
         open(Screen::Help);
       } else if (settingsIndex_ == 14) {
+        detailIndex_ = 0;
         open(Screen::AiApi);
       } else if (settingsIndex_ == 15) {
         powerIndex_ = 0;
@@ -4919,8 +5036,13 @@ void FireOS::handleHelpButton(uint8_t index) {
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
   if (aiProjectPickerActive_) {
-    const uint8_t resumeOffset = aiResumeAvailable_ ? 1 : 0;
-    const uint8_t itemCount = luaAppCount_ + 4 + resumeOffset;
+    const bool repairResume = luaRepairId_.length() > 0 &&
+                              luaRepairStatus_ != "cancelled" &&
+                              luaRepairStatus_ != "failed" &&
+                              luaRepairStatus_ != "unavailable";
+    const uint8_t repairOffset = repairResume ? 1 : 0;
+    const uint8_t buildOffset = aiResumeAvailable_ ? 1 : 0;
+    const uint8_t itemCount = luaAppCount_ + 4 + repairOffset + buildOffset;
     if (index == 0) {
       aiProjectSelection_ =
           (aiProjectSelection_ + itemCount - 1) % itemCount;
@@ -4928,16 +5050,38 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiProjectSelection_ = (aiProjectSelection_ + 1) % itemCount;
     } else if (aiProjectSelection_ == itemCount - 1) {
       back();
-    } else if (aiResumeAvailable_ && aiProjectSelection_ == 0) {
+    } else if (repairResume && aiProjectSelection_ == 0) {
+      aiProjectPickerActive_ = false;
+      if (luaErrorAppId_.length() == 0)
+        luaErrorAppId_ = pendingDiagnosticAppId_;
+      if (luaAppError_.length() == 0)
+        luaAppError_ = luaRepairMessage_.length() > 0 ? luaRepairMessage_
+                                                      : "Repair pending";
+      previousScreen_ = Screen::AiDeveloper;
+      screen_ = Screen::LuaApp;
+      requestLuaRepairStatus();
+    } else if (aiResumeAvailable_ && aiProjectSelection_ == repairOffset) {
       aiProjectPickerActive_ = false;
       aiBuildId_ = buildJobIds_[0];
-      backgroundBuildActive_ = true;
-      aiWorkflowState_ = 4;
-      aiWorkflowText_ = "Resume bygging";
+      aiBuildErrorCode_ = buildJobErrorCodes_[0];
+      aiBuildErrorStatus_ = buildJobErrors_[0];
+      aiBuildDiagnosticMessage_ = buildJobDiagnostics_[0];
+      aiBuildCanResume_ = buildJobCanResume_[0];
+      aiBuildCanRetry_ = buildJobCanRetry_[0];
+      aiBuildResumePending_ = buildJobStatuses_[0] == "failed";
+      aiBuildRetryPending_ = false;
+      const bool failedJob = buildJobStatuses_[0] == "failed";
+      backgroundBuildActive_ = !failedJob;
+      aiWorkflowState_ = failedJob ? 2 : 4;
+      aiDeveloperMode_ = 2;
+      aiWorkflowText_ = failedJob && aiBuildErrorStatus_.length() > 0
+                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            : "Resume bygging";
+      aiAssistantText_ = aiBuildErrorStatus_;
       if (backendClient_) backendClient_->buildResume(aiBuildId_);
     } else {
       aiProjectPickerActive_ = false;
-      const uint8_t selection = aiProjectSelection_ - resumeOffset;
+      const uint8_t selection = aiProjectSelection_ - repairOffset - buildOffset;
       if (selection == 0) {
         aiVoiceTestMode_ = false;
         aiConversationMode_ = 1;
@@ -5001,6 +5145,17 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiProjectOffset_ = aiProjectSelection_ - 4;
     return;
   }
+  if (aiBuildResumePending_ && index == 2 &&
+      (aiWorkflowState_ == 2 || aiWorkflowState_ == 3)) {
+    // Leave the preserved failure view without cancelling the backend job.
+    back();
+    return;
+  }
+  if (aiBuildResumePending_ && index == 1 && aiWorkflowState_ == 2) {
+    aiWorkflowText_ = "VENTER PÅ RETRY-PLAN";
+    redrawRequested_ = true;
+    return;
+  }
   if (index == 1) {
     if (aiWorkflowState_ == 0) {
       if (aiVoiceTestMode_ || (backendClient_ && backendClient_->sessionReady())) {
@@ -5049,6 +5204,10 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
   } else if (index == 0 && aiWorkflowState_ == 3) {
     if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
       if (backendClient_->confirmBuild(aiProposalId_)) {
+        aiBuildRetryPending_ = aiBuildResumePending_;
+        aiBuildResumePending_ = false;
+        aiBuildErrorStatus_ = "";
+        aiBuildDiagnosticMessage_ = "";
         aiWorkflowText_ = "SENDING BUILD";
         aiWorkflowState_ = 4;
         aiDeveloperMode_ = 2;
@@ -5792,9 +5951,13 @@ void FireOS::stopLuaApp(const String& reason) {
                         reason == "user_exit";
   const bool requestedStop = reason == "remote_stop" || reason == "rollback";
   const bool osNavigation = reason == "os_navigation";
-  const String stoppedDiagnostics = luaDiagnosticsJson(
-      reason == "runtime_limit" ? "stop"
-                                 : (userExit ? "stop" : "update"));
+  const char* diagnosticPhase = "update";
+  if (reason == "runtime_limit" || userExit) {
+    diagnosticPhase = "stop";
+  } else if (luaRuntime_ && luaRuntime_->lastPhase()) {
+    diagnosticPhase = luaRuntime_->lastPhase();
+  }
+  const String stoppedDiagnostics = luaDiagnosticsJson(diagnosticPhase);
   const bool failedRun = reason.length() > 0 && !userExit && !requestedStop &&
                          !osNavigation;
   if (luaAppActive_ && reason.length() > 0) {
@@ -6050,6 +6213,30 @@ void FireOS::serviceLuaRepair() {
   }
 }
 
+void FireOS::cancelLuaRepair() {
+  if (!repairCancelSupported_) {
+    luaRepairMessage_ = "Cancel not supported";
+    return;
+  }
+  if (luaRepairId_.length() == 0) {
+    luaRepairRequested_ = false;
+    luaRepairPrepareSent_ = false;
+    luaRepairBuildConfirmed_ = false;
+    luaRepairConfirmPending_ = false;
+    luaRepairCancelPending_ = false;
+    luaRepairStatus_ = "cancelled";
+    luaRepairPhase_ = "cancelled";
+    luaRepairMessage_ = "Byggingen ble avbrutt";
+    goToBootApp();
+    return;
+  }
+  luaRepairCancelPending_ = true;
+  luaRepairMessage_ = "Avbryter bygging";
+  luaRepairStatus_ = "cancelling";
+  luaRepairPhase_ = "cancelling";
+  goToBootApp();
+}
+
 void FireOS::handleLuaRepairStatus(const String& message) {
   const String incomingRepair = jsonStringField(message, "repair_id");
   const String incomingApp = jsonStringField(message, "app_id");
@@ -6072,11 +6259,21 @@ void FireOS::handleLuaRepairStatus(const String& message) {
   luaRepairProgress_ = static_cast<uint8_t>(
       constrain(jsonIntField(message, "progress"), 0, 100));
   luaRepairPrepareSent_ = true;
+  if (luaRepairId_.length() > 0) {
+    preferences.putString("repair_id", luaRepairId_);
+    preferences.putString("repair_project", luaRepairProjectId_);
+    preferences.putString("repair_proposal", luaRepairProposalId_);
+    preferences.putString("repair_package", luaRepairReadyPackageId_);
+    preferences.putString("repair_version", luaRepairReadyVersion_);
+    preferences.putString("repair_status", luaRepairStatus_);
+    preferences.putString("repair_phase", luaRepairPhase_);
+    preferences.putString("repair_message", luaRepairMessage_.substring(0, 240));
+    preferences.putUChar("repair_progress", luaRepairProgress_);
+  }
 
   const bool repairQueued = luaRepairStatus_ == "queued" ||
                             luaRepairStatus_ == "building" ||
-                            luaRepairStatus_ == "testing" ||
-                            luaRepairStatus_ == "ready";
+                            luaRepairStatus_ == "testing";
   if (repairQueued) {
     luaRepairConfirmPending_ = false;
     luaRepairBuildConfirmed_ = true;
@@ -6098,11 +6295,27 @@ void FireOS::handleLuaRepairStatus(const String& message) {
                             : "Fixed app ready to run";
   } else if (luaRepairStatus_ == "failed" ||
              luaRepairStatus_ == "interrupted" ||
-             luaRepairStatus_ == "unavailable") {
+             luaRepairStatus_ == "unavailable" ||
+             luaRepairStatus_ == "cancelled") {
     luaRepairRequested_ = false;
     luaRepairPrepareSent_ = false;
     luaRepairBuildConfirmed_ = false;
     luaRepairConfirmPending_ = false;
+    luaRepairCancelPending_ = false;
+    preferences.remove("repair_id");
+    preferences.remove("repair_project");
+    preferences.remove("repair_proposal");
+    preferences.remove("repair_package");
+    preferences.remove("repair_version");
+    preferences.remove("repair_status");
+    preferences.remove("repair_phase");
+    preferences.remove("repair_message");
+    preferences.remove("repair_progress");
+    luaRepairId_ = "";
+    luaRepairProjectId_ = "";
+    luaRepairProposalId_ = "";
+    luaRepairReadyPackageId_ = "";
+    luaRepairReadyVersion_ = "";
   }
 }
 
@@ -6126,12 +6339,23 @@ void FireOS::startLuaRepairRun() {
 }
 
 void FireOS::handleLuaErrorButton(uint8_t index) {
-  if (index == 2) {
-    back();
+  const bool repairActive = luaRepairRequested_ || luaRepairId_.length() > 0 ||
+                            luaRepairStatus_ == "ready" ||
+                            luaRepairStatus_ == "building" ||
+                            luaRepairStatus_ == "testing" ||
+                            luaRepairStatus_ == "queued" ||
+                            luaRepairStatus_ == "awaiting_confirmation";
+  if (index == 0) {
+    // Minimize only. The PC-owned repair continues in the background.
+    goToBootApp();
     return;
   }
-  if (index == 0) {
-    luaErrorAction_ = 0;
+  if (repairActive && index == 2) {
+    cancelLuaRepair();
+    return;
+  }
+  if (index == 2) {
+    back();
     return;
   }
   if (luaErrorAction_ == 0) {
@@ -6142,56 +6366,217 @@ void FireOS::handleLuaErrorButton(uint8_t index) {
 }
 
 void FireOS::requestBackgroundBuildJobs() {
-  if (!backgroundBuildsSupported_ || buildJobsRequested_ || !backendClient_ ||
+  if ((!backgroundBuildsSupported_ && !failedBuildResumeSupported_) ||
+      buildJobsRequested_ || !backendClient_ ||
       !backendClient_->sessionReady())
     return;
-  if (backendClient_->buildJobs(0)) buildJobsRequested_ = true;
+  if (backendClient_->buildJobs(0)) {
+    buildJobsRequested_ = true;
+    buildJobsRequestAt_ = millis();
+  }
 }
 
 void FireOS::handleBackgroundBuildMessage(const String& message) {
   const String type = jsonStringField(message, "type");
   const String buildId = jsonStringField(message, "build_id");
-  if (buildId.length() > 0) aiBuildId_ = buildId;
   if (type == "build_jobs") {
+    buildJobsRequested_ = false;
+    buildJobsRequestAt_ = 0;
+    buildJobsRetryCount_ = 0;
+    backendBootJobsReceived_ = true;
+    backendBootSyncWaiting_ = false;
+    backendBootPending_ = false;
     buildJobCount_ = 0;
+    bool activeBuildFound = false;
+    uint8_t activeBuildPriority = 0;
     const int jobsAt = message.indexOf("\"jobs\"");
-    int cursor = jobsAt >= 0 ? message.indexOf('{', jobsAt) : -1;
+    const int jobsArray = jobsAt >= 0 ? message.indexOf('[', jobsAt) : -1;
+    int cursor = jobsArray >= 0 ? jobsArray + 1 : -1;
     while (cursor >= 0 && buildJobCount_ < 4) {
-      const int end = message.indexOf('}', cursor);
+      while (cursor < message.length() &&
+             (message[cursor] == ' ' || message[cursor] == '\t' ||
+              message[cursor] == '\r' || message[cursor] == '\n' ||
+              message[cursor] == ','))
+        ++cursor;
+      if (cursor >= message.length() || message[cursor] != '{') break;
+      const int end = jsonObjectEnd(message, cursor);
       if (end < 0) break;
       const String item = message.substring(cursor, end + 1);
-      buildJobIds_[buildJobCount_] = jsonStringField(item, "build_id");
-      buildJobNames_[buildJobCount_] = jsonStringField(item, "name");
-      buildJobStatuses_[buildJobCount_] = jsonStringField(item, "status");
-      if (buildJobIds_[buildJobCount_].length() > 0) ++buildJobCount_;
-      cursor = message.indexOf('{', end + 1);
+      const uint8_t jobIndex = buildJobCount_;
+      buildJobIds_[jobIndex] = jsonStringField(item, "build_id");
+      buildJobNames_[jobIndex] = jsonStringField(item, "name");
+      buildJobStatuses_[jobIndex] = jsonStringField(item, "status");
+      buildJobErrors_[jobIndex] = jsonStringField(item, "error_status");
+      if (buildJobErrors_[jobIndex].length() == 0)
+        buildJobErrors_[jobIndex] = jsonStringField(item, "message");
+      buildJobErrorCodes_[jobIndex] = jsonStringField(item, "error_code");
+      buildJobDiagnostics_[jobIndex] =
+          jsonStringField(item, "diagnostic_message");
+      buildJobCanResume_[jobIndex] =
+          jsonBoolField(item, "can_resume", false);
+      if (item.indexOf("\"can_resume\"") < 0)
+        buildJobCanResume_[jobIndex] =
+            jsonBoolField(item, "can_open", false);
+      buildJobCanRetry_[jobIndex] = jsonBoolField(item, "can_retry", false);
+      const String phase = jsonStringField(item, "phase");
+      const String messageText = jsonStringField(item, "message");
+      const bool finished = buildJobStatuses_[jobIndex] == "ready" ||
+                            buildJobStatuses_[jobIndex] == "failed" ||
+                            buildJobStatuses_[jobIndex] == "cancelled";
+      const bool active = buildJobIds_[jobIndex].length() > 0 &&
+                          !finished &&
+                          (buildJobStatuses_[jobIndex].length() > 0 ||
+                           phase.length() > 0);
+      const uint8_t activePriority =
+          (buildJobStatuses_[jobIndex] == "queued" && phase == "queued")
+              ? 1
+              : 2;
+      if (active && (!activeBuildFound || activePriority > activeBuildPriority)) {
+        activeBuildFound = true;
+        activeBuildPriority = activePriority;
+        aiBuildId_ = buildJobIds_[jobIndex];
+        aiBuildResumeCount_ = jsonIntField(item, "resume_count", -1);
+        buildProgress_ = static_cast<uint8_t>(
+            constrain(buildProgressField(item), 0, 100));
+        aiBuildProgress_ = buildProgress_;
+        buildPhase_ = phase;
+        buildStatusMessage_ = messageText;
+        aiWorkflowText_ = messageText.length() > 0
+                              ? messageText
+                              : phase.length() > 0 ? phase : "Bygger...";
+        aiWorkflowState_ = 4;
+        aiDeveloperMode_ = 2;
+        backgroundBuildActive_ = true;
+        aiBuildResumePending_ = false;
+        aiBuildRetryPending_ = false;
+      }
+      if (buildJobIds_[jobIndex].length() > 0) ++buildJobCount_;
+      cursor = end + 1;
+    }
+    if (!activeBuildFound && !buildNoticeActive_) {
+      backgroundBuildActive_ = false;
     }
     aiResumeAvailable_ = buildJobCount_ > 0;
     redrawRequested_ = true;
     return;
   }
+  const bool buildEvent = type == "build_progress" ||
+                          type == "build_job_status" ||
+                          type == "build_resumed" ||
+                          type == "build_ready_notice" ||
+                          type == "build_backgrounded" ||
+                          type == "build_cancelled";
+  const bool independentNotice = type == "build_ready_notice";
+  if (buildEvent && buildId.length() > 0 && aiBuildId_.length() > 0 &&
+      buildId != aiBuildId_ && !aiBuildRetryPending_ && !independentNotice) {
+    // A delayed event from the previous failed job must not overwrite a
+    // newer retry job after reconnect.
+    return;
+  }
+  if (buildEvent && buildId.length() > 0 && buildId != aiBuildId_ &&
+      !independentNotice) {
+    aiBuildErrorCode_ = "";
+    aiBuildErrorStatus_ = "";
+    aiBuildDiagnosticMessage_ = "";
+    aiBuildResumePending_ = false;
+    aiBuildCanResume_ = false;
+    aiBuildCanRetry_ = false;
+    aiBuildResumeCount_ = -1;
+    aiBuildId_ = buildId;
+    aiBuildRetryPending_ = false;
+  }
+  const int incomingResumeCount =
+      buildEvent ? jsonIntField(message, "resume_count", -1) : -1;
+  if (buildEvent && buildId.length() > 0 && buildId == aiBuildId_ &&
+      incomingResumeCount >= 0 && aiBuildResumeCount_ >= 0 &&
+      incomingResumeCount < aiBuildResumeCount_) {
+    return;
+  }
+  if (incomingResumeCount >= 0) aiBuildResumeCount_ = incomingResumeCount;
   if (type == "build_progress" || type == "build_job_status" ||
       type == "build_resumed") {
+    const String status = jsonStringField(message, "status");
+    const String state = jsonStringField(message, "state");
+    const String incomingPhase = jsonStringField(message, "phase");
+    const String errorCode = jsonStringField(message, "error_code");
+    const String errorStatus = jsonStringField(message, "error_status");
+    const String diagnostic = jsonStringField(message, "diagnostic_message");
+    if (errorCode.length() > 0) aiBuildErrorCode_ = errorCode;
+    if (errorStatus.length() > 0) aiBuildErrorStatus_ = errorStatus;
+    else if (status == "failed") {
+      const String fallback = jsonStringField(message, "message");
+      if (fallback.length() > 0) aiBuildErrorStatus_ = fallback;
+    }
+    if (diagnostic.length() > 0) aiBuildDiagnosticMessage_ = diagnostic;
+    if (message.indexOf("\"can_resume\"") >= 0)
+      aiBuildCanResume_ = jsonBoolField(message, "can_resume", false);
+    if (message.indexOf("\"can_retry\"") >= 0)
+      aiBuildCanRetry_ = jsonBoolField(message, "can_retry", false);
+
+    if (type == "build_resumed" &&
+        (state == "awaiting_build_confirmation" ||
+         state == "awaiting_confirmation")) {
+      buildProgress_ = static_cast<uint8_t>(
+          constrain(buildProgressField(message), 0, 100));
+      buildPhase_ = incomingPhase;
+      buildStatusMessage_ = jsonStringField(message, "message");
+      aiBuildProgress_ = buildProgress_;
+      aiProposalId_ = jsonStringField(message, "proposal_id");
+      aiBuildResumePending_ = true;
+      aiBuildRetryPending_ = false;
+      backgroundBuildActive_ = false;
+      aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 2;
+      aiDeveloperMode_ = 2;
+      aiWorkflowText_ = aiBuildErrorStatus_.length() > 0
+                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            : "READY TO RETRY";
+      aiAssistantText_ = aiBuildErrorStatus_;
+      redrawRequested_ = true;
+      return;
+    }
+    if (status != "failed" && incomingPhase != "failed") {
+      // The same build_id continues after retry. Its old failure is history,
+      // not the current status shown on FIRE.
+      aiBuildErrorCode_ = "";
+      aiBuildErrorStatus_ = "";
+      aiBuildDiagnosticMessage_ = "";
+      aiBuildCanResume_ = false;
+      aiBuildCanRetry_ = false;
+      aiBuildResumePending_ = false;
+      aiBuildRetryPending_ = false;
+      aiAssistantText_ = "";
+    }
     buildProgress_ = static_cast<uint8_t>(
-        constrain(jsonIntField(message, "progress"), 0, 100));
-    buildPhase_ = jsonStringField(message, "phase");
+        constrain(buildProgressField(message), 0, 100));
+    buildPhase_ = incomingPhase;
     buildStatusMessage_ = jsonStringField(message, "message");
     aiBuildProgress_ = buildProgress_;
     aiWorkflowText_ = buildStatusMessage_.length() > 0
                           ? buildStatusMessage_
                           : buildPhase_;
-    if (buildPhase_ == "ready" || jsonStringField(message, "status") == "ready") {
+    if (buildPhase_ == "ready" || status == "ready") {
       aiWorkflowState_ = 5;
       backgroundBuildActive_ = false;
-    } else if (buildPhase_ == "failed" ||
-               jsonStringField(message, "status") == "failed") {
+      aiBuildResumePending_ = false;
+    } else if (buildPhase_ == "failed" || status == "failed") {
       aiWorkflowState_ = 0;
+      aiDeveloperMode_ = 2;
       backgroundBuildActive_ = false;
+      aiResumeAvailable_ = true;
+      aiBuildResumePending_ = false;
+      aiWorkflowText_ = aiBuildErrorStatus_.length() > 0
+                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            : "BUILD FAILED";
     } else {
       aiWorkflowState_ = 4;
+      aiDeveloperMode_ = 2;
       backgroundBuildActive_ = true;
     }
   } else if (type == "build_ready_notice") {
+    if (buildId.length() > 0 && buildId == buildNoticeAckedId_) {
+      redrawRequested_ = true;
+      return;
+    }
     buildNoticeActive_ = true;
     buildNoticeId_ = buildId;
     buildNoticeName_ = jsonStringField(message, "name");
@@ -6204,6 +6589,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
   } else if (type == "build_cancelled") {
     backgroundBuildActive_ = false;
     aiWorkflowState_ = 0;
+    aiBuildRetryPending_ = false;
     aiWorkflowText_ = "Bygging avbrutt";
   } else if (type == "event_ack") {
     const String event = jsonStringField(message, "event");
@@ -6234,8 +6620,41 @@ void FireOS::updateLuaApp() {
   if (luaAppActive_) flushLuaRgb();
 }
 
+void FireOS::applyBackendMode() {
+  if (backendMode_ == 2) {
+    backendBootPending_ = false;
+    backendBootSyncWaiting_ = false;
+    backendBootAttempted_ = true;
+    if (backendClient_ && backendClient_->active()) backendClient_->disconnect();
+    backendStatus_ = "Backend sync off";
+    return;
+  }
+  if (backendClient_ && backendClient_->configured() && wifiMode_ != 2) {
+    // Auto performs one lightweight boot check; On remains demanded by
+    // updateBackend() until the user changes the policy again.
+    backendBootPending_ = true;
+    backendBootSyncWaiting_ = true;
+    backendBootSyncStartedAt_ = millis();
+    backendBootJobsReceived_ = false;
+    backendBootAttempted_ = false;
+  }
+}
+
 void FireOS::updateBackend() {
   if (!backendClient_) return;
+  if (backendMode_ == 2 || wifiMode_ == 2) {
+    if (backendClient_->active()) backendClient_->disconnect();
+    backendBootPending_ = false;
+    backendBootSyncWaiting_ = false;
+    return;
+  }
+  if ((backendBootPending_ || backendBootSyncWaiting_) && timeSyncPending_) {
+    if (backendClient_->active()) backendClient_->disconnect();
+    return;
+  }
+  const bool bootCheck = backendBootPending_ &&
+                         WiFi.status() == WL_CONNECTED &&
+                         !backendBootAttempted_;
   const bool backendDemand = screen_ == Screen::AiDeveloper ||
                               screen_ == Screen::AiApi ||
                               screen_ == Screen::LuaApp ||
@@ -6244,6 +6663,9 @@ void FireOS::updateBackend() {
                               screen_ == Screen::Firmware ||
                                luaRepairRequested_ || luaRepairId_.length() > 0 ||
                                backgroundBuildActive_ || buildNoticeActive_ ||
+                               (backendMode_ == 1 && backendClient_->configured()) ||
+                               backendBootPending_ || backendBootSyncWaiting_ ||
+                               bootCheck ||
                               (packageManager_ && packageManager_->busy()) ||
                               (firmwareStorage_ && firmwareStorage_->busy()) ||
                               (githubFirmware_ && githubFirmware_->busy()) ||
@@ -6260,6 +6682,34 @@ void FireOS::updateBackend() {
     requestWifi(true);
   }
   backendClient_->service(WiFi.status() == WL_CONNECTED);
+  if (luaRepairCancelPending_ && backendClient_->sessionReady() &&
+      luaRepairId_.length() > 0) {
+    if (backendClient_->appRepairCancel(luaRepairId_)) {
+      luaRepairCancelPending_ = false;
+      luaRepairMessage_ = "Venter på avbrytelse";
+    }
+  }
+  if (buildJobsRequested_ && buildJobsRequestAt_ != 0 &&
+      millis() - buildJobsRequestAt_ >= 5000) {
+    buildJobsRequested_ = false;
+    buildJobsRequestAt_ = 0;
+    if (buildJobsRetryCount_ < 2 && backendClient_->sessionReady()) {
+      ++buildJobsRetryCount_;
+      requestBackgroundBuildJobs();
+    }
+  }
+  if (bootCheck) {
+    backendBootAttempted_ = true;
+    backendBootAttemptedAt_ = millis();
+  }
+  if (backendBootSyncWaiting_ &&
+      millis() - backendBootSyncStartedAt_ >= 15000) {
+    // A boot sync must not hold the UI forever when the PC is offline or the
+    // backend does not answer build_jobs. Normal screen demand can reconnect.
+    backendBootSyncWaiting_ = false;
+    backendBootPending_ = false;
+    buildJobsRequested_ = false;
+  }
   serviceLuaRepair();
   if (luaRepairStatusQueryPending_ && backendClient_->sessionReady()) {
     if (backendClient_->appRepairStatus(luaRepairId_, luaErrorAppId_))
@@ -6273,8 +6723,14 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   os->backendStatus_ = status;
-  if (connected) os->buildJobsRequested_ = false;
-  else os->buildJobsRequested_ = false;
+  if (connected) {
+    os->buildJobsRequested_ = false;
+    os->buildJobsRequestAt_ = 0;
+    os->buildJobsRetryCount_ = 0;
+  } else {
+    os->buildJobsRequested_ = false;
+    os->buildJobsRequestAt_ = 0;
+  }
   if (connected && os->luaRepairId_.length() > 0)
     os->luaRepairStatusQueryPending_ = true;
   if (!connected && os->luaRepairPrepareSent_ &&
@@ -6408,7 +6864,11 @@ void FireOS::handleBackendMessage(const String& message) {
   const String type = jsonStringField(message, "type");
   if (type == "session_started") {
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
-    if (backgroundBuildsSupported_) requestBackgroundBuildJobs();
+    failedBuildResumeSupported_ =
+        message.indexOf("failed_build_resume_v1") >= 0;
+    repairCancelSupported_ = message.indexOf("repair_cancel_v1") >= 0;
+    if (backgroundBuildsSupported_ || failedBuildResumeSupported_)
+      requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
     const String mode = jsonStringField(message, "conversation_mode");
@@ -6419,7 +6879,11 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "session_snapshot") {
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
-    if (backgroundBuildsSupported_) requestBackgroundBuildJobs();
+    failedBuildResumeSupported_ =
+        message.indexOf("failed_build_resume_v1") >= 0;
+    repairCancelSupported_ = message.indexOf("repair_cancel_v1") >= 0;
+    if (backgroundBuildsSupported_ || failedBuildResumeSupported_)
+      requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
     const String mode = jsonStringField(message, "conversation_mode");
@@ -6568,10 +7032,15 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "build_proposal") {
     aiProposalId_ = jsonStringField(message, "proposal_id");
-    aiAssistantText_ = jsonStringField(message, "summary");
+    const String summary = jsonStringField(message, "summary");
+    aiAssistantText_ = summary.length() > 0 ? summary : aiBuildErrorStatus_;
     aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 0;
     aiDeveloperMode_ = 2;
-    aiWorkflowText_ = "READY TO BUILD";
+    aiWorkflowText_ = aiBuildResumePending_
+                          ? (aiBuildErrorStatus_.length() > 0
+                                 ? clipUtf8(aiBuildErrorStatus_, 28)
+                                 : "READY TO RETRY")
+                          : "READY TO BUILD";
     return;
   }
   if (type == "build_progress") {
@@ -7035,14 +7504,18 @@ void FireOS::handleAiApiButton(uint8_t index) {
     if (index == 1 || index == 2) stopWifiSetup();
     return;
   }
-  constexpr uint8_t kCount = 3;
+  constexpr uint8_t kCount = 4;
   if (index == 0) {
     detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
   } else if (index == 2) {
     detailIndex_ = (detailIndex_ + 1) % kCount;
   } else if (detailIndex_ == 0) {
+    backendMode_ = (backendMode_ + 1) % 3;
+    saveSettings();
+    applyBackendMode();
+  } else if (detailIndex_ == 1) {
     startAiApiSetup();
-  } else if (detailIndex_ == 2) {
+  } else if (detailIndex_ == 3) {
     back();
   }
 }
@@ -7553,6 +8026,10 @@ void FireOS::updateWifiState() {
       wifiConnectActive_ = false;
       wifiStatus_ = "Connection failed: check password/network (" +
                     wifiFailureReason(status) + ")";
+      if (backendBootPending_ && wifiMode_ == 0) {
+        backendBootPending_ = false;
+        backendBootAttempted_ = true;
+      }
     }
   }
 
@@ -7592,6 +8069,7 @@ void FireOS::updateTimeSync() {
     if (wifiSsid_.length() == 0) {
       timeSyncPending_ = false;
       timeSyncConfigured_ = false;
+      backendBootPending_ = false;
       timeSyncStatus_ = "Connect Wi-Fi to sync time";
       return;
     }
@@ -7607,6 +8085,7 @@ void FireOS::updateTimeSync() {
     if (millis() - timeSyncStarted_ > 45000) {
       timeSyncPending_ = false;
       timeSyncConfigured_ = false;
+      backendBootPending_ = false;
       timeSyncStatus_ = "Wi-Fi time sync timed out";
     }
     return;
@@ -7633,6 +8112,7 @@ void FireOS::updateTimeSync() {
         timeSyncStatus_ = "Last Wi-Fi sync: " + timeSyncLast_;
         timeSyncPending_ = false;
         timeSyncConfigured_ = false;
+        backendBootPending_ = false;
         if (wifiMode_ == 0) requestWifi(false);
       }
     }
@@ -7640,6 +8120,7 @@ void FireOS::updateTimeSync() {
     timeSyncStatus_ = "Connect to Wi-Fi for time sync";
     timeSyncPending_ = false;
     timeSyncConfigured_ = false;
+    backendBootPending_ = false;
   }
 }
 
@@ -7784,7 +8265,7 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
                               backendDeviceId_, kFirmwareVersion);
     backendStatus_ = backendClient_->status();
   }
-  if (wifiMode_ != 2 && backendHost_.length() > 0 &&
+  if (wifiMode_ != 2 && backendMode_ != 2 && backendHost_.length() > 0 &&
       backendToken_.length() >= 24) {
     // Backend configuration is an explicit app dependency. Auto mode may
     // keep Wi-Fi off at boot, so request it when the backend is configured.
@@ -8286,16 +8767,21 @@ void FireOS::handleQuickButton(uint8_t index) {
         saveSettings();
         break;
       case 4:
-        open(Screen::FileExplorer);
+        backendMode_ = (backendMode_ + 1) % 3;
+        saveSettings();
+        applyBackendMode();
         break;
       case 5:
+        open(Screen::FileExplorer);
+        break;
+      case 6:
         powerActionIndex_ = 0;
         open(Screen::PowerActions);
         break;
-      case 6:
+      case 7:
         open(Screen::Settings);
         break;
-      case 7:
+      case 8:
         screen_ = previousScreen_;
         break;
     }
@@ -8505,6 +8991,26 @@ void FireOS::resetSettings() {
   mainVisible_[4] = true;
   wifiEnabled_ = false;
   wifiMode_ = 0;
+  backendMode_ = 0;
+  backendBootPending_ = false;
+  backendBootAttempted_ = false;
+  backendBootSyncWaiting_ = false;
+  backendBootJobsReceived_ = false;
+  backendBootSyncStartedAt_ = 0;
+  buildJobsRetryCount_ = 0;
+  buildJobsRequestAt_ = 0;
+  luaRepairId_ = "";
+  luaRepairProjectId_ = "";
+  luaRepairProposalId_ = "";
+  luaRepairReadyPackageId_ = "";
+  luaRepairReadyVersion_ = "";
+  luaRepairStatus_ = "";
+  luaRepairPhase_ = "";
+  luaRepairMessage_ = "";
+  luaRepairRequested_ = false;
+  luaRepairPrepareSent_ = false;
+  luaRepairCancelPending_ = false;
+  if (backendClient_ && backendClient_->active()) backendClient_->disconnect();
   wifiTimeSync_ = false;
   timeSyncPending_ = false;
   timeSyncConfigured_ = false;
@@ -8588,6 +9094,7 @@ void FireOS::draw() {
   } else {
     drawScreen(screen_);
   }
+  if (buildNoticeActive_) drawBuildNoticeOverlay();
   ui.pushSprite(0, 0);
   if (screen_ == Screen::FileExplorer && sdImagePreview_) {
     M5.Display.fillRect(0, 28, 320, 188, kBg);
@@ -8708,13 +9215,38 @@ void FireOS::drawStatusBar(const char* title) {
                                    wifiSetupActive_)
                                       ? 1
                                       : 0;
+  const bool backendConnected = backendClient_ &&
+                                backendClient_->sessionReady();
+  const bool backendWorking = !backendConnected && backendClient_ &&
+                              backendClient_->configured() &&
+                              backendMode_ != 2 && wifiMode_ != 2 &&
+                              (backendClient_->active() || backendBootPending_ ||
+                               (backendMode_ == 1 &&
+                                WiFi.status() == WL_CONNECTED));
+  drawBackendIcon(232, 5, backendConnected ? 2 : backendWorking ? 1 : 0);
   drawWifiIcon(252, 6, wifiState);
-  drawBluetoothIcon(276, 5, bluetoothEnabled_);
+  bool bluetoothConnected = bluetoothConnected_;
+#ifdef FIRE_OS_BLE
+  bluetoothConnected = bluetoothConnected || bluetoothPeripheralConnected;
+#endif
+  const uint8_t bluetoothState =
+      bluetoothConnected
+          ? 2
+          : (bluetoothScanInProgress_ || bluetoothBootInitPending_)
+                ? 1
+                : (bluetoothEnabled_ || bluetoothRadioReady) ? 3 : 0;
+  drawBluetoothIcon(276, 5, bluetoothState);
   drawBatteryIcon(298, 6, batteryLevel(), batteryCharging());
   if (backgroundBuildActive_) {
     ui.drawRoundRect(112, 23, 96, 3, 1, kMuted);
     ui.fillRoundRect(113, 24,
                      max<int>(2, 94 * buildProgress_ / 100), 1, 1, kCyan);
+  } else if (luaRepairRequested_ && luaRepairProgress_ > 0 &&
+             luaRepairStatus_ != "ready") {
+    ui.drawRoundRect(112, 23, 96, 3, 1, kMuted);
+    ui.fillRoundRect(113, 24,
+                     max<int>(2, 94 * luaRepairProgress_ / 100), 1, 1,
+                     kOrange);
   } else if (buildNoticeActive_) {
     ui.fillCircle(160, 24, 2, kGreen);
   }
@@ -8788,7 +9320,7 @@ void FireOS::drawMain() {
     ui.fillCircle(firstDot + position * 10, 207, 3,
                   item == mainIndex_ ? color : kMuted);
   }
-  if (buildNoticeActive_) {
+  if (false && buildNoticeActive_) {
     ui.fillRoundRect(22, 48, 276, 112, 10, kPanel);
     ui.setTextDatum(MC_DATUM);
     drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
@@ -8800,7 +9332,7 @@ void FireOS::drawMain() {
     drawText(238, 140, "Avbryt", kMuted, 1, kPanel);
     ui.setTextDatum(TL_DATUM);
   }
-  if (buildNoticeActive_) {
+  if (false && buildNoticeActive_) {
     ui.fillRoundRect(22, 48, 276, 112, 10, kPanel);
     ui.setTextDatum(MC_DATUM);
     drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
@@ -8813,6 +9345,19 @@ void FireOS::drawMain() {
     ui.setTextDatum(TL_DATUM);
   }
   drawFooter("Previous", "Open", "Next");
+}
+
+void FireOS::drawBuildNoticeOverlay() {
+  ui.fillRoundRect(22, 48, 276, 112, 10, kPanel);
+  ui.setTextDatum(MC_DATUM);
+  drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
+  String notice = buildNoticeName_.length() > 0 ? buildNoticeName_ : "Ny versjon";
+  drawText(160, 88, clipUtf8(notice, 28), kText, 1, kPanel);
+  drawText(160, 108, clipUtf8(buildNoticeMessage_, 28), kMuted, 1, kPanel);
+  drawText(82, 140, "Åpne", kCyan, 1, kPanel);
+  drawText(238, 140, "Avbryt", kMuted, 1, kPanel);
+  ui.setTextDatum(TL_DATUM);
+  drawFooter("", "Åpne", "Avbryt");
 }
 
 void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size) {
@@ -8955,7 +9500,7 @@ void FireOS::drawSettings() {
       "Date / Time",       "Display & Sound", "Wi-Fi",       "Bluetooth",
       "File Explorer",     "Boot",             "Firmware",      "Menu Layout",
       "Shortcuts",         "App Manager",      "Debug",         "System Info",
-      "Help",              "Factory Reset",    "AI settings",   "Power",
+      "Help",              "Factory Reset",    "Backend / AI",   "Power",
       "Back",
   };
   drawStatusBar("Settings");
@@ -9590,28 +10135,51 @@ void FireOS::drawAiDeveloper() {
       backendColor = kCyan;
     }
     drawText(160, 59, backendLabel, backendColor, 1, kPanel);
-    const uint8_t resumeOffset = aiResumeAvailable_ ? 1 : 0;
-    const uint8_t itemCount = luaAppCount_ + 4 + resumeOffset;
+    const bool repairResume = luaRepairId_.length() > 0 &&
+                              luaRepairStatus_ != "cancelled" &&
+                              luaRepairStatus_ != "failed" &&
+                              luaRepairStatus_ != "unavailable";
+    const uint8_t repairOffset = repairResume ? 1 : 0;
+    const uint8_t buildOffset = aiResumeAvailable_ ? 1 : 0;
+    const uint8_t itemCount = luaAppCount_ + 4 + repairOffset + buildOffset;
     const uint8_t visible = min<uint8_t>(6, itemCount - aiProjectOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = aiProjectOffset_ + row;
       const bool selected = item == aiProjectSelection_;
       const int y = 72 + row * 22;
       if (selected) ui.fillRoundRect(20, y - 4, 280, 19, 4, kCyan);
-       String label = aiResumeAvailable_ && item == 0
-                          ? "Resume"
-                          : item == resumeOffset
-                              ? "Chat only"
-                              : item == resumeOffset + 1
-                                  ? "Voice test"
-                                  : item == resumeOffset + 2
-                                      ? "New app"
-                                      : item == itemCount - 1
-                                          ? "Back"
-                                          : luaAppNames_[item - resumeOffset - 3];
+       String label = repairResume && item == 0
+                          ? "Resume feilretting"
+                          : aiResumeAvailable_ && item == repairOffset
+                              ? "Resume bygging"
+                              : item == repairOffset + buildOffset
+                                  ? "Chat only"
+                                  : item == repairOffset + buildOffset + 1
+                                      ? "Voice test"
+                                      : item == repairOffset + buildOffset + 2
+                                          ? "New app"
+                                          : item == itemCount - 1
+                                              ? "Back"
+                                              : luaAppNames_[item - repairOffset - buildOffset - 3];
       if (label.length() > 28) label = label.substring(0, 25) + "...";
       drawText(160, y, label, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);
+    }
+    const uint8_t buildResumeItem = repairOffset;
+    if (aiResumeAvailable_ && aiProjectSelection_ == buildResumeItem &&
+        buildJobCount_ > 0) {
+      const bool failed = buildJobStatuses_[0] == "failed";
+      String reason = buildJobErrors_[0];
+      if (reason.length() == 0) reason = buildJobStatuses_[0];
+      ui.setTextDatum(MC_DATUM);
+      drawText(160, 202,
+               failed ? "FEIL: " + clipUtf8(reason, 25) :
+                        clipUtf8(reason, 30),
+               failed ? kOrange : kMuted, 1, kPanel);
+      String id = buildJobIds_[0];
+      if (id.length() > 14) id = id.substring(0, 14);
+      drawText(160, 216, "ID " + id, kMuted, 1, kPanel);
+      ui.setTextDatum(TL_DATUM);
     }
     drawText(48, 232, "PREV", kMuted, 1, TFT_BLACK);
     drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
@@ -9763,8 +10331,10 @@ void FireOS::drawAiDeveloper() {
   static const char* const workflowLabels[] = {
       "PRESS CENTER TO LISTEN", "LISTENING", "UNDERSTANDING...",
       "READY TO BUILD", "BUILDING...", "READY TO RUN", "RUNNING"};
+  const bool failedBuildView = aiBuildResumePending_ &&
+                               aiBuildErrorStatus_.length() > 0;
   ui.setTextDatum(MC_DATUM);
-  drawText(cx, 190, stateLabel, kMuted, 1, TFT_BLACK);
+  if (!failedBuildView) drawText(cx, 190, stateLabel, kMuted, 1, TFT_BLACK);
   String workflowLabel = aiWorkflowText_.length() > 0
                              ? aiWorkflowText_
                              : workflowLabels[min<uint8_t>(aiWorkflowState_, 6)];
@@ -9777,7 +10347,13 @@ void FireOS::drawAiDeveloper() {
     workflowLabel = "CHAT - PRESS B TO SPEAK";
   workflowLabel = compactStatusText(workflowLabel);
   drawText(cx, 207, workflowLabel, kMuted, 1, TFT_BLACK);
-  if (aiAssistantText_.length() > 0) {
+  if (failedBuildView) {
+    drawText(cx, 174, clipUtf8(aiBuildErrorStatus_, 30), kOrange, 1,
+             TFT_BLACK);
+    if (aiBuildDiagnosticMessage_.length() > 0)
+      drawText(cx, 190, clipUtf8(aiBuildDiagnosticMessage_, 34), kMuted, 1,
+               TFT_BLACK);
+  } else if (aiAssistantText_.length() > 0) {
     String assistant = aiAssistantText_;
     if (assistant.length() > 34) assistant = assistant.substring(0, 31) + "...";
     drawText(cx, 174, assistant, 0xBDF7, 1, TFT_BLACK);
@@ -9794,12 +10370,23 @@ void FireOS::drawAiDeveloper() {
   if (aiWorkflowState_ == 1) {
     centerHint = "FINISH";
   } else if (aiWorkflowState_ == 2) {
-    centerHint = "NEW TALK";
-    rightHint = "CANCEL";
+    if (aiBuildResumePending_) {
+      centerHint = "VENTER...";
+      rightHint = "TILBAKE";
+    } else {
+      centerHint = "NEW TALK";
+      rightHint = "CANCEL";
+    }
   } else if (aiWorkflowState_ == 3) {
-    leftHint = "BUILD";
-    centerHint = "ADD TALK";
-    rightHint = "CANCEL";
+    if (aiBuildResumePending_) {
+      leftHint = "PRØV IGJEN";
+      centerHint = "ENDRE";
+      rightHint = "TILBAKE";
+    } else {
+      leftHint = "BUILD";
+      centerHint = "ADD TALK";
+      rightHint = "CANCEL";
+    }
   } else if (aiWorkflowState_ == 4) {
     leftHint = backgroundBuildsSupported_ ? "BACKGROUND" : "WAIT";
     centerHint = "SETTINGS";
@@ -9835,7 +10422,7 @@ void FireOS::drawAiDeveloper() {
 }
 
 void FireOS::drawAiApi() {
-  drawStatusBar("AI settings");
+  drawStatusBar("Backend / AI");
   if (wifiSetupActive_) {
     ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
     drawText(24, 41, "Backend config", TFT_WHITE, 2, kPanel);
@@ -9851,10 +10438,14 @@ void FireOS::drawAiApi() {
     drawFooter("", "Close", "");
     return;
   }
-  drawRow(0, "Backend config", detailIndex_ == 0);
-  drawRow(1, "Connection status", detailIndex_ == 1,
+  const String backendModeLabel = backendMode_ == 0
+                                      ? "Auto"
+                                      : backendMode_ == 1 ? "On" : "Off";
+  drawRow(0, "Mode", detailIndex_ == 0, backendModeLabel);
+  drawRow(1, "Backend config", detailIndex_ == 1);
+  drawRow(2, "Connection status", detailIndex_ == 2,
           backendClient_ && backendClient_->configured() ? backendStatus_ : "Not configured");
-  drawRow(2, "Back", detailIndex_ == 2);
+  drawRow(3, "Back", detailIndex_ == 3);
   String host = backendHost_.length() > 0 ? backendHost_ : "not set";
   if (host.length() > 24) host = host.substring(0, 21) + "...";
   String device = backendDeviceId_.length() > 0 ? backendDeviceId_ : "not set";
@@ -9938,9 +10529,15 @@ void FireOS::drawLuaApp() {
                TFT_BLACK);
     else
       drawText(160, 207, "B starter valgt handling", kMuted, 1, TFT_BLACK);
-    drawText(46, 232, "HOME", kMuted, 1, TFT_BLACK);
+    const bool repairActive = luaRepairRequested_ || luaRepairId_.length() > 0 ||
+                              luaRepairStatus_ == "ready" ||
+                              luaRepairStatus_ == "building" ||
+                              luaRepairStatus_ == "testing" ||
+                              luaRepairStatus_ == "queued" ||
+                              luaRepairStatus_ == "awaiting_confirmation";
+    drawText(46, 232, "MINIMER", kMuted, 1, TFT_BLACK);
     drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
-    drawText(274, 232, "BACK", kMuted, 1, TFT_BLACK);
+    drawText(274, 232, "AVBRYT", kMuted, 1, TFT_BLACK);
     ui.setTextDatum(TL_DATUM);
   }
 }
@@ -10207,13 +10804,31 @@ void FireOS::drawQuickSettings() {
     bluetoothValue = "Disconnected (" + bluetoothModeLabel + ")";
   }
   if (bluetoothValue.length() > 21) bluetoothValue = bluetoothValue.substring(0, 21);
+  const String backendModeLabel = backendMode_ == 0
+                                      ? "Auto"
+                                      : backendMode_ == 1 ? "On" : "Off";
+  String backendValue;
+  if (backendMode_ == 2) {
+    backendValue = "Off";
+  } else if (wifiMode_ == 2) {
+    backendValue = "Wi-Fi Off";
+  } else if (backendClient_ && backendClient_->sessionReady()) {
+    backendValue = "Connected (" + backendModeLabel + ")";
+  } else if (backendClient_ && backendClient_->active()) {
+    backendValue = "Connecting (" + backendModeLabel + ")";
+  } else {
+    backendValue = "Disconnected (" + backendModeLabel + ")";
+  }
+  if (backendValue.length() > 21) backendValue = backendValue.substring(0, 21);
   const String sdValue = sdStorageLabel();
 
   auto drawQuickRow = [&](uint8_t item, const String& label,
                           const String& value) {
-    const int y = 105 + static_cast<int>(item - 2) * 17;
+    // Keep the first status row below the volume control. The seven compact
+    // rows then fit inside the panel without touching the footer.
+    const int y = 114 + static_cast<int>(item - 2) * 13;
     const bool selected = quickIndex_ == item;
-    if (selected) ui.fillRoundRect(10, y - 3, 300, 18, 5, kCyan);
+    if (selected) ui.fillRoundRect(10, y - 2, 300, 15, 5, kCyan);
     drawText(20, y + 1, label, selected ? kBg : kText, 1,
              selected ? kCyan : kPanel);
     if (value.length() > 0) {
@@ -10225,10 +10840,11 @@ void FireOS::drawQuickSettings() {
   };
   drawQuickRow(2, "Wi-Fi", wifiValue);
   drawQuickRow(3, "Bluetooth", bluetoothValue);
-  drawQuickRow(4, "SD card", sdValue);
-  drawQuickRow(5, "Power", "");
-  drawQuickRow(6, "All settings", "");
-  drawQuickRow(7, "Back", "");
+  drawQuickRow(4, "Backend-sync", backendValue);
+  drawQuickRow(5, "SD card", sdValue);
+  drawQuickRow(6, "Power", "");
+  drawQuickRow(7, "All settings", "");
+  drawQuickRow(8, "Back", "");
   drawFooter("", quickEditing_ ? "Adjust" : "Select", "");
 }
 
@@ -10620,6 +11236,18 @@ void FireOS::refreshBatteryStatus() const {
       M5.Power.isCharging() == m5::Power_Class::is_charging;
 }
 
+void FireOS::drawBackendIcon(int32_t x, int32_t y, uint8_t state) {
+  uint16_t color = kMuted;
+  if (state == 2) {
+    color = kGreen;
+  } else if (state == 1) {
+    color = (millis() / 250) % 2 == 0 ? kGreen : kMuted;
+  }
+  ui.drawCircle(x + 4, y + 6, 3, color);
+  ui.drawCircle(x + 10, y + 6, 3, color);
+  ui.drawLine(x + 6, y + 4, x + 8, y + 8, color);
+}
+
 void FireOS::drawWifiIcon(int32_t x, int32_t y, uint8_t state) {
   uint16_t color = kMuted;
   if (state == 2) {
@@ -10634,8 +11262,15 @@ void FireOS::drawWifiIcon(int32_t x, int32_t y, uint8_t state) {
   ui.fillCircle(x + 6, y + 11, 1, color);
 }
 
-void FireOS::drawBluetoothIcon(int32_t x, int32_t y, bool enabled) {
-  const uint16_t color = enabled ? kCyan : kMuted;
+void FireOS::drawBluetoothIcon(int32_t x, int32_t y, uint8_t state) {
+  uint16_t color = kMuted;
+  if (state == 2) {
+    color = kGreen;
+  } else if (state == 3) {
+    color = kCyan;
+  } else if (state == 1) {
+    color = (millis() / 250) % 2 == 0 ? kCyan : kMuted;
+  }
   ui.drawLine(x + 5, y, x + 5, y + 14, color);
   ui.drawLine(x + 5, y, x + 10, y + 4, color);
   ui.drawLine(x + 10, y + 4, x + 5, y + 8, color);

@@ -573,6 +573,12 @@ bool FireBackendClient::appRepairStatus(const String& repairId,
   return sendEvent("app_repair_status", fields);
 }
 
+bool FireBackendClient::appRepairCancel(const String& repairId) {
+  if (repairId.length() == 0) return false;
+  return sendEvent("app_repair_cancel", ",\"repair_id\":\"" +
+                   jsonEscape(repairId) + "\"");
+}
+
 bool FireBackendClient::buildBackground(const String& buildId) {
   if (buildId.length() == 0) return false;
   return sendEvent("build_background", ",\"build_id\":\"" +

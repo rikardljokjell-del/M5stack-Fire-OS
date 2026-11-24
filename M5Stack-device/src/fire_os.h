@@ -104,7 +104,7 @@ class FireOS {
   static constexpr uint8_t kMaxLuaApps = 32;
   static constexpr uint8_t kMainCount = kSystemMainCount + kMaxLuaApps;
   static constexpr uint8_t kSettingsCount = 17;
-  static constexpr uint8_t kQuickCount = 8;
+  static constexpr uint8_t kQuickCount = 9;
   static constexpr uint8_t kPowerCount = 6;
   static constexpr uint8_t kPowerActionCount = 4;
   static constexpr uint8_t kMaxBluetoothDevices = 32;
@@ -154,7 +154,16 @@ class FireOS {
   bool factoryResetArmed_ = false;
   bool wifiEnabled_ = false;
   uint8_t wifiMode_ = 0;  // 0=Auto, 1=On, 2=Off
+  uint8_t backendMode_ = 0;  // 0=Auto, 1=On, 2=Off
   bool wifiTimeSync_ = false;
+  bool backendBootPending_ = false;
+  bool backendBootAttempted_ = false;
+  uint32_t backendBootAttemptedAt_ = 0;
+  bool backendBootSyncWaiting_ = false;
+  bool backendBootJobsReceived_ = false;
+  uint32_t backendBootSyncStartedAt_ = 0;
+  uint8_t buildJobsRetryCount_ = 0;
+  uint32_t buildJobsRequestAt_ = 0;
   bool timeSyncPending_ = false;
   bool timeSyncConfigured_ = false;
   uint32_t timeSyncStarted_ = 0;
@@ -442,6 +451,8 @@ class FireOS {
   bool luaRepairConfirmPending_ = false;
   bool luaRepairStatusQueryPending_ = false;
   bool luaRepairRunAfterInstall_ = false;
+  bool luaRepairCancelPending_ = false;
+  bool repairCancelSupported_ = false;
   uint32_t luaRepairLastAttemptAt_ = 0;
   uint32_t luaRepairConfirmLastAttemptAt_ = 0;
   uint32_t luaMaxRuntimeMs_ = FireLuaRuntime::kDefaultRuntimeMs;
@@ -471,15 +482,30 @@ class FireOS {
   String aiProjectName_;
   String aiBuildId_;
   bool backgroundBuildsSupported_ = false;
+  bool failedBuildResumeSupported_ = false;
   bool backgroundBuildActive_ = false;
   bool buildJobsRequested_ = false;
   bool aiResumeAvailable_ = false;
+  bool aiBuildResumePending_ = false;
+  bool aiBuildRetryPending_ = false;
+  bool aiBuildCanResume_ = false;
+  bool aiBuildCanRetry_ = false;
+  int32_t aiBuildResumeCount_ = -1;
   uint8_t buildJobCount_ = 0;
   String buildJobIds_[4];
   String buildJobNames_[4];
   String buildJobStatuses_[4];
+  String buildJobErrors_[4];
+  String buildJobErrorCodes_[4];
+  String buildJobDiagnostics_[4];
+  bool buildJobCanResume_[4] = {};
+  bool buildJobCanRetry_[4] = {};
+  String aiBuildErrorCode_;
+  String aiBuildErrorStatus_;
+  String aiBuildDiagnosticMessage_;
   bool buildNoticeActive_ = false;
   String buildNoticeId_;
+  String buildNoticeAckedId_;
   String buildNoticeName_;
   String buildNoticeMessage_ = "Appen er klar";
   uint8_t buildProgress_ = 0;
@@ -805,6 +831,7 @@ class FireOS {
   void requestLuaRepair();
   void requestLuaRepairStatus();
   void serviceLuaRepair();
+  void cancelLuaRepair();
   void handleLuaRepairStatus(const String& message);
   void startLuaRepairRun();
   void writeLuaErrorSnapshot(const String& errorCode, const String& message,
@@ -817,6 +844,7 @@ class FireOS {
   String luaDiagnosticsJson(const char* phase) const;
   String audioDiagnosticsJson(const char* phase) const;
   void updateBackend();
+  void applyBackendMode();
   void handleBackendMessage(const String& message);
   void handleBackgroundBuildMessage(const String& message);
   void requestBackgroundBuildJobs();
@@ -849,6 +877,7 @@ class FireOS {
   void drawStatusBar(const char* title);
   void drawFooter(const char* left, const char* middle, const char* right);
   void drawMain();
+  void drawBuildNoticeOverlay();
   void drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size);
   void drawApps();
   void drawSettings();
@@ -888,7 +917,8 @@ class FireOS {
                     uint8_t stepCount, bool selected, uint16_t accent,
                     bool editing = false);
   void drawWifiIcon(int32_t x, int32_t y, uint8_t state);
-  void drawBluetoothIcon(int32_t x, int32_t y, bool enabled);
+  void drawBackendIcon(int32_t x, int32_t y, uint8_t state);
+  void drawBluetoothIcon(int32_t x, int32_t y, uint8_t state);
   void drawBatteryIcon(int32_t x, int32_t y, int level, bool charging);
   int batteryLevel() const;
   bool batteryCharging() const;

@@ -65,6 +65,7 @@ class FireBackendClient {
                         const String& errorCode, const String& message,
                         const String& diagnostics, const String& runId = String());
   bool appRepairStatus(const String& repairId, const String& appId = String());
+  bool appRepairCancel(const String& repairId);
   bool buildBackground(const String& buildId);
   bool buildJobs(uint32_t offset = 0);
   bool buildResume(const String& buildId);
