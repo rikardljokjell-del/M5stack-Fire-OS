@@ -1,20 +1,44 @@
 # FIRE OS firmware
 
-Aktuell **testkandidat: fire-os-1.2.0-rc6**. Vanlig oppdatering går nå direkte
+Aktuell **testkandidat: fire-os-1.2.0-rc7**. Velg
+**Settings → Firmware → Oppdater fra GitHub → utgave → Installer direkte fra GitHub**
+og bekreft med B. Oppdateringen bruker ikke SD-kort eller backend.
+GitHub-valget har bare installering og tilbake; SD-nedlasting er fjernet.
+Under arbeidet vises status og fremdrift. A kan avbryte før aktivering.
+
+Alle 15 tester og tre bygg er bestått på kilde
+[7eb40b7](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/7eb40b7e0effca647d101031c777832aa672a010),
+[CI 45496282327](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45496282327).
+Fysisk direkte GitHub-installasjon pågår; full produksjonsgodkjenning påstås ikke.
+Normal RC7 er ny; de fysisk testede RC2-bildene for bootloader,
+partisjonstabell og recovery beholdes uendret i USB-pakken.
+
+| Gjeldende RC7-fil | Bruk |
+| --- | --- |
+| [Normal firmware](fire-os-1.2.0-rc7.bin) | Direkte, signert GitHub-oppdatering |
+| [USB-arkiv](fire-os-1.2.0-rc7-usb.zip) | Førstegangsmigrering på en annen enhet |
+| [Kontrollsummer](fire-os-1.2.0-rc7-SHA256SUMS.txt) | Eksakte filhashes |
+| [Utgivelsesbevis](fire-os-1.2.0-rc7-evidence.json) | CI, komponentkilder og faktisk teststatus |
+
+## Historisk RC6
+
+RC6 beholdes uendret med [original katalog](fire-os-1.2.0-rc6-catalog.json).
+Denne kandidaten tilbød direkte installasjon
 fra GitHub til inaktiv OS-slot, uten SD-kort eller backend. Velg
 **Settings → Firmware → Oppdater fra GitHub → utgave → Installer direkte fra GitHub**
 og bekreft med B. FIRE kontrollerer signatur, størrelse, nettverksdata og
 tilbakeavlest flash før ny firmware velges og enheten starter om.
-**Lagre pa SD** er et separat, valgfritt valg.
+Den tilbød også **Lagre pa SD**, som er fjernet i RC7.
 
 Alle 15 tester og tre bygg er bestått på kilde
 [55a8584](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/55a8584e8216a2760781d562b88be42679ddf387),
 [CI 45492728362](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45492728362).
-Den fysiske RC6-testen pågår; dette er ikke full produksjonsgodkjenning.
+Den private fysiske RC6-testen krasjet i FatFS under SD-skriving før direkte
+OTA ble prøvd. Årsaken er ikke fastslått og tilskrives ikke maskinvare.
 Normal RC6 er ny, mens USB-pakken bevarer de fysisk testede
 RC2-bildene for bootloader, partisjonstabell og recovery med separat opphav.
 
-| Gjeldende RC6-fil | Bruk |
+| Historisk RC6-fil | Bruk |
 | --- | --- |
 | [Normal firmware](fire-os-1.2.0-rc6.bin) | Direkte, signert GitHub-oppdatering |
 | [USB-arkiv](fire-os-1.2.0-rc6-usb.zip) | Førstegangsmigrering på en annen enhet |

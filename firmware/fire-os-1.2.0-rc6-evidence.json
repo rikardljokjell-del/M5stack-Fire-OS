@@ -128,5 +128,12 @@
     "Home/Camper on user Home Assistant and public Cloudflare/WSS",
     "Visual/button/audio/AI/Lua installation and RUN acceptance",
     "Physical power interruption and GPIO39 recovery hold"
-  ]
+  ],
+  "physical_attempt": {
+    "report": "M5Stack-device/PHYSICAL_USB_2026-11-24.md",
+    "type": "private test harness based on RC6 production source",
+    "sd_save": "failed: LoadProhibited in FatFS validate/f_write; no watchdog",
+    "direct_ota": "not reached in this test",
+    "cause": "not established; no basis to attribute to hardware"
+  }
 }
