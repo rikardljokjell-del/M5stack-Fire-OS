@@ -29,14 +29,20 @@ du skal slå av for å tvinge fram migrering.
 ## 1. Kontroller pakken uten enhet
 
 Åpne PowerShell i `M5Stack-backend`. Den ferdige pakken ligger for eksempel i
-`workspace\migration\fire-os-1.2.0-rc1` og inneholder:
+`workspace\migration\fire-os-1.2.0-rc2` og inneholder:
 
 - `migration.json` og `migration.sig` (signert plan for alle fire bildene).
 - `bootloader.bin`, `partitions.bin`, `normal.bin`, `recovery.bin`.
 - `catalog-v2.json` og `release-public.pem`.
 
+Den publiserte USB-pakken er `firmware/fire-os-1.2.0-rc2-usb.zip` i repoet.
+Pakk ut alle åtte filene til mappen over før kontroll. En separat publisert
+`fire-os-1.2.0-rc2.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
+en valgfri ekstrakopi i den lokale arbeidsmappen; den finnes ikke i USB-ZIP-en
+og kreves ikke av migreringsverktøyet.
+
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py --bundle workspace\migration\fire-os-1.2.0-rc1
+.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.2.0-rc2
 ```
 
 Standardkommandoen åpner **ingen serieport** og skriver ingenting til FIRE.
@@ -60,7 +66,7 @@ tilhører FIRE, for eksempel COM3; verktøyet gjetter aldri en port.
 ## 3. Kun forhåndskontroll av tilkoblet FIRE
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc1 --port COM3
+.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc2 --port COM3
 ```
 
 Enheten går midlertidig til ROM-nedlastingsmodus for kontroll, og startes tilbake
@@ -74,7 +80,7 @@ brukes enhetens dokumenterte USB-bootprosedyre; ingen sikkerhetsdialog omgås.
 Kjør først når riktig signert pakke og riktig serieport er kontrollert:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc1 --port COM3 --confirm MIGRATE-FIRE
+.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc2 --port COM3 --confirm MIGRATE-FIRE
 ```
 
 Før skriving gjør verktøyet dette i rekkefølge:
@@ -154,8 +160,18 @@ De omfatter ugyldige signaturer/nøkkelbytte/hash/layout, chip/eFuse-avvisning,
 full backup før skriving, bevart NVS/app1/config/coredump, stopp ved ulik
 avlesning eller feil etter skriving, gjenoppretting av skadet partisjonstabell,
 annen enhet og fast baud før avlesning. Ingen serieport er åpnet i disse testene.
-Reell COM-/strømbrudd-/bootloader-/recovery-test og faktisk signert utgivelsespakke
-gjenstår. 624 grønne backendtester er en separat kontroll før dette verktøyet.
+Den faktiske signerte RC2-pakken er kontrollert 24. november 2026 med kommandoen
+over: signaturer, hashes, ESP32-bilder og eksakt layout består (exit 0).
+Samme kontroll er også kjørt mot de eksakt åtte filene nyutpakket fra USB-ZIP-en
+i `workspace\release-verify\fire-os-1.2.0-rc2`, med exit 0 og uten serieport.
+Kilden er `7efbae95fa0a54aeb3e1d6a615390810b69279b4`, med CI-bevis i
+[kjøring 45431615060, jobb 138578163034](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45431615060/job/138578163034).
+Normalbildet er 2399824 byte med SHA256
+`c25aca3f58f3caa947f86bede567d6b987d0a654406caa98ef441ca00819b223`.
+RC1 beholdes som historikk; bruk RC2 i de aktuelle migreringseksemplene.
+Reell COM-/strømbrudd-/bootloader-/recovery-test gjenstår. Ingen port er åpnet
+av pakkekontrollen. De 665 grønne backendtestene er et separat lokalt bevis;
+ingen ny fullsuite er kjørt for dette dokumentasjons- og pakkebyttet.
 Esptool 4.5.1 og de låste USB-avhengighetene er installert på denne Windows-PC-en.
 Import/API-tilgjengelighet og den ekte esptool-bildeparserens samsvar med vår
 format-/SHA-fixture er kontrollert uten å åpne serieport.

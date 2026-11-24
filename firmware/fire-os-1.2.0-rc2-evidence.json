@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "version": "fire-os-1.2.0-rc2",
+  "candidate": true,
+  "physical_verified": false,
+  "repository": "rikardljokjell-del/M5stack-Fire-OS",
+  "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+  "ci": {
+    "firmware_run_id": 45431615060,
+    "firmware_job_id": 138578163034,
+    "artifact_id": 14939173437,
+    "artifact_zip_sha256": "12de936a14e9c424067d4dc1f111e5425ef013815ce40d52fc3d4608dcc5b5d4",
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "tests": 12
+  },
+  "firmware": {
+    "name": "fire-os-1.2.0-rc2.bin",
+    "size": 2399824,
+    "sha256": "c25aca3f58f3caa947f86bede567d6b987d0a654406caa98ef441ca00819b223"
+  },
+  "migration": {
+    "name": "fire-os-1.2.0-rc2-usb.zip",
+    "size": 2632282,
+    "sha256": "81bd55a47f62b79af1cfd72729517623643d8e4c167b033f4a1946e9d024627b",
+    "manifest_sha256": "ed18d01d5702679387c56c9f18bb8261d8aa5f3e7e5c1ffdda27501754974b07",
+    "files": [
+      "migration.json",
+      "migration.sig",
+      "bootloader.bin",
+      "partitions.bin",
+      "normal.bin",
+      "recovery.bin",
+      "catalog-v2.json",
+      "release-public.pem"
+    ]
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "c25aca3f58f3caa947f86bede567d6b987d0a654406caa98ef441ca00819b223",
+      "size": 2399824
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "ota": {
+    "algorithm": "ecdsa-p256-sha256",
+    "key_id": "fire-release-2026",
+    "layout": "fire-ab-recovery-v1",
+    "factory_reset_gpio": 39,
+    "factory_reset_hold_seconds": 3,
+    "rollback_enabled": true,
+    "data_factory_reset": []
+  },
+  "not_verified": [
+    "physical FIRE startup and responsiveness",
+    "physical rollback and independent factory recovery",
+    "user Cloudflare and Home Assistant configuration"
+  ],
+  "changes": [
+    "Keep a healthy Home Auto MQTT route; reevaluate after real disconnection or configuration change",
+    "Do not reconnect MQTT for layout or favorite changes"
+  ]
+}

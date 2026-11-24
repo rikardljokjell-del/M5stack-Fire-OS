@@ -1,13 +1,58 @@
 # FIRE OS — leveransebevis
 
-## RC2 under kontroll
+## RC2: signert og kontrollert
 
-RC2 retter kun Home Auto-ruting: en frisk ekstern MQTT-forbindelse brytes
-ikke etter ett minutt. Lokal rute vurderes igjen etter et faktisk nettbrudd
-eller endret konfigurasjon. Nye bygg, ny kildecommit og signert RC2-pakke
-registreres etter kontroll; RC1-filene overskrives ikke.
-Visnings-/favorittendringer endrer ikke nettverkets konfigurasjonsgenerasjon
-og starter ikke MQTT på nytt; profil- og ruteendringer gjør det fortsatt.
+RC2 retter Home Auto-ruting: en frisk ekstern MQTT-forbindelse brytes ikke
+etter ett minutt. Lokal rute vurderes igjen etter faktisk nettbrudd eller
+endret konfigurasjon. Visnings-/favorittendringer starter ikke MQTT på nytt;
+profil- og ruteendringer gjør det fortsatt. RC1-filene er bevart urørt.
+
+Kildecommit: `7efbae95fa0a54aeb3e1d6a615390810b69279b4`.
+[FIRE firmware checks 45431615060](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45431615060)
+bestod alle 12 tester og normal-, recovery- og bootloaderbygg.
+Leveransen bruker bare denne kjøringens CI-artefakter. Arkivet er 25 466 940
+byte, SHA256 `12de936a14e9c424067d4dc1f111e5425ef013815ce40d52fc3d4608dcc5b5d4`.
+
+Lokal pakke: `M5Stack-backend/workspace/migration/fire-os-1.2.0-rc2/`.
+
+| Fil | Byte | SHA256 |
+| --- | ---: | --- |
+| `normal.bin` / `fire-os-1.2.0-rc2.bin` | 2399824 | `c25aca3f58f3caa947f86bede567d6b987d0a654406caa98ef441ca00819b223` |
+| `recovery.bin` | 1578112 | `040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5` |
+| `bootloader.bin` | 27760 | `8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64` |
+| `partitions.bin` | 3072 | `66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120` |
+| `catalog-v2.json` | 1002 | `313344c52168e3e87b4faf05b9a35c0b036f2bf9a2289d74a28f5db599e9f2dc` |
+| `migration.json` | 858 | `ed18d01d5702679387c56c9f18bb8261d8aa5f3e7e5c1ffdda27501754974b07` |
+| `migration.sig` | 97 | `de8b049247ff2b581495ca9d7cf630f1e03bcb16e13af507651e242052407856` |
+| `release-public.pem` | 178 | `5e0fc99bf3a221f53129595ea31371cdb8eca502a4e9a7fd956855b98d450ccc` |
+
+USB-verktøyets uavhengige `check --bundle workspace/migration/fire-os-1.2.0-rc2`
+bestod signatur-, hash-, faktisk ESP32-image- og layoutkontroll. Signerings-
+verktøyet verifiserte også katalogsignaturen og den ene RC2-oppføringen.
+Ingen serieport ble åpnet, og ingenting ble skrevet til enheten. Ingen privat
+nøkkel følger med. USB-pakkens katalog inneholder bare RC2. Samlet signert rotkatalog er laget med
+RC2 først og historisk RC1 som andre oppføring. RC1-notatet anbefaler RC2 på
+grunn av minuttfrakoblingen i RC1 Auto. Original RC1-arkivkatalog, RC1-filer og
+hele RC2-USB-pakken er kontrollert uendret før/etter kataloggenereringen.
+
+`firmware/index.json`: 1 538 byte, SHA256
+`b8de65b28e2138f150f7e4bfb64734d4133fa16acfeccc041924b6de2547d0b4`.
+Begge katalogsignaturer og tilhørende binærhasher består verifikasjon.
+
+Master pakket rotens `fire-os-1.2.0-rc2-usb.zip`: 2 632 282 byte, SHA256
+`81bd55a47f62b79af1cfd72729517623643d8e4c167b033f4a1946e9d024627b`.
+Master har kontrollert en separat utpakking med det faktiske USB-verktøyet.
+
+CI-normalbygget rapporterer 63 796 byte statisk RAM og 2 393 397 byte flashbruk.
+Recovery rapporterer 50 684 byte RAM og 1 571 809 byte flashbruk. IRAM-slutt er
+fortsatt `0x4009fb98` (1 128 byte margin). Generert CI-sdkconfig er kontrollert:
+GPIO39 lav/tre sekunder velger factory recovery ved å slette bare OTA-valget;
+rollback er aktiv og data-reset-listen tom.
+
+Fysisk sluttkontroll gjenstår, særlig stabil ekstern Auto-forbindelse over
+flere minutter, visningsendring uten frakobling, faktisk nettbrudd med nytt
+rutevalg, og RC2-installasjon/recovery på enheten. Bygg- og signaturbevis er
+ikke bevis på fysisk kjøring. Øvrig fysisk sjekkliste nedenfor gjelder fortsatt.
 
 ## Historisk RC1-leveranse
 

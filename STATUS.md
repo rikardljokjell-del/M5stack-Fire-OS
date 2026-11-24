@@ -6,7 +6,7 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-Kode og signert testpakke **fire-os-1.2.0-rc1** er klargjort. FIRE Studio,
+Kode og signert testpakke **fire-os-1.2.0-rc2** er klargjort. FIRE Studio,
 sikker offentlig backendinngang, direkte Home og OTA med uavhengig recovery
 er implementert. Linux-byggfilene er signert, USB-arkivet er pakket ut på nytt
 og kontrollert av det separate migreringsverktøyet. Ingen fysisk FIRE er
@@ -72,19 +72,25 @@ Brukerens egne entiteter, offentlig Cloudflare/WSS og fysisk FIRE er fortsatt
 
 ## Levert firmwarepakke
 
-Kilde `34ade23bc2872dbc3561a09d859aba865d05f470`.
-[Linux-kjøring 45426276015](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45426276015)
+RC2 retter minuttvis frakobling i Home Auto og unødvendig ny MQTT-tilkobling
+ved visningsendringer. Friske forbindelser beholdes; ruten vurderes på nytt
+ved faktisk nettbrudd eller endret oppsett. Dette er kildekontrollert og bygget;
+treminutterstesten på annet nett står i den fysiske sluttesten.
+RC1 beholdes som uendrede historiske filer, med tydelig merknad i katalogen.
+
+Kilde `7efbae95fa0a54aeb3e1d6a615390810b69279b4`.
+[Linux-kjøring 45431615060](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45431615060)
 bestod normal firmware med BLE/lyd, separat recovery, custom bootloader og
 alle 12 C++-/signatur-/pakkekontroller. CI-arkivet er SHA256-kontrollert før
 ekstraksjon. De distribuerte filene kommer fra denne kjøringen.
 
-- Normal firmware: 2 399 808 byte,
-  SHA256 `1241877bb01510bf5e964864edc54052ec6ce594330ac68179bfbcd26f4a8a9e`.
-- [Signert USB-arkiv](firmware/fire-os-1.2.0-rc1-usb.zip): 2 632 217 byte,
-  SHA256 `5cb1dc081a18630325cb26223c23f215af58987e3d772e8fb5d1b99b3e2e4dbd`.
+- Normal firmware: 2 399 824 byte,
+  SHA256 `c25aca3f58f3caa947f86bede567d6b987d0a654406caa98ef441ca00819b223`.
+- [Signert USB-arkiv](firmware/fire-os-1.2.0-rc2-usb.zip): 2 632 282 byte,
+  SHA256 `81bd55a47f62b79af1cfd72729517623643d8e4c167b033f4a1946e9d024627b`.
 - Det publiserbare arkivet inneholder bare de åtte nødvendige filene, ingen
   privat nøkkel. Ny utpakking bestod faktisk `migrate_fire.py check` uten COM.
-- [Maskinlesbart bevis](firmware/fire-os-1.2.0-rc1-evidence.json),
+- [Maskinlesbart bevis](firmware/fire-os-1.2.0-rc2-evidence.json),
   [device-rapport](M5Stack-device/DELIVERY_REPORT.md) og
   [firmwareoversikt](firmware/README.md).
 

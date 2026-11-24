@@ -52,8 +52,12 @@ innloggingsmetode. Disse er ikke opprettet eller kjøpt automatisk.
    `.\scripts\cloudflare.ps1 tunnel login`, deretter
    `.\scripts\cloudflare.ps1 tunnel create fire-pc`.
    Konto- og tunnellegitimasjonen blir i brukerens `.cloudflared`-mappe.
-4. Kopier `deployment/cloudflare/pc.yml.example` til `.cloudflared/fire-pc.yml`.
-   Erstatt UUID, credentials-file, domenenavn, Access team og audience. Behold
+4. Kopier `deployment/cloudflare/pc.yml.example` til
+   `"$env:USERPROFILE\.cloudflared\fire-pc.yml"` med PowerShell. Dette er
+   brukerens mappe, ikke en `.cloudflared`-mappe under backendmappen.
+   Erstatt UUID, credentials-file, domenenavn, Access team og audience.
+   Sett porten i **begge** `service: http://127.0.0.1:8765`-adressene til
+   backendens lagrede port hvis den er en annen enn 8765. Behold
    to ulike vertsnavn og avsluttende 404-regel. Behold `httpHostHeader` lik det
    offentlige vertsnavnet, aldri `localhost`. Browser-ruten krever Access ved
    tunnelinngangen OG signaturkontroll i applikasjonen.
@@ -69,8 +73,8 @@ innloggingsmetode. Disse er ikke opprettet eller kjøpt automatisk.
    Etter CLI-alternativet avslutter og åpner du Windows-programmet igjen, slik
    at konfigurasjonen leses fra disk. Ingen hemmeligheter skal gis som argument.
 7. Kontroller tunneloppsettet med
-   `.\scripts\cloudflare.ps1 tunnel --config <sti-til-fire-pc.yml> ingress validate`.
-   Start med `.\scripts\cloudflare.ps1 tunnel --config <sti-til-fire-pc.yml> run fire-pc`.
+   `.\scripts\cloudflare.ps1 tunnel --config "$env:USERPROFILE\.cloudflared\fire-pc.yml" ingress validate`.
+   Start med `.\scripts\cloudflare.ps1 tunnel --config "$env:USERPROFILE\.cloudflared\fire-pc.yml" run fire-pc`.
    Cloudflared holdes i gang på PC-en; ingen inngående ruterport åpnes.
 8. Åpne `https://studio.dittdomene.no/ui/` på mobil/PC, logg inn med Access og
    velg **Logg inn med Cloudflare Access** i Studio. Nettlesersesjonen varer

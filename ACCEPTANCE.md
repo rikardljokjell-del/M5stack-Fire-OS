@@ -43,10 +43,10 @@ Disse punktene stanser ikke uavhengig implementering og lokal kontroll.
 | Faktisk nettleser, isolert mockprofil | Dialog → bekreftet bygg → bibliotek; innstillinger; firmwareoversikt; 390 px mobil uten sideoverløp | Ingen betalte AI-kall eller produksjonsendringer |
 | Faktisk lokal prosess/HTTP-restart, isolert profil | Innstillinger/token beholdt; gammel browsersesjon avvist | Mock, ikke fysisk tale |
 | Eksisterende Windows-program etter idle-kontroll | Kontrollert omstart, innstillinger/nøkler bevart; ny UI svarer | Ingen produksjons-AI-kall sendt |
-| Ekte Mosquitto på Windows | Ikke kjørt: Code Integrity blokkerte biblioteket | Ingen sikkerhetspolicy omgått; Linux-kontroll pågår |
+| Ekte Mosquitto på Windows | Ikke kjørt: Code Integrity blokkerte biblioteket | Ingen sikkerhetspolicy omgått; Linux-kontroll bestått under |
 | Ekte Mosquitto 2.1.4, Ubuntu | Bestått TLS/navn, WS, passordskille og negative ACL-kontroller; jobb 138535122608 | Isolert testbroker, ikke brukerens HA/MQTT eller offentlig Cloudflare |
 | Ekte HA 2026.11.3 og broker, Linux | Run 45422781786 grønn; pakke, handling/ACK, labels, fjernbryter, feilinput, reload og ny prosess med retained replay | Syntetiske entiteter; fysisk FIRE og brukeroppsett står åpne |
-| Firmware, Linux på 34ade23 | Run 45426276015 grønn: normal, recovery, bootloader og 12 tester | Ingen fysisk FIRE; BLE/lyd kompilert, ikke fysisk testet |
+| RC2-firmware, Linux på 7efbae95 | Run 45431615060 grønn: normal, recovery, bootloader og 12 tester | Ingen fysisk FIRE; BLE/lyd kompilert, ikke fysisk testet |
 | Distribuert USB-arkiv etter ny utpakking | Faktisk signatur-/hash-/image-/layoutkontroll bestått | Ingen COM åpnet; selve flashingen og tilbakeføring står åpne |
 
 Fysisk oppstart/recovery og responstid forblir åpne til de er prøvd. Følg

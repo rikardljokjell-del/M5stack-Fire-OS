@@ -119,12 +119,12 @@ Ny oppstartsløsning med uavhengig redning krever en førstegangs USB-migrering.
 Etter migreringen skal normale oppdateringer hentes fra **Innstillinger på FIRE**
 direkte fra GitHub. Studio viser bare versjoner og informasjon.
 
-Den signerte testpakken **fire-os-1.2.0-rc1** er klar på denne PC-en i
-`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc1/`. Følg
+Den signerte testpakken **fire-os-1.2.0-rc2** er klar på denne PC-en i
+`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc2/`. Følg
 [USB-veiledningen](M5Stack-backend/docs/USB_MIGRATION.md) fra steg 1.
 Pakken er også tilgjengelig som
-[USB-arkiv](firmware/fire-os-1.2.0-rc1-usb.zip) med
-[kontrollsummer](firmware/fire-os-1.2.0-rc1-SHA256SUMS.txt).
+[USB-arkiv](firmware/fire-os-1.2.0-rc2-usb.zip) med
+[kontrollsummer](firmware/fire-os-1.2.0-rc2-SHA256SUMS.txt).
 
 Versjonen er en testkandidat. Signatur- og pakkekontrollen er bestått;
 fysisk oppstart, tilbakeføring og redning står på sluttestlisten.

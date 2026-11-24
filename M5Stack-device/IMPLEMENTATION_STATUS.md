@@ -2,15 +2,22 @@
 
 ## Current candidate: fire-os-1.2.0-rc2
 
-RC2 source is ready for master commit/CI. Local m5stack-fire-ble build passed
-(2,393,541 B flash, 63,796 B static RAM), and 5 signing + 4 packaging tests passed.
-The fresh-remote >60 s behavior still needs physical verification. It removes the periodic 60-second teardown
-of a healthy remote Home Auto connection. Auto keeps its working route and
-reevaluates local after actual disconnection or configuration changes; changed
-configuration resets route choice/backoff. No parallel probe or command retry
-was added. RC1 binaries, catalog evidence and signing outputs remain immutable.
-UI-only layout/favorite persistence does not change the network generation;
-profile/route changes still do. The final normal rebuild includes both fixes.
+RC2 is signed and independently verified. Source commit:
+`7efbae95fa0a54aeb3e1d6a615390810b69279b4`.
+CI 45431615060 passed all 12 tests and all three builds. Only those CI artifacts
+were used. Package: `../M5Stack-backend/workspace/migration/fire-os-1.2.0-rc2/`.
+The PC migration consumer passed signature/hash/image/layout checks without
+opening a serial port. No physical installation or execution is claimed.
+
+RC2 removes the periodic teardown of healthy remote Home Auto connections.
+Changed configuration resets route selection/backoff; layout/favorite changes
+leave the network generation alone. No parallel probe or command retry added.
+See DELIVERY_REPORT.md for exact RC2 artifacts and remaining physical tests.
+The root catalog is signed and verified with RC2 first and historical RC1
+second; the RC1 note explains its Auto disconnection issue and recommends RC2.
+Both versioned bins and all RC1 immutable files/RC2 USB inputs were verified
+unchanged during catalog generation. Master handles publication; no more code
+changes are pending. RC1 remains immutable history.
 
 ## RC1 audit history
 
