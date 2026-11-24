@@ -91,7 +91,7 @@ jobs:
         shell: bash
     env:
       HA_IMAGE: ghcr.io/home-assistant/home-assistant:2026.11.3
-      BROKER_IMAGE: eclipse-mosquitto:2.1.4
+      BROKER_IMAGE: eclipse-mosquitto:2.1.4-alpine
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -120,6 +120,7 @@ jobs:
       - name: Run actual HA configuration, labels, services and automation reload
         run: |
           docker run --rm --name fire-home-ci-ha --network fire-home-ci \
+            --user "$(id -u):$(id -g)" \
             --cap-drop ALL --security-opt no-new-privileges:true \
             --volume "$RUNNER_TEMP/fire-home-native/ha:/config" \
             --volume "$PWD/home_assistant/ha_runtime_smoke.py:/smoke.py:ro" \
@@ -127,6 +128,7 @@ jobs:
       - name: Restart actual HA in a new process with old retained request present
         run: |
           docker run --rm --name fire-home-ci-ha --network fire-home-ci \
+            --user "$(id -u):$(id -g)" \
             --cap-drop ALL --security-opt no-new-privileges:true \
             --volume "$RUNNER_TEMP/fire-home-native/ha:/config" \
             --volume "$PWD/home_assistant/ha_runtime_smoke.py:/smoke.py:ro" \

@@ -345,7 +345,7 @@ def generate(config, output):
         files["existing-broker-acl.txt"] = "user fire_home_bridge\n"+"\n".join(
             ["topic write "+prefix+"/+/request"]+["topic read "+prefix+"/+/"+s for s in ("catalog","state","ack")])+"\n"
     files["hash-passwords.sh"] = "#!/bin/sh\nset -eu\ncd /mosquitto/config\nmosquitto_passwd -U passwords.local\nmosquitto_passwd -U passwords.remote\nchmod 600 passwords.local passwords.remote\n"
-    files["compose.yaml"] = json.dumps({"services":{"fire-home-mqtt":{"image":"eclipse-mosquitto:2.1.4","restart":"unless-stopped",
+    files["compose.yaml"] = json.dumps({"services":{"fire-home-mqtt":{"image":"eclipse-mosquitto:2.1.4-alpine","restart":"unless-stopped",
         "ports":["8883:8883","127.0.0.1:9001:9001"],"volumes":["./:/mosquitto/config:ro","./certs:/mosquitto/certs:ro","fire-home-data:/mosquitto/data"]}},
         "volumes":{"fire-home-data":{}}},indent=2)+"\n"
     files["cloudflared-ingress.yaml"] = json.dumps({"ingress":[{"hostname":profile.remote_host or "home.example.com","service":"http://127.0.0.1:9001"},{"service":"http_status:404"}]},indent=2)+"\n"

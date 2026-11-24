@@ -91,7 +91,7 @@ def prepare(directory: Path) -> None:
     storage = ha / ".storage"
     storage.mkdir()
     # Only this ephemeral instance is seeded; production HA uses its normal UI.
-    entry = {"entry_id": "01FIREHOMECI0000000000000000", "domain": "mqtt", "title": "CI broker",
+    entry = {"entry_id": secrets.token_hex(16), "domain": "mqtt", "title": "CI broker",
              "version": 2, "minor_version": 1, "source": "user", "unique_id": None,
              "data": {"broker": HOST, "port": 8883, "username": "fire_ha",
                       "password": credentials["fire_home_fire_ha"], "certificate": ca,
@@ -190,6 +190,7 @@ async def inside(directory: Path, phase: str):
     from homeassistant.helpers import entity_registry as er, label_registry as lr
     from homeassistant.runner import RuntimeConfig
 
+    logging.basicConfig(level=logging.INFO)
     errors = PackageErrors()
     logging.getLogger().addHandler(errors)
     checks = []

@@ -58,7 +58,7 @@ Kopier den genererte mappen til en egen mappe på denne verten, ikke til Windows
 hvis Home skal virke med Windows av. I den kopierte mappen:
 
 ```sh
-docker run --rm -v "$PWD:/mosquitto/config" eclipse-mosquitto:2.1.4 sh /mosquitto/config/hash-passwords.sh
+docker run --rm -v "$PWD:/mosquitto/config" eclipse-mosquitto:2.1.4-alpine sh /mosquitto/config/hash-passwords.sh
 sudo chown -R 1883:1883 .
 docker compose up -d
 ```
