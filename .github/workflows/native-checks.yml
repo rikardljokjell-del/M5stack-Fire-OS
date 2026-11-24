@@ -1,0 +1,41 @@
+name: FIRE native checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master, 'codex/**']
+    paths:
+      - '.github/workflows/native-checks.yml'
+      - 'M5Stack-device/src/fire_byte_queue.h'
+      - 'M5Stack-device/src/fire_json_guard.h'
+      - 'M5Stack-device/tests/**'
+  pull_request:
+    paths:
+      - '.github/workflows/native-checks.yml'
+      - 'M5Stack-device/src/fire_byte_queue.h'
+      - 'M5Stack-device/src/fire_json_guard.h'
+      - 'M5Stack-device/tests/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Actual C++ queue and JSON guards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Compile and run both host C++ test programs
+        run: python -m unittest discover -s M5Stack-device/tests -p 'test_native_guards.py' -v

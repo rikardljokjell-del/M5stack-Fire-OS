@@ -37,8 +37,10 @@ jobs:
       # Official release tarball fetched from mosquitto.org; fixed content hash.
       MOSQUITTO_SHA256: ca30b26ccd3041c0e11fc407fe4f2e62bc445e8d8dea94a083cc60c09bd5ea30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.13'
       - name: Install build and setup dependencies
@@ -72,9 +74,78 @@ jobs:
             | tee "$RUNNER_TEMP/home-broker-report.json"
       - name: Upload secret-free broker result
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: home-broker-report
           path: ${{ runner.temp }}/home-broker-report.json
           if-no-files-found: ignore
           retention-days: 7
+
+  native-ha:
+    name: Native Home Assistant package and replay checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: M5Stack-backend
+        shell: bash
+    env:
+      HA_IMAGE: ghcr.io/home-assistant/home-assistant:2026.11.3
+      BROKER_IMAGE: eclipse-mosquitto:2.1.4
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Prepare only ephemeral synthetic HA and broker data
+        run: |
+          python -m pip install 'pydantic>=2.10,<3' -r home_assistant/requirements-setup.txt
+          python -m home_assistant.ha_runtime_smoke --prepare "$RUNNER_TEMP/fire-home-native"
+          docker pull "$HA_IMAGE"
+          docker pull "$BROKER_IMAGE"
+          docker image inspect "$HA_IMAGE" "$BROKER_IMAGE" --format '{{index .RepoDigests 0}}'
+          docker network create --internal fire-home-ci
+          docker run --rm --user 0 \
+            --volume "$RUNNER_TEMP/fire-home-native/broker:/mosquitto/config" \
+            "$BROKER_IMAGE" sh /mosquitto/config/hash-passwords.sh
+          sudo chown -R 1883:1883 "$RUNNER_TEMP/fire-home-native/broker"
+          docker run --detach --name fire-home-ci-broker --network fire-home-ci \
+            --network-alias fire-home-mqtt \
+            --volume "$RUNNER_TEMP/fire-home-native/broker:/mosquitto/config:ro" \
+            --volume "$RUNNER_TEMP/fire-home-native/broker/certs:/mosquitto/certs:ro" \
+            --tmpfs /mosquitto/data:rw,uid=1883,gid=1883 \
+            "$BROKER_IMAGE"
+      - name: Run actual HA configuration, labels, services and automation reload
+        run: |
+          docker run --rm --name fire-home-ci-ha --network fire-home-ci \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --volume "$RUNNER_TEMP/fire-home-native/ha:/config" \
+            --volume "$PWD/home_assistant/ha_runtime_smoke.py:/smoke.py:ro" \
+            --entrypoint python "$HA_IMAGE" /smoke.py --inside /config --phase primary
+      - name: Restart actual HA in a new process with old retained request present
+        run: |
+          docker run --rm --name fire-home-ci-ha --network fire-home-ci \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --volume "$RUNNER_TEMP/fire-home-native/ha:/config" \
+            --volume "$PWD/home_assistant/ha_runtime_smoke.py:/smoke.py:ro" \
+            --entrypoint python "$HA_IMAGE" /smoke.py --inside /config --phase restart
+      - name: Bounded broker diagnostics
+        if: failure()
+        run: docker logs --tail 80 fire-home-ci-broker || true
+      - name: Upload only secret-free HA result
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: home-native-report
+          path: |
+            ${{ runner.temp }}/fire-home-native/ha/home-native-primary.json
+            ${{ runner.temp }}/fire-home-native/ha/home-native-report.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove ephemeral containers and network
+        if: always()
+        run: |
+          docker rm --force fire-home-ci-ha fire-home-ci-broker 2>/dev/null || true
+          docker network rm fire-home-ci 2>/dev/null || true

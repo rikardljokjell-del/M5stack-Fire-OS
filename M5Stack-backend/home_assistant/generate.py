@@ -214,7 +214,6 @@ def broker_acl(profile):
 def broker_config(profile):
     base = """# Standard Mosquitto 2.0.22+; dedicated config, not an overlay on a global auth plugin.
 per_listener_settings true
-allow_zero_length_clientid false
 max_packet_size 12288
 message_size_limit 8192
 max_queued_messages 8
@@ -229,6 +228,7 @@ persistence_location /mosquitto/data/
 # LAN only; certificate SAN must cover the local_host name configured on FIRE.
 listener 8883
 max_connections 6
+allow_zero_length_clientid false
 protocol mqtt
 allow_anonymous false
 password_file /mosquitto/config/passwords.local
@@ -241,6 +241,7 @@ tls_version tlsv1.2
 # Docker publishes this listener at 127.0.0.1:9001, never 0.0.0.0.
 listener 9001
 max_connections 6
+allow_zero_length_clientid false
 protocol websockets
 allow_anonymous false
 password_file /mosquitto/config/passwords.remote

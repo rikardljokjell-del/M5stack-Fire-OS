@@ -29,7 +29,7 @@ class Peer:
     def __init__(self,host,port,user,password,*,ca=None,websocket=False):
         import paho.mqtt.client as mqtt
         self.messages=[];self.connected=threading.Event();self.reason=None
-        self.client=mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,protocol=mqtt.MQTTv5,
+        self.client=mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,client_id="fire-ci-"+os.urandom(8).hex(),protocol=mqtt.MQTTv5,
                                 transport="websockets" if websocket else "tcp")
         self.client.username_pw_set(user,password)
         if ca:self.client.tls_set(ca_certs=str(ca),tls_version=ssl.PROTOCOL_TLS_CLIENT)
