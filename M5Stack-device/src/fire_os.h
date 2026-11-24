@@ -349,7 +349,27 @@ class FireOS {
   String luaAppNames_[kMaxLuaApps];
   String luaAppIds_[kMaxLuaApps];
   String luaAppDisplayNames_[kMaxLuaApps];
+  String luaAppVersions_[kMaxLuaApps];
+  String luaAppChecksums_[kMaxLuaApps];
+  String luaAppPackageIds_[kMaxLuaApps];
   uint8_t luaAppCount_ = 0;
+  struct LuaScanItem {
+    String path, name, id, displayName, version, checksum, packageId;
+  };
+  LuaScanItem luaScanItems_[kMaxLuaApps];
+  enum class LuaScanPhase : uint8_t {
+    Idle, CheckStorage, RootExists, OpenRoot, Next, SourceExists, OpenManifest, Read, Parse, Finish
+  };
+  LuaScanPhase luaScanPhase_ = LuaScanPhase::Idle;
+  File luaScanDirectory_, luaScanManifest_;
+  String luaScanFolder_, luaScanBody_;
+  uint32_t luaScanRevision_ = 0, luaScanActiveRevision_ = 0;
+  uint32_t luaScanStartedAt_ = 0;
+  size_t luaScanExpected_ = 0;
+  uint8_t luaScanCount_ = 0;
+  bool luaScanPending_ = false, luaScanComplete_ = true;
+  bool luaCacheValid_ = false, luaCacheComplete_ = false;
+  bool appInventoryPending_ = false;
   bool fileExplorerScanPending_ = false;
 
   enum class LuaJobKind : uint8_t {
@@ -694,6 +714,9 @@ class FireOS {
   void releaseSdImageBuffer();
   void scanExternalApps();
   void scanLuaApps();
+  void invalidateLuaApps();
+  void serviceLuaAppScan();
+  void publishLuaAppScan();
   void syncLuaAppSelections();
   void saveLuaAppSelections();
   uint8_t shortcutActionCount() const;

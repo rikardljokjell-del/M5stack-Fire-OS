@@ -1,5 +1,6 @@
 #include "fire_os.h"
 #include "fire_audio_capture.h"
+#include "fire_json_guard.h"
 
 #include <M5Unified.h>
 #ifdef FIRE_OS_BLE
@@ -22,6 +23,7 @@
 #include <esp_sntp.h>
 #include <math.h>
 #include <string.h>
+#include <errno.h>
 #include <mbedtls/sha256.h>
 #include <cJSON.h>
 #ifdef FIRE_OS_BLE
@@ -50,7 +52,24 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc2";
+constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc3";
+// Fixed labels only: never log app names, paths, endpoints or credentials.
+// Keep the lifetime loop maxima intact while locating blocking UI phases.
+class FireUiPhaseTimer {
+ public:
+  explicit FireUiPhaseTimer(const char* phase)
+      : phase_(phase), started_(esp_timer_get_time()) {}
+  ~FireUiPhaseTimer() {
+    const int64_t elapsed = esp_timer_get_time() - started_;
+    if (elapsed >= 50000)
+      Serial.printf("FIRE slow phase=%s us=%lu uptime_ms=%lu\n", phase_,
+                    static_cast<unsigned long>(elapsed),
+                    static_cast<unsigned long>(millis()));
+  }
+ private:
+  const char* phase_;
+  int64_t started_;
+};
 constexpr uint32_t kFirmwareBootGuardMs = 15000;
 constexpr uint32_t kLuaServiceDisplay = 1u << 0;
 constexpr uint32_t kLuaServiceButtons = 1u << 1;
@@ -1100,7 +1119,7 @@ void FireOS::update() {
   const int64_t loopStartedUs = esp_timer_get_time();
   if (lastLoopStartedUs_) maxLoopGapUs_ = max(maxLoopGapUs_, static_cast<uint32_t>(min<int64_t>(60000000, loopStartedUs - lastLoopStartedUs_)));
   lastLoopStartedUs_ = loopStartedUs;
-  M5.update();
+  { FireUiPhaseTimer timing("m5_update"); M5.update(); }
   // M5Unified updates button state in M5.update(), but the IMU data register
   // is refreshed separately. Keep one bounded 50 Hz update for the Debug view
   // and the shared Lua IMU service so both expose live sensor values.
@@ -1132,7 +1151,7 @@ void FireOS::update() {
     bluetoothPeripheralAddressType = bluetoothTypeSnapshot;
   }
 #endif
-  updateBootFeedback();
+  { FireUiPhaseTimer timing("boot_feedback"); updateBootFeedback(); }
   updateFirmwareBootGuard();
   if (ota_.busy() || ota_.finished()) {
     firmwareMessage_ = ota_.message();
@@ -1166,7 +1185,7 @@ void FireOS::update() {
 #endif
   pollButtons();
   // Render the result of a button event before optional background work.
-  if (redrawRequested_) draw();
+  if (redrawRequested_) { FireUiPhaseTimer timing("draw_input"); draw(); }
   if (appScanPending_) {
     appScanPending_ = false;
     if (screen_ == Screen::Apps || screen_ == Screen::AppsSettings) {
@@ -1225,16 +1244,20 @@ void FireOS::update() {
   if (homeApp_.configured() && screen_ == Screen::Home && wifiMode_ != 2 &&
       WiFi.status() != WL_CONNECTED && !wifiConnectActive_ && wifiSsid_.length())
     requestWifi(true);
-  homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2);
+  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2); }
   if (homeApp_.takeSetupRequest()) {
     startWifiSetup(); homeApp_.setupHint(wifiSetupPassword_);
   }
+  serviceLuaAppScan();
   updateWifiState();
   updateBluetoothScan();
-  serviceLuaHardwareJobs();
+  { FireUiPhaseTimer timing("hardware_jobs"); serviceLuaHardwareJobs(); }
+  {
+  FireUiPhaseTimer timing("reverse_service");
   reverseTransport_.service(WiFi.status() == WL_CONNECTED &&
                             backendClient_ && backendClient_->configured());
-  updateTimeSync();
+  }
+  { FireUiPhaseTimer timing("time_sync"); updateTimeSync(); }
   updateBackend();
   updateAiAudio();
   updateDebugTests();
@@ -1270,7 +1293,9 @@ void FireOS::update() {
   const uint32_t drawInterval = screen_ == Screen::AiDeveloper
                                     ? 33
                                     : animatedScreen ? 25 : 50;
-  if (redrawRequested_ || millis() - lastDrawAt_ >= drawInterval) draw();
+  if (redrawRequested_ || millis() - lastDrawAt_ >= drawInterval) {
+    FireUiPhaseTimer timing("draw_frame"); draw();
+  }
   // Initialize BLE after the first Bluetooth settings frame is visible. BLE
   // setup can take a noticeable amount of time and must not delay the menu
   // transition itself.
@@ -1597,6 +1622,7 @@ void FireOS::saveSavedBluetoothDevices() {
 }
 
 bool FireOS::initSdCard() {
+  invalidateLuaApps();
   sdLastProbe_ = millis();
   // SD.begin() initializes the default VSPI bus (18/19/23 on FIRE).
   sdReady_ = SD.begin(kSdCsPin);
@@ -1887,6 +1913,7 @@ void FireOS::previewSelectedSdFile() {
 }
 
 void FireOS::deleteSelectedSdEntry() {
+  invalidateLuaApps();
   bool ok = false;
   if (sdSelection_ < sdEntryCount_) {
     ok = sdEntryDirectories_[sdSelection_]
@@ -1899,6 +1926,7 @@ void FireOS::deleteSelectedSdEntry() {
 }
 
 void FireOS::copySelectedSdEntry() {
+  invalidateLuaApps();
   if (sdSelection_ >= sdEntryCount_ || sdEntryDirectories_[sdSelection_]) {
     sdMessage_ = "Copy folders not supported";
     return;
@@ -1928,6 +1956,7 @@ void FireOS::copySelectedSdEntry() {
 }
 
 void FireOS::moveSelectedSdEntry() {
+  invalidateLuaApps();
   if (sdSelection_ >= sdEntryCount_ || sdPath_ == "/") {
     sdMessage_ = "Already at root";
     return;
@@ -1941,6 +1970,7 @@ void FireOS::moveSelectedSdEntry() {
 }
 
 void FireOS::commitSdNameEditor() {
+  invalidateLuaApps();
   sdNameBuffer_.trim();
   if (sdNameBuffer_.length() == 0) {
     sdMessage_ = "Name cannot be empty";
@@ -2058,7 +2088,6 @@ String FireOS::externalAppBaseName(const String& path) const {
 
 void FireOS::scanExternalApps() {
   externalAppCount_ = 0;
-  luaAppCount_ = 0;
   if (!sdReady_ && !initSdCard()) return;
   File apps = SD.open("/apps");
   if (!apps || !apps.isDirectory()) return;
@@ -2110,77 +2139,215 @@ void FireOS::scanExternalApps() {
 }
 
 void FireOS::scanLuaApps() {
-  luaAppCount_ = 0;
-  if (!sdReady_ && !initSdCard()) return;
-  File apps = SD.open("/apps");
-  if (!apps || !apps.isDirectory()) return;
-  File entry = apps.openNextFile();
-  while (entry && luaAppCount_ < kMaxLuaApps) {
-    if (entry.isDirectory()) {
-      String raw = entry.name();
-      if (!raw.startsWith("/")) raw = "/apps/" + raw;
-      if (sdBaseName(raw).startsWith(".")) {
-        entry.close();
-        entry = apps.openNextFile();
-        continue;
-      }
-      const String manifest = sdJoinPath(raw, "manifest.json");
-      const String source = sdJoinPath(raw, "main.lua");
-      if (SD.exists(manifest) && SD.exists(source)) {
-        luaAppPaths_[luaAppCount_] = source;
-        luaAppNames_[luaAppCount_] = sdBaseName(raw);
-        luaAppIds_[luaAppCount_] = jsonStringField(
-            [&]() {
-              File manifestFile = SD.open(manifest, FILE_READ);
-              String body;
-              if (manifestFile && manifestFile.size() <= 8192) {
-                while (manifestFile.available()) body += static_cast<char>(manifestFile.read());
-              }
-              if (manifestFile) manifestFile.close();
-              return body;
-            }(),
-            "id");
-        if (luaAppIds_[luaAppCount_].length() == 0)
-          luaAppIds_[luaAppCount_] = luaAppNames_[luaAppCount_];
-        luaAppDisplayNames_[luaAppCount_] = jsonStringField(
-            [&]() {
-              File manifestFile = SD.open(manifest, FILE_READ);
-              String body;
-              if (manifestFile && manifestFile.size() <= 8192) {
-                while (manifestFile.available()) body += static_cast<char>(manifestFile.read());
-              }
-              if (manifestFile) manifestFile.close();
-              return body;
-            }(),
-            "name");
-        if (luaAppDisplayNames_[luaAppCount_].length() == 0)
-          luaAppDisplayNames_[luaAppCount_] = luaAppNames_[luaAppCount_];
-        ++luaAppCount_;
-      }
-    }
-    entry.close();
-    entry = apps.openNextFile();
+  // Requests coalesce. Files and the candidate belong solely to the UI task.
+  if (luaScanPhase_ == LuaScanPhase::Idle) luaScanPending_ = true;
+}
+
+void FireOS::invalidateLuaApps() {
+  ++luaScanRevision_;
+  luaScanManifest_.close();
+  luaScanDirectory_.close();
+  luaScanPhase_ = LuaScanPhase::Idle;
+  luaScanBody_ = "";
+  luaCacheValid_ = false;
+  luaScanPending_ = true;
+  appInventoryPending_ = true;
+}
+
+void FireOS::serviceLuaAppScan() {
+  FireUiPhaseTimer timing("lua_scan_step");
+  // Package extraction mutates /apps on its existing worker. Never read a
+  // partially installed tree, nor publish a candidate from before that change.
+  if (packageManager_ && packageManager_->busy()) {
+    if (luaScanPhase_ != LuaScanPhase::Idle) invalidateLuaApps();
+    return;
   }
-  apps.close();
-  for (uint8_t i = 0; i < luaAppCount_; ++i) {
-    for (uint8_t j = i + 1; j < luaAppCount_; ++j) {
-      if (luaAppNames_[j].compareTo(luaAppNames_[i]) < 0) {
-        String path = luaAppPaths_[i];
-        luaAppPaths_[i] = luaAppPaths_[j];
-        luaAppPaths_[j] = path;
-        String name = luaAppNames_[i];
-        luaAppNames_[i] = luaAppNames_[j];
-        luaAppNames_[j] = name;
-        String id = luaAppIds_[i];
-        luaAppIds_[i] = luaAppIds_[j];
-        luaAppIds_[j] = id;
-        String displayName = luaAppDisplayNames_[i];
-        luaAppDisplayNames_[i] = luaAppDisplayNames_[j];
-        luaAppDisplayNames_[j] = displayName;
-      }
+  if (luaScanPhase_ == LuaScanPhase::Idle) {
+    if (!luaScanPending_) {
+      if (appInventoryPending_ && luaCacheValid_) sendAppInventory();
+      return;
     }
+    luaScanPending_ = false;
+    luaScanCount_ = 0;
+    luaScanComplete_ = sdReady_;
+    luaScanActiveRevision_ = luaScanRevision_;
+    luaScanStartedAt_ = millis();
+    luaScanPhase_ = sdReady_ ? LuaScanPhase::CheckStorage : LuaScanPhase::Finish;
+    return;
   }
-  syncLuaAppSelections();
+  if (luaScanActiveRevision_ != luaScanRevision_) {
+    invalidateLuaApps();
+    return;
+  }
+  switch (luaScanPhase_) {
+    case LuaScanPhase::CheckStorage:
+      luaScanDirectory_ = SD.open("/");
+      if (!luaScanDirectory_ || !luaScanDirectory_.isDirectory()) {
+        luaScanComplete_ = false;
+        luaScanPhase_ = LuaScanPhase::Finish;
+      } else luaScanPhase_ = LuaScanPhase::RootExists;
+      break;
+    case LuaScanPhase::RootExists:
+      errno = 0;
+      luaScanPhase_ = SD.exists("/apps") ? LuaScanPhase::OpenRoot : LuaScanPhase::Finish;
+      if (errno && errno != ENOENT) luaScanComplete_ = false;
+      break;
+    case LuaScanPhase::OpenRoot:
+      luaScanDirectory_.close();
+      luaScanDirectory_ = SD.open("/apps");
+      if (!luaScanDirectory_ || !luaScanDirectory_.isDirectory()) {
+        luaScanComplete_ = false;
+        luaScanPhase_ = LuaScanPhase::Finish;
+      } else luaScanPhase_ = LuaScanPhase::Next;
+      break;
+    case LuaScanPhase::Next: {
+      // At most one directory entry per turn, including hidden/non-app files.
+      errno = 0;
+      File entry = luaScanDirectory_.openNextFile();
+      if (!entry) {
+        if (errno) luaScanComplete_ = false;
+        luaScanPhase_ = LuaScanPhase::Finish;
+        break;
+      }
+      String folder = entry.name();
+      const bool directory = entry.isDirectory();
+      entry.close();
+      if (!directory || sdBaseName(folder).startsWith(".")) break;
+      if (luaScanCount_ == kMaxLuaApps) {
+        luaScanComplete_ = false;  // Do not claim an exhaustive truncated list.
+        luaScanPhase_ = LuaScanPhase::Finish;
+        break;
+      }
+      luaScanFolder_ = folder.startsWith("/") ? folder : "/apps/" + folder;
+      luaScanPhase_ = LuaScanPhase::SourceExists;
+      break;
+    }
+    case LuaScanPhase::SourceExists:
+      errno = 0;
+      luaScanPhase_ = SD.exists(sdJoinPath(luaScanFolder_, "main.lua"))
+                          ? LuaScanPhase::OpenManifest : LuaScanPhase::Next;
+      if (errno && errno != ENOENT) luaScanComplete_ = false;
+      break;
+    case LuaScanPhase::OpenManifest:
+      luaScanManifest_ = SD.open(sdJoinPath(luaScanFolder_, "manifest.json"), FILE_READ);
+      luaScanBody_ = "";
+      luaScanExpected_ = luaScanManifest_ ? luaScanManifest_.size() : 0;
+      if (!luaScanManifest_ || luaScanManifest_.isDirectory() ||
+          !luaScanExpected_ || luaScanExpected_ > 8192 ||
+          !luaScanBody_.reserve(luaScanExpected_)) {
+        luaScanManifest_.close();
+        luaScanComplete_ = false;
+        luaScanPhase_ = LuaScanPhase::Next;
+      } else luaScanPhase_ = LuaScanPhase::Read;
+      break;
+    case LuaScanPhase::Read: {
+      // Bulk reads replace bytewise SD calls. One bounded block per UI turn.
+      uint8_t block[256];
+      const size_t amount = min(sizeof(block), luaScanExpected_ - luaScanBody_.length());
+      const size_t received = luaScanManifest_.read(block, amount);
+      if (received != amount || !luaScanBody_.concat(reinterpret_cast<const char*>(block), received)) {
+        luaScanManifest_.close();
+        luaScanComplete_ = false;
+        luaScanPhase_ = LuaScanPhase::Next;
+      } else if (luaScanBody_.length() == luaScanExpected_) {
+        luaScanManifest_.close();
+        luaScanPhase_ = LuaScanPhase::Parse;
+      }
+      break;
+    }
+    case LuaScanPhase::Parse: {
+      cJSON* document = fireJsonSafe(luaScanBody_.c_str(), luaScanBody_.length(), 8192)
+          ? cJSON_ParseWithOpts(luaScanBody_.c_str(), nullptr, true) : nullptr;
+      if (!document || !cJSON_IsObject(document)) {
+        luaScanComplete_ = false;
+      } else {
+        auto field = [document](const char* name) -> String {
+          const cJSON* value = cJSON_GetObjectItemCaseSensitive(document, name);
+          return cJSON_IsString(value) && value->valuestring ? String(value->valuestring) : String();
+        };
+        LuaScanItem& item = luaScanItems_[luaScanCount_++];
+        item.path = sdJoinPath(luaScanFolder_, "main.lua");
+        item.name = sdBaseName(luaScanFolder_);
+        item.id = field("id");
+        if (!item.id.length()) item.id = item.name;
+        item.displayName = field("name");
+        if (!item.displayName.length()) item.displayName = item.name;
+        item.version = field("version");
+        item.checksum = field("checksum");
+        item.packageId = preferences.getString(compactPreferenceKey("ap_", item.name).c_str(), "");
+        if (item.id.length() > 96 || item.displayName.length() > 128 ||
+            item.version.length() > 64 || item.checksum.length() > 64 ||
+            item.packageId.length() > 128) luaScanComplete_ = false;
+      }
+      cJSON_Delete(document);
+      luaScanBody_ = "";
+      luaScanPhase_ = LuaScanPhase::Next;
+      break;
+    }
+    case LuaScanPhase::Finish:
+      luaScanDirectory_.close();
+      publishLuaAppScan();
+      break;
+    default: break;
+  }
+}
+
+void FireOS::publishLuaAppScan() {
+  FireUiPhaseTimer timing("lua_scan_publish");
+  if (luaScanActiveRevision_ != luaScanRevision_) { invalidateLuaApps(); return; }
+  // Keep the previous complete snapshot on any read/parse/truncation failure.
+  // An incomplete inventory must never tell the backend that an app vanished.
+  if (luaScanComplete_) {
+    const String selectedMain = mainIndex_ >= kSystemMainCount &&
+        mainIndex_ - kSystemMainCount < luaAppCount_ ? luaAppIds_[mainIndex_ - kSystemMainCount] : String();
+    const String selectedApp = externalAppSelection_ >= externalAppCount_ &&
+        externalAppSelection_ - externalAppCount_ < luaAppCount_ ? luaAppPaths_[externalAppSelection_ - externalAppCount_] : String();
+    const String selectedMenu = luaMenuSelection_ < luaAppCount_ ? luaAppIds_[luaMenuSelection_] : String();
+    const String selectedProject = aiProjectSelection_ && aiProjectSelection_ <= luaAppCount_
+        ? luaAppIds_[aiProjectSelection_ - 1] : String();
+    for (uint8_t i = 0; i < luaScanCount_; ++i)
+      for (uint8_t j = i + 1; j < luaScanCount_; ++j)
+        if (luaScanItems_[j].name.compareTo(luaScanItems_[i].name) < 0) {
+          LuaScanItem swap = luaScanItems_[i]; luaScanItems_[i] = luaScanItems_[j]; luaScanItems_[j] = swap;
+        }
+    luaAppCount_ = luaScanCount_;
+    if (selectedMain.length()) mainIndex_ = 0;
+    externalAppSelection_ = selectedApp.length() ? externalAppCount_ + luaAppCount_
+        : min<uint8_t>(externalAppSelection_, externalAppCount_ + luaAppCount_);
+    luaMenuSelection_ = 0;
+    aiProjectSelection_ = 0;
+    if (bootAppPicker_) bootAppSelection_ = 0;
+    for (uint8_t i = 0; i < luaAppCount_; ++i) {
+      const LuaScanItem& item = luaScanItems_[i];
+      luaAppPaths_[i] = item.path; luaAppNames_[i] = item.name;
+      luaAppIds_[i] = item.id; luaAppDisplayNames_[i] = item.displayName;
+      luaAppVersions_[i] = item.version; luaAppChecksums_[i] = item.checksum;
+      luaAppPackageIds_[i] = item.packageId;
+      if (item.id == selectedMain) mainIndex_ = kSystemMainCount + i;
+      if (item.path == selectedApp) externalAppSelection_ = externalAppCount_ + i;
+      if (item.id == selectedMenu) luaMenuSelection_ = i;
+      if (item.id == selectedProject) aiProjectSelection_ = i + 1;
+      if (bootAppPicker_ && item.path == selectedBootAppPath_) bootAppSelection_ = externalAppCount_ + i + 1;
+    }
+    syncLuaAppSelections();
+    externalAppOffset_ = externalAppSelection_ > 4 ? externalAppSelection_ - 4 : 0;
+    luaMenuOffset_ = luaMenuSelection_ > 5 ? luaMenuSelection_ - 5 : 0;
+    aiProjectOffset_ = aiProjectSelection_ > 5 ? aiProjectSelection_ - 5 : 0;
+    if (bootAppPicker_) bootAppOffset_ = bootAppSelection_ > 5 ? bootAppSelection_ - 5 : 0;
+    if (appManagerDeleteConfirm_ && appManagerDeleteMode_ == 1) {
+      appManagerDeleteConfirm_ = false; appManagerDeleteMode_ = 0;
+    }
+    appManagerActionMenu_ = false;
+    rebuildAppManagerItems();
+    redrawRequested_ = true;
+  }
+  luaCacheValid_ = true;
+  luaCacheComplete_ = luaScanComplete_;
+  luaScanPhase_ = LuaScanPhase::Idle;
+  Serial.printf("FIRE inventory scan apps=%u complete=%u elapsed_ms=%lu\n",
+                luaScanCount_, luaScanComplete_, static_cast<unsigned long>(millis() - luaScanStartedAt_));
+  for (auto& item : luaScanItems_) item = LuaScanItem();
+  if (appInventoryPending_) sendAppInventory();
 }
 
 void FireOS::syncLuaAppSelections() {
@@ -3454,6 +3621,9 @@ int8_t FireOS::managerItemForAppId(const String& appId) const {
 }
 
 void FireOS::rebuildAppManagerItems() {
+  FireUiPhaseTimer timing("app_manager");
+  const String selectedId = managerSelection_ < managerItemCount_ ? managerItems_[managerSelection_].appId : String();
+  const String selectedPath = managerSelection_ < managerItemCount_ ? managerItems_[managerSelection_].localPath : String();
   managerItemCount_ = 0;
   for (uint8_t index = 0;
        index < externalAppCount_ && managerItemCount_ < kMaxManagerItems;
@@ -3479,15 +3649,8 @@ void FireOS::rebuildAppManagerItems() {
     item.appId = appId;
     item.name = luaAppNames_[index];
     item.localPath = source;
-    item.localPackageId = preferences.getString(
-        compactPreferenceKey("ap_", appId).c_str(), "");
-    File manifest = SD.open(sdJoinPath(folder, "manifest.json"), FILE_READ);
-    if (manifest && manifest.size() <= 8192) {
-      String body;
-      while (manifest.available()) body += static_cast<char>(manifest.read());
-      item.localVersion = jsonStringField(body, "version");
-    }
-    if (manifest) manifest.close();
+    item.localPackageId = luaAppPackageIds_[index];
+    item.localVersion = luaAppVersions_[index];
   }
 
   for (uint8_t backendIndex = 0; backendIndex < backendAppCount_; ++backendIndex) {
@@ -3521,6 +3684,10 @@ void FireOS::rebuildAppManagerItems() {
       managerItems_[j] = swap;
     }
   }
+  for (uint8_t i = 0; i < managerItemCount_; ++i)
+    if ((selectedId.length() && managerItems_[i].appId == selectedId) ||
+        (!selectedId.length() && selectedPath.length() && managerItems_[i].localPath == selectedPath))
+      managerSelection_ = i;
   const uint8_t itemCount = managerItemCount_ + 1;
   if (managerSelection_ >= itemCount) managerSelection_ = itemCount - 1;
   if (managerSelection_ < managerOffset_) managerOffset_ = managerSelection_;
@@ -3651,42 +3818,34 @@ void FireOS::requestSelectedAppVersions() {
 }
 
 void FireOS::sendAppInventory() {
+  FireUiPhaseTimer timing("inventory_send");
+  appInventoryPending_ = true;
   if (!backendClient_ || !backendClient_->sessionReady()) return;
-  if (!sdReady_) {
-    backendClient_->appInventory("[]", false, false);
+  if (luaScanPending_ || luaScanPhase_ != LuaScanPhase::Idle ||
+      (packageManager_ && packageManager_->busy())) return;
+  if (!luaCacheValid_) { scanLuaApps(); return; }
+  if (!luaCacheComplete_ || !sdReady_) {
+    // complete=false suppresses missing inference, but PRESENT entries still
+    // change backend state. Never serialize stale UI rows after a failed scan.
+    appInventoryPending_ = !backendClient_->appInventory("[]", sdReady_, false);
     return;
   }
   String appsJson = "[";
   for (uint8_t index = 0; index < luaAppCount_; ++index) {
-    const String source = luaAppPaths_[index];
-    const int slash = source.lastIndexOf('/');
-    const String folder = slash > 0 ? source.substring(0, slash) : source;
-    const String appId = sdBaseName(folder);
-    String version;
-    String checksum;
-    File manifest = SD.open(sdJoinPath(folder, "manifest.json"), FILE_READ);
-    if (manifest && manifest.size() <= 8192) {
-      String body;
-      while (manifest.available()) body += static_cast<char>(manifest.read());
-      version = jsonStringField(body, "version");
-      checksum = jsonStringField(body, "checksum");
-    }
-    if (manifest) manifest.close();
-    const String packageId = preferences.getString(
-        compactPreferenceKey("ap_", appId).c_str(), "");
     if (index > 0) appsJson += ',';
-    appsJson += "{\"app_id\":\"" + jsonEscapeField(appId);
-    if (packageId.length() > 0)
-      appsJson += "\",\"package_id\":\"" + jsonEscapeField(packageId);
-    appsJson += "\",\"version\":\"" + jsonEscapeField(version) +
-                "\",\"checksum\":\"" + jsonEscapeField(checksum) + "\"}";
+    appsJson += "{\"app_id\":\"" + jsonEscapeField(luaAppNames_[index]);
+    if (luaAppPackageIds_[index].length())
+      appsJson += "\",\"package_id\":\"" + jsonEscapeField(luaAppPackageIds_[index]);
+    appsJson += "\",\"version\":\"" + jsonEscapeField(luaAppVersions_[index]) +
+                "\",\"checksum\":\"" + jsonEscapeField(luaAppChecksums_[index]) + "\"}";
   }
   appsJson += ']';
-  backendClient_->appInventory(appsJson, true, true);
+  appInventoryPending_ = !backendClient_->appInventory(appsJson, sdReady_, luaCacheComplete_ && sdReady_);
 }
 
 bool FireOS::deleteExternalApp(const String& path) {
   if (path.length() == 0 || (!sdReady_ && !initSdCard())) return false;
+  invalidateLuaApps();
   const bool deleted = SD.remove(path);
   if (deleted && selectedBootAppPath_ == path) {
     selectedBootAppPath_ = "";
@@ -3701,6 +3860,7 @@ bool FireOS::deleteLuaApp(const String& path) {
   const int slash = folder.lastIndexOf('/');
   if (slash <= 0) return false;
   folder = folder.substring(0, slash);
+  invalidateLuaApps();
   const bool ok = removeSdTree(folder);
   if (ok) {
     const String appId = sdBaseName(folder);
@@ -3826,12 +3986,8 @@ bool FireOS::launchSelectedBootApp() {
   if (selectedBootAppPath_.length() == 0) return false;
   if (!sdReady_ && !initSdCard()) return false;
   if (selectedBootAppPath_.endsWith("/main.lua")) {
-    scanLuaApps();
-    for (uint8_t index = 0; index < luaAppCount_; ++index) {
-      if (luaAppPaths_[index] == selectedBootAppPath_)
-        return startLuaApp(luaAppPaths_[index], luaAppDisplayNames_[index]);
-    }
-    return false;
+    // Boot launch reads/validates its own manifest; it does not need an index.
+    return startLuaApp(selectedBootAppPath_, sdBaseName(selectedBootAppPath_));
   }
   return installExternalApp(selectedBootAppPath_, true, true);
 }
@@ -4324,7 +4480,6 @@ void FireOS::open(Screen screen) {
     externalAppOffset_ = 0;
     externalAppMessage_ = "";
     externalAppCount_ = 0;
-    luaAppCount_ = 0;
     externalAppMessage_ = "Scanning apps...";
     appScanPending_ = true;
   }
@@ -4347,7 +4502,6 @@ void FireOS::open(Screen screen) {
     backendCatalogLoading_ = false;
     backendCatalogNextOffset_ = 0;
     externalAppCount_ = 0;
-    luaAppCount_ = 0;
     externalAppMessage_ = "Scanning apps...";
     appScanPending_ = true;
   }
@@ -6482,6 +6636,7 @@ void FireOS::applyBackendMode() {
 }
 
 void FireOS::updateBackend() {
+  FireUiPhaseTimer timing("backend_service");
   if (!backendClient_) return;
   if (backendMode_ == 2 || wifiMode_ == 2) {
     if (backendClient_->active()) backendClient_->disconnect();
@@ -6618,11 +6773,6 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
   os->aiWorkflowText_ = ok ? "INSTALLED" : message;
   if (os->screen_ == Screen::AppsSettings) {
     os->managerStatus_ = ok ? "Downloaded to FIRE" : message;
-    if (ok) {
-      os->scanExternalApps();
-      os->rebuildAppManagerItems();
-      os->sendAppInventory();
-    }
   }
   if (ok) {
     const String installedPath = os->packageManager_
@@ -6645,6 +6795,11 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
       preferences.putString(compactPreferenceKey("ap_", appId).c_str(),
                             packageId);
     }
+    os->invalidateLuaApps();
+    os->scanLuaApps();
+    os->sendAppInventory();
+    // RUN resolves lp_/lh_ and loads the installed path directly, independent
+    // of the asynchronously refreshed menu/inventory snapshot.
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
         os->aiInstallId_, packageId, true, archiveHash, "installed");
     if (os->luaRepairRunAfterInstall_ &&
@@ -6762,6 +6917,7 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "app_inventory_request") {
+    FireUiPhaseTimer timing("inventory_request");
     scanLuaApps();
     rebuildAppManagerItems();
     sendAppInventory();
@@ -7007,6 +7163,7 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowText_ = "DOWNLOAD EXPIRED";
       return;
     }
+    invalidateLuaApps();
     const bool accepted = packageManager_ && packageManager_->startDownload(
         backendHost_, backendPort_, backendToken_, url, aiPackageId_, aiInstallId_,
         hash, size);
@@ -7133,6 +7290,7 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "rollback_request") {
+    invalidateLuaApps();
     const String rollbackId = jsonStringField(message, "rollback_id");
     const String packageId = jsonStringField(message, "package_id");
     const String commandBoot = jsonStringField(message, "boot_id");
@@ -7178,6 +7336,10 @@ void FireOS::handleBackendMessage(const String& message) {
           available = false;
         }
       }
+    }
+    if (available) {
+      const String folder = path.substring(0, path.lastIndexOf('/'));
+      preferences.putString(compactPreferenceKey("ap_", sdBaseName(folder)).c_str(), packageId);
     }
     if (luaAppActive_) stopLuaApp("rollback");
     if (backendClient_)
@@ -7797,6 +7959,7 @@ void FireOS::connectSavedWifi() {
 }
 
 void FireOS::beginWifiConnection() {
+  FireUiPhaseTimer timing("wifi_prepare");
   if (wifiSsid_.length() == 0) {
     wifiConnectActive_ = false;
     wifiStatus_ = "No saved network";
@@ -7816,7 +7979,10 @@ void FireOS::beginWifiConnection() {
 void FireOS::updateWifiState() {
   if (wifiBeginAt_ && millis() - wifiBeginAt_ >= 75) {
     wifiBeginAt_ = 0;
-    if (wifiEnabled_ && wifiMode_ != 2) WiFi.begin(wifiSsid_.c_str(), wifiPassword_.c_str());
+    if (wifiEnabled_ && wifiMode_ != 2) {
+      FireUiPhaseTimer timing("wifi_begin");
+      WiFi.begin(wifiSsid_.c_str(), wifiPassword_.c_str());
+    }
   }
   const wl_status_t status = WiFi.status();
   if (wifiScanActive_) {
