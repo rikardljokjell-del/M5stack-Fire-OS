@@ -6,16 +6,66 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-Kode og signert testpakke **fire-os-1.2.0-rc5** er ferdigstilt. Rikards FIRE
-er fysisk USB-migrert med full backup og kjører helsegodkjent RC5 i app1.
+Signert testkandidat **fire-os-1.2.0-rc7** er publisert på main
+`093d7751a507b92b5d1d332f76a7961f20032050`. Alle **15 tester og tre bygg**
+bestod på kilde `7eb40b7e0effca647d101031c777832aa672a010`,
+[CI 45496282327](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45496282327).
+Sju offentlige filer er hentet og sammenlignet byte for byte; katalogsignaturer
+og USB-pakken er kontrollert. FIRE har deretter selv hentet og installert
+den eksakte RC7-filen fra GitHub, uten SD-mellomlagring.
+
+Avbrudd ved én prosent ble akseptert etter minst 24 225 vellykket skrevne
+byte; alle 8 192 byte oppstartsmetadata var uendret. Ett eksplisitt nytt
+forsøk fullførte nedlasting, flashkontroll og vanlig RC7-oppstart. Faktisk
+app1/B ble lest tilbake med riktig CI-hash og sekvens **10 VALID** / gyldig
+CRC. Inaktiv testutgave er erstattet; begge OS-plasser er nå ren RC7.
+125 sekunders vanlig drift og en 45-sekunders vanlig omstart viste ingen
+panic, ekstra reset eller watchdog. Maks løkkegap var **85,014 / 86,013 ms**.
+Siste omstart ga to komplette skanninger med sju apper. COM3 er lukket.
+
+Eksisterende backend bekreftet deretter ny RC7-boot med nyere komplett
+inventar: **7/7** app-ID-er, versjoner, checksums og normaliserte pakke-ID-er
+matcher den tidligere fysiske referansen. Både health og nettsiden svarte
+HTTP 200. Firmwareoversikten viste **RC7 → RC6 → RC5 → RC2 → RC1 → 1.1**,
+kun lesing og ingen katalogfeil. Transporten var klar uten registrert feil.
+
+RC7 installerer direkte fra GitHub til inaktiv OS-slot uten SD-kort eller
+backend. Nettverksdata og tilbakeavlest flash må matche signert hash før
+oppstartsvalget endres. Menyens installasjonsbekreftelse er rettet.
+Unødvendige forbindelser pauses under firmwarearbeid; aktive AI-/appjobber
+avbrytes ikke automatisk. SD-nedlasting er fjernet fra firmwaremenyen og
+avvises også ved kølegging. Status, fremdrift og avbryt vises under arbeidet.
+
+Brukerens SD-feil er gjenskapt fysisk: ett kall skrev bare 9 av 2048 byte
+med EIO etter omtrent 1,64 MB. Kortet hadde god plass. Internminnet var også
+presset, men drivergjennomgangen beviser ikke at minnepress forårsaket EIO.
+En privat RC6-basert SD-test krasjet senere med LoadProhibited i FatFS
+validate/f_write; direkte OTA ble ikke nådd. Årsaken er ikke fastslått og
+tilskrives ikke maskinvare. Den kjente SD-skrivebanen brukes ikke ved RC7
+GitHub-oppdatering. Se [samlet fysisk bevis](M5Stack-device/PHYSICAL_USB_2026-11-24.md).
+
+Normal RC7 er **2 422 464 byte**, SHA256
+`55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372`.
+[USB-arkivet](firmware/fire-os-1.2.0-rc7-usb.zip) er **2 646 099 byte**, SHA256
+`eec3e649611e972e40afe9d34a900e4edebd05f0e4200989896983cb52541c77`.
+Bare de åtte nødvendige filene er med; ny utpakking bestod faktisk
+signatur-/hash-/image-/layoutkontroll. Bootloader, tabell og recovery er
+uendrede fysisk testede RC2-komponenter med separat kildeopphav i
+[utgivelsesbeviset](firmware/fire-os-1.2.0-rc7-evidence.json).
+
+### Tidligere fysisk RC5-bevis
+
+Kode og signert testpakke **fire-os-1.2.0-rc5** ble ferdigstilt. Rikards FIRE
+ble fysisk USB-migrert med full backup og kjørte helsegodkjent RC5 i app1.
 Kontrollert tidlig omstart ga SDK-tilbakeføring til factory recovery. RC5
 stod 125 sekunder og bestod vanlig omstart i 45 sekunder uten registrerte
 krasj, ekstra reset eller watchdog-feil. Maksimal løkkeavstand var **87,988 ms**
 og **86,013 ms**, mot **1 391 ms** før rettingene. Backend bekreftet samme
 sju apper og fersk tilkobling. Se [det fysiske USB-beviset](M5Stack-device/PHYSICAL_USB_2026-11-24.md).
 
-Dette er avgrenset fysisk oppstarts-/inventarbevis. Visuell/knapp-/lydprøve,
-Home i brukerens HA, GitHub-OTA og samlet AI/appflyt står fortsatt åpne.
+RC5-tallene er historiske oppstarts-/inventarbevis. RC7 GitHub-OTA er nå
+prøvd som beskrevet over. Visuell/knapp-/lydprøve, Home i brukerens HA og
+samlet AI/appflyt står fortsatt åpne.
 Produksjonsgodkjenning krever de gjenstående kontrollene under.
 
 | Område | Implementert / lokalt kontrollert | Gjenstående bevis |
@@ -24,7 +74,7 @@ Produksjonsgodkjenning krever de gjenstående kontrollene under.
 | Offentlig backend | Separate browser-/deviceverter, Access-JWT, engangspålogging lokalt, sesjon/CSRF/Origin og egne enhetstokener | Brukerens domene, konto og tunnel |
 | Jobber og samtale | Samme lagring som Windows-programmet, frakoblet apputvikling, eksplisitt BUILD/RUN og sikker omstart | Nettbrudd/tale/installasjon med ny fysisk firmware |
 | Direkte Home | Native kortvisning, Home/Camper, HA-styrte tillatelser, MQTT/TLS/WSS, veiviser/import; ekte HA og broker testet isolert | Brukerens entiteter/adresser og fysisk FIRE |
-| Firmware/recovery | Tre bygg, 13 CI-tester, signert katalog/bundle, kontrollert USB-arkiv, fysisk oppstart/VALID/SDK-fallback og separat recovery | GitHub-OTA, redningsknapp og tidligere normal OTA-slot |
+| Firmware/recovery | RC7: 15 tester/tre bygg, fysisk GitHub→OTA, avbrudd/nytt forsøk, flash-readback, VALID og vanlig omstart; ren RC7 i begge slotter | Fysisk strømbrudd, redningsknapp og tidligere normal OTA-slot gjenstår |
 
 ## Testbevis
 
@@ -76,7 +126,7 @@ Se [detaljert Home-bevis](M5Stack-backend/home_assistant/VERIFICATION.md).
 Brukerens egne entiteter, offentlig Cloudflare/WSS og fysisk FIRE er fortsatt
 åpne sluttkontroller.
 
-## Levert firmwarepakke
+## Historisk RC5-pakke og testbevis
 
 RC5 erstatter synkron bytevis SD-inventering med en trinnvis, konsistent
 metadataoversikt. Pakkeidentitet lagres før rapportering; mislykket skanning

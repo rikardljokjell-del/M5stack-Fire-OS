@@ -9,7 +9,14 @@ Under arbeidet vises status og fremdrift. A kan avbryte før aktivering.
 Alle 15 tester og tre bygg er bestått på kilde
 [7eb40b7](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/7eb40b7e0effca647d101031c777832aa672a010),
 [CI 45496282327](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45496282327).
-Fysisk direkte GitHub-installasjon pågår; full produksjonsgodkjenning påstås ikke.
+FIRE har fysisk hentet denne RC7-filen fra GitHub, avbrutt ved én prosent
+uten endret oppstartsvalg og fullført etter ett eksplisitt nytt forsøk.
+Tilbakeavlest app1 matcher CI-filen; sekvens 10 er VALID med gyldig CRC.
+Begge OS-plasser inneholder ren RC7, og testutgaven er fjernet.
+125 sekunders drift og 45 sekunders vanlig omstart ga ingen panic/watchdog;
+maks løkkegap var 85/86 ms. Backend bekreftet de samme sju appidentitetene.
+Se [samlet fysisk bevis](../M5Stack-device/PHYSICAL_USB_2026-11-24.md).
+Full brukerprøve av Home, tale, AI/appkjøring og fysisk strømbrudd gjenstår.
 Normal RC7 er ny; de fysisk testede RC2-bildene for bootloader,
 partisjonstabell og recovery beholdes uendret i USB-pakken.
 
@@ -66,8 +73,8 @@ Dette er ikke full produksjonsgodkjenning av Home, tale, apper og GitHub-OTA.
 | [Utgivelsesbevis](fire-os-1.2.0-rc5-evidence.json) | Eksakte filhashes, komponentkilder, CI og avgrensede fysiske resultater |
 
 Start med [samlet oppsett](../SETUP.md) og [fysisk test](../docs/PHYSICAL_CHECK.md).
-**Rikards enhet er allerede migrert og kjører RC5 i B / app1.** Forrige
-private testversjon i A og separat factory recovery er beholdt. En ny enhet
+Under den historiske RC5-testen kjørte Rikards enhet i B / app1. Forrige
+private testversjon i A og separat factory recovery var beholdt. En ny enhet
 bruker [USB-veiledningen](../M5Stack-backend/docs/USB_MIGRATION.md); pakken
 er også klargjort lokalt i
 `M5Stack-backend/workspace/migration/fire-os-1.2.0-rc5/`.
@@ -91,8 +98,9 @@ Etter engangsmigreringen bruker du **Settings → Firmware** på FIRE.
 FIRE kontrollerer signatur, mål, størrelse og SHA256, og skriver bare inaktiv
 OS-slot. Bootloader, partisjonstabell og factory beholdes ved normal OTA.
 Redning kan velges med A før vanlig OS og hente signert firmware uten SD
-eller Windows. Fysisk knapphold, GitHub-OTA og tidligere normal OTA-slot skal
+eller Windows. Fysisk knapphold og tidligere normal OTA-slot skal
 fortsatt prøves; USB-testen av tidlig reset viste tilbakeføring til factory.
+Direkte GitHub-OTA er nå prøvd med RC7 som beskrevet øverst.
 Backendens firmwarevisning viser bare versjoner og informasjon.
 
 Historisk RC2 beholdes uendret med

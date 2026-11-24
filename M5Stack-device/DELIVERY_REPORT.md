@@ -1,6 +1,33 @@
 # FIRE OS — leveransebevis
 
-## RC5: fysisk målt normal og signert sluttpakke
+## RC7: fysisk direkte GitHub-oppdatering
+
+Kilde `7eb40b7e0effca647d101031c777832aa672a010`, CI 45496282327:
+15 tester og tre bygg bestod. Faktisk GitHub-nedlasting/OTA, UI-avbrudd ved 1 %,
+uendret bootvalg, eksplisitt nytt forsøk, normal RC7-boot, CI-byteidentitet,
+sekvens 10 VALID/CRC og vanlig omstart er fysisk kontrollert. Begge slotter har
+ren CI-produksjon, app1 er valgt, ingen testharness er igjen og COM3 er lukket.
+Backend bekreftet nyere komplett oversikt fra sluttoppstarten: 7/7 app-ID-er,
+versjoner, checksums og normaliserte pakke-ID-er matchet RC2. Lagring var klar;
+health-UI svarte 200, og fire Reverse TCP-kanaler var klare uten feil.
+Se [fullt fysisk bevis, teststyringsrace og avgrensninger](PHYSICAL_USB_2026-11-24.md).
+
+Normal: 2 422 464 B, SHA256
+`55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372`.
+Offentlig USB-ZIP: 2 646 099 B, SHA256
+`eec3e649611e972e40afe9d34a900e4edebd05f0e4200989896983cb52541c77`.
+Eksakt utpakking `workspace/release-verify/fire-os-1.2.0-rc7` ble kontrollert av
+masters faktiske migrerings-CLI. RC2-bootloader/tabell/recovery beholdes
+byteidentisk med separat kilde-/CI-proveniens; normal kommer fra RC7 CI.
+
+Produksjon målt passivt 125,015 s: løkkegap 85 014 µs;
+vanlig resetopptak 45,043 s: løkkegap 86 013 µs.
+Oppdateringstesten nådde 176 143 µs gap; ingen generell 100 ms-garanti påstås.
+SD-nedlasting er fjernet fra GitHub-menyen etter påvist EIO/FatFS-krasj;
+den underliggende SD-feilen er ikke erklært rettet. Offline SD-installasjon,
+Home/AI/lyd, visuelle knapper og fysisk recoveryhold gjenstår.
+
+## Historisk RC5: fysisk målt normal og signert sluttpakke
 
 Kildecommit `958415d20029939a0e105f4ee23aa6008a7ab567`.
 [CI 45477480676](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45477480676)
@@ -65,7 +92,7 @@ WebSocket-lesing og de målte 88/86 ms; RC1 anbefaler nå RC5. Begge kataloger
 ble signert på nytt. Normal/image-, migreringsmanifest-, migreringssignatur-
 og alle RC1/RC2-arkivfiler er uendret. Tidligere kataloger er bevart privat.
 
-Rikards enhet står i **B/app1** med RC5 sekvens 4 VALID, og RC4 A/app0 er
+Etter RC5-testen stod Rikards enhet i **B/app1** med RC5 sekvens 4 VALID, og RC4 A/app0 var
 bevart. Den signerte engangspakken skriver normal til **A/app0** ved en ny
 migrering. Disse er ulike dokumenterte installasjonsforløp.
 

@@ -7,9 +7,35 @@ av device-agenten; se den kanoniske
 Pakkekontrollen nedenfor er separat og åpner ingen serieport. Kildekode og
 grønne PC-tester alene er ikke fysisk verifikasjon.
 
-**Rikards FIRE er allerede USB-migrert og kjører helsegodkjent RC5.** Stegene
+**Rikards FIRE er allerede USB-migrert og har bekreftet ren produksjons-RC7-oppstart.** RC6 er
+en publisert kandidat, men SD-lagring krasjet i en privat fysisk UI-test;
+årsaken er ikke tilskrevet SD-maskinvaren. RC7 er bygget og publisert med
+kontrollert signert pakke. Device-agenten har bekreftet GitHub-installasjon,
+lagret helsegodkjenning og vanlig omstart; se den kanoniske rapporten. Stegene
 nedenfor er en generell veiledning for en annen FIRE som trenger førstegangs-
 migrering; de er ikke en ny migreringsoppgave for den ferdig oppdaterte enheten.
+
+## Vanlig oppdatering fra GitHub: ny RC7-flyt
+
+Følgende menyflyt er implementert i bygget og publisert RC7. Produksjonsfilen er
+hentet og installert fysisk av enheten; prøveomfanget fremgår av device-rapporten.
+Flyten erstatter ikke førstegangsmigreringen nedenfor. Historisk
+RC5-verifikasjon er bevart nederst; USB-eksemplene viser den kontrollerte,
+signerte RC7-pakken.
+
+1. Åpne **Settings → Firmware → Oppdater fra GitHub**.
+2. Velg **RC7**, deretter **Installer**. Det andre valget er **Tilbake**.
+3. Bekreft installeringen med **B** i bekreftelsesvinduet.
+4. Enheten kontrollerer oppdateringen og starter automatisk på nytt etter
+   vellykket kontroll og installering.
+
+Direkte installering går til den inaktive OTA-plassen og krever **ikke SD-kort**.
+GitHub-menyen har ingen funksjon for å lagre firmware på SD. RC7 avviser også
+slike lagringsforespørsler i koden. Installering fra en ferdig eksisterende,
+frakoblet SD-fil beholdes som en separat funksjon; det er ikke et nødvendig
+mellomsteg for GitHub-installering. Fysisk SD-installering er ikke godkjent
+av denne backendkontrollen. At den nye flyten unngår SD-skriving, beviser ikke
+at SD-skrivefeilen er rettet.
 
 ## Før du begynner
 
@@ -35,21 +61,21 @@ du skal slå av for å tvinge fram migrering.
 ## 1. Kontroller pakken uten enhet
 
 Åpne PowerShell i `M5Stack-backend`. Den ferdige pakken ligger for eksempel i
-`workspace\migration\fire-os-1.2.0-rc5` og inneholder:
+`workspace\migration\fire-os-1.2.0-rc7` og inneholder:
 
 - `migration.json` og `migration.sig` (signert plan for alle fire bildene).
 - `bootloader.bin`, `partitions.bin`, `normal.bin`, `recovery.bin`.
 - `catalog-v2.json` og `release-public.pem`.
 
-USB-pakkens utgivelsessti er `firmware/fire-os-1.2.0-rc5-usb.zip` i repoet.
+USB-pakkens utgivelsessti er `firmware/fire-os-1.2.0-rc7-usb.zip` i repoet.
 Pakk ut alle åtte filene til mappen over før kontroll. En separat publisert
-`fire-os-1.2.0-rc5.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
+`fire-os-1.2.0-rc7.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
 en valgfri ekstrakopi i den lokale arbeidsmappen; den finnes ikke i USB-ZIP-en
 og kreves ikke av migreringsverktøyet. Lokal `component-provenance.json` er også
 en ekstra revisjonsfil, ikke en av de åtte nødvendige filene i USB-ZIP-en.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.2.0-rc5
+.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.2.0-rc7
 ```
 
 Standardkommandoen åpner **ingen serieport** og skriver ingenting til FIRE.
@@ -73,7 +99,7 @@ tilhører FIRE, for eksempel COM3; verktøyet gjetter aldri en port.
 ## 3. Kun forhåndskontroll av tilkoblet FIRE
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc5 --port COM3
+.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc7 --port COM3
 ```
 
 Enheten går midlertidig til ROM-nedlastingsmodus for kontroll, og startes tilbake
@@ -87,7 +113,7 @@ brukes enhetens dokumenterte USB-bootprosedyre; ingen sikkerhetsdialog omgås.
 Kjør først når riktig signert pakke og riktig serieport er kontrollert:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc5 --port COM3 --confirm MIGRATE-FIRE
+.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc7 --port COM3 --confirm MIGRATE-FIRE
 ```
 
 Før skriving gjør verktøyet dette i rekkefølge:
@@ -167,19 +193,22 @@ De omfatter ugyldige signaturer/nøkkelbytte/hash/layout, chip/eFuse-avvisning,
 full backup før skriving, bevart NVS/app1/config/coredump, stopp ved ulik
 avlesning eller feil etter skriving, gjenoppretting av skadet partisjonstabell,
 annen enhet og fast baud før avlesning. Ingen serieport er åpnet i disse testene.
-Den faktiske signerte RC5-pakken er kontrollert 24. november 2026 med kommandoen
-over: signaturer, hashes, ESP32-bilder og eksakt layout består (exit 0), uten
-serieport. Normalbildets kilde er `958415d20029939a0e105f4ee23aa6008a7ab567`,
-med [CI-bevis 45477480676](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45477480676).
-Normalbildet er 2408576 byte med SHA256
-`6499092470f40287776fcac49fa73abc225c1f420b41ebb8c4ea76bce1d004e7`.
-Rotkoordinatoren har også pakket ut den ferdige RC5-USB-ZIP-en og kontrollert
-de eksakt åtte filene i `workspace\release-verify\fire-os-1.2.0-rc5-final` med samme
-verktøy: exit 0, uten serieport. Lokal komponentproveniens ligger utenfor ZIP-en.
+Den faktiske signerte RC7-pakken er kontrollert av rotkoordinatoren, og backend-
+agenten har uavhengig kjørt samme `check` mot den nyutpakkede USB-pakken i
+`workspace\release-verify\fire-os-1.2.0-rc7`: signaturer, hashes, ESP32-bilder
+og eksakt layout består (exit 0), uten serieport.
+Normalbildets kilde er `7eb40b7e0effca647d101031c777832aa672a010`, med
+[CI-bevis 45496282327, jobb 138807536199](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45496282327/job/138807536199):
+alle 15 tester og tre bygg bestått. Normalbildet er 2422464 byte med SHA256
+`55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372`.
+USB-ZIP-en er 2646099 byte med SHA256
+`eec3e649611e972e40afe9d34a900e4edebd05f0e4200989896983cb52541c77`.
+Den inneholder eksakt åtte nødvendige filer; lokal komponentproveniens ligger
+utenfor ZIP-en. Pakke-/CI-kontrollen er ikke fysisk OTA-/SD-verifikasjon.
 Bootloader, partisjonstabell og recovery er uendret fra det fysisk testede
 RC2-grunnlaget, kilde `7efbae95fa0a54aeb3e1d6a615390810b69279b4`.
-Dette er RC5-normal med RC2-grunnlag, ikke et nytt RC5-bygg av alle komponentene.
-Tidligere RC1/RC2-pakkekontroller beholdes som historiske bevis; RC2 ble også
+Dette er RC7-normal med RC2-grunnlag, ikke et nytt RC7-bygg av alle komponentene.
+Tidligere RC1/RC2/RC5/RC6-pakkekontroller beholdes som historiske bevis; RC2 ble også
 kontrollert etter nyutpakking av nøyaktig åtte USB-filer.
 
 Fysisk migrering med full backup og bilde-readback, recovery og kontrollert
@@ -192,6 +221,28 @@ pakke-ID-er mot faktisk RC2-referanse. SD var tilgjengelig og fire Reverse TCP-
 kanaler autentisert, uten rapportert transportfeil. Auto/mainmenu kan bevisst
 lukke den inaktive AI-sesjonen; dette er ikke bevis på feil eller en pågående
 AI-samtale. Ingen apper ble kjørt i denne kontrollen.
+
+Ved første produksjonsoppstart etter GitHub-installering har backend også
+mottatt fersk `fire-os-1.2.0-rc7` med ny bootidentitet. Health og webUI svarte
+200; privat Reverse TCP var klar med fire autentiserte kanaler uten feil.
+RC7-bootens appinventar stod først som `requested`, uten ferdig rapport for
+gjeldende boot/tilkobling. Dette var ikke bevis på slettede apper. Etter den
+endelige rene RC7-omstarten bekreftet backend ny boot, nyere komplett inventar
+og tilgjengelig SD. Alle 7/7 gjeldende boot-/tilkoblingsoppføringer matcher
+RC2-referansen på app-ID, versjon, checksum og normalisert package-ID. Rapporten
+var 191 sekunder gammel ved siste avlesning; dette er lagret bevis fra den nye
+booten, ikke en påstand om en melding sendt akkurat ved avlesningen.
+Rotkoordinatoren har separat bekreftet app1 med sekvens 10 og VALID, samt
+at begge OS-plassene inneholder eksakt CI-RC7 og testharnessen er fjernet.
+Produksjonsopptak og vanlig omstart viste komplett skanning av sju apper,
+uten panic eller watchdog; detaljer og målinger ligger i device-rapporten.
+Firmwareoversikten viste RC7, RC6, RC5, RC2, RC1 og 1.1 i den rekkefølgen,
+bare lesbar metadata og ingen katalogfeil. Privat Reverse TCP var fortsatt
+klar med fire autentiserte kanaler uten feil. Ingen AI- eller appkjøring er
+bekreftet av denne kontrollen. Hypotesen om at Auto avbrøt den første
+inventarforespørselen er ikke bevist av disse dataene; den siste rene RC7-booten
+leverte komplett inventar uten backendendring.
+
 Fysisk strømbrudd, recovery-knappevalg, offentlig TLS, Home og AI-/Lua-kjøring
 er ikke bekreftet av disse målingene. De 665 grønne backendtestene er et
 separat lokalt bevis;

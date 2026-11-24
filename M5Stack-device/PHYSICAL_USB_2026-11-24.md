@@ -1,8 +1,113 @@
 # FIRE — fysiske USB-bevis 2026-11-24
 
-## Sluttresultat: RC5 installert og målt
+## RC7: direkte GitHub-installasjon og ren produksjon i begge slotter
 
-Enheten står i normal **fire-os-1.2.0-rc5**, app1 ved `0x650000`, med faktisk
+FIRE kjører **fire-os-1.2.0-rc7 i B/app1**, sekvens **10 VALID=2** med
+gyldig SDK-CRC lest fra flash. Den faktiske nettinstallerte app1-filen er
+byteidentisk med CI: 2 422 464 byte, SHA256
+`55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372`.
+Kilde `7eb40b7e0effca647d101031c777832aa672a010`,
+[CI 45496282327](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45496282327):
+15 tester og alle tre bygg bestod.
+
+En privat engangstest brukte faktisk Firmware-UI, signert GitHub-katalog og
+uendret produksjonskode i FireOta mens vanlig UI kjørte. SD-overføring ble
+uttrykkelig hoppet over. UI-avbrudd ble akseptert ved 1 %; fremdriften settes
+etter vellykket flashskriving/hashoppdatering, så minst 24 225 byte var skrevet.
+Eksakt siste byteantall og separat readback av den delvise filen ble ikke tatt.
+Etter avbruddet var alle 8 192 byte i OTA-metadata uendret, valgt boot var
+fortsatt kjørende app0, og ingen omstart var planlagt. Ett eksplisitt nytt
+forsøk hentet den publiserte RC7-filen fra fast GitHub-URL. Nettstrømhash,
+ESP32-image og full flash-readback ble kontrollert før SDK valgte app1.
+Bootloaderen startet deretter vanlig CI-produksjon; ingen USB-skriving eller
+vertsstyrt reset skjedde mellom nytt forsøk og denne oppstarten.
+
+Teststyringen hadde en bokføringsrace: `positive_install_failed` ble skrevet
+etter workerens fullføring, før neste UI-tikk hadde konsumert suksess og satt
+omstartstid. Produksjons-OS håndterte suksessen og startet om. Markøren er
+bevart i råbeviset; faktisk app1-boot, CI-byteidentitet og VALID-readback er
+uavhengige sluttbevis. Ingen produksjonsendring eller ny OTA ble gjort for
+å pynte på denne testmarkøren.
+
+| Måling | Produksjon etter GitHub, 125.015 s passivt opptak | Vanlig sluttomstart, 45.043 s |
+| --- | ---: | ---: |
+| Maks løkke, µs | 79895 | 80312 |
+| Maks løkkeavstand, µs | 85014 | 86013 |
+| Minste målt intern heap, byte | 103580 | 99044 |
+| Historisk minimum intern heap, byte | 94348 | 80232 |
+| Minste målt største internblokk, byte | 98292 | 94196 |
+| Stakkreserve, byte | 5108 | 5108 |
+| RGB-timeouts | 0 | 0 |
+
+Det passive opptaket startet etter selve nettoppstarten og er ikke et komplett
+opptak av de første oppstartssekundene. Sluttomstarten er tatt opp fra reset.
+Den første nettoppstarten ga ikke bekreftet fersk komplett backend-oversikt.
+Den endelige vanlige produksjonsomstarten logget to komplette skanninger med
+sju apper, på 3 269 og 3 215 ms. Ingen apper ble reinstallert eller slettet
+for å få dette resultatet. Årsaken til den første manglende rapporten er ikke
+fastslått; en transporthypotese ble ikke brukt som grunnlag for kodeendring.
+Backend bekreftet deretter en nyere, komplett oversikt fra den endelige
+RC7-oppstarten og samme boot-/epoch-identitet: 7/7 app-ID-er, versjoner,
+checksums og normaliserte pakke-ID-er matchet RC2-baseline. Lagring var klar,
+health-UI svarte HTTP 200, og Reverse TCP hadde fire klare kanaler uten feil.
+Oversikten var 191 sekunder gammel ved kontrollen, men tilhørte denne
+sluttoppstarten og var nyere enn første RC7-snapshot. Dette er ikke AI/RUN-bevis.
+Ingen ekstra reset, kjent panic/watchdog eller RGB-timeout ble sett i disse
+opptakene. Under selve private oppdateringstesten var maks løkke/gap
+170 611/176 143 µs og historisk minste interne heap 2 516 byte. Disse tallene
+er beholdt; et under-100-ms-mål påstås ikke for hele oppdateringsarbeidet.
+
+Etter faktisk app1 VALID- og imagekontroll ble hele det private testbildets
+overskrevne område bevart lokalt. Bare inaktiv app0 ble erstattet med samme
+eksakte CI-produksjonsfil og FF-padding over resten av testbildets område.
+Full readback og uendret OTA-metadata ble kontrollert. Begge slotter inneholder
+nå produksjons-RC7; ingen automatisk testharness er igjen. App0 er en kontrollert
+USB-kopi og er ikke separat startet i dette sluttløpet. App1 sekvens 10 er
+fortsatt valgt og ble startet normalt igjen. Factory, bootloader og tabell er
+uendrede fysisk verifiserte RC2-komponenter. RC5-slotdump, opprinnelig
+dobbeltbackup og sensitive rålogger er private og ignorerte. COM3 er lukket.
+
+RC7 tilbyr **Settings → Firmware → GitHub → Installer** uten SD-mellomlagring.
+SD-nedlasting er fjernet fra GitHub-menyen og avvist før køing; den påviste
+SD/FatFS-feilen nedenfor er ikke erklært reparert. Installer fra ferdige
+signerte SD-filer finnes fortsatt, men dette separate løpet er ikke fysisk
+sluttverifisert. Kortet satt i under testen; drift med fysisk fjernet kort er
+ikke eget testbevis. Home/HA, lyd/AI, visuell knappkontroll og fysisk recovery-
+knapphold gjenstår. Ingen betalt AI/RUN, ny appinstallasjon eller sletting av
+brukerdata ble utført.
+
+## Historisk GitHub-feil og avgrenset SD-diagnose
+
+Brukerens «GitHub firmware SD write failed» ble fysisk gjenskapt med en
+privat RC5-basert diagnoseutgave mens vanlig UI kjørte. En skriving ba om
+2 048 byte, fikk 9 byte og `errno=5` (EIO). Da var 1 637 367 nettverksbyte
+mottatt; den bevarte `.part`-filen var 1 637 376 byte. Kortet rapporterte
+1 971 351 552 byte totalt og 3 792 896 byte brukt. Kortet var dermed ikke
+fullt. Lav intern heap ble også målt, men er ikke bevist årsak til EIO.
+
+En privat RC6-basert integrasjonstest hentet den faktiske signerte RC6-
+katalogen og startet SD-lagring. Den krasjet før direkte OTA ble forsøkt:
+`LoadProhibited`, `EXCVADDR=0x1`, i `FatFS validate → f_write →
+vfs_fat_write → fwrite → FireGithubFirmwareManager::writeBytes`.
+Dekoding mot nøyaktig privat ELF viste en null filesystem-peker etter
+FatFS-låsventing. Årsaken til at pekeren ble ugyldig er ikke fastslått.
+Ingen watchdog ble sett. Testutgaven hadde allerede bestått lokal
+helsekontroll og startet igjen med testarming av; SD-testen ble ikke gjentatt.
+Dette løpet er **ikke bestått**, og etablerer ingen fungerende SD-nedlasting.
+
+RC5/app1 ble bevart gjennom begge forsøk og deretter startet tilbake med
+sekvens 8 NEW, ordinær helsegodkjenning og normal omstart. Hele RC5-slotten,
+opprinnelig dobbeltbackup, private testbilder og sensitive rålogger er
+bevart lokalt under ignorert `workspace/`. Ingen formatering eller sletting
+av brukerdata ble utført.
+
+RC7 fjerner SD-nedlasting fra GitHub-menyen; hovedløpet er direkte GitHub til
+inaktiv OTA-slot. Den separate direkteinstallasjonstesten er under arbeid.
+Ingen fysisk suksess for dette løpet er påstått ennå.
+
+## Historisk RC5-resultat: installert og målt før GitHub-rettingen
+
+Etter denne testen stod enheten i normal **fire-os-1.2.0-rc5**, app1 ved `0x650000`, med faktisk
 OTA-sekvens 4 **VALID=2** og gyldig SDK-CRC lest fra flash. RC4 app0 med
 sekvens 3 VALID er bevart som tilbakevei, og factory recovery/bootloader/
 partisjonstabell er de fysisk verifiserte RC2-komponentene. COM3 er lukket.

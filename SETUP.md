@@ -115,25 +115,44 @@ offentlig eller skru av sertifikatkontroll for å hoppe over dette steget.
 
 ## 5. Firmware og førstegangsoppgradering
 
-Din FIRE er allerede USB-migrert, oppdatert til **RC5** og helsegodkjent.
-Den står nå i **OS-slot B / app1**, med forrige testversjon i A og separat
-redning beholdt. Bruk den fysiske sluttesten videre.
+Din FIRE er allerede migrert og oppdatert til **RC7 direkte fra GitHub**.
+Den står i **OS-slot B / app1** med lagret helsegodkjenning. Begge OS-plassene
+inneholder ren RC7, testutgaven er fjernet, og separat redning er beholdt.
+Du skal ikke gjenta førstegangs USB-migrering på din enhet.
 
 På en annen FIRE krever den nye oppstartsløsningen en førstegangs USB-migrering.
 Etter migreringen skal normale oppdateringer hentes fra **Innstillinger på FIRE**
 direkte fra GitHub. Studio viser bare versjoner og informasjon.
 
-Den signerte testpakken **fire-os-1.2.0-rc5** er klar på denne PC-en i
-`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc5/`. Følg
+Fra RC7 bruker du denne vanlige oppdateringen:
+
+1. Koble FIRE til Wi-Fi og ha strøm tilkoblet.
+2. Åpne **Settings → Firmware → Oppdater fra GitHub**.
+3. Velg ønsket utgave, deretter **Installer direkte fra GitHub**.
+4. Kontroller versjonen i bekreftelsen og trykk **B / Installer**.
+5. Vent til kontroll, installering og automatisk omstart er ferdig.
+
+Dette krever verken SD-kort eller Windows-backend. Bare den inaktive
+OS-plassen skrives; gjeldende OS og separat redning beholdes under
+nedlastingen. A kan avbryte før den siste aktiveringen. Ved nettfeil velger
+du samme utgave på nytt når nettet er tilbake.
+
+GitHub-menyen har **Installer direkte fra GitHub** og **Tilbake**. Firmware
+lastes ikke ned til SD. **Installer fra SD** beholdes for ferdige offlinefiler
+med signert katalog og brukes ikke i den vanlige GitHub-oppdateringen.
+
+Den signerte testpakken **fire-os-1.2.0-rc7** er klar på denne PC-en i
+`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc7/`. Følg
 [USB-veiledningen](M5Stack-backend/docs/USB_MIGRATION.md) fra steg 1 ved migrering
 av en annen FIRE; din enhet er allerede ferdig med dette.
 Pakken er også tilgjengelig som
-[USB-arkiv](firmware/fire-os-1.2.0-rc5-usb.zip) med
-[kontrollsummer](firmware/fire-os-1.2.0-rc5-SHA256SUMS.txt).
+[USB-arkiv](firmware/fire-os-1.2.0-rc7-usb.zip) med
+[kontrollsummer](firmware/fire-os-1.2.0-rc7-SHA256SUMS.txt).
 
-Versjonen er en testkandidat. Signatur-/pakkekontroll, fysisk USB-oppstart,
-lagret helsegodkjenning og kontrollert SDK-tilbakeføring til factory er bestått.
-Visuelle/knapp-/lydtester, Home, AI/appflyt og GitHub-OTA står på sluttestlisten.
+Versjonen er fortsatt en testkandidat for den samlede leveransen. Fysisk
+GitHub-installasjon, avbrudd ved én prosent, nytt forsøk, flashkontroll,
+lagret helsegodkjenning og vanlig omstart er bestått. Visuelle knappetester,
+lyd, Home, AI/appflyt, fysisk strømbrudd og redningsknapp står på sluttestlisten.
 
 ## Samlet sluttkontroll hos deg
 

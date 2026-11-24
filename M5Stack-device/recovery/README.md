@@ -1,17 +1,16 @@
-# FIRE 1.2.0-rc5: bygg, migrering og redning
+# FIRE 1.2.0-rc7: bygg, migrering og redning
 
-Dette er en testkandidat. Kompilering og kryptografiske tester erstatter ikke
-fysisk kontroll. RC2-grunnlaget ble USB-migrert 24. november med verifisert
-dobbeltbackup. RC5 normal er senere installert, lest tilbake og godkjent.
-Factory-oppstart, SDK-rollback og lagret VALID er bekreftet. Oppstarts-/inventar-
-testen målte 88 ms maksimal løkkeavstand, vanlig omstart 86 ms. Fysisk
-knapphold, Home/AI/lyd og OTA-veiene gjenstår. Se
-[USB-bevis](../PHYSICAL_USB_2026-11-24.md). Historiske 1.1-filer
-beholdes, men er ikke signerte oppdateringer til det nye oppsettet.
+RC7 er fysisk installert direkte fra GitHub til inaktiv OS-slot, verifisert
+mot CI, bekreftet VALID og startet normalt igjen. Avbrudd og eksplisitt nytt
+forsøk er testet. GitHub-menyen bruker ingen SD-mellomlagring; SD-nedlasting
+er fjernet etter fysisk SD-feil. Offline SD-installasjon er et eget, ennå ikke
+sluttverifisert løp. Se [kanoniske fysiske bevis](../PHYSICAL_USB_2026-11-24.md).
 
-Sluttpakken kombinerer eksakt fysisk målt RC5-normal med de byteidentiske
-RC2-komponentene bootloader, tabell og recovery. Komponentenes kilder/CI/hasher
-oppgis separat; nyere CI-recovery er ikke den distribuerte recoveryfilen.
+Dette er fortsatt en testkandidat. Knapphold, Home/AI/lyd og øvrig fysisk
+sluttkontroll gjenstår. Sluttpakken bruker eksakt RC7-normal fra CI og
+byteidentiske fysisk verifiserte RC2-komponenter for bootloader, tabell og
+factory recovery. Deres kilde-/CI-proveniens oppgis separat. Ingen private
+testharness er igjen i enhetens to produksjonsslotter.
 
 ## Første installasjon
 

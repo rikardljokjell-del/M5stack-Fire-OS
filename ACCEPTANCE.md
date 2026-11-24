@@ -47,7 +47,14 @@ Disse punktene stanser ikke uavhengig implementering og lokal kontroll.
 | Ekte Mosquitto på Windows | Ikke kjørt: Code Integrity blokkerte biblioteket | Ingen sikkerhetspolicy omgått; Linux-kontroll bestått under |
 | Ekte Mosquitto 2.1.4, Ubuntu | Bestått TLS/navn, WS, passordskille og negative ACL-kontroller; jobb 138535122608 | Isolert testbroker, ikke brukerens HA/MQTT eller offentlig Cloudflare |
 | Ekte HA 2026.11.3 og broker, Linux | Run 45422781786 grønn; pakke, handling/ACK, labels, fjernbryter, feilinput, reload og ny prosess med retained replay | Syntetiske entiteter; fysisk FIRE og brukeroppsett står åpne |
-| RC5-firmware, Linux på 958415d | Run 45477480676 grønn: normal, recovery, bootloader og 13 tester | Normal RC5 brukes; pakken beholder fysisk testet RC2-bootloader/tabell/recovery med eksplisitt komponentproveniens |
+| RC7-firmware, Linux på 7eb40b7 | Run 45496282327 grønn: normal, recovery, bootloader og 15 tester | Eksakt normal RC7; USB-pakken beholder fysisk testet RC2-bootloader/tabell/recovery med eksplisitt komponentproveniens |
+| Faktisk C++ for HTTP og SD-filbytte, Linux | Nye tester av streng HTTP-framing/lengde og kort skriving, korrupt readback og feil ved filaktivering bestått i samme CI | Vertstester; fysisk SD-kort og ESP32 OTA er egne kontroller |
+| Offentlig RC7-utgivelse | Sju filer HTTP 200, korrekt lengde, byteidentiske; katalogsignaturer verifisert | PC-nedlasting, ikke fysisk FIRE OTA |
+| Brukerens SD-feil på fysisk FIRE | EIO gjenskapt: 9 av 2048 byte skrevet etter omtrent 1,64 MB; god plass | Lav heap observert samtidig, men årsakssammenheng er ikke bevist |
+| Privat RC6-basert SD-test | Ikke bestått: LoadProhibited i FatFS validate/f_write før OTA | Ingen kjent årsak eller grunnlag for å tilskrive maskinvare; RC7 fjerner SD-nedlasting fra firmwareflyten |
+| Fysisk RC7 direkte GitHub→OTA | Avbrudd ved 1 % med alle 8192 metadata-byte uendret; nytt UI-forsøk installerte eksakt CI-bilde og startet app1 | Minst 24225 byte bekreftet skrevet før avbrudd; ikke egen partial-image-readback |
+| RC7 sluttstatus og vanlig omstart | App1 sekvens10 VALID/CRC bekreftet; begge slotter ren CI-RC7; 125 s + 45 s uten panic/watchdog; gap85,014/86,013ms | Privat teststyring hadde en for tidlig feilmelding; faktisk firmware/boot kontrollert uavhengig uten produksjonskodeendring |
+| Faktisk siste RC7-inventar til backend | Ny boot/nyere komplett inventar, 7/7 ID/versjon/checksum/normalisert pakke-ID bevart, SD klar | Native appfil-identiteter; ingen AI-/app-RUN eller brukerens HA påstått |
 | Distribuert USB-arkiv etter ny utpakking | Faktisk signatur-/hash-/image-/layoutkontroll bestått | Denne separate pakkekontrollen åpner ingen COM-port |
 | Faktisk USB-migrering på FIRE | Dobbel 16 MiB-backup, skriving og eksakt tilbakeavlesning bestått | Backup og rålogger er private; normal OTA er egen kontroll |
 | Kontrollert tidlig reset | SDK markerte oppstart ABORTED og lastet factory | Ikke fysisk GPIO39-knapphold eller tilbakeføring til tidligere normal OTA-slot |
@@ -55,5 +62,5 @@ Disse punktene stanser ikke uavhengig implementering og lokal kontroll.
 | Faktisk RC5 til eksisterende backend | Fersk HELLO og komplett SD-inventory, 7/7 ID/versjon/checksum/pakke-ID bevart | Ingen AI-/appkjøringspåstand; Auto kan være idle/offline når transporten er klar |
 
 Det avgrensede USB-beviset står i [fysisk rapport](M5Stack-device/PHYSICAL_USB_2026-11-24.md).
-Visuell UI/knapper/lyd, Home, GitHub-OTA og samlet AI/appflyt er fortsatt åpne.
+Visuell UI/knapper/lyd, Home, fysisk nett-/strømbrudd og samlet AI/appflyt er fortsatt åpne.
 Følg [den konkrete sluttesten](docs/PHYSICAL_CHECK.md) og registrer resten samlet.

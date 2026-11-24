@@ -1,36 +1,41 @@
 # Device delivery status — 2026-11-24
 
-## Current candidate: fire-os-1.2.0-rc5
+## Current candidate: fire-os-1.2.0-rc7
 
-Source `958415d20029939a0e105f4ee23aa6008a7ab567`, CI 45477480676:
-13 tests and all three builds passed. Exact tested normal image: 2,408,576 B,
-SHA256 `6499092470f40287776fcac49fa73abc225c1f420b41ebb8c4ea76bce1d004e7`.
-Static RAM 63,796 B; IRAM end 0x4009fb98, 1,128 B margin.
+Source `7eb40b7e0effca647d101031c777832aa672a010`; CI 45496282327 passed
+15 tests and all three builds. Exact production image: 2,422,464 B,
+SHA256 `55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372`.
 
-Physical RC5 normal boot ran 125.221 s, with max loop/gap 83,048/87,988 us;
-ordinary restart ran 45.009 s, max 80,684/86,013 us. No extra reset, known
-panic/watchdog marker or RGB timeout. Actual seq4 VALID=2 and correct CRC
-were read from flash; RC4 app0/seq3 sector remained unchanged. COM3 released.
-Fresh complete inventory retained all seven app/version/checksum/package
-identities. No backend callback >=10 ms was logged. No Lua app was run.
-The <100 ms gap target passed for this startup/inventory fixture only.
+Actual GitHub catalog/download, direct inactive-slot OTA, accepted cancellation
+with unchanged 8 KiB boot metadata, explicit retry, production app1 boot,
+flash readback/CI identity, SDK seq10 VALID2/CRC and ordinary restart passed.
+The private driver's premature failure marker is retained and explained in
+the [canonical physical report](PHYSICAL_USB_2026-11-24.md); no repeat OTA was
+used to hide it. Passive production capture 125.015s measured
+loop/gap 79895/85014us; full reset capture
+45.043s measured 80312/86013us.
+No extra reset, known panic/watchdog or RGB timeout in these captures.
+Backend confirmed a newer complete inventory tied to the final RC7 boot/epoch:
+7/7 IDs, versions, checksums and normalized package IDs matched RC2. Storage
+was ready, health UI HTTP200, four Reverse TCP channels ready without error.
+The inventory was191s old at inspection, from this final boot, not the earlier
+RC7 snapshot. This does not establish AI/RUN acceptance.
+Update-time gap reached176143us and internal heap minimum2516B in the private
+fixture; the update itself is not claimed below100ms.
 
-RC5 retains the cooperative inventory/cache and frame budget, and replaces
-bytewise WebSocket payload reads with bounded bulk reads and a cooperative
-10 ms I/O budget. Native callbacks remain synchronous and are measured;
-this is not a universal 10 ms callback guarantee. Lifetime maxima stay intact.
+Both slots now hold exact CI RC7 production; app1 is selected, and app0 is a
+USB/readback-verified fallback copy, not separately booted in this final pass.
+All private automatic test images were removed from device. COM3 released.
+Bootloader/table/factory remain the physically verified RC2 components from
+7efbae9 / CI45431615060, with separate component provenance. Root owns git
+and publication. Signed bundle: `../M5Stack-backend/workspace/migration/fire-os-1.2.0-rc7/`.
 
-Signed bundle: `../M5Stack-backend/workspace/migration/fire-os-1.2.0-rc5/`.
-Its normal is the exact physically tested CI image. Bootloader/table/recovery
-are byteidentical retained RC2 components from source 7efbae9 / CI 45431615060,
-explicitly recorded in component-provenance.json. This is not a homogeneous
-RC5 component build. Master owns root packaging/publication and all git.
-
-Canonical scope, intermediate failures and private-evidence handling:
-[PHYSICAL_USB_2026-11-24.md](PHYSICAL_USB_2026-11-24.md).
-Button-hold recovery, screen/buttons/LED appearance, Home/HA, public TLS,
-GitHub/SD OTA, audio/microphone and AI BUILD/RUN remain physically unverified.
-The working production route in this fixture was private Reverse TCP.
+GitHub SD saving is removed/rejected: physical EIO and a later FatFS null-pointer
+panic remain unresolved. Direct OTA uses no SD staging. Offline signed-SD
+installation, removed-card operation, GPIO39/button-hold recovery, visual
+acceptance, Home/HA, public backend WSS, audio/AI/Lua RUN remain unverified.
+No user data was erased and no paid AI/RUN or new app installation was done.
+Historical RC5 and intermediate RC2/3/4 measurements remain in the physical report.
 
 ## Historical RC2 candidate and first physical finding
 
@@ -53,8 +58,9 @@ Changed configuration resets route selection/backoff; layout/favorite changes
 leave the network generation alone. No parallel probe or command retry added.
 See DELIVERY_REPORT.md for exact RC2 artifacts and remaining physical tests.
 At RC2 publication the root catalog was signed with RC2 first and historical
-RC1 second. The current catalog is RC5, historical RC2, historical RC1;
-its RC2 note recommends RC5 because of the measured inventory UI pause.
+RC1 second. The later RC5 catalog contained RC5, historical RC2 and RC1;
+its RC2 note recommended RC5 because of the measured inventory UI pause.
+The published catalog now starts with RC7, RC6, RC5, RC2 and RC1.
 Both versioned bins and all RC1 immutable files/RC2 USB inputs were verified
 unchanged during catalog generation. Master handles publication; no more code
 changes were pending at publication. The later physical response finding

@@ -4,7 +4,10 @@ Backend agent owns the PC tool; device agent produces the artifact directory.
 Before the USB session on 2026-11-24 no device had been flashed in this work.
 RC2 migration and controlled rollback have now been physically observed; see
 [USB evidence and limits](../PHYSICAL_USB_2026-11-24.md). This contract remains
-unchanged. Button-hold recovery and network OTA are not established by USB.
+unchanged. USB alone does not establish button-hold recovery or network OTA.
+A separate physical RC7 run now establishes direct GitHub OTA, cancellation,
+retry, exact CI readback, VALID and normal reboot; see the same canonical report.
+Physical button-hold recovery and offline SD installation remain unverified.
 
 Directory `migration/` contains `migration.json`, `migration.sig`, `bootloader.bin`,
 `partitions.bin`, `recovery.bin`, `normal.bin`, `catalog-v2.json`,

@@ -2,36 +2,27 @@
 
 Et modulært Arduino/PlatformIO-startprosjekt for M5Stack FIRE med M5Unified/M5GFX.
 
-## Aktuell testkandidat: 1.2.0-rc5
+## Aktuell testkandidat: 1.2.0-rc7
 
-Denne kandidaten legger til direkte Home, verifisert HTTPS/WSS, signert OTA og
-uavhengig redningsapp. Den er ikke fysisk sluttverifisert. Se
-[recovery/README.md](recovery/README.md) for bygg, migrering og redning, og
-[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for aktuelle byggbevis.
-Første installasjon krever den signerte engangspakken med full USB-backup.
-Vanlig PlatformIO Upload er sperret fordi den ville erstattet recovery-bootloaderen.
+Oppdater fra **Settings → Firmware → GitHub → Installer**. Enheten henter
+signert firmware direkte til den inaktive OS-plassen, kontrollerer størrelse,
+nettstrøm og tilbakeavlest flash, og starter om etter vellykket kontroll.
+SD-nedlasting er tatt ut etter fysisk påvist SD-feil; oppdatering trenger
+ingen SD-mellomlagring. Ferdige signerte SD-filer har fortsatt eget installvalg.
 
-RC5 er installert og helsegodkjent på fysisk FIRE etter full dobbeltbackup,
-image-readback og kontrollert SDK-rollback i migreringsløpet. Maksimal målt
-OS-løkkeavstand ble redusert fra omtrent 1,39 sekunder i RC2 til 88 ms i
-RC5s oppstarts-/inventartest; vanlig omstart målte 86 ms. Sju apper beholdt
-riktige identiteter og hasher. Øvrig fysisk sluttkontroll gjenstår. Se
-[USB-bevis og avgrensninger](PHYSICAL_USB_2026-11-24.md).
+Direkte GitHub-installasjon, avbrudd uten endret oppstartsvalg, nytt forsøk,
+faktisk VALID og vanlig omstart er fysisk kontrollert med RC7. Rikards enhet
+kjører RC7 i **B/app1**; A/app0 inneholder samme rene CI-produksjonsfil som
+tilbakevei. Ingen privat testkode er igjen. Recoverygrunnlaget er uendret RC2.
+Backend bekreftet alle sju appers identiteter, versjoner og hasher fra den
+endelige RC7-oppstarten, med klar lagring og fire feilfrie transportkanaler.
+Se [fysiske bevis og avgrensninger](PHYSICAL_USB_2026-11-24.md).
 
-RC5 leser appoversikten trinnvis og gjenbruker samme ferdige metadata i UI
-og backend. Nettverkspayload leses i små blokker med tidsbudsjett; skjermen
-tegnes høyst én gang per runde. Redningsgrunnlaget er bevisst beholdt fra
-den fysisk verifiserte RC2-pakken, med separat komponentproveniens.
-
-Rikards testede enhet kjører RC5 i **B/app1**, med RC4 i A/app0 som tilbakevei.
-Den signerte engangspakken plasserer normal i **A/app0** ved en ny migrering;
-den gjeldende enhetstilstanden er dermed ikke en ny USB-standardinstallasjon.
-
-RC5 beholder RC2-rettingen av Auto-forbindelsen i Home: en frisk ekstern forbindelse beholdes.
-Lokal rute vurderes på nytt ved faktisk nettbrudd eller endret profil/oppsett.
-Det kjøres ingen periodisk frakobling for å prøve lokal rute. RC1 beholdes som
-historisk kandidat med egne, uendrede filer og hasher.
-Endret kortvisning eller favoritter starter heller ikke MQTT på nytt.
+RC7 beholder trinnvis appoversikt, avgrenset nettlesing og Home-forbindelser.
+Home/HA, lyd/AI, fysisk knapphold og øvrig sluttkontroll gjenstår. Første
+installasjon bruker den signerte USB-engangspakken med full backup; vanlig
+PlatformIO Upload er sperret. Se [recovery/README.md](recovery/README.md) og
+[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
 ## Første OS-milepæl
 

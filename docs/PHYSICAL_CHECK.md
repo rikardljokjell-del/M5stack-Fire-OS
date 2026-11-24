@@ -6,10 +6,10 @@ De øvrige punktene er ikke dermed bestått. Bruk den
 ferdige leveransepakken og gjør ett punkt om gangen. Noter firmwareversjonen
 som vises under **Settings → Firmware**.
 
-Rikards FIRE er allerede migrert og kjører RC5 i **B / app1**. Gå videre med
+Rikards FIRE er allerede migrert og kjører RC7 i **B / app1**. Gå videre med
 meny-/knappetestene og funksjonene under; første USB-migrering er utført.
 Hvis du prøver redning på denne enheten, velger du **B / app1** for å komme
-tilbake til RC5. A inneholder forrige private testversjon. Steg 1 nedenfor
+tilbake til valgt RC7. A inneholder også ren RC7; testutgaven er fjernet. Steg 1 nedenfor
 beskriver førstegangsoppsett på en ny enhet, der pakken skriver normal til A.
 
 A og C flytter valget. B åpner eller bekrefter. Følg også knappeteksten nederst
@@ -84,19 +84,26 @@ fortsatt være stoppet.
 
 ## 6. Avbrutt firmwarenedlasting og vanlig oppdatering
 
-Ha strøm til FIRE og SD-kortet på plass. Avbruddstesten gjelder **nedlasting**,
-før bekreftelsen som installerer firmware.
+Den automatiserte fysiske testen har allerede hentet RC7 fra GitHub, avbrutt
+ved én prosent uten å endre oppstartsvalget, prøvd igjen og startet vanlig
+RC7 med lagret helsegodkjenning. Punktene under kan brukes til din egen
+meny-/knappetest og nettbruddstest; førstegangs USB-migrering trengs ikke.
 
-1. På FIRE åpner du **Settings → Firmware → GitHub firmware files**. Velg den
-   avtalte utgivelsen. Under nedlastingen skal A/C og vanlig navigering reagere.
-2. Slå av hotspot/nettet en kort stund mens den laster ned. Enheten skal melde
-   avbrudd eller tidsavbrudd, og gjeldende OS skal fortsatt fungere.
-3. Koble til igjen og hent listen på nytt. Velg samme utgivelse på nytt. Hvis
-   **Overwrite existing file?** vises, bekreft overskriving med B. Vent til
-   nedlastingen er ferdig.
-4. Gå til **SD firmware files**, velg filen og kontroller navnet ved
-   **Flash firmware?**. B bekrefter installering. La strømmen være tilkoblet
-   til FIRE har startet igjen. Kontroller versjon, menyer og Home på nytt.
+Fra RC7 krever vanlig GitHub-oppdatering ikke SD-kort eller Windows-backend.
+Ha strøm til FIRE. Nettbruddstesten gjelder overføringen før ny firmware
+aktiveres; la strømmen være tilkoblet under hele testen.
+
+1. Åpne **Settings → Firmware → Oppdater fra GitHub**, velg den avtalte
+   utgaven og **Installer direkte fra GitHub**. Kontroller versjonen og
+   bekreft med **B / Installer**.
+2. Under overføringen skal fremdriften oppdateres. A kan avbryte før siste
+   aktivering. Ved et avtalt nettbrudd skal enheten melde avbrudd eller
+   tidsavbrudd og fortsatt kunne bruke gjeldende OS.
+3. Koble til igjen, velg samme utgave på nytt og bekreft installering. La FIRE
+   fullføre kontrollene og starte automatisk om. Kontroller versjon og menyer.
+4. Kontroller at GitHub-utgaven bare har **Installer direkte fra GitHub** og
+   **Tilbake**. SD-nedlasting er fjernet. Gjenta eventuelt uten SD-kort og med
+   Windows-backenden stoppet for å kontrollere uavhengigheten fysisk.
 
 ## 7. Åpne redning uten Windows eller SD-kort
 

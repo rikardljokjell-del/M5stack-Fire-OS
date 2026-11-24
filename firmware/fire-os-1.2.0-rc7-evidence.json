@@ -3,7 +3,7 @@
   "version": "fire-os-1.2.0-rc7",
   "candidate": true,
   "physical_verified": false,
-  "physical_usb_subset_verified": false,
+  "physical_usb_subset_verified": true,
   "production_verified": false,
   "repository": "rikardljokjell-del/M5stack-Fire-OS",
   "source_commit": "7eb40b7e0effca647d101031c777832aa672a010",
@@ -96,7 +96,8 @@
       "ci_run": 45496282327,
       "size": 2422464,
       "sha256": "55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372",
-      "retained_rc2_component": false
+      "retained_rc2_component": false,
+      "physically_tested_exact_ci_image": true
     },
     "recovery": {
       "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
@@ -123,10 +124,180 @@
     "SD download removed from GitHub UI and rejected before queueing; progress and cancellation shown during operations"
   ],
   "not_verified": [
-    "RC7 physical direct GitHub download, cancel/retry, OTA activation, health approval and normal reboot pending",
     "Home/Camper on user Home Assistant and public Cloudflare/WSS",
-    "Visual/button/audio/AI/Lua installation and RUN acceptance",
-    "Physical power interruption and GPIO39 recovery hold",
-    "Independent offline SD installation; SD filesystem crash cause remains unresolved"
-  ]
+    "Human visual/button/audio/AI/Lua installation and RUN acceptance",
+    "Physical network loss, power interruption, GPIO39 recovery hold and rollback to previous normal version",
+    "Independent offline SD installation; earlier SD write crash cause remains unresolved"
+  ],
+  "physical_ota_subset_verified": true,
+  "physical_ota": {
+    "report": "M5Stack-device/PHYSICAL_USB_2026-11-24.md",
+    "direct_github_install_verified": true,
+    "no_host_write_or_reset_between_retry_and_production_boot": true,
+    "cancel": {
+      "reported_progress_percent": 1,
+      "progress_updates_only_after_successful_esp_ota_write_and_hash_update": true,
+      "minimum_confirmed_written_bytes_from_progress": 24225,
+      "exact_final_partial_byte_count_recorded": false,
+      "partial_slot_readback_before_retry": false,
+      "cancel_accepted": true,
+      "all_8192_otadata_bytes_unchanged": true,
+      "boot_partition_still_running_app0": true,
+      "reboot_pending": false,
+      "retry": "one explicit native UI retry of the same signed release"
+    },
+    "selected_partition": "app1 / B",
+    "metadata_sequence": 10,
+    "metadata_state": "VALID",
+    "metadata_crc_verified": true,
+    "active_image_exact_ci_readback": {
+      "size": 2422464,
+      "sha256": "55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372",
+      "ota": {
+        "sequence": 10,
+        "state": 2,
+        "crc_valid": true
+      }
+    },
+    "cleanup": {
+      "inactive_app0_written": true,
+      "active_app1_untouched": true,
+      "metadata_unchanged": true,
+      "both_slots_exact_ci_production": true,
+      "test_harness_removed": true,
+      "com_closed": true
+    },
+    "production_stability": {
+      "metrics": {
+        "schema": 1,
+        "samples": 5,
+        "duration_seconds": 125.015,
+        "maxima": {
+          "loop_us": 79895,
+          "gap_us": 85014,
+          "callback_us": 0,
+          "heap": 103612,
+          "min_heap": 94348,
+          "largest": 98292,
+          "min_largest": 98292,
+          "stack": 5108,
+          "rgb_timeouts": 0
+        },
+        "minima": {
+          "heap": 103580,
+          "min_heap": 94348,
+          "largest": 98292,
+          "min_largest": 98292,
+          "stack": 5108
+        },
+        "interrupted": false,
+        "sample_limit_reached": false,
+        "raw_serial_logs_saved": false
+      },
+      "panic": 0,
+      "watchdog": 0,
+      "extra_resets": 0,
+      "capture_started_after_initial_production_boot": true
+    },
+    "final_normal_reboot": {
+      "metrics": {
+        "schema": 1,
+        "samples": 1,
+        "duration_seconds": 45.043,
+        "maxima": {
+          "loop_us": 80312,
+          "gap_us": 86013,
+          "callback_us": 0,
+          "heap": 99044,
+          "min_heap": 80232,
+          "largest": 94196,
+          "min_largest": 94196,
+          "stack": 5108,
+          "rgb_timeouts": 0
+        },
+        "minima": {
+          "heap": 99044,
+          "min_heap": 80232,
+          "largest": 94196,
+          "min_largest": 94196,
+          "stack": 5108
+        },
+        "interrupted": false,
+        "sample_limit_reached": false,
+        "raw_serial_logs_saved": false
+      },
+      "inventory_scans": [
+        {
+          "apps": 7,
+          "complete": 1,
+          "elapsed_ms": 3269
+        },
+        {
+          "apps": 7,
+          "complete": 1,
+          "elapsed_ms": 3215
+        }
+      ],
+      "panic": 0,
+      "watchdog": 0,
+      "expected_boot_count": 1
+    },
+    "private_harness_bookkeeping": {
+      "false_negative_preserved": true,
+      "explanation": "The private driver checked firmwareBusy() after update(), in the interval where the OTA worker had finished successfully but the next UI update had not yet consumed finished()/succeeded() and set otaRebootAt_. It stopped its own driver. The unmodified OS consumed success on its next turn and restarted into app1.",
+      "production_code_changed_for_harness_race": false
+    },
+    "backend_fresh_identity_comparison": {
+      "fresh_final_rc7_boot": true,
+      "inventory_newer_than_first_rc7_observation": true,
+      "inventory_complete": true,
+      "storage_ready": true,
+      "matched_apps": 7,
+      "compared_fields": [
+        "app ID set",
+        "version",
+        "checksum",
+        "normalized package ID"
+      ],
+      "health_http": 200,
+      "ui_http": 200,
+      "catalog_order": [
+        "RC7",
+        "RC6",
+        "RC5",
+        "RC2",
+        "RC1",
+        "1.1"
+      ],
+      "catalog_read_only": true,
+      "catalog_error": false,
+      "no_paid_ai_or_run_calls": true
+    },
+    "private_update_metrics": {
+      "offsets": [
+        "0x10000"
+      ],
+      "samples": 2,
+      "maxima": {
+        "loop_us": 170611,
+        "gap_us": 176143,
+        "callback_us": 0,
+        "heap": 66436,
+        "min_heap": 2516,
+        "largest": 61428,
+        "min_largest": 61428,
+        "stack": 5092,
+        "rgb_timeouts": 0
+      },
+      "minima": {
+        "heap": 18716,
+        "min_heap": 2516,
+        "largest": 6132,
+        "min_largest": 6132,
+        "stack": 5092
+      }
+    },
+    "physical_card_removal_tested": false,
+    "inactive_app0_booted_separately": false
+  }
 }
