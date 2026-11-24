@@ -52,7 +52,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc3";
+constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc4";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -61,7 +61,7 @@ class FireUiPhaseTimer {
       : phase_(phase), started_(esp_timer_get_time()) {}
   ~FireUiPhaseTimer() {
     const int64_t elapsed = esp_timer_get_time() - started_;
-    if (elapsed >= 50000)
+    if (elapsed >= 100000)
       Serial.printf("FIRE slow phase=%s us=%lu uptime_ms=%lu\n", phase_,
                     static_cast<unsigned long>(elapsed),
                     static_cast<unsigned long>(millis()));
@@ -1117,6 +1117,7 @@ void FireOS::begin() {
 
 void FireOS::update() {
   const int64_t loopStartedUs = esp_timer_get_time();
+  bool renderedThisLoop = false;
   if (lastLoopStartedUs_) maxLoopGapUs_ = max(maxLoopGapUs_, static_cast<uint32_t>(min<int64_t>(60000000, loopStartedUs - lastLoopStartedUs_)));
   lastLoopStartedUs_ = loopStartedUs;
   { FireUiPhaseTimer timing("m5_update"); M5.update(); }
@@ -1185,7 +1186,11 @@ void FireOS::update() {
 #endif
   pollButtons();
   // Render the result of a button event before optional background work.
-  if (redrawRequested_) { FireUiPhaseTimer timing("draw_input"); draw(); }
+  if (redrawRequested_) {
+    FireUiPhaseTimer timing("draw_input");
+    draw();
+    renderedThisLoop = true;
+  }
   if (appScanPending_) {
     appScanPending_ = false;
     if (screen_ == Screen::Apps || screen_ == Screen::AppsSettings) {
@@ -1293,8 +1298,15 @@ void FireOS::update() {
   const uint32_t drawInterval = screen_ == Screen::AiDeveloper
                                     ? 33
                                     : animatedScreen ? 25 : 50;
-  if (redrawRequested_ || millis() - lastDrawAt_ >= drawInterval) {
-    FireUiPhaseTimer timing("draw_frame"); draw();
+  if (!renderedThisLoop &&
+      (redrawRequested_ || millis() - lastDrawAt_ >= drawInterval)) {
+    if (esp_timer_get_time() - loopStartedUs < 20000) {
+      FireUiPhaseTimer timing("draw_frame"); draw();
+    } else {
+      // A costly callback already used this turn. Keep the frame pending so
+      // the next turn renders it before optional work, including animation.
+      redrawRequested_ = true;
+    }
   }
   // Initialize BLE after the first Bluetooth settings frame is visible. BLE
   // setup can take a noticeable amount of time and must not delay the menu
