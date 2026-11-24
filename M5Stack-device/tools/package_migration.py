@@ -79,7 +79,7 @@ def package(paths: dict[str, Path], commit: str, version: str, key_path: Path, o
     payload = {"schema": 2, "repository": "rikardljokjell-del/M5stack-Fire-OS", "target": "m5stack-fire",
         "layout": "fire-ab-recovery-v1", "min_recovery": 1, "channel": "stable", "files": [{
         "name": artifact, "path": "firmware/" + artifact, "version": version,
-        "notes": "Testversjon: direkte Home, TLS, signert OTA og separat recovery. Fysisk sluttkontroll gjenstår.",
+        "notes": "RC2: Auto beholder fungerende MQTT-forbindelse. Direkte Home/TLS, signert OTA og separat recovery. Fysisk sluttkontroll gjenstår.",
         "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "source_commit": commit,
         "sha256": normal["sha256"], "size_bytes": normal["size"]}]}
     envelope = sign(payload, key, output); verify(envelope, pinned)
@@ -97,7 +97,7 @@ def main():
     for role in ROLES:
         parser.add_argument("--" + role, type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--version", default="fire-os-1.2.0-rc1")
+    parser.add_argument("--version", default="fire-os-1.2.0-rc2")
     parser.add_argument("--private-key", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

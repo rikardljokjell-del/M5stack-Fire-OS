@@ -14,9 +14,11 @@ til huset før du har valgt det i Home Assistant.
 | AI-samtale, tale og lage Lua-apper | FIRE eller nettleser → PC-backend → OpenAI | Ja |
 | FIRE Studio og appbibliotek | Nettleser → PC-backend | Ja |
 
-FIRE trenger Wi-Fi med internett for ekstern bruk. Et mobilhotspot kan gi dette.
+FIRE trenger **2,4 GHz Wi-Fi** med internett for ekstern bruk. Et mobilhotspot
+kan gi dette; velg 2,4 GHz eller kompatibilitetsmodus i hotspotinnstillingene.
 FIRE har ikke innebygd mobilnett. Et nett med egen innloggingsside må eventuelt
 godkjennes separat. Home kan også brukes bare lokalt.
+Se [FIREs maskinvarespesifikasjon](https://docs.m5stack.com/en/core/Fire).
 
 ## 1. Start FIRE Studio på PC-en
 

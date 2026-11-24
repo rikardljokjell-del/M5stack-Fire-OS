@@ -2,7 +2,7 @@
 
 Et modulært Arduino/PlatformIO-startprosjekt for M5Stack FIRE med M5Unified/M5GFX.
 
-## Ny testkandidat: 1.2.0-rc1
+## Ny testkandidat: 1.2.0-rc2
 
 Denne kandidaten legger til direkte Home, verifisert HTTPS/WSS, signert OTA og
 uavhengig redningsapp. Den er ikke fysisk sluttverifisert. Se
@@ -10,6 +10,12 @@ uavhengig redningsapp. Den er ikke fysisk sluttverifisert. Se
 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for aktuelle byggbevis.
 Første installasjon krever den signerte engangspakken med full USB-backup.
 Vanlig PlatformIO Upload er sperret fordi den ville erstattet recovery-bootloaderen.
+
+RC2 retter Auto-forbindelsen i Home: en frisk ekstern forbindelse beholdes.
+Lokal rute vurderes på nytt ved faktisk nettbrudd eller endret profil/oppsett.
+Det kjøres ingen periodisk frakobling for å prøve lokal rute. RC1 beholdes som
+historisk kandidat med egne, uendrede filer og hasher.
+Endret kortvisning eller favoritter starter heller ikke MQTT på nytt.
 
 ## Første OS-milepæl
 

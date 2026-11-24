@@ -113,9 +113,10 @@ bool FireHome::configure(const String& body, String& error) {
   } else { ok = false; error = "Ugyldig oppsett eller opptatt"; }
   cJSON_Delete(root); return ok;
 }
-void FireHome::persist() {
+void FireHome::persist(bool reconnect) {
   preferences_.putUChar("profile", profile_); preferences_.putUChar("route", routeMode_);
-  preferences_.putUChar("layout", layout_); ++generation_;
+  preferences_.putUChar("layout", layout_);
+  if (reconnect) ++generation_;
 }
 void FireHome::invalidate() {
   catalogValid_ = false; stateAt_ = 0; confirm_ = false; pendingRid_ = ""; count_ = 0; focus_ = 0;
@@ -138,10 +139,14 @@ void FireHome::run() {
   uint32_t measuredAt = 0;
   uint32_t backoff = 1000;
   bool tryRemote = false;
+  uint32_t previousGeneration = UINT32_MAX;
   for (;;) {
     if (!wanted_) { delay(100); continue; }
     Profile p; uint8_t mode; uint32_t generation;
     xSemaphoreTake(configMutex_, portMAX_DELAY); p = profiles_[profile_]; mode = routeMode_; generation = generation_; xSemaphoreGive(configMutex_);
+    if (generation != previousGeneration) {
+      tryRemote = false; backoff = 1000; previousGeneration = generation;
+    }
     const bool remote = mode == 2 || (mode == 0 && (tryRemote || !p.localHost.length()));
     const String host = fireNetworkHost(remote ? p.remoteHost : p.localHost);
     if (!host.length() || time(nullptr) < 1700000000) {
@@ -171,8 +176,9 @@ void FireHome::run() {
     uint32_t started = millis(); bool connectedOnce = false;
     while (wanted_ && generation == generation_) {
       if (online_) { connectedOnce = true; backoff = 1000; }
-      if ((connectedOnce && !online_) || (!connectedOnce && millis() - started > 10000) ||
-          (mode == 0 && remote && millis() - started > 60000)) break;
+      // Keep a healthy route. Auto reevaluates local only on a real network
+      // loss or configuration change, never by interrupting remote traffic.
+      if ((connectedOnce && !online_) || (!connectedOnce && millis() - started > 10000)) break;
       Outgoing out;
       if (online_ && xQueueReceive(outgoing_, &out, 0) == pdTRUE && out.generation == generation_ && out.connection == connection_)
         esp_mqtt_client_publish(client, (topicPrefix_ + "request").c_str(), out.body, 0, 1, false);
@@ -415,10 +421,10 @@ void FireHome::button(uint8_t index) {
     if (index != 1) focus_ = (focus_ + options + (index == 0 ? -1 : 1)) % options;
     else if (focus_ == 0) {
       if (xSemaphoreTake(configMutex_, 0) != pdTRUE) return;
-      profile_ ^= 1; invalidate(); persist(); xSemaphoreGive(configMutex_);
+      profile_ ^= 1; invalidate(); persist(true); xSemaphoreGive(configMutex_);
     } else if (focus_ == 1) {
       if (xSemaphoreTake(configMutex_, 0) != pdTRUE) return;
-      routeMode_ = (routeMode_ + 1) % 3; invalidate(); persist(); focus_ = 1;
+      routeMode_ = (routeMode_ + 1) % 3; invalidate(); persist(true); focus_ = 1;
       xSemaphoreGive(configMutex_);
     }
     else if (focus_ == 2) { layout_ ^= 1; persist(); }

@@ -1,4 +1,15 @@
-# FIRE OS 1.2.0-rc1 — leveransebevis
+# FIRE OS — leveransebevis
+
+## RC2 under kontroll
+
+RC2 retter kun Home Auto-ruting: en frisk ekstern MQTT-forbindelse brytes
+ikke etter ett minutt. Lokal rute vurderes igjen etter et faktisk nettbrudd
+eller endret konfigurasjon. Nye bygg, ny kildecommit og signert RC2-pakke
+registreres etter kontroll; RC1-filene overskrives ikke.
+Visnings-/favorittendringer endrer ikke nettverkets konfigurasjonsgenerasjon
+og starter ikke MQTT på nytt; profil- og ruteendringer gjør det fortsatt.
+
+## Historisk RC1-leveranse
 
 Testkandidat, fysisk sluttkontroll gjenstår. Ingen enhet er flashet i dette
 arbeidet. Master håndterer publisering og den samlede overleveringen.

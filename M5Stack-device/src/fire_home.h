@@ -76,7 +76,7 @@ class FireHome {
   bool sendCommand(const Card& card, const char* op, double value, bool number,
                    const char* text = nullptr);
   bool queue(const String& body);
-  void persist();
+  void persist(bool reconnect = false);
   void invalidate();
   void reorder();
   uint8_t visible(uint8_t* indices) const;

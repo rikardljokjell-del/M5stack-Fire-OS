@@ -1,4 +1,4 @@
-# FIRE 1.2.0-rc1: bygg, migrering og redning
+# FIRE 1.2.0-rc2: bygg, migrering og redning
 
 Dette er en testkandidat. Kompilering og kryptografiske tester erstatter ikke
 fysisk kontroll. Ingen enhet er flashet i dette arbeidet. Historiske 1.1-filer

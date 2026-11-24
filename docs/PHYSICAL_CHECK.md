@@ -57,6 +57,10 @@ fortsatt være stoppet.
 3. Med bryteren av: koble FIRE tilbake til hjemmenettet og velg **Lokalt**.
    Lokal styring skal fortsatt virke. Velg **Auto** når begge forbindelser er
    kontrollert, hvis du ønsker automatisk bytte.
+4. Med ekstern tilgang tillatt: la **Auto** stå på et annet nett i minst tre
+   minutter. Status og styring skal fortsette uten faste minuttvise avbrudd.
+   En fungerende forbindelse beholdes; nytt rutevalg skjer ved nettbrudd eller
+   endret oppsett.
 
 ## 5. AI, mobilnettleser og samme jobb etter nettbrudd
 

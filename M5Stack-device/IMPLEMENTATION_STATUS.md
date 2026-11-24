@@ -1,5 +1,19 @@
 # Device delivery status — 2026-11-24
 
+## Current candidate: fire-os-1.2.0-rc2
+
+RC2 source is ready for master commit/CI. Local m5stack-fire-ble build passed
+(2,393,541 B flash, 63,796 B static RAM), and 5 signing + 4 packaging tests passed.
+The fresh-remote >60 s behavior still needs physical verification. It removes the periodic 60-second teardown
+of a healthy remote Home Auto connection. Auto keeps its working route and
+reevaluates local after actual disconnection or configuration changes; changed
+configuration resets route choice/backoff. No parallel probe or command retry
+was added. RC1 binaries, catalog evidence and signing outputs remain immutable.
+UI-only layout/favorite persistence does not change the network generation;
+profile/route changes still do. The final normal rebuild includes both fixes.
+
+## RC1 audit history
+
 Source changes are frozen. Final source commit is
 `34ade23bc2872dbc3561a09d859aba865d05f470`.
 Linux CI passed all 12 tests and normal/recovery/bootloader builds. The exact
