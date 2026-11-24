@@ -25,7 +25,8 @@ ISOLATED_DEPS = ROOT / "home_assistant/generated/test-deps"
 if ISOLATED_DEPS.is_dir():
     sys.path.insert(0, str(ISOLATED_DEPS))
 
-from jinja2 import Environment, StrictUndefined
+from jinja2 import StrictUndefined
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 
 @pytest.fixture
@@ -56,7 +57,7 @@ class NativeRunner:
         self.messages = []
         self.actions = []
         self.before_dispatch = None
-        self.env = Environment(undefined=StrictUndefined)
+        self.env = ImmutableSandboxedEnvironment(undefined=StrictUndefined)
         self.env.filters.update(to_json=lambda v: json.dumps(v,ensure_ascii=False,separators=(",",":"),allow_nan=False),
             from_json=self.from_json, regex_match=lambda v,p: bool(re.match(p,v)),
             base64_encode=lambda v:base64.b64encode(v.encode()).decode())
@@ -325,3 +326,34 @@ def test_certificate_renewal_preserves_ca_passwords_and_native_upload(config,tmp
     assert all((out/name).read_bytes()==body for name,body in before.items())
     new=x509.load_pem_x509_certificate((out/"certs/server.pem").read_bytes())
     assert new.serial_number!=old.serial_number and new.issuer==old.issuer
+
+
+def test_generated_and_renewed_certificates_pass_real_strict_tls(config,tmp_path):
+    """Use actual OpenSSL verification without a socket, service or external host."""
+    import ssl
+    from home_assistant.renew_certificate import renew
+    output=tmp_path/"strict-tls"
+    generate(config,output)
+
+    def handshake():
+        client_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        client_context.verify_flags |= ssl.VERIFY_X509_STRICT
+        client_context.load_verify_locations(cafile=str(output/"certs/ca.pem"))
+        server_context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.load_cert_chain(str(output/"certs/server.pem"),str(output/"certs/server.key"))
+        client_in,client_out,server_in,server_out=[ssl.MemoryBIO() for _ in range(4)]
+        client=client_context.wrap_bio(client_in,client_out,server_hostname=config["local_host"])
+        server=server_context.wrap_bio(server_in,server_out,server_side=True)
+        finished=set()
+        for _ in range(20):
+            for name,connection,outgoing,incoming in (("client",client,client_out,server_in),("server",server,server_out,client_in)):
+                try:connection.do_handshake();finished.add(name)
+                except (ssl.SSLWantReadError,ssl.SSLWantWriteError):pass
+                if outgoing.pending:incoming.write(outgoing.read())
+            if len(finished)==2:break
+        assert finished=={"client","server"}
+        assert client.getpeercert()["subjectAltName"]==(("DNS",config["local_host"]),)
+
+    handshake()
+    renew(output)
+    handshake()

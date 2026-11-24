@@ -128,7 +128,7 @@ def package(profile):
     publish_action = "script." + slug + "_publish"
     refresh = [{"action": publish_action, "data": {"route": r}} for r in ("local", "remote")]
     bootstrap = [
-        {"action": "input_text.set_value", "target": {"entity_id": ids["epoch"]}, "data": {"value": template("sha256(now().isoformat() ~ (range(0,2147483647)|random))[:16]")}},
+        {"action": "input_text.set_value", "target": {"entity_id": ids["epoch"]}, "data": {"value": template("sha256(now().isoformat() ~ (range(0,65536)|random) ~ (range(0,65536)|random))[:16]")}},
         {"action": "input_number.set_value", "target": {"entity_id": ids["seq"]}, "data": {"value": 0}},
     ] + refresh
     ack_base = {"action": "mqtt.publish", "data": {"topic": template("prefix ~ '/' ~ route ~ '/ack'"), "qos": 1, "retain": False,
@@ -275,6 +275,8 @@ def certificates(profile, output):
         .add_extension(x509.BasicConstraints(ca=True,path_length=0),critical=True)
         .add_extension(x509.KeyUsage(digital_signature=True,content_commitment=False,key_encipherment=False,
           data_encipherment=False,key_agreement=False,key_cert_sign=True,crl_sign=True,encipher_only=False,decipher_only=False),critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()),critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()),critical=False)
         .sign(key,hashes.SHA256()))
     serverkey=ec.generate_private_key(ec.SECP256R1())
     try: san=x509.IPAddress(ipaddress.ip_address(profile.local_host))
@@ -285,6 +287,8 @@ def certificates(profile, output):
       .add_extension(x509.SubjectAlternativeName([san]),critical=False)
       .add_extension(x509.BasicConstraints(ca=False,path_length=None),critical=True)
       .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),critical=False)
+      .add_extension(x509.SubjectKeyIdentifier.from_public_key(serverkey.public_key()),critical=False)
+      .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()),critical=False)
       .sign(key,hashes.SHA256()))
     for filename, data in {"ca.pem":ca.public_bytes(serialization.Encoding.PEM),
         "ca-private.key":key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()),

@@ -32,6 +32,8 @@ def renew(directory):
        .add_extension(x509.SubjectAlternativeName([san]),critical=False)
        .add_extension(x509.BasicConstraints(ca=False,path_length=None),critical=True)
        .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),critical=False)
+       .add_extension(x509.SubjectKeyIdentifier.from_public_key(serverkey.public_key()),critical=False)
+       .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()),critical=False)
        .sign(key,hashes.SHA256()))
     contents={"server.pem":cert.public_bytes(serialization.Encoding.PEM),
               "server.key":serverkey.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption())}
