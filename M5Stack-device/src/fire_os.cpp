@@ -52,7 +52,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc6";
+constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc7";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -1730,6 +1730,10 @@ bool FireOS::firmwareBusy() const {
 }
 
 bool FireOS::queueFirmwareAction(FirmwareAction action, bool overwrite) {
+  if (action == FirmwareAction::SaveSd) {
+    firmwareMessage_ = "Bruk direkte installering fra GitHub";
+    return false;
+  }
   if (firmwareBusy()) { firmwareMessage_ = "Vent til firmwarearbeidet er ferdig"; return false; }
   if (luaAppActive_ || backgroundBuildActive_ || aiAudioCaptureActive_ || aiAudioOutputActive_ ||
       aiAudioDownloadPending_ || aiVoiceTestPlaybackActive_ || aiBuildResumePending_ ||
@@ -4942,17 +4946,11 @@ void FireOS::handleFirmwareButton(uint8_t index) {
     return;
   }
   if (firmwareGithubActionMenu_) {
-    if (index != 1) firmwareGithubActionIndex_ = (firmwareGithubActionIndex_ + (index == 0 ? 2 : 1)) % 3;
+    if (index != 1) firmwareGithubActionIndex_ ^= 1;
     else if (firmwareGithubActionIndex_ == 0) {
       firmwareGithubActionMenu_ = false;
       firmwareInstallFromGithub_ = true; firmwareInstallConfirm_ = true;
       firmwareMessage_ = "Bekreft installering og omstart";
-    } else if (firmwareGithubActionIndex_ == 1) {
-      if (!sdReady_ && !initSdCard()) { firmwareMessage_ = "SD-kort er ikke tilgjengelig"; return; }
-      firmwareGithubActionMenu_ = false;
-      if (SD.exists("/firmware/" + firmwareGithubRelease_.name)) {
-        firmwareGithubOverwriteConfirm_ = true; firmwareMessage_ = "Beholde eller erstatte SD-kopien?";
-      } else queueFirmwareAction(FirmwareAction::SaveSd);
     } else { firmwareGithubActionMenu_ = false; firmwareGithubDialog_ = true; }
     return;
   }
@@ -9929,6 +9927,20 @@ void FireOS::drawBoot() {
 
 void FireOS::drawFirmware() {
   drawStatusBar("Firmware");
+  if (firmwareBusy()) {
+    ui.fillRoundRect(12, 44, 296, 142, 12, kPanel);
+    drawText(24, 58, "Firmwareoppdatering", kCyan, 2, kPanel);
+    const String status = ota_.busy() ? ota_.message() : firmwareMessage_;
+    drawText(24, 101, status.substring(0, 42), kText, 1, kPanel);
+    if (status.length() > 42)
+      drawText(24, 119, status.substring(42, 84), kText, 1, kPanel);
+    if (ota_.busy()) {
+      ui.fillRoundRect(24, 151, 270, 10, 3, kBg);
+      ui.fillRoundRect(24, 151, 270 * ota_.progress() / 100, 10, 3, kCyan);
+    }
+    drawFooter(ota_.busy() ? "A  AVBRYT" : "VENT", "ARBEIDER", "");
+    return;
+  }
   if (ota_.busy()) {
     drawText(18, 45, "Firmwareoppdatering", kCyan, 2);
     String message = ota_.message();
@@ -9959,8 +9971,8 @@ void FireOS::drawFirmware() {
   }
   if (firmwareGithubActionMenu_) {
     drawText(16, 38, firmwareGithubRelease_.version, kCyan, 2);
-    const char* actions[] = {"Installer direkte fra GitHub", "Lagre pa SD", "Tilbake"};
-    for (uint8_t i=0; i<3; ++i) {
+    const char* actions[] = {"Installer direkte fra GitHub", "Tilbake"};
+    for (uint8_t i=0; i<2; ++i) {
       const int y = 85 + i*28; const bool selected = i == firmwareGithubActionIndex_;
       if (selected) ui.fillRoundRect(10,y-4,300,23,4,kCyan);
       drawText(20,y,actions[i],selected?kBg:kText,1,selected?kCyan:kBg);
