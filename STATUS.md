@@ -6,7 +6,7 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-Kode og signert testpakke **fire-os-1.2.0-rc2** er klargjort. FIRE Studio,
+Kode og signert testpakke **fire-os-1.2.0-rc2** er publisert i GitHub. FIRE Studio,
 sikker offentlig backendinngang, direkte Home og OTA med uavhengig recovery
 er implementert. Linux-byggfilene er signert, USB-arkivet er pakket ut på nytt
 og kontrollert av det separate migreringsverktøyet. Ingen fysisk FIRE er
@@ -97,6 +97,16 @@ ekstraksjon. De distribuerte filene kommer fra denne kjøringen.
 Cloudflare CLI 2026.11.2 er også hentet og SHA256-/versjonskontrollert lokalt.
 `scripts/cloudflare.ps1` bruker den lokale kopien. Ingen konto, tunnel, DNS
 eller offentlig tilgang er opprettet; det krever brukerens valgte oppsett.
+
+Etter publisering på main `5e5853936cc10d6083dc153450e0ae2495c7b8e5`
+er katalog, normalbinær, USB-arkiv, bevis og kontrollsummer hentet fra de
+offentlige GitHub-adressene og sammenlignet byte for byte med leveransen.
+Katalogsignaturen er verifisert på den nedlastede kopien. GitHub svarte 200
+med korrekt Content-Length, uten omdirigering eller komprimering i kontrollen.
+Dette er PC-bevis, ikke fysisk FIRE-nedlasting.
+Den faktisk kjørende backenden svarte 200 på health og UI, og viste RC2,
+historisk RC1 og 1.1 i riktig rekkefølge uten katalogfeil. Ingen omstart,
+innstillingsendring eller betalte AI-kall var nødvendig i denne sluttkontrollen.
 
 ## Tidligere bevis
 
