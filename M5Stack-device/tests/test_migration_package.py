@@ -62,6 +62,18 @@ class MigrationPackageTests(unittest.TestCase):
             data = bytearray(self.table); data[position] ^= 1
             with self.subTest(position=position), self.assertRaises(ValueError): package.validate_partitions(data)
 
+    def test_release_notes_are_exact_signed_and_validated_before_output(self):
+        for notes in ("", "ø" * 121, "e\u0301"):
+            with self.subTest(notes=notes), self.assertRaises(ValueError):
+                package.package(self.paths, "a" * 40, "fire-os-test-rc3",
+                                self.private, self.output, notes=notes)
+            self.assertFalse(self.output.exists())
+        notes = "RC3: Trinnvis appoversikt. Fysisk sluttkontroll gjenstår."
+        package.package(self.paths, "a" * 40, "fire-os-test-rc3",
+                        self.private, self.output, notes=notes)
+        payload = sign_release.verify(json.loads((self.output / "catalog-v2.json").read_bytes()), self.key.public_key())
+        self.assertEqual(payload["files"][0]["notes"], notes)
+
     def test_wrong_key_and_wrong_chip_fail_before_output(self):
         other = ec.generate_private_key(ec.SECP256R1())
         self.private.write_bytes(other.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))

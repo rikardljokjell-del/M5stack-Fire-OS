@@ -142,6 +142,7 @@ void FireAsyncClient::run() {
         const int n = socket->read(data, min<size_t>(sizeof(data), min<size_t>(space, availableBytes)));
         if (n > 0) rx_.write(data, n);
       }
+      txWriting_ = true;
       const size_t sent = tx_.read(data, sizeof(data));
       size_t offset = 0;
       const uint32_t writeStarted = millis();
@@ -150,11 +151,13 @@ void FireAsyncClient::run() {
         if (!n) break;
         offset += n;
       }
+      txWriting_ = false;
       if (offset != sent || (!socket->connected() && !socket->available())) break;
       delay(2);
     }
   }
   socket->stop();
+  txWriting_ = false;
   fireMeasureWorker("net", measuredAt_);
   state_ = stop_ ? State::Idle : State::Failed;
   active_ = false;

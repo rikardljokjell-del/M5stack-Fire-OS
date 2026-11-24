@@ -2152,6 +2152,7 @@ void FireOS::invalidateLuaApps() {
   luaCacheValid_ = false;
   luaScanPending_ = true;
   appInventoryPending_ = true;
+  if (backendMode_ == 2 || wifiMode_ == 2) return;
 }
 
 void FireOS::serviceLuaAppScan() {
@@ -3840,6 +3841,11 @@ void FireOS::sendAppInventory() {
                 "\",\"checksum\":\"" + jsonEscapeField(luaAppChecksums_[index]) + "\"}";
   }
   appsJson += ']';
+  if (appsJson.length() > 6144) {
+    // Leave room for the event envelope in the backend client's 8 KiB frame.
+    appInventoryPending_ = !backendClient_->appInventory("[]", sdReady_, false);
+    return;
+  }
   appInventoryPending_ = !backendClient_->appInventory(appsJson, sdReady_, luaCacheComplete_ && sdReady_);
 }
 
@@ -6644,6 +6650,19 @@ void FireOS::updateBackend() {
     backendBootSyncWaiting_ = false;
     return;
   }
+  const uint32_t responseNow = millis();
+  const bool inventoryInFlight = appInventoryPending_ && backendClient_->sessionReady();
+  if (!inventoryInFlight) appInventoryDemandAt_ = 0;
+  else if (!appInventoryDemandAt_) appInventoryDemandAt_ = responseNow;
+  else if (responseNow - appInventoryDemandAt_ >= 30000) {
+    appInventoryPending_ = false;
+    appInventoryDemandAt_ = 0;
+    Serial.println("FIRE inventory response deadline expired");
+  }
+  const bool writesPending = backendClient_->pendingWrites();
+  if (!writesPending) backendDrainStartedAt_ = 0;
+  else if (!backendDrainStartedAt_) backendDrainStartedAt_ = responseNow;
+  const bool drainDemand = writesPending && responseNow - backendDrainStartedAt_ < 20000;
   // Time sync has its own deadline. Never make backend discovery depend on NTP.
   if (backendBootSyncWaiting_ && WiFi.status() == WL_CONNECTED &&
       backendBootSyncStartedAt_ == 0) backendBootSyncStartedAt_ = millis();
@@ -6661,6 +6680,10 @@ void FireOS::updateBackend() {
                                buildNoticePendingId_.length() > 0 ||
                                (backendMode_ == 1 && backendClient_->configured()) ||
                                backendBootPending_ || backendBootSyncWaiting_ ||
+                               // Finish an in-flight inventory without turning
+                               // Auto into a permanent offline reconnect loop.
+                               (appInventoryPending_ && backendClient_->sessionReady()) ||
+                               drainDemand ||
                                bootCheck ||
                               (packageManager_ && packageManager_->busy()) ||
                               (firmwareStorage_ && firmwareStorage_->busy()) ||

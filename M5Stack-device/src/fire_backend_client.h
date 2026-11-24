@@ -41,6 +41,7 @@ class FireBackendClient {
   bool connected() const { return state_ == State::Connected && sessionStarted_; }
   bool sessionReady() const { return connected() && sessionId_.length() > 0; }
   bool active() const { return state_ != State::Offline; }
+  bool pendingWrites() const { return !usingReverseTransport_ && client_.pendingWrites(); }
   const String& bootId() const { return bootId_; }
   const String& status() const { return status_; }
 

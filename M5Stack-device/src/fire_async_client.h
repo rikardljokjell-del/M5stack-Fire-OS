@@ -20,6 +20,10 @@ class FireAsyncClient : public WiFiClient {
   bool connecting() const { return state_.load() == State::Connecting; }
   bool stopping() const { return active_.load() && stop_.load(); }
   bool running() const { return active_.load(); }
+  bool pendingWrites() const {
+    // Queue first: a consumer publishes in-flight before removing its bytes.
+    return active_ && !stop_ && (tx_.size() != 0 || txWriting_.load());
+  }
   bool canWrite(size_t length) const {
     return tx_.initialized() && active_ && !stop_ && state_ == State::Ready &&
            tx_.free() >= length;
@@ -42,6 +46,7 @@ class FireAsyncClient : public WiFiClient {
   std::atomic<bool> stop_{false};
   std::atomic<bool> failureReported_{false};
   std::atomic<bool> secure_{true};
+  std::atomic<bool> txWriting_{false};
   bool workerSecure_ = true;
   uint32_t measuredAt_ = 0;
   char host_[128] = {};

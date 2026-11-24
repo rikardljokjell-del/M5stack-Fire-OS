@@ -42,13 +42,17 @@ def validate_partitions(data: bytes):
     if data[at:at+16] != b"\xeb\xeb" + b"\xff" * 14 or data[at+16:at+32] != hashlib.md5(data[:at]).digest() or any(v != 255 for v in data[at+32:]):
         raise ValueError("Invalid partition table MD5/end marker")
 
-def package(paths: dict[str, Path], commit: str, version: str, key_path: Path, output: Path):
+def package(paths: dict[str, Path], commit: str, version: str, key_path: Path, output: Path,
+            notes: str = "Signert FIRE OS-testkandidat. Se leveransebevis for fysisk status."):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("Expected exact committed source SHA")
     if not re.fullmatch(r"fire-os-[A-Za-z0-9_.-]+", version) or len(version) > 40:
         raise ValueError("Unsafe immutable version")
     if output.exists():
         raise ValueError("Refusing to overwrite a migration artifact directory")
+    if not isinstance(notes, str) or not 1 <= len(notes.encode("utf-8")) <= 240:
+        raise ValueError("Release notes must contain 1..240 UTF-8 bytes")
+    canonical({"notes": notes})  # Reject non-NFC text before creating output.
     key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
     pinned = serialization.load_pem_public_key((ROOT / "certs/release-public.pem").read_bytes())
     if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1) or key.public_key().public_numbers() != pinned.public_numbers():
@@ -79,7 +83,7 @@ def package(paths: dict[str, Path], commit: str, version: str, key_path: Path, o
     payload = {"schema": 2, "repository": "rikardljokjell-del/M5stack-Fire-OS", "target": "m5stack-fire",
         "layout": "fire-ab-recovery-v1", "min_recovery": 1, "channel": "stable", "files": [{
         "name": artifact, "path": "firmware/" + artifact, "version": version,
-        "notes": "RC2: Auto beholder fungerende MQTT-forbindelse. Direkte Home/TLS, signert OTA og separat recovery. Fysisk sluttkontroll gjenstår.",
+        "notes": notes,
         "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "source_commit": commit,
         "sha256": normal["sha256"], "size_bytes": normal["size"]}]}
     envelope = sign(payload, key, output); verify(envelope, pinned)
@@ -97,11 +101,14 @@ def main():
     for role in ROLES:
         parser.add_argument("--" + role, type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--version", default="fire-os-1.2.0-rc2")
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--notes", required=True,
+                        help="Exact release-specific notes, at most 240 UTF-8 bytes; no implied physical approval")
     parser.add_argument("--private-key", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    package({role: getattr(args, role) for role in ROLES}, args.source_commit, args.version, args.private_key, args.output)
+    package({role: getattr(args, role) for role in ROLES}, args.source_commit, args.version,
+            args.private_key, args.output, notes=args.notes)
 
 if __name__ == "__main__":
     main()

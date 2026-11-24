@@ -370,6 +370,7 @@ class FireOS {
   bool luaScanPending_ = false, luaScanComplete_ = true;
   bool luaCacheValid_ = false, luaCacheComplete_ = false;
   bool appInventoryPending_ = false;
+  uint32_t appInventoryDemandAt_ = 0, backendDrainStartedAt_ = 0;
   bool fileExplorerScanPending_ = false;
 
   enum class LuaJobKind : uint8_t {
