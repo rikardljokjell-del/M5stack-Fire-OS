@@ -13,8 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.11'
       - run: python -m pip install platformio==6.2.0 cryptography==50.0.2
@@ -27,11 +29,13 @@ jobs:
         run: pio run --project-dir M5Stack-device -e fire-recovery
       - name: Button-aware rollback bootloader
         run: pio run --project-dir M5Stack-device/recovery/bootloader
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: fire-unsigned-${{ github.sha }}
-          if-no-files-found: warn
+          if-no-files-found: error
+          # Only the explicit build outputs below; never .secrets or runtime data.
+          include-hidden-files: true
           path: |
             M5Stack-device/.pio/build/*/firmware.bin
             M5Stack-device/.pio/build/*/firmware.elf
