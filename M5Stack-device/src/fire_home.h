@@ -18,6 +18,7 @@ class FireHome {
   bool back();
   bool configure(const String& body, String& error);
   bool configured() const;
+  bool networkIdle() const { return !networkActive_.load(); }
   String profileName() const { return profile_ ? "Camper" : "Home"; }
   const char* setupPage() const;
   bool takeSetupRequest() { bool result = setupRequested_; setupRequested_ = false; return result; }
@@ -53,6 +54,7 @@ class FireHome {
   uint8_t helloAttempts_ = 0;
   bool remoteAllowed_ = false, catalogValid_ = false;
   std::atomic<bool> wanted_{false}, online_{false}, remote_{false}, helloNeeded_{false};
+  std::atomic<bool> networkActive_{false};
   std::atomic<uint32_t> generation_{0};
   SemaphoreHandle_t configMutex_ = nullptr;
   QueueHandle_t inbox_ = nullptr, outgoing_ = nullptr;

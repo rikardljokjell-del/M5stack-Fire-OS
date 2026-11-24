@@ -255,6 +255,14 @@ class FireOS {
   bool firmwareGithubDialog_ = false;
   bool firmwareSdDialog_ = false;
   bool firmwareGithubOverwriteConfirm_ = false;
+  bool firmwareGithubActionMenu_ = false, firmwareInstallFromGithub_ = false;
+  uint8_t firmwareGithubActionIndex_ = 0;
+  FireRelease firmwareGithubRelease_;
+  String firmwareGithubCatalog_, firmwarePendingSdPath_;
+  enum class FirmwareAction : uint8_t { None, Manifest, SaveSd, InstallGithub, InstallSd };
+  FirmwareAction firmwareAction_ = FirmwareAction::None;
+  bool firmwareNetworkPaused_ = false, firmwareSaveOverwrite_ = false;
+  uint32_t firmwareQuietAt_ = 0;
   uint8_t firmwareGithubPendingIndex_ = 0;
   uint8_t firmwareGithubSelection_ = 0;
   uint8_t firmwareGithubOffset_ = 0;
@@ -695,6 +703,9 @@ class FireOS {
   void refreshSdDirectory();
   void scanFirmwareFiles();
   bool installFirmwareFile(const String& path);
+  bool firmwareBusy() const;
+  bool queueFirmwareAction(FirmwareAction action, bool overwrite = false);
+  void serviceFirmwareAction();
   bool handlePendingFirmwareBoot();
   void updateFirmwareBootGuard();
   void handleFileExplorerButton(uint8_t index);

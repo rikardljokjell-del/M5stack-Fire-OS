@@ -52,7 +52,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc5";
+constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc6";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -1214,13 +1214,7 @@ void FireOS::update() {
       redrawRequested_ = true;
     }
   }
-  if (firmwareInstallPending_) {
-    firmwareInstallPending_ = false;
-    String path;
-    if (firmwareSelection_ < firmwareCount_)
-      path = firmwarePaths_[firmwareSelection_];
-    if (path.length() == 0 || !installFirmwareFile(path)) redrawRequested_ = true;
-  }
+  serviceFirmwareAction();
   if (auto* request = setupPortal_.take()) {
     const bool provision = request->operation == FireSetupPortal::Operation::Provision;
     bool ok = wifiSetupActive_ && !portalCloseAt_ && setupPortal_.current(*request) &&
@@ -1249,7 +1243,7 @@ void FireOS::update() {
   if (homeApp_.configured() && screen_ == Screen::Home && wifiMode_ != 2 &&
       WiFi.status() != WL_CONNECTED && !wifiConnectActive_ && wifiSsid_.length())
     requestWifi(true);
-  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2); }
+  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2 && !firmwareNetworkPaused_); }
   if (homeApp_.takeSetupRequest()) {
     startWifiSetup(); homeApp_.setupHint(wifiSetupPassword_);
   }
@@ -1259,7 +1253,7 @@ void FireOS::update() {
   { FireUiPhaseTimer timing("hardware_jobs"); serviceLuaHardwareJobs(); }
   {
   FireUiPhaseTimer timing("reverse_service");
-  reverseTransport_.service(WiFi.status() == WL_CONNECTED &&
+  reverseTransport_.service(!firmwareNetworkPaused_ && WiFi.status() == WL_CONNECTED &&
                             backendClient_ && backendClient_->configured());
   }
   { FireUiPhaseTimer timing("time_sync"); updateTimeSync(); }
@@ -1634,6 +1628,7 @@ void FireOS::saveSavedBluetoothDevices() {
 }
 
 bool FireOS::initSdCard() {
+  if (firmwareBusy()) return sdReady_;
   invalidateLuaApps();
   sdLastProbe_ = millis();
   // SD.begin() initializes the default VSPI bus (18/19/23 on FIRE).
@@ -1643,6 +1638,7 @@ bool FireOS::initSdCard() {
 }
 
 void FireOS::scanFirmwareFiles() {
+  if (firmwareBusy()) { firmwareMessage_ = "Vent til firmwarearbeidet er ferdig"; return; }
   firmwareCount_ = 0;
   if (!sdReady_ && !initSdCard()) {
     firmwareMessage_ = "SD card not detected";
@@ -1727,8 +1723,73 @@ void FireOS::updateFirmwareBootGuard() {
   }
 }
 
+bool FireOS::firmwareBusy() const {
+  return firmwareAction_ != FirmwareAction::None || ota_.busy() || otaRebootAt_ ||
+      (githubFirmware_ && githubFirmware_->busy()) ||
+      (firmwareStorage_ && firmwareStorage_->busy());
+}
+
+bool FireOS::queueFirmwareAction(FirmwareAction action, bool overwrite) {
+  if (firmwareBusy()) { firmwareMessage_ = "Vent til firmwarearbeidet er ferdig"; return false; }
+  if (luaAppActive_ || backgroundBuildActive_ || aiAudioCaptureActive_ || aiAudioOutputActive_ ||
+      aiAudioDownloadPending_ || aiVoiceTestPlaybackActive_ || aiBuildResumePending_ ||
+      aiWorkflowState_ == 1 || aiWorkflowState_ == 2 ||
+      aiWorkflowState_ == 3 || aiWorkflowState_ == 4 || aiWorkflowState_ == 6 ||
+      (packageManager_ && packageManager_->busy()) ||
+      (backendClient_ && backendClient_->audioTransferActive())) {
+    firmwareMessage_ = "Fullfor aktiv AI/app-jobb for firmwareoppdatering"; return false;
+  }
+  invalidateLuaApps();  // Close candidate SD handles before a firmware worker.
+  firmwareAction_ = action; firmwareSaveOverwrite_ = overwrite;
+  firmwareNetworkPaused_ = true; firmwareQuietAt_ = millis();
+  if (backendClient_ && backendClient_->active()) backendClient_->disconnect();
+  reverseTransport_.service(false);
+  homeApp_.service(WiFi.status() == WL_CONNECTED, false);
+  if (action != FirmwareAction::InstallSd && WiFi.status() != WL_CONNECTED) requestWifi(true);
+  firmwareMessage_ = "Klargjor firmwarearbeid"; redrawRequested_ = true;
+  return true;
+}
+
+void FireOS::serviceFirmwareAction() {
+  if (firmwareAction_ == FirmwareAction::None) {
+    if (firmwareNetworkPaused_ && !firmwareBusy()) firmwareNetworkPaused_ = false;
+    return;
+  }
+  if (firmwareBootGuardActive_) {
+    firmwareMessage_ = "Venter pa oppstartskontroll";
+    return;
+  }
+  if (firmwareAction_ != FirmwareAction::InstallSd && WiFi.status() != WL_CONNECTED) {
+    if (wifiMode_ != 2 && millis() - firmwareQuietAt_ < 20000) {
+      firmwareMessage_ = "Venter pa Wi-Fi"; return;
+    }
+    firmwareAction_ = FirmwareAction::None; firmwareNetworkPaused_ = false;
+    firmwareMessage_ = "Koble til Wi-Fi og prov igjen"; redrawRequested_ = true; return;
+  }
+  const bool quiet = (!backendClient_ || backendClient_->networkIdle()) && homeApp_.networkIdle();
+  if (!quiet || millis() - firmwareQuietAt_ < 300) {
+    if (millis() - firmwareQuietAt_ < 12000) return;
+    firmwareAction_ = FirmwareAction::None; firmwareNetworkPaused_ = false;
+    firmwareMessage_ = "Nettverk rydder fortsatt. Prov firmware igjen"; redrawRequested_ = true; return;
+  }
+  const auto action = firmwareAction_; firmwareAction_ = FirmwareAction::None;
+  const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+  Serial.printf("FIRE firmware quiet heap=%u largest=%u\n",
+      heap_caps_get_free_size(caps), heap_caps_get_largest_free_block(caps));
+  bool started = false;
+  if (action == FirmwareAction::Manifest) started = githubFirmware_ && githubFirmware_->startManifest();
+  else if (action == FirmwareAction::SaveSd) started = githubFirmware_ &&
+      githubFirmware_->startDownload(firmwareGithubRelease_, firmwareGithubCatalog_, firmwareSaveOverwrite_);
+  else if (action == FirmwareAction::InstallGithub)
+    started = ota_.startGithub(firmwareGithubCatalog_, firmwareGithubRelease_.name);
+  else if (action == FirmwareAction::InstallSd) started = installFirmwareFile(firmwarePendingSdPath_);
+  if (!started) { firmwareMessage_ = "Firmwarearbeid kunne ikke starte. Prov igjen"; firmwareNetworkPaused_ = false; }
+  redrawRequested_ = true;
+}
+
 bool FireOS::installFirmwareFile(const String& path) {
-  if ((!sdReady_ && !initSdCard()) || ota_.busy()) return false;
+  if (firmwareBusy() || (!sdReady_ && !initSdCard())) return false;
+  invalidateLuaApps();
   const bool started = ota_.start(path);
   firmwareMessage_ = started ? "Kontrollerer firmware" : "Ugyldig firmwarevalg";
   redrawRequested_ = true;
@@ -2039,6 +2100,7 @@ void FireOS::handleFileExplorerAction(uint8_t index) {
 }
 
 void FireOS::handleFileExplorerButton(uint8_t index) {
+  if (firmwareBusy()) { sdMessage_ = "Vent til firmwarearbeidet er ferdig"; return; }
   if (sdImagePreview_) {
     if (index == 1 || index == 2) {
       sdImagePreview_ = false;
@@ -2099,6 +2161,7 @@ String FireOS::externalAppBaseName(const String& path) const {
 }
 
 void FireOS::scanExternalApps() {
+  if (firmwareBusy()) return;
   externalAppCount_ = 0;
   if (!sdReady_ && !initSdCard()) return;
   File apps = SD.open("/apps");
@@ -2171,7 +2234,7 @@ void FireOS::serviceLuaAppScan() {
   FireUiPhaseTimer timing("lua_scan_step");
   // Package extraction mutates /apps on its existing worker. Never read a
   // partially installed tree, nor publish a candidate from before that change.
-  if (packageManager_ && packageManager_->busy()) {
+  if (firmwareBusy() || (packageManager_ && packageManager_->busy())) {
     if (luaScanPhase_ != LuaScanPhase::Idle) invalidateLuaApps();
     return;
   }
@@ -4579,8 +4642,10 @@ void FireOS::open(Screen screen) {
     firmwareGithubOffset_ = 0;
     firmwareInstallConfirm_ = false;
     firmwareInstallPending_ = false;
-    firmwareMessage_ = "Scanning /firmware...";
-    firmwareScanPending_ = true;
+    firmwareGithubActionMenu_ = false;
+    firmwareInstallFromGithub_ = false;
+    firmwareMessage_ = "Velg GitHub eller SD-filer";
+    firmwareScanPending_ = false;
   }
 }
 
@@ -4852,109 +4917,78 @@ void FireOS::handleBootButton(uint8_t index) {
 }
 
 void FireOS::handleFirmwareButton(uint8_t index) {
-  if (firmwareGithubOverwriteConfirm_) {
-    if (index == 0 || index == 2) {
-      firmwareGithubOverwriteConfirm_ = false;
-      firmwareMessage_ = "Download cancelled";
-    } else if (githubFirmware_ &&
-               githubFirmware_->startDownload(firmwareGithubPendingIndex_,
-                                               true)) {
-      firmwareGithubOverwriteConfirm_ = false;
-      firmwareGithubDialog_ = false;
-      firmwareMessage_ = "Downloading and overwriting...";
+  if (firmwareBusy()) {
+    if (index == 0 && ota_.busy() && ota_.cancel()) firmwareMessage_ = "Avbryter installering";
+    else firmwareMessage_ = "Firmwarearbeid pagar";
+    return;
+  }
+  // Confirmation must precede the still-open SD/catalog lists.
+  if (firmwareInstallConfirm_) {
+    firmwareInstallConfirm_ = false;
+    if (index == 1) {
+      if (firmwareInstallFromGithub_) queueFirmwareAction(FirmwareAction::InstallGithub);
+      else queueFirmwareAction(FirmwareAction::InstallSd);
     } else {
-      firmwareMessage_ = "GitHub download unavailable";
+      firmwareMessage_ = "Installering avbrutt";
+      if (firmwareInstallFromGithub_) firmwareGithubActionMenu_ = true;
+      else firmwareSdDialog_ = true;
     }
+    return;
+  }
+  if (firmwareGithubOverwriteConfirm_) {
+    firmwareGithubOverwriteConfirm_ = false;
+    if (index == 1) queueFirmwareAction(FirmwareAction::SaveSd, true);
+    else { firmwareGithubActionMenu_ = true; firmwareMessage_ = "Lagring avbrutt"; }
+    return;
+  }
+  if (firmwareGithubActionMenu_) {
+    if (index != 1) firmwareGithubActionIndex_ = (firmwareGithubActionIndex_ + (index == 0 ? 2 : 1)) % 3;
+    else if (firmwareGithubActionIndex_ == 0) {
+      firmwareGithubActionMenu_ = false;
+      firmwareInstallFromGithub_ = true; firmwareInstallConfirm_ = true;
+      firmwareMessage_ = "Bekreft installering og omstart";
+    } else if (firmwareGithubActionIndex_ == 1) {
+      if (!sdReady_ && !initSdCard()) { firmwareMessage_ = "SD-kort er ikke tilgjengelig"; return; }
+      firmwareGithubActionMenu_ = false;
+      if (SD.exists("/firmware/" + firmwareGithubRelease_.name)) {
+        firmwareGithubOverwriteConfirm_ = true; firmwareMessage_ = "Beholde eller erstatte SD-kopien?";
+      } else queueFirmwareAction(FirmwareAction::SaveSd);
+    } else { firmwareGithubActionMenu_ = false; firmwareGithubDialog_ = true; }
     return;
   }
   if (firmwareGithubDialog_) {
     const uint8_t remoteCount = githubFirmware_ ? githubFirmware_->entryCount() : 0;
     const uint8_t itemCount = remoteCount + 1;
-    if (index == 0) {
-      firmwareGithubSelection_ =
-          (firmwareGithubSelection_ + itemCount - 1) % itemCount;
-    } else if (index == 2) {
-      firmwareGithubSelection_ =
-          (firmwareGithubSelection_ + 1) % itemCount;
-    } else if (firmwareGithubSelection_ < remoteCount) {
-      const String name = githubFirmware_->entryName(firmwareGithubSelection_);
-      if (sdReady_ && SD.exists("/firmware/" + name)) {
-        firmwareGithubPendingIndex_ = firmwareGithubSelection_;
-        firmwareGithubOverwriteConfirm_ = true;
-        firmwareMessage_ = "File exists: overwrite or cancel";
-      } else if (githubFirmware_ &&
-                 githubFirmware_->startDownload(firmwareGithubSelection_)) {
-        firmwareGithubDialog_ = false;
-        firmwareMessage_ = "Downloading from GitHub...";
-      } else {
-        firmwareMessage_ = "GitHub download unavailable";
-      }
-    } else {
-      firmwareGithubDialog_ = false;
-      firmwareMessage_ = "GitHub list closed";
-    }
-    if (firmwareGithubSelection_ < firmwareGithubOffset_)
-      firmwareGithubOffset_ = firmwareGithubSelection_;
-    if (firmwareGithubSelection_ >= firmwareGithubOffset_ + 5)
-      firmwareGithubOffset_ = firmwareGithubSelection_ - 4;
+    if (index != 1) firmwareGithubSelection_ = (firmwareGithubSelection_ + itemCount + (index == 0 ? -1 : 1)) % itemCount;
+    else if (firmwareGithubSelection_ < remoteCount) {
+      if (githubFirmware_->selection(firmwareGithubSelection_, firmwareGithubRelease_, firmwareGithubCatalog_)) {
+        firmwareGithubDialog_ = false; firmwareGithubActionMenu_ = true; firmwareGithubActionIndex_ = 0;
+      } else firmwareMessage_ = "Utgaven kunne ikke velges. Hent listen igjen";
+    } else { firmwareGithubDialog_ = false; firmwareMessage_ = "GitHub-listen lukket"; }
+    if (firmwareGithubSelection_ < firmwareGithubOffset_) firmwareGithubOffset_ = firmwareGithubSelection_;
+    if (firmwareGithubSelection_ >= firmwareGithubOffset_ + 5) firmwareGithubOffset_ = firmwareGithubSelection_ - 4;
     return;
   }
   if (firmwareSdDialog_) {
-    const uint8_t itemCount = firmwareCount_ + 1;
-    if (index == 0) {
-      firmwareSelection_ = (firmwareSelection_ + itemCount - 1) % itemCount;
-    } else if (index == 2) {
-      firmwareSelection_ = (firmwareSelection_ + 1) % itemCount;
-    } else if (firmwareSelection_ < firmwareCount_) {
-      if (firmwareStorage_ && firmwareStorage_->busy()) {
-        firmwareMessage_ = "Wait for firmware download";
-      } else {
-        firmwareInstallConfirm_ = true;
-        firmwareMessage_ = "Confirm firmware flash";
-      }
-    } else {
-      firmwareSdDialog_ = false;
-      firmwareSelection_ = 1;
-      firmwareOffset_ = 0;
-      firmwareMessage_ = "SD firmware list closed";
-    }
-    if (firmwareSelection_ < firmwareOffset_)
-      firmwareOffset_ = firmwareSelection_;
-    if (firmwareSelection_ >= firmwareOffset_ + 5)
-      firmwareOffset_ = firmwareSelection_ - 4;
+    const uint8_t count = firmwareCount_ + 1;
+    if (index != 1) firmwareSelection_ = (firmwareSelection_ + count + (index == 0 ? -1 : 1)) % count;
+    else if (firmwareSelection_ < firmwareCount_) {
+      firmwarePendingSdPath_ = firmwarePaths_[firmwareSelection_];
+      firmwareSdDialog_ = false; firmwareInstallFromGithub_ = false; firmwareInstallConfirm_ = true;
+      firmwareMessage_ = "Bekreft installering og omstart";
+    } else { firmwareSdDialog_ = false; firmwareSelection_ = 1; firmwareOffset_ = 0; }
+    if (firmwareSelection_ < firmwareOffset_) firmwareOffset_ = firmwareSelection_;
+    if (firmwareSelection_ >= firmwareOffset_ + 5) firmwareOffset_ = firmwareSelection_ - 4;
     return;
   }
-  if (firmwareInstallConfirm_) {
-    if (index == 0 || index == 2) {
-      firmwareInstallConfirm_ = false;
-      firmwareMessage_ = "Flash cancelled";
-    } else {
-      firmwareInstallConfirm_ = false;
-      firmwareInstallPending_ = true;
-      firmwareMessage_ = "Flashing selected firmware...";
-    }
-    return;
-  }
-  const uint8_t itemCount = 3;  // GitHub files, SD files, Back.
-  if (index == 0) {
-    firmwareSelection_ = (firmwareSelection_ + itemCount - 1) % itemCount;
-  } else if (index == 2) {
-    firmwareSelection_ = (firmwareSelection_ + 1) % itemCount;
-  } else if (firmwareSelection_ == 0) {
-    firmwareMessage_ = "Updating GitHub list...";
-    firmwareGithubDialog_ = true;
-    firmwareGithubSelection_ = 0;
-    firmwareGithubOffset_ = 0;
-    if (githubFirmware_) githubFirmware_->startManifest();
+  if (index != 1) firmwareSelection_ = (firmwareSelection_ + 3 + (index == 0 ? -1 : 1)) % 3;
+  else if (firmwareSelection_ == 0) {
+    firmwareGithubDialog_ = true; firmwareGithubSelection_ = firmwareGithubOffset_ = 0;
+    queueFirmwareAction(FirmwareAction::Manifest);
   } else if (firmwareSelection_ == 1) {
-    firmwareMessage_ = "Scanning /firmware...";
-    firmwareSelection_ = 0;
-    firmwareOffset_ = 0;
-    firmwareSdDialog_ = true;
-    firmwareScanPending_ = true;
-  } else {
-    back();
-  }
+    firmwareMessage_ = "Leser SD-filer"; firmwareSelection_ = firmwareOffset_ = 0;
+    firmwareSdDialog_ = true; firmwareScanPending_ = true;
+  } else back();
 }
 
 void FireOS::playBootRgbPulse() {
@@ -6656,6 +6690,10 @@ void FireOS::applyBackendMode() {
 void FireOS::updateBackend() {
   FireUiPhaseTimer timing("backend_service");
   if (!backendClient_) return;
+  if (firmwareNetworkPaused_) {
+    if (backendClient_->active()) backendClient_->disconnect();
+    return;
+  }
   if (backendMode_ == 2 || wifiMode_ == 2) {
     if (backendClient_->active()) backendClient_->disconnect();
     backendBootPending_ = false;
@@ -6686,7 +6724,6 @@ void FireOS::updateBackend() {
                               screen_ == Screen::LuaApp ||
                               screen_ == Screen::Settings ||
                               screen_ == Screen::AppsSettings ||
-                              screen_ == Screen::Firmware ||
                                luaRepairRequested_ || luaRepairId_.length() > 0 ||
                                backgroundBuildActive_ || buildNoticeActive_ ||
                                buildNoticePendingId_.length() > 0 ||
@@ -6699,7 +6736,6 @@ void FireOS::updateBackend() {
                                bootCheck ||
                               (packageManager_ && packageManager_->busy()) ||
                               (firmwareStorage_ && firmwareStorage_->busy()) ||
-                              (githubFirmware_ && githubFirmware_->busy()) ||
                               pendingDiagnosticAppId_.length() > 0;
   if (!backendDemand) {
     // Do not let a failed PC connection stall normal FIRE OS navigation.
@@ -9893,41 +9929,46 @@ void FireOS::drawBoot() {
 
 void FireOS::drawFirmware() {
   drawStatusBar("Firmware");
-  if (firmwareGithubOverwriteConfirm_) {
-    ui.fillRoundRect(12, 44, 296, 142, 12, kPanel);
-    drawText(26, 56, "File already exists", kOrange, 2, kPanel);
-    String name = githubFirmware_
-                      ? githubFirmware_->entryName(firmwareGithubPendingIndex_)
-                      : String();
-    if (name.length() > 28) name = name.substring(0, 25) + "...";
-    drawText(26, 88, name, TFT_WHITE, 1, kPanel);
-    drawText(26, 112, "Overwrite existing file?", kText, 1, kPanel);
-    drawText(26, 140, "B overwrite   A/C cancel", kCyan, 1, kPanel);
-    drawFooter("Cancel", "Overwrite", "Cancel");
-    return;
-  }
-  if (firmwareGithubDialog_) {
-    drawGithubFirmwareDialog();
-    return;
-  }
-  if (firmwareSdDialog_) {
-    drawSdFirmwareDialog();
-    return;
+  if (ota_.busy()) {
+    drawText(18, 45, "Firmwareoppdatering", kCyan, 2);
+    String message = ota_.message();
+    drawText(18, 85, message.substring(0, 35), kText, 1);
+    if (message.length() > 35) drawText(18, 105, message.substring(35, 70), kText, 1);
+    ui.drawRoundRect(18, 140, 284, 18, 4, kMuted);
+    ui.fillRoundRect(20, 142, 280 * ota_.progress() / 100, 14, 3, kCyan);
+    drawFooter("Avbryt", "Vent", "Vent"); return;
   }
   if (firmwareInstallConfirm_) {
     ui.fillRoundRect(14, 40, 292, 150, 12, kPanel);
-    drawText(28, 52, "Flash firmware?", kOrange, 2, kPanel);
-    String name = firmwareSelection_ < firmwareCount_
-                      ? firmwareNames_[firmwareSelection_]
-                      : String();
-    if (name.length() > 28) name = name.substring(0, 25) + "...";
+    drawText(28, 52, "Installer firmware?", kOrange, 2, kPanel);
+    String name = firmwareInstallFromGithub_ ? firmwareGithubRelease_.version : sdBaseName(firmwarePendingSdPath_);
+    if (name.length() > 28) name = name.substring(0,25) + "...";
     drawText(28, 88, name, TFT_WHITE, 1, kPanel);
-    drawText(28, 114, "Writes inactive OTA slot", kMuted, 1, kPanel);
-    drawText(28, 132, "Reboots FIRE OS", kMuted, 1, kPanel);
-    drawText(28, 158, "B flash   A/C cancel", kCyan, 1, kPanel);
-    drawFooter("Cancel", "Flash", "Cancel");
-    return;
+    drawText(28, 114, firmwareInstallFromGithub_ ? "Hentes direkte fra GitHub" : "Kontrollerer signert SD-kopi", kMuted, 1, kPanel);
+    drawText(28, 138, "Installerer og starter pa nytt", kCyan, 1, kPanel);
+    drawFooter("Avbryt", "Installer", "Avbryt"); return;
   }
+  if (firmwareGithubOverwriteConfirm_) {
+    ui.fillRoundRect(12, 44, 296, 142, 12, kPanel);
+    drawText(26, 56, "Erstatt SD-kopien?", kOrange, 2, kPanel);
+    String name = firmwareGithubRelease_.name;
+    if (name.length() > 28) name = name.substring(0,25) + "...";
+    drawText(26, 92, name, TFT_WHITE, 1, kPanel);
+    drawText(26, 125, "Tidligere kopi beholdes som backup", kMuted, 1, kPanel);
+    drawFooter("Avbryt", "Erstatt", "Avbryt"); return;
+  }
+  if (firmwareGithubActionMenu_) {
+    drawText(16, 38, firmwareGithubRelease_.version, kCyan, 2);
+    const char* actions[] = {"Installer direkte fra GitHub", "Lagre pa SD", "Tilbake"};
+    for (uint8_t i=0; i<3; ++i) {
+      const int y = 85 + i*28; const bool selected = i == firmwareGithubActionIndex_;
+      if (selected) ui.fillRoundRect(10,y-4,300,23,4,kCyan);
+      drawText(20,y,actions[i],selected?kBg:kText,1,selected?kCyan:kBg);
+    }
+    drawFooter("Forrige", "Velg", "Neste"); return;
+  }
+  if (firmwareGithubDialog_) { drawGithubFirmwareDialog(); return; }
+  if (firmwareSdDialog_) { drawSdFirmwareDialog(); return; }
   drawText(16, 34, "Running", kCyan, 1);
   drawText(16, 48, firmwareVersionLabel(), TFT_WHITE, 2);
 
@@ -9939,10 +9980,10 @@ void FireOS::drawFirmware() {
     const int y = 70 + row * 22;
     if (selected) ui.fillRoundRect(10, y - 3, 300, 19, 4, kCyan);
     if (item == 0) {
-      drawText(20, y, "GitHub firmware files", selected ? kBg : kText, 1,
+      drawText(20, y, "Oppdater fra GitHub", selected ? kBg : kText, 1,
                selected ? kCyan : kBg);
     } else if (item == 1) {
-      drawText(20, y, "SD firmware files", selected ? kBg : kText, 1,
+      drawText(20, y, "Installer fra SD", selected ? kBg : kText, 1,
                selected ? kCyan : kBg);
     } else {
       drawText(20, y, "Back", selected ? kBg : kText, 1,
@@ -9963,7 +10004,7 @@ void FireOS::drawFirmware() {
 void FireOS::drawSdFirmwareDialog() {
   ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
   ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
-  drawText(18, 39, "SD firmware files", TFT_WHITE, 2, kPanel);
+  drawText(18, 39, "Installer fra SD", TFT_WHITE, 2, kPanel);
   const uint8_t itemCount = firmwareCount_ + 1;
   if (firmwareCount_ == 0) {
     ui.setTextDatum(MC_DATUM);
@@ -10048,7 +10089,7 @@ void FireOS::drawGithubFirmwareDialog() {
   ui.setTextDatum(MC_DATUM);
   drawText(160, 190, status, kMuted, 1, kPanel);
   ui.setTextDatum(TL_DATUM);
-  drawFooter("A  UP", "B  DOWNLOAD", "DOWN  C");
+  drawFooter("A  UP", "B  SELECT", "DOWN  C");
 }
 
 void FireOS::drawMainMenuSettings() {

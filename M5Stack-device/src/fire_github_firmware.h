@@ -25,15 +25,18 @@ class FireGithubFirmwareManager {
                     ResultCallback result);
   bool startManifest();
   bool startDownload(uint8_t index, bool overwriteExisting = false);
+  bool selection(uint8_t index, FireRelease& release, String& signedCatalog) const;
+  bool startDownload(const FireRelease& release, const String& signedCatalog,
+                     bool overwriteExisting = false);
   void service(bool wifiConnected, bool sdReady);
 
-  bool busy() const { return io_.busy(); }
+  bool busy() const { return io_.busy() || client_.running(); }
   const String& status() const { return status_; }
   uint8_t entryCount() const { return io_.running ? 0 : entryCount_; }
-  const String& entryName(uint8_t index) const { return names_[index]; }
-  const String& entryVersion(uint8_t index) const { return versions_[index]; }
-  const String& entryNotes(uint8_t index) const { return notes_[index]; }
-  uint32_t entrySize(uint8_t index) const { return sizes_[index]; }
+  const String& entryName(uint8_t index) const { return catalog_.files[index].name; }
+  const String& entryVersion(uint8_t index) const { return catalog_.files[index].version; }
+  const String& entryNotes(uint8_t index) const { return catalog_.files[index].notes; }
+  uint32_t entrySize(uint8_t index) const { return catalog_.files[index].size; }
 
  private:
   enum class State : uint8_t {
@@ -61,14 +64,13 @@ class FireGithubFirmwareManager {
   File stagedFile_;
   bool manifestMode_ = false;
   bool overwriteExisting_ = false;
-  uint8_t selectedIndex_ = 0;
   uint8_t entryCount_ = 0;
-  String names_[kMaxEntries];
-  String versions_[kMaxEntries];
-  String notes_[kMaxEntries];
+  FireReleaseCatalog catalog_;
+  FireRelease selectedRelease_;
   String verifiedManifest_;
-  String hashes_[kMaxEntries];
-  uint32_t sizes_[kMaxEntries] = {};
+  String downloadCatalog_;
+  bool selectionVerified_ = false, ownsStage_ = false, ownsCatalogStage_ = false;
+  String catalogStage_, binaryBackup_, catalogBackup_;
 
   String requestPath_;
   String headerBuffer_;
@@ -102,7 +104,8 @@ class FireGithubFirmwareManager {
   bool prepareDownload(bool sdReady);
   void finishManifest();
   void finishDownload();
-  String sha256File(const String& path) const;
+  String sha256File(const String& path, uint32_t expectedSize) const;
+  bool writeCatalog();
   static String jsonStringField(const String& json, const char* key);
   static uint32_t jsonUintField(const String& json, const char* key);
   static bool validFilename(const String& name);

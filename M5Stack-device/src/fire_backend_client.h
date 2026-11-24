@@ -42,6 +42,9 @@ class FireBackendClient {
   bool sessionReady() const { return connected() && sessionId_.length() > 0; }
   bool active() const { return state_ != State::Offline; }
   bool pendingWrites() const { return !usingReverseTransport_ && client_.pendingWrites(); }
+  bool networkIdle() const {
+    return !client_.running() && !audioClient_.running() && !audioTransferRunning_;
+  }
   const String& bootId() const { return bootId_; }
   const String& status() const { return status_; }
 

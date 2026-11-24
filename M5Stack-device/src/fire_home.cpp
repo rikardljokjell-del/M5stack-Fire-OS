@@ -142,6 +142,7 @@ void FireHome::run() {
   uint32_t previousGeneration = UINT32_MAX;
   for (;;) {
     if (!wanted_) { delay(100); continue; }
+    networkActive_ = true;
     Profile p; uint8_t mode; uint32_t generation;
     xSemaphoreTake(configMutex_, portMAX_DELAY); p = profiles_[profile_]; mode = routeMode_; generation = generation_; xSemaphoreGive(configMutex_);
     if (generation != previousGeneration) {
@@ -151,6 +152,7 @@ void FireHome::run() {
     const String host = fireNetworkHost(remote ? p.remoteHost : p.localHost);
     if (!host.length() || time(nullptr) < 1700000000) {
       if (time(nullptr) < 1700000000) configTime(0, 0, "pool.ntp.org", "time.google.com");
+      networkActive_ = false;
       delay(1000); tryRemote = !tryRemote; continue;
     }
     remote_ = remote;
@@ -169,8 +171,9 @@ void FireHome::run() {
     config.message_retransmit_timeout = 60000;
     if (p.ca.length() && !remote) config.cert_pem = p.ca.c_str();
     else config.crt_bundle_attach = arduino_esp_crt_bundle_attach;
+    if (!wanted_ || generation != generation_) { networkActive_ = false; continue; }
     auto client = esp_mqtt_client_init(&config);
-    if (!client) { delay(1000); continue; }
+    if (!client) { networkActive_ = false; delay(1000); continue; }
     esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, event, this);
     esp_mqtt_client_start(client);
     uint32_t started = millis(); bool connectedOnce = false;
@@ -188,6 +191,7 @@ void FireHome::run() {
     esp_mqtt_client_stop(client); esp_mqtt_client_destroy(client);
     Outgoing discarded; while (xQueueReceive(outgoing_, &discarded, 0) == pdTRUE) {}
     if (assembly_) heap_caps_free(assembly_); assembly_ = nullptr;
+    networkActive_ = false;
     tryRemote = mode == 0 ? !remote : false;
     const uint32_t wait = millis();
     while (wanted_ && generation == generation_ && millis() - wait < backoff + esp_random() % 250) delay(20);
