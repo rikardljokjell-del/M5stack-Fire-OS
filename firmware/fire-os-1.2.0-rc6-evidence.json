@@ -1,0 +1,132 @@
+{
+  "schema": 1,
+  "version": "fire-os-1.2.0-rc6",
+  "candidate": true,
+  "physical_verified": false,
+  "physical_usb_subset_verified": false,
+  "production_verified": false,
+  "repository": "rikardljokjell-del/M5stack-Fire-OS",
+  "source_commit": "55a8584e8216a2760781d562b88be42679ddf387",
+  "ci": {
+    "firmware_run_id": 45492728362,
+    "firmware_job_id": 138795011278,
+    "artifact_id": 14967068544,
+    "artifact_zip_sha256": "75d3c6aa15dc85906d8f3f59074a23e6f90482d284d5afb6a6de973b582f689a",
+    "tests": 15,
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "distribution_note": "Normal from this CI. Physically verified RC2 bootloader/table/recovery are retained with separate component provenance."
+  },
+  "firmware": {
+    "name": "fire-os-1.2.0-rc6.bin",
+    "size": 2422224,
+    "sha256": "e549a8d6fc75c8969448b88c3bb050c9ae7ae103450f7e5b15e255d8cea6637b"
+  },
+  "migration": {
+    "name": "fire-os-1.2.0-rc6-usb.zip",
+    "size": 2645872,
+    "sha256": "96868a947d69a0b418992c47aca5dac07d7c232ae35232e327feb2cf3def73d7",
+    "manifest_sha256": "a4d9c148d15627a2cde2a59367921e083d84ec2ad18be61ea5426a1249e36848",
+    "catalog_sha256": "7f03fc7043c0dd5c8f22ce374aa61b7c00c4909376ef7fa43149a3170af3e51f",
+    "files": [
+      "migration.json",
+      "migration.sig",
+      "bootloader.bin",
+      "partitions.bin",
+      "normal.bin",
+      "recovery.bin",
+      "catalog-v2.json",
+      "release-public.pem"
+    ]
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "e549a8d6fc75c8969448b88c3bb050c9ae7ae103450f7e5b15e255d8cea6637b",
+      "size": 2422224
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "component_provenance": {
+    "bootloader": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 27760,
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "retained_rc2_component": true
+    },
+    "partitions": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 3072,
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "retained_rc2_component": true
+    },
+    "normal": {
+      "source_commit": "55a8584e8216a2760781d562b88be42679ddf387",
+      "ci_run": 45492728362,
+      "size": 2422224,
+      "sha256": "e549a8d6fc75c8969448b88c3bb050c9ae7ae103450f7e5b15e255d8cea6637b",
+      "retained_rc2_component": false
+    },
+    "recovery": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 1578112,
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "retained_rc2_component": true
+    }
+  },
+  "ota": {
+    "algorithm": "ecdsa-p256-sha256",
+    "key_id": "fire-release-2026",
+    "layout": "fire-ab-recovery-v1",
+    "rollback_enabled": true,
+    "factory_reset_gpio": 39,
+    "factory_reset_hold_seconds": 3,
+    "data_factory_reset": []
+  },
+  "changes": [
+    "Direct signed GitHub update to inactive OS slot without SD",
+    "Exact HTTP response, received-byte hash, ESP32 image check and flash-readback hash before boot selection",
+    "Explicit installation confirmation handled before SD list",
+    "Firmware operations wait for Wi-Fi and boot health, pause unnecessary network activity and preserve active jobs",
+    "Optional SD save verifies closed files and restores preserved binary/catalog on activation failure"
+  ],
+  "not_verified": [
+    "RC6 physical direct GitHub download, OTA activation, health approval and normal reboot pending",
+    "RC6 optional SD save and user hardware reliability pending",
+    "Home/Camper on user Home Assistant and public Cloudflare/WSS",
+    "Visual/button/audio/AI/Lua installation and RUN acceptance",
+    "Physical power interruption and GPIO39 recovery hold"
+  ]
+}

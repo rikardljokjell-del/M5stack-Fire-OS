@@ -1,6 +1,33 @@
 # FIRE OS firmware
 
-Aktuell **testkandidat: fire-os-1.2.0-rc5**. Den er fysisk installert på
+Aktuell **testkandidat: fire-os-1.2.0-rc6**. Vanlig oppdatering går nå direkte
+fra GitHub til inaktiv OS-slot, uten SD-kort eller backend. Velg
+**Settings → Firmware → Oppdater fra GitHub → utgave → Installer direkte fra GitHub**
+og bekreft med B. FIRE kontrollerer signatur, størrelse, nettverksdata og
+tilbakeavlest flash før ny firmware velges og enheten starter om.
+**Lagre pa SD** er et separat, valgfritt valg.
+
+Alle 15 tester og tre bygg er bestått på kilde
+[55a8584](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/55a8584e8216a2760781d562b88be42679ddf387),
+[CI 45492728362](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45492728362).
+Den fysiske RC6-testen pågår; dette er ikke full produksjonsgodkjenning.
+Normal RC6 er ny, mens USB-pakken bevarer de fysisk testede
+RC2-bildene for bootloader, partisjonstabell og recovery med separat opphav.
+
+| Gjeldende RC6-fil | Bruk |
+| --- | --- |
+| [Normal firmware](fire-os-1.2.0-rc6.bin) | Direkte, signert GitHub-oppdatering |
+| [USB-arkiv](fire-os-1.2.0-rc6-usb.zip) | Førstegangsmigrering på en annen enhet |
+| [Kontrollsummer](fire-os-1.2.0-rc6-SHA256SUMS.txt) | Eksakte filhashes |
+| [Utgivelsesbevis](fire-os-1.2.0-rc6-evidence.json) | CI, komponentkilder og faktisk teststatus |
+
+## Historisk RC5
+
+RC5 beholdes uendret med [original katalog](fire-os-1.2.0-rc5-catalog.json).
+SD-skrivefeilen er gjenskapt på fysisk FIRE, og installasjonsbekreftelsen hadde
+en separat feil. Bruk RC6. Følgende er de tidligere USB-målingene:
+
+RC5 ble fysisk installert på
 Rikards FIRE og helsegodkjent. Målt maksimal løkkeavstand ved oppstart og
 appinventering var 88 ms, og 86 ms etter vanlig omstart; tidligere RC2 nådde
 1 391 ms. Ingen krasj eller ekstra reset ble sett i de avgrensede opptakene.
