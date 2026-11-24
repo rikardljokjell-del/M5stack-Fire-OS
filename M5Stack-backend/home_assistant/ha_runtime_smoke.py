@@ -116,6 +116,8 @@ class Device:
         self.route = "remote" if remote else "local"
         self.messages: list[tuple[float, str, object]] = []
         self.ready = threading.Event()
+        self.subscribed = threading.Event()
+        self.subscription_count = 0
         self.reason = None
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="fire-ci-" + secrets.token_hex(8), protocol=mqtt.MQTTv5,
                                   transport="websockets" if remote else "tcp")
@@ -139,6 +141,12 @@ class Device:
 
         self.client.on_connect = connected
         self.client.on_message = message
+        def subscribed(client, userdata, mid, reasons, properties):
+            if all(not reason.is_failure for reason in reasons):
+                self.subscription_count += 1
+                if self.subscription_count == 3:
+                    self.subscribed.set()
+        self.client.on_subscribe = subscribed
         self.client.connect(HOST, 9001 if remote else 8883, keepalive=10)
         self.client.loop_start()
         if not self.ready.wait(10) or self.reason != 0:
@@ -146,6 +154,9 @@ class Device:
             raise AssertionError("CI device MQTT connection rejected")
         for suffix in ("catalog", "state", "ack"):
             self.client.subscribe(PREFIX + "/" + self.route + "/" + suffix, qos=1)
+        if not self.subscribed.wait(10):
+            self.close()
+            raise AssertionError("CI device response subscriptions not acknowledged")
 
     def close(self):
         self.client.disconnect()
@@ -166,7 +177,9 @@ class Device:
                 if received >= after and kind == suffix and isinstance(value, dict) and predicate(value):
                     return value
             await asyncio.sleep(.05)
-        raise AssertionError("Timed out awaiting " + self.route + " " + suffix)
+        # Fixture messages contain only hardcoded synthetic data, never passwords.
+        recent = [(kind, value) for _, kind, value in self.messages[-3:]]
+        raise AssertionError("Timed out awaiting " + self.route + " " + suffix + "; recent fixture frames=" + repr(recent)[:2500])
 
 
 class PackageErrors(logging.Handler):
@@ -208,9 +221,24 @@ async def inside(directory: Path, phase: str):
         return int(state.state)
 
     async def catalog(device, predicate=lambda item: True):
+        # HA intentionally batches MQTT subscriptions for 0.5 seconds. Await
+        # the real SUBACK rather than losing a nonretained hello during startup
+        # or reload, then accidentally timing out before the next heartbeat.
+        subscribed = asyncio.Event()
+        remove = mqtt.async_on_subscribe_done(hass, PREFIX + "/" + device.route + "/request", 1, subscribed.set)
+        try:
+            await asyncio.wait_for(subscribed.wait(), timeout=15)
+        finally:
+            remove()
         mark = time.monotonic()
         await device.send({"v": 1, "type": "hello", "rid": secrets.token_hex(8)})
-        return await device.wait("catalog", lambda item: item.get("epoch") != "0000000000000000" and predicate(item), after=mark)
+        try:
+            return await device.wait("catalog", lambda item: item.get("epoch") != "0000000000000000" and predicate(item), after=mark)
+        except AssertionError:
+            print("CI helper diagnostics:", {"epoch": hass.states.get("input_text." + SLUG + "_epoch").state,
+                  "seq": hass.states.get("input_number." + SLUG + "_seq").state,
+                  "package_errors": errors.errors[:3]}, flush=True)
+            raise
 
     async def command(device, card="lamp", op="on", value=None, *, extra=None, retained=False):
         current = await catalog(device)
