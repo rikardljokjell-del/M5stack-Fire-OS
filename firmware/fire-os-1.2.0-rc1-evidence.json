@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "version": "fire-os-1.2.0-rc1",
+  "candidate": true,
+  "physical_verified": false,
+  "repository": "rikardljokjell-del/M5stack-Fire-OS",
+  "source_commit": "34ade23bc2872dbc3561a09d859aba865d05f470",
+  "ci": {
+    "firmware_run_id": 45426276015,
+    "firmware_job_id": 138559037762,
+    "artifact_id": 14938085013,
+    "artifact_zip_sha256": "11a37d5ae1de6eaa3263505637700a0572bc3d401be224b89c4396bfc9a09a8d",
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "tests": 12
+  },
+  "firmware": {
+    "name": "fire-os-1.2.0-rc1.bin",
+    "size": 2399808,
+    "sha256": "1241877bb01510bf5e964864edc54052ec6ce594330ac68179bfbcd26f4a8a9e"
+  },
+  "migration": {
+    "name": "fire-os-1.2.0-rc1-usb.zip",
+    "size": 2632217,
+    "sha256": "5cb1dc081a18630325cb26223c23f215af58987e3d772e8fb5d1b99b3e2e4dbd",
+    "manifest_sha256": "8ebdd1f50cad2691b09439ede595d3bd7613b3b4466bdc3d29373d4cc32889b1",
+    "files": [
+      "migration.json",
+      "migration.sig",
+      "bootloader.bin",
+      "partitions.bin",
+      "normal.bin",
+      "recovery.bin",
+      "catalog-v2.json",
+      "release-public.pem"
+    ]
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "fb0e8dbc804574cc5aa7373b85e97726588c072608cd931057b805be0bc9324e",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "1241877bb01510bf5e964864edc54052ec6ce594330ac68179bfbcd26f4a8a9e",
+      "size": 2399808
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "ota": {
+    "algorithm": "ecdsa-p256-sha256",
+    "key_id": "fire-release-2026",
+    "layout": "fire-ab-recovery-v1",
+    "factory_reset_gpio": 39,
+    "factory_reset_hold_seconds": 3,
+    "rollback_enabled": true,
+    "data_factory_reset": []
+  },
+  "not_verified": [
+    "physical FIRE startup and responsiveness",
+    "physical rollback and independent factory recovery",
+    "user Cloudflare and Home Assistant configuration"
+  ]
+}

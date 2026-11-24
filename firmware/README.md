@@ -1,19 +1,37 @@
 # FIRE OS firmware
 
-This folder contains device-compatible FIRE OS `.bin` builds for the M5Stack
-FIRE. Copy a selected `.bin` to the SD card at `/firmware/`, then open
-`Settings -> Firmware` on the device.
+Aktuell **testkandidat: fire-os-1.2.0-rc1**. Kode, bygg, signaturer og
+migreringspakken er kontrollert. Fysisk FIRE, tilbakeføring og redning må
+sluttkontrolleres før kandidaten kan godkjennes for produksjon.
 
-The device validates the ESP32 image, writes the inactive OTA slot, verifies
-the result and reboots only after explicit confirmation. Keep the previous
-known-good firmware available for recovery.
+| Fil | Bruk |
+| --- | --- |
+| [fire-os-1.2.0-rc1-usb.zip](fire-os-1.2.0-rc1-usb.zip) | Komplett signert engangsmigrering: normal firmware, separat recovery, bootloader, partisjoner og signert plan |
+| [fire-os-1.2.0-rc1.bin](fire-os-1.2.0-rc1.bin) | Normal firmware for direkte oppdatering etter migrering; brukes sammen med signert katalog |
+| [index.json](index.json) | Signert schema 2-katalog som FIRE henter direkte fra GitHub |
+| [Kontrollsummer](fire-os-1.2.0-rc1-SHA256SUMS.txt) | SHA256 for binær og USB-arkiv |
+| [Bygg- og pakkebevis](fire-os-1.2.0-rc1-evidence.json) | Eksakt kildecommit, Linux-kjøring, filstørrelser, hashes og åpne fysiske kontroller |
 
-`index.json` is the public catalog used by `Settings -> Firmware -> GitHub
-firmware`. It must contain only tested M5Stack FIRE builds and the exact
-SHA-256/size of each binary.
+Start med [samlet oppsett](../SETUP.md), deretter
+[USB-migreringen](../M5Stack-backend/docs/USB_MIGRATION.md) og
+[fysisk sluttest](../docs/PHYSICAL_CHECK.md). Pakken er allerede klargjort
+lokalt i `M5Stack-backend/workspace/migration/fire-os-1.2.0-rc1/` på denne PC-en.
+Ved nedlasting av USB-arkivet pakkes det ut til en ny mappe før kontrollen.
+Den løse `.bin`-filen installerer ikke den nødvendige redningsløsningen alene.
 
-The current catalog entry is `fire-os-1.1.bin`.
+Etter engangsmigreringen bruker du **Settings → Firmware** på FIRE.
+FIRE verifiserer katalogsignatur, mål, størrelse og SHA256. Vanlig OTA skriver
+bare inaktiv OS-plass; bootloader, partisjonstabell og factory recovery blir
+beholdt. Redning kan velges med A før vanlig OS starter og kan hente direkte
+fra GitHub uten SD-kort eller Windows. Faktisk knappe-/feilfunksjon står på
+sluttestlisten. Backendens firmwarevisning er bare en versjonsoversikt.
 
-The current binary is the device firmware from the latest verified
-`m5stack-fire-ble` build. Always use the exact size and SHA-256 from
-`index.json`; the firmware menu rejects mismatches.
+Kilden er [34ade23bc2872dbc3561a09d859aba865d05f470](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/34ade23bc2872dbc3561a09d859aba865d05f470).
+[Linux-kontrollen](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45426276015)
+bestod to firmwarebygg, bootloader og 12 tester. Det publiserte USB-arkivet
+er pakket ut på nytt og godkjent av det separate migreringsverktøyet uten
+serieport eller skriving til enhet. Private signeringsnøkler følger aldri med.
+
+Historisk `fire-os-1.1.bin` beholdes. Dens opprinnelige metadata ligger i
+[legacy-index-v1.json](legacy-index-v1.json) for Studio-oversikten. Denne
+usignerte utgaven er ikke en oppdatering til den nye recovery-layouten.

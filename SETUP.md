@@ -38,6 +38,8 @@ Innstillinger og bibliotek er felles med Windows-programmet.
 
 Dette oppsettet gjøres én gang. Du trenger en Cloudflare-konto, et domene under
 den kontoen og egen innlogging. Ingen ruterport skal åpnes.
+Selve Cloudflare-programmet er allerede klargjort på denne PC-en; veiledningen
+bruker den lokale hjelperen `M5Stack-backend/scripts/cloudflare.ps1`.
 
 Du velger to adresser, for eksempel:
 
@@ -47,6 +49,8 @@ Du velger to adresser, for eksempel:
 Følg [de nummererte Cloudflare-stegene](M5Stack-backend/docs/WEB_STUDIO_SETUP.md#én-gang-mobil-og-internett).
 Der finner du ferdig tunnelmal, hva du skal erstatte, og hvilke felt du fyller
 inn i Studio. PC-en og tunnelen må være i gang for ekstern AI og Studio.
+I Studio velger du **Innstillinger → Tilkobling → Forbindelsesmåte: direct**
+for dette oppsettet.
 Windows må også holdes våken mens du vil bruke AI utenfra; hvilemodus stopper
 PC-tjenestene. Kontroller strøm-/hvileinnstillingen når PC-en står på strøm.
 
@@ -113,9 +117,15 @@ Ny oppstartsløsning med uavhengig redning krever en førstegangs USB-migrering.
 Etter migreringen skal normale oppdateringer hentes fra **Innstillinger på FIRE**
 direkte fra GitHub. Studio viser bare versjoner og informasjon.
 
-Migreringspakken og den eksakte enhetsveiledningen klargjøres sammen med den
-ferdige firmwarebyggen. Ingen firmware skal installeres bare fordi den er
-signert: fysisk oppstart, tilbakeføring og redning må også kontrolleres.
+Den signerte testpakken **fire-os-1.2.0-rc1** er klar på denne PC-en i
+`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc1/`. Følg
+[USB-veiledningen](M5Stack-backend/docs/USB_MIGRATION.md) fra steg 1.
+Pakken er også tilgjengelig som
+[USB-arkiv](firmware/fire-os-1.2.0-rc1-usb.zip) med
+[kontrollsummer](firmware/fire-os-1.2.0-rc1-SHA256SUMS.txt).
+
+Versjonen er en testkandidat. Signatur- og pakkekontrollen er bestått;
+fysisk oppstart, tilbakeføring og redning står på sluttestlisten.
 
 ## Samlet sluttkontroll hos deg
 

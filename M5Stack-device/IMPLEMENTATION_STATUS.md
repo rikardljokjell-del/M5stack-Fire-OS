@@ -1,6 +1,13 @@
-# Device source freeze — 2026-11-24
+# Device delivery status — 2026-11-24
 
-READY FOR MASTER SOURCE COMMIT AND LINUX CI. Source changes are frozen.
+Source changes are frozen. Final source commit is
+`34ade23bc2872dbc3561a09d859aba865d05f470`.
+Linux CI passed all 12 tests and normal/recovery/bootloader builds. The exact
+CI artifacts have been signed and independently verified by the PC migration
+tool. Package: `../M5Stack-backend/workspace/migration/fire-os-1.2.0-rc1/`.
+Authoritative delivered artifact hashes and remaining physical checks are in
+[DELIVERY_REPORT.md](DELIVERY_REPORT.md); local build snapshots below are audit
+history, not the distributed binary bytes. Master handles publication.
 No COM device, no flashing, no physical integration claim. Master owns git.
 
 ## Final local builds
@@ -21,7 +28,7 @@ No COM device, no flashing, no physical integration claim. Master owns git.
   C:/Users/Rikard/.codex/device-build/bootloader because IDF rejects spaces.
   No Windows security policy was modified.
 
-## Tests and remaining release gate
+## Local test audit (final Linux gate passed)
 
 - Five real ECDSA release tests PASSED; four migration-packaging tests PASSED.
 - Original native_core executable PASSED locally earlier. Master reports both
@@ -29,10 +36,9 @@ No COM device, no flashing, no physical integration claim. Master owns git.
   compiled them, but Windows Application Control blocked execution (WinError
   4551). This is NOT a passing local suite and has not been hidden/skipped.
 - New actual WebSocket header/nonce validator has positive/negative C++ tests.
-  Linux firmware-checks.yml must run the complete 12-test suite on this source.
-- No source commit was guessed. tools/package_migration.py must receive the
-  exact SHA supplied by master after committing the frozen sources. Prefer
-  source-matched Linux CI images if master selects those as release artifacts.
+  Linux firmware-checks.yml ran the complete 12-test suite successfully.
+- The exact master-supplied source SHA and its Linux CI images were used by
+  tools/package_migration.py. Both signed catalog and migration checks passed.
 
 ## Delivery included
 

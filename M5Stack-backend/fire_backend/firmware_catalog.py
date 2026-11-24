@@ -10,6 +10,7 @@ import httpx
 REPOSITORY = "rikardljokjell-del/M5stack-Fire-OS"
 RELEASES = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=12"
 INDEX = f"https://raw.githubusercontent.com/{REPOSITORY}/main/firmware/index.json"
+LEGACY_INDEX = f"https://raw.githubusercontent.com/{REPOSITORY}/main/firmware/legacy-index-v1.json"
 
 
 async def fetch_json(client, url):
@@ -23,7 +24,7 @@ async def fetch_json(client, url):
     return json.loads(body)
 
 
-def index_entries(data):
+def index_entries(data, source="firmware/index.json"):
     """Legacy index and signed-index envelopes are metadata, never trusted OTA approval."""
     if not isinstance(data, dict):
         raise ValueError
@@ -55,8 +56,9 @@ def index_entries(data):
              "published_at": r.get("published_at"), "prerelease": bool(r.get("prerelease")),
              "target": r.get("target", payload.get("target")),
              "signed": signed, "legacy_unsigned": not signed,
-             "signature_verified": False, "source": "firmware/index.json",
-             "compatibility": "Metadata. FIRE kontrollerer target, størrelse, hash og signatur."}
+             "signature_verified": False, "source": source,
+             "compatibility": "Metadata. FIRE kontrollerer target, størrelse, hash og signatur." if signed
+                              else "Eldre, usignert katalog. Ikke for den nye recovery-layouten."}
             for r in files[:24] if isinstance(r, dict)]
 
 
@@ -73,9 +75,18 @@ class FirmwareCatalog:
                 self.checked = time.time()
                 try:
                     async with httpx.AsyncClient(timeout=3, follow_redirects=False, trust_env=False) as client:
-                        results = await asyncio.gather(fetch_json(client, INDEX), fetch_json(client, RELEASES), return_exceptions=True)
-                    index, data = results
-                    entries = index_entries(index) if not isinstance(index, Exception) else []
+                        results = await asyncio.gather(fetch_json(client, INDEX), fetch_json(client, LEGACY_INDEX),
+                                                       fetch_json(client, RELEASES), return_exceptions=True)
+                    index, legacy, data = results
+                    entries, usable = [], False
+                    for result, source in ((index,"firmware/index.json"),(legacy,"firmware/legacy-index-v1.json")):
+                        if isinstance(result, Exception):continue
+                        try:
+                            if source.endswith("legacy-index-v1.json") and result.get("schema") != 1:
+                                continue
+                            entries.extend(index_entries(result,source));usable=True
+                        except (ValueError,TypeError,AttributeError):
+                            continue
                     if isinstance(data, Exception):
                         data = []
                     if not isinstance(data, list):
@@ -88,9 +99,14 @@ class FirmwareCatalog:
                                     "url": f"https://github.com/{REPOSITORY}/releases",
                                     "compatibility": "FIRE kontrollerer target, hash og signatur før installasjon."}
                                    for r in data[:12] if isinstance(r, dict) and not r.get("draft")]
-                    self.cached = entries + [r for r in releases if r['version'] not in {e['version'] for e in entries}]
-                    if all(isinstance(r, Exception) for r in results):
+                    if not usable and not releases:
                         raise ValueError
+                    # Current signed metadata wins; then exact legacy archive;
+                    # releases only add versions absent from either index.
+                    merged={}
+                    for entry in entries+releases:
+                        if entry['version'] not in merged:merged[entry['version']]=entry
+                    self.cached=list(merged.values())
                     self.error = ""
                 except (httpx.HTTPError, ValueError, TypeError):
                     self.error = "GitHub-katalogen kunne ikke hentes. Sist hentede oversikt beholdes."

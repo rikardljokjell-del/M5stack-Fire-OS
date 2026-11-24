@@ -6,18 +6,19 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-Leveransen er under sluttføring. FIRE Studio, sikker offentlig backendinngang
-og det direkte HA-oppsettet er implementert. Enhetsagenten ferdigstiller native
-Home, sikker nettverkstransport og OTA med uavhengig recovery. Ingen ny firmware
-er flashet på en fysisk FIRE i denne leveransen.
+Kode og signert testpakke **fire-os-1.2.0-rc1** er klargjort. FIRE Studio,
+sikker offentlig backendinngang, direkte Home og OTA med uavhengig recovery
+er implementert. Linux-byggfilene er signert, USB-arkivet er pakket ut på nytt
+og kontrollert av det separate migreringsverktøyet. Ingen fysisk FIRE er
+flashet i denne leveransen. Produksjonsgodkjenning krever sluttesten under.
 
 | Område | Implementert / lokalt kontrollert | Gjenstående bevis |
 | --- | --- | --- |
 | FIRE Studio | PC-/mobilvisning, innstillinger, samtale, bekreftet appbygg, jobber, bibliotek, kostnader og lesbar GitHub-firmwareoversikt | Ny fysisk FIRE og live offentlig oppsett |
 | Offentlig backend | Separate browser-/deviceverter, Access-JWT, engangspålogging lokalt, sesjon/CSRF/Origin og egne enhetstokener | Brukerens domene, konto og tunnel |
 | Jobber og samtale | Samme lagring som Windows-programmet, frakoblet apputvikling, eksplisitt BUILD/RUN og sikker omstart | Nettbrudd/tale/installasjon med ny fysisk firmware |
-| Direkte Home | Native HA-pakke, streng mapping/etiketter, kommando-/replaykontroll, separat MQTT-innlogging lokalt/eksternt, veiviser og importfil | Faktisk HA, ekte broker og fysisk FIRE |
-| Firmware/recovery | Under ferdigstilling i deviceprosjektet | Endelig bygg/pakke/signatur og fysisk oppstart/feil/recovery |
+| Direkte Home | Native kortvisning, Home/Camper, HA-styrte tillatelser, MQTT/TLS/WSS, veiviser/import; ekte HA og broker testet isolert | Brukerens entiteter/adresser og fysisk FIRE |
+| Firmware/recovery | Tre bygg, 12 CI-tester, signert katalog/bundle, kontrollert USB-arkiv, inaktiv OTA-slot, watchdog og separat recovery | Fysisk oppstart, tilbakeføring og redning |
 
 ## Testbevis
 
@@ -32,6 +33,9 @@ er flashet på en fysisk FIRE i denne leveransen.
   omstart og eksisterende reverse TCP-transport.
   Totalen inkluderer 51 Home-tester, 31 tester av migreringsverktøyet og fem
   kontroller av den avgrensede diagnoseinnsamlingen.
+- Etter fullkjøringen ble firmwareoversikten utvidet til å bevare den eldre
+  GitHub-katalogen. **29 relevante katalog-/browser-/livssyklustester bestått**.
+  Disse overlapper fullsuiten og skal ikke legges til som 29 unike tester.
 - Home: 51 målrettede tester bestått, inkludert genererte scriptsekvenser i
   en Jinja-sandbox og faktiske strenge OpenSSL-håndtrykk. I tillegg er ekte
   Home Assistant-kjøring bestått som beskrevet nedenfor.
@@ -66,6 +70,28 @@ Se [detaljert Home-bevis](M5Stack-backend/home_assistant/VERIFICATION.md).
 Brukerens egne entiteter, offentlig Cloudflare/WSS og fysisk FIRE er fortsatt
 åpne sluttkontroller.
 
+## Levert firmwarepakke
+
+Kilde `34ade23bc2872dbc3561a09d859aba865d05f470`.
+[Linux-kjøring 45426276015](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45426276015)
+bestod normal firmware med BLE/lyd, separat recovery, custom bootloader og
+alle 12 C++-/signatur-/pakkekontroller. CI-arkivet er SHA256-kontrollert før
+ekstraksjon. De distribuerte filene kommer fra denne kjøringen.
+
+- Normal firmware: 2 399 808 byte,
+  SHA256 `1241877bb01510bf5e964864edc54052ec6ce594330ac68179bfbcd26f4a8a9e`.
+- [Signert USB-arkiv](firmware/fire-os-1.2.0-rc1-usb.zip): 2 632 217 byte,
+  SHA256 `5cb1dc081a18630325cb26223c23f215af58987e3d772e8fb5d1b99b3e2e4dbd`.
+- Det publiserbare arkivet inneholder bare de åtte nødvendige filene, ingen
+  privat nøkkel. Ny utpakking bestod faktisk `migrate_fire.py check` uten COM.
+- [Maskinlesbart bevis](firmware/fire-os-1.2.0-rc1-evidence.json),
+  [device-rapport](M5Stack-device/DELIVERY_REPORT.md) og
+  [firmwareoversikt](firmware/README.md).
+
+Cloudflare CLI 2026.11.2 er også hentet og SHA256-/versjonskontrollert lokalt.
+`scripts/cloudflare.ps1` bruker den lokale kopien. Ingen konto, tunnel, DNS
+eller offentlig tilgang er opprettet; det krever brukerens valgte oppsett.
+
 ## Tidligere bevis
 
 Ekte OpenAI-dialog, kodegenerering og validert Lua-pakke er prøvd tidligere i
@@ -78,8 +104,8 @@ eller at enhetskilden aldri var endret, gjelder ikke lenger.
 ## Samles til slutt hos brukeren
 
 Domene/Cloudflare-innlogging, HA-installasjonstype/MQTT-vert, valgte entiteter,
-førstegangs USB-migrering og fysiske tester. Dette hindrer ikke ferdigstilling
-av kode, pakker, dokumentasjon og lokale kontroller.
+førstegangs USB-migrering og fysiske tester. Kode, pakker, dokumentasjon og
+uavhengige kontroller er klargjort før disse opplysningene etterspørres.
 
 Produksjonsklar fysisk drift påstås først etter kontroll av oppstart,
 nettbrudd, norsk tale, minne/respons, Home med Windows av og uavhengig recovery.

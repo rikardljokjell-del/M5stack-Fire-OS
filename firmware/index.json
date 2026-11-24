@@ -1,13 +1,1 @@
-{
-  "schema": 1,
-  "repository": "rikardljokjell-del/M5stack-Fire-OS",
-  "target": "m5stack-fire",
-  "files": [
-    {
-      "name": "fire-os-1.1.bin",
-      "version": "fire-os-1.1",
-      "size_bytes": 1941568,
-      "sha256": "A596DB0C7B572C0DA1C2E102E209C789244E325E555A9D15551297CDB532EF67"
-    }
-  ]
-}
+{"algorithm":"ecdsa-p256-sha256","key_id":"fire-release-2026","payload":"eyJjaGFubmVsIjoic3RhYmxlIiwiZmlsZXMiOlt7Im5hbWUiOiJmaXJlLW9zLTEuMi4wLXJjMS5iaW4iLCJub3RlcyI6IlRlc3R2ZXJzam9uOiBkaXJla3RlIEhvbWUsIFRMUywgc2lnbmVydCBPVEEgb2cgc2VwYXJhdCByZWNvdmVyeS4gRnlzaXNrIHNsdXR0a29udHJvbGwgZ2plbnN0w6VyLiIsInBhdGgiOiJmaXJtd2FyZS9maXJlLW9zLTEuMi4wLXJjMS5iaW4iLCJwdWJsaXNoZWRfYXQiOiIyMDI2LTExLTI0VDE1OjM3OjIzWiIsInNoYTI1NiI6IjEyNDE4NzdiYjAxNTEwYmY1ZTk2NDg2NGVkYzU0MDUyZWM2Y2U1OTQzMzBhYzY4MTc5YmZiY2QyNmY0YThhOWUiLCJzaXplX2J5dGVzIjoyMzk5ODA4LCJzb3VyY2VfY29tbWl0IjoiMzRhZGUyM2JjMjg3MmRiYzM1NjFhMDlkODU5YWJhODY1ZDA1ZjQ3MCIsInZlcnNpb24iOiJmaXJlLW9zLTEuMi4wLXJjMSJ9XSwibGF5b3V0IjoiZmlyZS1hYi1yZWNvdmVyeS12MSIsIm1pbl9yZWNvdmVyeSI6MSwicmVwb3NpdG9yeSI6InJpa2FyZGxqb2tqZWxsLWRlbC9NNXN0YWNrLUZpcmUtT1MiLCJzY2hlbWEiOjIsInRhcmdldCI6Im01c3RhY2stZmlyZSJ9","schema":2,"signature":"MEUCIQD0+oojEBrMf66QL53+tGW+OemPxx1OBuS/6Y0Ps093qgIgMSv66EBj+5vC8E8rWkcCUso+LfEvSXeu7o0fYiBX0ho="}

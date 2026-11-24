@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "repository": "rikardljokjell-del/M5stack-Fire-OS",
+  "target": "m5stack-fire",
+  "files": [
+    {
+      "name": "fire-os-1.1.bin",
+      "version": "fire-os-1.1",
+      "size_bytes": 1941568,
+      "sha256": "A596DB0C7B572C0DA1C2E102E209C789244E325E555A9D15551297CDB532EF67"
+    }
+  ]
+}

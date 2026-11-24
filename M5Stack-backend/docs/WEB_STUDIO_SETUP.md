@@ -41,12 +41,16 @@ mobil bruker HTTPS-oppsettet under; ingen anonym LAN-innlogging åpnes.
 Du trenger et domene administrert i Cloudflare, en Cloudflare-konto og en Access
 innloggingsmetode. Disse er ikke opprettet eller kjøpt automatisk.
 
-1. Installer Cloudflare `cloudflared` fra den offisielle Windows-distribusjonen.
+1. På denne PC-en er offisiell Cloudflare `cloudflared` 2026.11.2 allerede hentet
+   til ignorert `workspace/tools/cloudflared/`, kontrollert mot publisert SHA256
+   og prøvd med kun `--version`. Bruk `scripts/cloudflare.ps1` fra backendmappen;
+   den kontrollerer hash/størrelse før kjøring og endrer ikke PATH.
 2. I Cloudflare Zero Trust: opprett en **Self-hosted Access application** for
    `studio.dittdomene.no`. Tillat bare din innlogging. Ikke lag en Bypass-policy.
    Noter teamnavn/issuer `https://TEAM.cloudflareaccess.com` og application AUD.
 3. Opprett en named tunnel på PC-en. For lokalt administrert tunnel bruker du
-   `cloudflared tunnel login`, deretter `cloudflared tunnel create fire-pc`.
+   `.\scripts\cloudflare.ps1 tunnel login`, deretter
+   `.\scripts\cloudflare.ps1 tunnel create fire-pc`.
    Konto- og tunnellegitimasjonen blir i brukerens `.cloudflared`-mappe.
 4. Kopier `deployment/cloudflare/pc.yml.example` til `.cloudflared/fire-pc.yml`.
    Erstatt UUID, credentials-file, domenenavn, Access team og audience. Behold
@@ -54,7 +58,7 @@ innloggingsmetode. Disse er ikke opprettet eller kjøpt automatisk.
    offentlige vertsnavnet, aldri `localhost`. Browser-ruten krever Access ved
    tunnelinngangen OG signaturkontroll i applikasjonen.
 5. Legg DNS-rutene til tunnelen:
-   `cloudflared tunnel route dns fire-pc studio.dittdomene.no` og tilsvarende
+   `.\scripts\cloudflare.ps1 tunnel route dns fire-pc studio.dittdomene.no` og tilsvarende
    `fire.dittdomene.no`. Bare studio-verten har interaktiv Access-innlogging.
    Enhetsverten bruker sitt eget begrensede device-token; et admin-token avvises
    på denne flaten. Ikke legg browseradmin eller andre apper på enhetsverten.
@@ -65,8 +69,8 @@ innloggingsmetode. Disse er ikke opprettet eller kjøpt automatisk.
    Etter CLI-alternativet avslutter og åpner du Windows-programmet igjen, slik
    at konfigurasjonen leses fra disk. Ingen hemmeligheter skal gis som argument.
 7. Kontroller tunneloppsettet med
-   `cloudflared tunnel --config <sti-til-fire-pc.yml> ingress validate`.
-   Start med `cloudflared tunnel --config <sti-til-fire-pc.yml> run fire-pc`.
+   `.\scripts\cloudflare.ps1 tunnel --config <sti-til-fire-pc.yml> ingress validate`.
+   Start med `.\scripts\cloudflare.ps1 tunnel --config <sti-til-fire-pc.yml> run fire-pc`.
    Cloudflared holdes i gang på PC-en; ingen inngående ruterport åpnes.
 8. Åpne `https://studio.dittdomene.no/ui/` på mobil/PC, logg inn med Access og
    velg **Logg inn med Cloudflare Access** i Studio. Nettlesersesjonen varer
@@ -89,7 +93,9 @@ Se `home_assistant/README.md` og `docs/HOME-v1.md`. Nabu Casa-adressen er ikke
 en MQTT-endpoint. Home og installerte selvstendige apper skal fungere med PC av.
 
 Firmwarevisningen er bare lesbar metadata fra repoets `firmware/index.json`
-og GitHub Releases. Eldre katalog merkes usignert; v2 merkes signert metadata,
+og `firmware/legacy-index-v1.json`, samt GitHub Releases. Gjeldende versjon har
+prioritet ved duplikater. Manglende eldre arkiv påvirker ikke gjeldende katalog.
+Eldre katalog merkes usignert og ikke for ny recovery-layout; v2 er signert metadata,
 men backend påstår ikke å ha verifisert signaturen eller fysisk firmware.
 FIRE kontrollerer sin egen target/hash/signatur og håndterer installering,
 tilbakeføring og recovery direkte. Ingen firmwarebinær lastes ned av webUI.
@@ -105,3 +111,7 @@ mobilbredde. Ingen betalte AI-kall kreves for disse kontrollene.
 Offisielt oppsettsgrunnlag:
 [Cloudflare JWT-validering](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/),
 [tunnelens origin-parametere](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/).
+Den lokalt kontrollerte versjonen kommer fra
+[Cloudflares offisielle 2026.11.2-utgivelse med SHA256](https://github.com/cloudflare/cloudflared/releases/tag/2026.11.2).
+Ingen Cloudflare-innlogging, tunnel, tjeneste, DNS-rute eller offentlig åpning er
+gjort av klargjøringen. Stegene over utføres først med brukerens konto/domene.
