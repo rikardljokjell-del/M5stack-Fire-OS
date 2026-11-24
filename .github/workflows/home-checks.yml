@@ -1,0 +1,80 @@
+name: Home integration checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**', main, master]
+    paths:
+      - '.github/workflows/home-checks.yml'
+      - 'M5Stack-backend/home_assistant/**'
+      - 'M5Stack-backend/contracts/home-v1*'
+      - 'M5Stack-backend/tests/test_home_contract*.py'
+  pull_request:
+    paths:
+      - '.github/workflows/home-checks.yml'
+      - 'M5Stack-backend/home_assistant/**'
+      - 'M5Stack-backend/contracts/home-v1*'
+      - 'M5Stack-backend/tests/test_home_contract*.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  broker:
+    name: Real Mosquitto TLS and WebSocket ACL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: M5Stack-backend
+        shell: bash
+    env:
+      MOSQUITTO_VERSION: '2.1.4'
+      # Official release tarball fetched from mosquitto.org; fixed content hash.
+      MOSQUITTO_SHA256: ca30b26ccd3041c0e11fc407fe4f2e62bc445e8d8dea94a083cc60c09bd5ea30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install build and setup dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake libssl-dev libcjson-dev
+          python -m pip install 'pydantic>=2.10,<3' -r home_assistant/requirements-setup.txt
+      - name: Build official Mosquitto with TLS and built-in WebSockets
+        run: |
+          source_dir="$RUNNER_TEMP/mosquitto-source"
+          prefix_dir="$RUNNER_TEMP/mosquitto-install"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://mosquitto.org/files/source/mosquitto-$MOSQUITTO_VERSION.tar.gz" \
+            --output "$RUNNER_TEMP/mosquitto.tar.gz"
+          printf '%s  %s\n' "$MOSQUITTO_SHA256" "$RUNNER_TEMP/mosquitto.tar.gz" | sha256sum --check --strict
+          mkdir -p "$source_dir"
+          tar -xzf "$RUNNER_TEMP/mosquitto.tar.gz" --strip-components=1 -C "$source_dir"
+          cmake -S "$source_dir" -B "$RUNNER_TEMP/mosquitto-build" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix_dir" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DWITH_DOCS=OFF -DWITH_PLUGINS=OFF -DWITH_TESTS=OFF -DWITH_CLIENTS=OFF \
+            -DWITH_LIB_CPP=OFF -DWITH_CTRL_SHELL=OFF -DWITH_LTO=OFF \
+            -DWITH_TLS=ON -DWITH_WEBSOCKETS=ON -DWITH_WEBSOCKETS_BUILTIN=ON
+          cmake --build "$RUNNER_TEMP/mosquitto-build" --parallel 2
+          cmake --install "$RUNNER_TEMP/mosquitto-build"
+          printf '%s\n' "$prefix_dir/bin" >> "$GITHUB_PATH"
+          printf 'MOSQUITTO_EXE=%s/sbin/mosquitto\n' "$prefix_dir" >> "$GITHUB_ENV"
+          printf 'LD_LIBRARY_PATH=%s/lib\n' "$prefix_dir" >> "$GITHUB_ENV"
+      - name: Exercise actual broker with ephemeral test credentials
+        run: |
+          python -m home_assistant.broker_smoke --broker-exe "$MOSQUITTO_EXE" \
+            | tee "$RUNNER_TEMP/home-broker-report.json"
+      - name: Upload secret-free broker result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: home-broker-report
+          path: ${{ runner.temp }}/home-broker-report.json
+          if-no-files-found: ignore
+          retention-days: 7

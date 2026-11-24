@@ -1,0 +1,77 @@
+{
+  "additionalProperties": false,
+  "description": "Local setup upload, not an MQTT message; passwords never go into Lua.",
+  "properties": {
+    "profile": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Profile",
+      "type": "integer"
+    },
+    "site": {
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+      "title": "Site",
+      "type": "string"
+    },
+    "device": {
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+      "title": "Device",
+      "type": "string"
+    },
+    "local_host": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9.\\-]{0,252}$",
+      "title": "Local Host",
+      "type": "string"
+    },
+    "remote_host": {
+      "pattern": "^(?:[a-zA-Z0-9][a-zA-Z0-9.\\-]{0,252})?$",
+      "title": "Remote Host",
+      "type": "string"
+    },
+    "local_user": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Local User",
+      "type": "string"
+    },
+    "local_password": {
+      "maxLength": 128,
+      "minLength": 24,
+      "title": "Local Password",
+      "type": "string"
+    },
+    "remote_user": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Remote User",
+      "type": "string"
+    },
+    "remote_password": {
+      "maxLength": 128,
+      "minLength": 24,
+      "title": "Remote Password",
+      "type": "string"
+    },
+    "ca": {
+      "maxLength": 4096,
+      "minLength": 128,
+      "pattern": "^-----BEGIN CERTIFICATE-----[\\s\\S]+-----END CERTIFICATE-----\\s*$",
+      "title": "Ca",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile",
+    "site",
+    "device",
+    "local_host",
+    "remote_host",
+    "local_user",
+    "local_password",
+    "remote_user",
+    "remote_password",
+    "ca"
+  ],
+  "title": "DeviceProfile",
+  "type": "object"
+}

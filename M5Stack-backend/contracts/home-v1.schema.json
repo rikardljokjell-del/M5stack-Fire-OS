@@ -1,0 +1,783 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:fire:home:v1",
+  "title": "FIRE Home v1",
+  "description": "Direct Home MQTT messages. Byte limits and cross-message authorization are enforced separately.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/catalog"
+    },
+    {
+      "$ref": "#/$defs/state"
+    },
+    {
+      "$ref": "#/$defs/ack"
+    },
+    {
+      "$ref": "#/$defs/request"
+    }
+  ],
+  "$defs": {
+    "Card": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "light"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ops": {
+                "items": {
+                  "enum": [
+                    "brightness",
+                    "off",
+                    "on"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "switch"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ops": {
+                "items": {
+                  "enum": [
+                    "off",
+                    "on"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "climate"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ops": {
+                "items": {
+                  "enum": [
+                    "heat_mode",
+                    "temperature"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "sensor"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ops": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "binary_sensor"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ops": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "script"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ops": {
+                "items": {
+                  "enum": [
+                    "run"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "scene"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ops": {
+                "items": {
+                  "enum": [
+                    "run"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ops": {
+                "contains": {
+                  "const": "temperature"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "step": {
+                "exclusiveMinimum": 0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "min",
+              "max",
+              "step"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ops": {
+                "contains": {
+                  "const": "heat_mode"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "modes": {
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "modes"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "not": {
+                  "const": "climate"
+                }
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "min"
+                  ]
+                },
+                {
+                  "required": [
+                    "max"
+                  ]
+                },
+                {
+                  "required": [
+                    "step"
+                  ]
+                },
+                {
+                  "required": [
+                    "modes"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string",
+          "x-max-utf8-bytes": 96
+        },
+        "kind": {
+          "enum": [
+            "light",
+            "switch",
+            "climate",
+            "sensor",
+            "binary_sensor",
+            "script",
+            "scene"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "unit": {
+          "default": "",
+          "maxLength": 12,
+          "title": "Unit",
+          "type": "string",
+          "x-max-utf8-bytes": 24
+        },
+        "ops": {
+          "items": {
+            "enum": [
+              "on",
+              "off",
+              "brightness",
+              "temperature",
+              "heat_mode",
+              "run"
+            ],
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Ops",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max"
+        },
+        "step": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step"
+        },
+        "modes": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "off",
+                  "heat",
+                  "auto"
+                ],
+                "type": "string"
+              },
+              "maxItems": 3,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Modes",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "ops"
+      ],
+      "title": "Card",
+      "type": "object"
+    },
+    "catalog": {
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "site": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+          "title": "Site",
+          "type": "string"
+        },
+        "device": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+          "title": "Device",
+          "type": "string"
+        },
+        "route": {
+          "enum": [
+            "local",
+            "remote"
+          ],
+          "title": "Route",
+          "type": "string"
+        },
+        "epoch": {
+          "pattern": "^[a-f0-9]{16}$",
+          "title": "Epoch",
+          "type": "string"
+        },
+        "rev": {
+          "pattern": "^[a-f0-9]{8,32}$",
+          "title": "Rev",
+          "type": "string"
+        },
+        "issued": {
+          "minimum": 0,
+          "title": "Issued",
+          "type": "integer"
+        },
+        "ttl": {
+          "maximum": 90,
+          "minimum": 1,
+          "title": "Ttl",
+          "type": "integer"
+        },
+        "last_seq": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Last Seq",
+          "type": "integer"
+        },
+        "remote_allowed": {
+          "title": "Remote Allowed",
+          "type": "boolean"
+        },
+        "cards": {
+          "items": {
+            "$ref": "#/$defs/Card"
+          },
+          "maxItems": 12,
+          "title": "Cards",
+          "type": "array"
+        }
+      },
+      "required": [
+        "v",
+        "site",
+        "device",
+        "route",
+        "epoch",
+        "rev",
+        "issued",
+        "ttl",
+        "last_seq",
+        "remote_allowed",
+        "cards"
+      ],
+      "title": "Catalog",
+      "type": "object"
+    },
+    "Value": {
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "on",
+            "off",
+            "ok",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "off",
+                "heat",
+                "auto",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
+        }
+      },
+      "required": [
+        "state",
+        "value"
+      ],
+      "title": "Value",
+      "type": "object"
+    },
+    "state": {
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "epoch": {
+          "pattern": "^[a-f0-9]{16}$",
+          "title": "Epoch",
+          "type": "string"
+        },
+        "rev": {
+          "pattern": "^[a-f0-9]{8,32}$",
+          "title": "Rev",
+          "type": "string"
+        },
+        "issued": {
+          "minimum": 0,
+          "title": "Issued",
+          "type": "integer"
+        },
+        "ttl": {
+          "maximum": 90,
+          "minimum": 1,
+          "title": "Ttl",
+          "type": "integer"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Value"
+          },
+          "maxProperties": 12,
+          "title": "Values",
+          "type": "object"
+        }
+      },
+      "required": [
+        "v",
+        "epoch",
+        "rev",
+        "issued",
+        "ttl",
+        "values"
+      ],
+      "title": "State",
+      "type": "object"
+    },
+    "ack": {
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "rid": {
+          "pattern": "^[a-f0-9]{16}$",
+          "title": "Rid",
+          "type": "string"
+        },
+        "seq": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "executed",
+            "rejected",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "code": {
+          "enum": [
+            "ok",
+            "schema",
+            "expired",
+            "session",
+            "revision",
+            "sequence",
+            "denied",
+            "unavailable",
+            "action_failed"
+          ],
+          "title": "Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "v",
+        "rid",
+        "seq",
+        "status",
+        "code"
+      ],
+      "title": "Ack",
+      "type": "object"
+    },
+    "Command": {
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "command",
+          "title": "Type",
+          "type": "string"
+        },
+        "rid": {
+          "pattern": "^[a-f0-9]{16}$",
+          "title": "Rid",
+          "type": "string"
+        },
+        "epoch": {
+          "pattern": "^[a-f0-9]{16}$",
+          "title": "Epoch",
+          "type": "string"
+        },
+        "rev": {
+          "pattern": "^[a-f0-9]{8,32}$",
+          "title": "Rev",
+          "type": "string"
+        },
+        "seq": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "issued": {
+          "minimum": 0,
+          "title": "Issued",
+          "type": "integer"
+        },
+        "ttl": {
+          "maximum": 15,
+          "minimum": 1,
+          "title": "Ttl",
+          "type": "integer"
+        },
+        "card": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+          "title": "Card",
+          "type": "string"
+        },
+        "op": {
+          "enum": [
+            "on",
+            "off",
+            "brightness",
+            "temperature",
+            "heat_mode",
+            "run"
+          ],
+          "title": "Op",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "rid",
+        "epoch",
+        "rev",
+        "seq",
+        "issued",
+        "ttl",
+        "card",
+        "op",
+        "value"
+      ],
+      "title": "Command",
+      "type": "object"
+    },
+    "Hello": {
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "maximum": 1,
+          "minimum": 1,
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "hello",
+          "title": "Type",
+          "type": "string"
+        },
+        "rid": {
+          "pattern": "^[a-f0-9]{16}$",
+          "title": "Rid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "v",
+        "type",
+        "rid"
+      ],
+      "title": "Hello",
+      "type": "object"
+    },
+    "request": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Hello"
+        },
+        {
+          "$ref": "#/$defs/Command"
+        }
+      ]
+    }
+  },
+  "x-max-utf8-bytes": {
+    "request": 512,
+    "ack": 512,
+    "catalog": 8192,
+    "state": 4096
+  }
+}

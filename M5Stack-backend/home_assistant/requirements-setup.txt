@@ -1,0 +1,3 @@
+# Offline setup and optional independent broker smoke. Not a running backend dependency.
+cryptography>=44,<48
+paho-mqtt>=2,<3

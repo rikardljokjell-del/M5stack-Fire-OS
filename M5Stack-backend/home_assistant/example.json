@@ -1,0 +1,15 @@
+{
+  "site": "home",
+  "profile": 0,
+  "device": "fire01",
+  "local_host": "ha.example.lan",
+  "remote_host": "home.example.com",
+  "read_label": "fire_home_read",
+  "control_label": "fire_home_control",
+  "cards": [
+    {"id":"desk","name":"Skrivebord","kind":"light","entity":"light.skrivebord","unit":"","ops":["on","off","brightness"]},
+    {"id":"heat","name":"Varme","kind":"climate","entity":"climate.stue","unit":"°C","ops":["temperature","heat_mode"],"min":10,"max":28,"step":0.5,"modes":["off","heat","auto"]},
+    {"id":"room","name":"Temperatur","kind":"sensor","entity":"sensor.stuetemperatur","unit":"°C","ops":[]},
+    {"id":"cat","name":"Kattedo","kind":"script","entity":"script.kattedo_trygg_handling","unit":"","ops":["run"]}
+  ]
+}
