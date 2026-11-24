@@ -30,7 +30,8 @@ syntaktisk YAML eller en Python-regelmodell erstatter ikke det.
 ## Samles til brukerens sluttoppsett
 
 Domene/Cloudflare-innlogging, installering i faktisk HA, valg av entiteter,
-ekstern Home-adresse, første USB-migrering og fysiske nett/lyd/knapp/strømtester.
+ekstern Home-adresse og gjenstående fysiske nett/lyd/knapp/strømtester.
+Rikards førstegangs USB-migrering er allerede gjennomført og dokumentert under.
 Disse punktene stanser ikke uavhengig implementering og lokal kontroll.
 
 ## Registrerte resultater 24. november 2026
@@ -46,8 +47,13 @@ Disse punktene stanser ikke uavhengig implementering og lokal kontroll.
 | Ekte Mosquitto på Windows | Ikke kjørt: Code Integrity blokkerte biblioteket | Ingen sikkerhetspolicy omgått; Linux-kontroll bestått under |
 | Ekte Mosquitto 2.1.4, Ubuntu | Bestått TLS/navn, WS, passordskille og negative ACL-kontroller; jobb 138535122608 | Isolert testbroker, ikke brukerens HA/MQTT eller offentlig Cloudflare |
 | Ekte HA 2026.11.3 og broker, Linux | Run 45422781786 grønn; pakke, handling/ACK, labels, fjernbryter, feilinput, reload og ny prosess med retained replay | Syntetiske entiteter; fysisk FIRE og brukeroppsett står åpne |
-| RC2-firmware, Linux på 7efbae95 | Run 45431615060 grønn: normal, recovery, bootloader og 12 tester | Ingen fysisk FIRE; BLE/lyd kompilert, ikke fysisk testet |
-| Distribuert USB-arkiv etter ny utpakking | Faktisk signatur-/hash-/image-/layoutkontroll bestått | Ingen COM åpnet; selve flashingen og tilbakeføring står åpne |
+| RC5-firmware, Linux på 958415d | Run 45477480676 grønn: normal, recovery, bootloader og 13 tester | Normal RC5 brukes; pakken beholder fysisk testet RC2-bootloader/tabell/recovery med eksplisitt komponentproveniens |
+| Distribuert USB-arkiv etter ny utpakking | Faktisk signatur-/hash-/image-/layoutkontroll bestått | Denne separate pakkekontrollen åpner ingen COM-port |
+| Faktisk USB-migrering på FIRE | Dobbel 16 MiB-backup, skriving og eksakt tilbakeavlesning bestått | Backup og rålogger er private; normal OTA er egen kontroll |
+| Kontrollert tidlig reset | SDK markerte oppstart ABORTED og lastet factory | Ikke fysisk GPIO39-knapphold eller tilbakeføring til tidligere normal OTA-slot |
+| Fysisk RC5-oppstart og vanlig reset | VALID lagret, 125 s + 45 s uten ekstra reset/panic/watchdog; gap 87,988 / 86,013 ms | Oppstart/inventar, ingen Lua-callback eller tale/Home-belastning |
+| Faktisk RC5 til eksisterende backend | Fersk HELLO og komplett SD-inventory, 7/7 ID/versjon/checksum/pakke-ID bevart | Ingen AI-/appkjøringspåstand; Auto kan være idle/offline når transporten er klar |
 
-Fysisk oppstart/recovery og responstid forblir åpne til de er prøvd. Følg
-[den konkrete sluttesten](docs/PHYSICAL_CHECK.md) og registrer resultatet samlet.
+Det avgrensede USB-beviset står i [fysisk rapport](M5Stack-device/PHYSICAL_USB_2026-11-24.md).
+Visuell UI/knapper/lyd, Home, GitHub-OTA og samlet AI/appflyt er fortsatt åpne.
+Følg [den konkrete sluttesten](docs/PHYSICAL_CHECK.md) og registrer resten samlet.

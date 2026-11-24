@@ -1,9 +1,15 @@
 # Engangs USB-migrering til FIRE med recovery
 
 Dette er et separat Windows-verktøy. Backend, AI, webUI og Lua-apper kan ikke
-starte det. **Ingen fysisk flashing er utført som del av denne leveransen.**
-Ferdige, signerte bilder må finnes før migrering. Kildekode og grønne tester
-er ikke en ferdig eller fysisk verifisert migrasjonspakke.
+starte det. Fysisk USB-migrering og etterfølgende RC5-oppstart er gjennomført
+av device-agenten; se den kanoniske
+[fysiske rapporten](../../M5Stack-device/PHYSICAL_USB_2026-11-24.md).
+Pakkekontrollen nedenfor er separat og åpner ingen serieport. Kildekode og
+grønne PC-tester alene er ikke fysisk verifikasjon.
+
+**Rikards FIRE er allerede USB-migrert og kjører helsegodkjent RC5.** Stegene
+nedenfor er en generell veiledning for en annen FIRE som trenger førstegangs-
+migrering; de er ikke en ny migreringsoppgave for den ferdig oppdaterte enheten.
 
 ## Før du begynner
 
@@ -29,20 +35,21 @@ du skal slå av for å tvinge fram migrering.
 ## 1. Kontroller pakken uten enhet
 
 Åpne PowerShell i `M5Stack-backend`. Den ferdige pakken ligger for eksempel i
-`workspace\migration\fire-os-1.2.0-rc2` og inneholder:
+`workspace\migration\fire-os-1.2.0-rc5` og inneholder:
 
 - `migration.json` og `migration.sig` (signert plan for alle fire bildene).
 - `bootloader.bin`, `partitions.bin`, `normal.bin`, `recovery.bin`.
 - `catalog-v2.json` og `release-public.pem`.
 
-Den publiserte USB-pakken er `firmware/fire-os-1.2.0-rc2-usb.zip` i repoet.
+USB-pakkens utgivelsessti er `firmware/fire-os-1.2.0-rc5-usb.zip` i repoet.
 Pakk ut alle åtte filene til mappen over før kontroll. En separat publisert
-`fire-os-1.2.0-rc2.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
+`fire-os-1.2.0-rc5.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
 en valgfri ekstrakopi i den lokale arbeidsmappen; den finnes ikke i USB-ZIP-en
-og kreves ikke av migreringsverktøyet.
+og kreves ikke av migreringsverktøyet. Lokal `component-provenance.json` er også
+en ekstra revisjonsfil, ikke en av de åtte nødvendige filene i USB-ZIP-en.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.2.0-rc2
+.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.2.0-rc5
 ```
 
 Standardkommandoen åpner **ingen serieport** og skriver ingenting til FIRE.
@@ -66,7 +73,7 @@ tilhører FIRE, for eksempel COM3; verktøyet gjetter aldri en port.
 ## 3. Kun forhåndskontroll av tilkoblet FIRE
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc2 --port COM3
+.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc5 --port COM3
 ```
 
 Enheten går midlertidig til ROM-nedlastingsmodus for kontroll, og startes tilbake
@@ -80,7 +87,7 @@ brukes enhetens dokumenterte USB-bootprosedyre; ingen sikkerhetsdialog omgås.
 Kjør først når riktig signert pakke og riktig serieport er kontrollert:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc2 --port COM3 --confirm MIGRATE-FIRE
+.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc5 --port COM3 --confirm MIGRATE-FIRE
 ```
 
 Før skriving gjør verktøyet dette i rekkefølge:
@@ -160,17 +167,34 @@ De omfatter ugyldige signaturer/nøkkelbytte/hash/layout, chip/eFuse-avvisning,
 full backup før skriving, bevart NVS/app1/config/coredump, stopp ved ulik
 avlesning eller feil etter skriving, gjenoppretting av skadet partisjonstabell,
 annen enhet og fast baud før avlesning. Ingen serieport er åpnet i disse testene.
-Den faktiske signerte RC2-pakken er kontrollert 24. november 2026 med kommandoen
-over: signaturer, hashes, ESP32-bilder og eksakt layout består (exit 0).
-Samme kontroll er også kjørt mot de eksakt åtte filene nyutpakket fra USB-ZIP-en
-i `workspace\release-verify\fire-os-1.2.0-rc2`, med exit 0 og uten serieport.
-Kilden er `7efbae95fa0a54aeb3e1d6a615390810b69279b4`, med CI-bevis i
-[kjøring 45431615060, jobb 138578163034](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45431615060/job/138578163034).
-Normalbildet er 2399824 byte med SHA256
-`c25aca3f58f3caa947f86bede567d6b987d0a654406caa98ef441ca00819b223`.
-RC1 beholdes som historikk; bruk RC2 i de aktuelle migreringseksemplene.
-Reell COM-/strømbrudd-/bootloader-/recovery-test gjenstår. Ingen port er åpnet
-av pakkekontrollen. De 665 grønne backendtestene er et separat lokalt bevis;
+Den faktiske signerte RC5-pakken er kontrollert 24. november 2026 med kommandoen
+over: signaturer, hashes, ESP32-bilder og eksakt layout består (exit 0), uten
+serieport. Normalbildets kilde er `958415d20029939a0e105f4ee23aa6008a7ab567`,
+med [CI-bevis 45477480676](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45477480676).
+Normalbildet er 2408576 byte med SHA256
+`6499092470f40287776fcac49fa73abc225c1f420b41ebb8c4ea76bce1d004e7`.
+Rotkoordinatoren har også pakket ut den ferdige RC5-USB-ZIP-en og kontrollert
+de eksakt åtte filene i `workspace\release-verify\fire-os-1.2.0-rc5-final` med samme
+verktøy: exit 0, uten serieport. Lokal komponentproveniens ligger utenfor ZIP-en.
+Bootloader, partisjonstabell og recovery er uendret fra det fysisk testede
+RC2-grunnlaget, kilde `7efbae95fa0a54aeb3e1d6a615390810b69279b4`.
+Dette er RC5-normal med RC2-grunnlag, ikke et nytt RC5-bygg av alle komponentene.
+Tidligere RC1/RC2-pakkekontroller beholdes som historiske bevis; RC2 ble også
+kontrollert etter nyutpakking av nøyaktig åtte USB-filer.
+
+Fysisk migrering med full backup og bilde-readback, recovery og kontrollert
+tilbakeføring er nå dokumentert i
+[device-rapporten](../../M5Stack-device/PHYSICAL_USB_2026-11-24.md).
+RC5 er observert under normal oppstart og etter vanlig omstart med lagret
+helsegodkjenning. Backend mottok fersk RC5-identitet og komplett SD-inventar
+etter begge oppstarter: 7/7 like app-ID-er, versjoner, checksums og normaliserte
+pakke-ID-er mot faktisk RC2-referanse. SD var tilgjengelig og fire Reverse TCP-
+kanaler autentisert, uten rapportert transportfeil. Auto/mainmenu kan bevisst
+lukke den inaktive AI-sesjonen; dette er ikke bevis på feil eller en pågående
+AI-samtale. Ingen apper ble kjørt i denne kontrollen.
+Fysisk strømbrudd, recovery-knappevalg, offentlig TLS, Home og AI-/Lua-kjøring
+er ikke bekreftet av disse målingene. De 665 grønne backendtestene er et
+separat lokalt bevis;
 ingen ny fullsuite er kjørt for dette dokumentasjons- og pakkebyttet.
 Esptool 4.5.1 og de låste USB-avhengighetene er installert på denne Windows-PC-en.
 Import/API-tilgjengelighet og den ekte esptool-bildeparserens samsvar med vår

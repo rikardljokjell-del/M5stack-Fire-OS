@@ -1,43 +1,55 @@
 # FIRE OS firmware
 
-Aktuell **testkandidat: fire-os-1.2.0-rc2**. RC2 beholder en frisk Home Auto-
-forbindelse og starter ikke MQTT på nytt ved endret kortvisning. Kode, bygg, signaturer og
-migreringspakken er kontrollert. Fysisk FIRE, tilbakeføring og redning må
-sluttkontrolleres før kandidaten kan godkjennes for produksjon.
+Aktuell **testkandidat: fire-os-1.2.0-rc5**. Den er fysisk installert på
+Rikards FIRE og helsegodkjent. Målt maksimal løkkeavstand ved oppstart og
+appinventering var 88 ms, og 86 ms etter vanlig omstart; tidligere RC2 nådde
+1 391 ms. Ingen krasj eller ekstra reset ble sett i de avgrensede opptakene.
+Dette er ikke full produksjonsgodkjenning av Home, tale, apper og GitHub-OTA.
 
 | Fil | Bruk |
 | --- | --- |
-| [fire-os-1.2.0-rc2-usb.zip](fire-os-1.2.0-rc2-usb.zip) | Komplett signert engangsmigrering: normal firmware, separat recovery, bootloader, partisjoner og signert plan |
-| [fire-os-1.2.0-rc2.bin](fire-os-1.2.0-rc2.bin) | Normal firmware for direkte oppdatering etter migrering; brukes sammen med signert katalog |
-| [index.json](index.json) | Signert schema 2-katalog som FIRE henter direkte fra GitHub |
-| [Kontrollsummer](fire-os-1.2.0-rc2-SHA256SUMS.txt) | SHA256 for binær og USB-arkiv |
-| [Bygg- og pakkebevis](fire-os-1.2.0-rc2-evidence.json) | Eksakt kildecommit, Linux-kjøring, filstørrelser, hashes og åpne fysiske kontroller |
+| [RC5 USB-arkiv](fire-os-1.2.0-rc5-usb.zip) | Signert førstegangsmigrering med fire bilder og alle åtte nødvendige filer |
+| [RC5 normal firmware](fire-os-1.2.0-rc5.bin) | Direkte oppdatering etter migrering, sammen med signert katalog |
+| [index.json](index.json) | Signert schema 2-katalog med nyeste kandidat først |
+| [Kontrollsummer](fire-os-1.2.0-rc5-SHA256SUMS.txt) | SHA256 for normalbinær og USB-arkiv |
+| [Utgivelsesbevis](fire-os-1.2.0-rc5-evidence.json) | Eksakte filhashes, komponentkilder, CI og avgrensede fysiske resultater |
 
-Start med [samlet oppsett](../SETUP.md), deretter
-[USB-migreringen](../M5Stack-backend/docs/USB_MIGRATION.md) og
-[fysisk sluttest](../docs/PHYSICAL_CHECK.md). Pakken er allerede klargjort
-lokalt i `M5Stack-backend/workspace/migration/fire-os-1.2.0-rc2/` på denne PC-en.
-Ved nedlasting av USB-arkivet pakkes det ut til en ny mappe før kontrollen.
-Den løse `.bin`-filen installerer ikke den nødvendige redningsløsningen alene.
+Start med [samlet oppsett](../SETUP.md) og [fysisk test](../docs/PHYSICAL_CHECK.md).
+**Rikards enhet er allerede migrert og kjører RC5 i B / app1.** Forrige
+private testversjon i A og separat factory recovery er beholdt. En ny enhet
+bruker [USB-veiledningen](../M5Stack-backend/docs/USB_MIGRATION.md); pakken
+er også klargjort lokalt i
+`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc5/`.
+
+RC5 retter gjentatt bytevis SD-lesing ved appoversikt, konsistent rapportering
+av pakkeidentitet, ventende nettverkssvar i Auto, skjermrammebudsjett og
+bytevis TCP/WebSocket-lesing. Første normalmåling var 125 sekunder, etterfulgt
+av flashlesing som bekreftet VALID og en 45-sekunders vanlig omstart.
+[Fysisk USB-rapport](../M5Stack-device/PHYSICAL_USB_2026-11-24.md) har scope og mellomresultater.
+
+Normalbildet er fra kilde
+[958415d](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/958415d20029939a0e105f4ee23aa6008a7ab567),
+[CI 45477480676](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45477480676),
+med 13 tester og tre grønne bygg. Den distribuerte pakken **gjenbruker de
+fysisk testede RC2-bildene for bootloader, partisjonstabell og recovery**;
+normal RC5 er ny. De separate komponentkildene står i utgivelsesbeviset.
+Alle fire eksakte bilder er bundet av den signerte migreringsplanen.
+Det er ikke påstått at alle fire kommer fra samme kildecommit.
 
 Etter engangsmigreringen bruker du **Settings → Firmware** på FIRE.
-FIRE verifiserer katalogsignatur, mål, størrelse og SHA256. Vanlig OTA skriver
-bare inaktiv OS-plass; bootloader, partisjonstabell og factory recovery blir
-beholdt. Redning kan velges med A før vanlig OS starter og kan hente direkte
-fra GitHub uten SD-kort eller Windows. Faktisk knappe-/feilfunksjon står på
-sluttestlisten. Backendens firmwarevisning er bare en versjonsoversikt.
+FIRE kontrollerer signatur, mål, størrelse og SHA256, og skriver bare inaktiv
+OS-slot. Bootloader, partisjonstabell og factory beholdes ved normal OTA.
+Redning kan velges med A før vanlig OS og hente signert firmware uten SD
+eller Windows. Fysisk knapphold, GitHub-OTA og tidligere normal OTA-slot skal
+fortsatt prøves; USB-testen av tidlig reset viste tilbakeføring til factory.
+Backendens firmwarevisning viser bare versjoner og informasjon.
 
-Kilden er [7efbae95fa0a54aeb3e1d6a615390810b69279b4](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/7efbae95fa0a54aeb3e1d6a615390810b69279b4).
-[Linux-kontrollen](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45431615060)
-bestod to firmwarebygg, bootloader og 12 tester. Det publiserte USB-arkivet
-er pakket ut på nytt og godkjent av det separate migreringsverktøyet uten
-serieport eller skriving til enhet. Private signeringsnøkler følger aldri med.
+Historisk RC2 beholdes uendret med
+[original katalog](fire-os-1.2.0-rc2-catalog.json). Bruk RC5: RC2 hadde målte
+UI-pauser ved appinventering. Historisk RC1 beholdes også med
+[original katalog](fire-os-1.2.0-rc1-catalog.json); den kunne bryte frisk Home
+Auto-forbindelse hvert minutt. RC3/RC4 var private USB-mellomtester.
 
-Historisk RC1 beholdes med uendrede binær-/USB-filer, kontrollsummer og
-[original signert katalog](fire-os-1.2.0-rc1-catalog.json). Bruk RC2: RC1 kunne
-bryte Home Auto-forbindelsen hvert minutt. Den gjeldende signerte katalogen
-lister RC2 først og RC1 som tydelig merket historikk.
-
-Historisk `fire-os-1.1.bin` beholdes. Dens opprinnelige metadata ligger i
-[legacy-index-v1.json](legacy-index-v1.json) for Studio-oversikten. Denne
-usignerte utgaven er ikke en oppdatering til den nye recovery-layouten.
+`fire-os-1.1.bin` og [legacy-index-v1.json](legacy-index-v1.json) beholdes for
+Studio-historikk. Den usignerte gamle utgaven er ikke en oppdatering for den
+nye recovery-layouten. Private signeringsnøkler følger aldri med.

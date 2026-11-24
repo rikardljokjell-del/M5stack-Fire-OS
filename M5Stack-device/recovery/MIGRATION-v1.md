@@ -1,7 +1,10 @@
 # Migration artifact contract v1
 
 Backend agent owns the PC tool; device agent produces the artifact directory.
-No device is connected and no flashing has been performed.
+Before the USB session on 2026-11-24 no device had been flashed in this work.
+RC2 migration and controlled rollback have now been physically observed; see
+[USB evidence and limits](../PHYSICAL_USB_2026-11-24.md). This contract remains
+unchanged. Button-hold recovery and network OTA are not established by USB.
 
 Directory `migration/` contains `migration.json`, `migration.sig`, `bootloader.bin`,
 `partitions.bin`, `recovery.bin`, `normal.bin`, `catalog-v2.json`,
@@ -34,6 +37,21 @@ match a verified entry in `catalog-v2.json` by size/hash; source commit matches
 that entry and the migration manifest. Public key must match the pinned key in
 the PC tool/source. Structural partition-table validation must check all rows
 against `partitions.csv`, including MD5 entry, bounds and no overlaps.
+
+`source_commit` identifies the normal firmware source. If an unchanged,
+previously verified bootloader/table/recovery is deliberately reused, the
+delivery report must record its own source commit, CI run and hashes separately.
+The signed migration manifest still binds every component's exact bytes.
+For the RC5 candidate, the retained base is the physically verified
+RC2 base, with all three input hashes matching RC2. RC3 adds write-drain
+introspection to the shared async client used by normal and recovery builds.
+Therefore the latest recovery source is not identical to RC2: the retained
+recovery must explicitly be attributed to RC2, rather than represented as the
+new RC5 CI recovery image. Its original interface/layout remains the retained
+baseline; compatibility and the deliberate component choice are documented
+in the delivery report and component-provenance.json.
+The packager requires explicit `--version` and release-specific `--notes`;
+it no longer silently inserts RC2 notes into later releases.
 
 Migration preserves NVS `0x9000..0xdfff`, coredump and all other unlisted
 regions. On first boot the apps initialize dedicated `homecfg`/`rescuecfg`

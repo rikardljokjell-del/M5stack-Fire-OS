@@ -2,7 +2,7 @@
 
 Et modulært Arduino/PlatformIO-startprosjekt for M5Stack FIRE med M5Unified/M5GFX.
 
-## Ny testkandidat: 1.2.0-rc2
+## Aktuell testkandidat: 1.2.0-rc5
 
 Denne kandidaten legger til direkte Home, verifisert HTTPS/WSS, signert OTA og
 uavhengig redningsapp. Den er ikke fysisk sluttverifisert. Se
@@ -11,7 +11,23 @@ uavhengig redningsapp. Den er ikke fysisk sluttverifisert. Se
 Første installasjon krever den signerte engangspakken med full USB-backup.
 Vanlig PlatformIO Upload er sperret fordi den ville erstattet recovery-bootloaderen.
 
-RC2 retter Auto-forbindelsen i Home: en frisk ekstern forbindelse beholdes.
+RC5 er installert og helsegodkjent på fysisk FIRE etter full dobbeltbackup,
+image-readback og kontrollert SDK-rollback i migreringsløpet. Maksimal målt
+OS-løkkeavstand ble redusert fra omtrent 1,39 sekunder i RC2 til 88 ms i
+RC5s oppstarts-/inventartest; vanlig omstart målte 86 ms. Sju apper beholdt
+riktige identiteter og hasher. Øvrig fysisk sluttkontroll gjenstår. Se
+[USB-bevis og avgrensninger](PHYSICAL_USB_2026-11-24.md).
+
+RC5 leser appoversikten trinnvis og gjenbruker samme ferdige metadata i UI
+og backend. Nettverkspayload leses i små blokker med tidsbudsjett; skjermen
+tegnes høyst én gang per runde. Redningsgrunnlaget er bevisst beholdt fra
+den fysisk verifiserte RC2-pakken, med separat komponentproveniens.
+
+Rikards testede enhet kjører RC5 i **B/app1**, med RC4 i A/app0 som tilbakevei.
+Den signerte engangspakken plasserer normal i **A/app0** ved en ny migrering;
+den gjeldende enhetstilstanden er dermed ikke en ny USB-standardinstallasjon.
+
+RC5 beholder RC2-rettingen av Auto-forbindelsen i Home: en frisk ekstern forbindelse beholdes.
 Lokal rute vurderes på nytt ved faktisk nettbrudd eller endret profil/oppsett.
 Det kjøres ingen periodisk frakobling for å prøve lokal rute. RC1 beholdes som
 historisk kandidat med egne, uendrede filer og hasher.

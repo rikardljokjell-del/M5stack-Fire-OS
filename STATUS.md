@@ -6,19 +6,25 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-Kode og signert testpakke **fire-os-1.2.0-rc2** er publisert i GitHub. FIRE Studio,
-sikker offentlig backendinngang, direkte Home og OTA med uavhengig recovery
-er implementert. Linux-byggfilene er signert, USB-arkivet er pakket ut på nytt
-og kontrollert av det separate migreringsverktøyet. Ingen fysisk FIRE er
-flashet i denne leveransen. Produksjonsgodkjenning krever sluttesten under.
+Kode og signert testpakke **fire-os-1.2.0-rc5** er ferdigstilt. Rikards FIRE
+er fysisk USB-migrert med full backup og kjører helsegodkjent RC5 i app1.
+Kontrollert tidlig omstart ga SDK-tilbakeføring til factory recovery. RC5
+stod 125 sekunder og bestod vanlig omstart i 45 sekunder uten registrerte
+krasj, ekstra reset eller watchdog-feil. Maksimal løkkeavstand var **87,988 ms**
+og **86,013 ms**, mot **1 391 ms** før rettingene. Backend bekreftet samme
+sju apper og fersk tilkobling. Se [det fysiske USB-beviset](M5Stack-device/PHYSICAL_USB_2026-11-24.md).
+
+Dette er avgrenset fysisk oppstarts-/inventarbevis. Visuell/knapp-/lydprøve,
+Home i brukerens HA, GitHub-OTA og samlet AI/appflyt står fortsatt åpne.
+Produksjonsgodkjenning krever de gjenstående kontrollene under.
 
 | Område | Implementert / lokalt kontrollert | Gjenstående bevis |
 | --- | --- | --- |
-| FIRE Studio | PC-/mobilvisning, innstillinger, samtale, bekreftet appbygg, jobber, bibliotek, kostnader og lesbar GitHub-firmwareoversikt | Ny fysisk FIRE og live offentlig oppsett |
+| FIRE Studio | PC-/mobilvisning, innstillinger, samtale, bekreftet appbygg, jobber, bibliotek, kostnader og lesbar GitHub-firmwareoversikt | Samlet fysisk AI-/appflyt og live offentlig oppsett |
 | Offentlig backend | Separate browser-/deviceverter, Access-JWT, engangspålogging lokalt, sesjon/CSRF/Origin og egne enhetstokener | Brukerens domene, konto og tunnel |
 | Jobber og samtale | Samme lagring som Windows-programmet, frakoblet apputvikling, eksplisitt BUILD/RUN og sikker omstart | Nettbrudd/tale/installasjon med ny fysisk firmware |
 | Direkte Home | Native kortvisning, Home/Camper, HA-styrte tillatelser, MQTT/TLS/WSS, veiviser/import; ekte HA og broker testet isolert | Brukerens entiteter/adresser og fysisk FIRE |
-| Firmware/recovery | Tre bygg, 12 CI-tester, signert katalog/bundle, kontrollert USB-arkiv, inaktiv OTA-slot, watchdog og separat recovery | Fysisk oppstart, tilbakeføring og redning |
+| Firmware/recovery | Tre bygg, 13 CI-tester, signert katalog/bundle, kontrollert USB-arkiv, fysisk oppstart/VALID/SDK-fallback og separat recovery | GitHub-OTA, redningsknapp og tidligere normal OTA-slot |
 
 ## Testbevis
 
@@ -72,33 +78,41 @@ Brukerens egne entiteter, offentlig Cloudflare/WSS og fysisk FIRE er fortsatt
 
 ## Levert firmwarepakke
 
-RC2 retter minuttvis frakobling i Home Auto og unødvendig ny MQTT-tilkobling
-ved visningsendringer. Friske forbindelser beholdes; ruten vurderes på nytt
-ved faktisk nettbrudd eller endret oppsett. Dette er kildekontrollert og bygget;
-treminutterstesten på annet nett står i den fysiske sluttesten.
-RC1 beholdes som uendrede historiske filer, med tydelig merknad i katalogen.
+RC5 erstatter synkron bytevis SD-inventering med en trinnvis, konsistent
+metadataoversikt. Pakkeidentitet lagres før rapportering; mislykket skanning
+publiserer ikke gamle tilstedeværelsesdata. Ventende svar og køede nettverksdata
+får fullføre i Auto med frister. Skjermtegning har rammebudsjett, og WebSocket-
+innhold leses i små blokker med tidsbudsjett. De fysiske tallene står over.
+RC1/RC2 beholdes som uendrede historiske utgivelsesfiler. RC3/RC4 var private
+USB-mellomtester og ble ikke publisert i firmwarekatalogen.
 
-Kilde `7efbae95fa0a54aeb3e1d6a615390810b69279b4`.
-[Linux-kjøring 45431615060](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45431615060)
-bestod normal firmware med BLE/lyd, separat recovery, custom bootloader og
-alle 12 C++-/signatur-/pakkekontroller. CI-arkivet er SHA256-kontrollert før
-ekstraksjon. De distribuerte filene kommer fra denne kjøringen.
+Normalfirmwarens kilde er `958415d20029939a0e105f4ee23aa6008a7ab567`.
+[Linux-kjøring 45477480676](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45477480676)
+bestod normal firmware med BLE/lyd, recovery, bootloader og alle **13**
+C++-/signatur-/pakkekontroller. CI-arkivet er SHA256-kontrollert før utpakking.
 
-- Normal firmware: 2 399 824 byte,
-  SHA256 `c25aca3f58f3caa947f86bede567d6b987d0a654406caa98ef441ca00819b223`.
-- [Signert USB-arkiv](firmware/fire-os-1.2.0-rc2-usb.zip): 2 632 282 byte,
-  SHA256 `81bd55a47f62b79af1cfd72729517623643d8e4c167b033f4a1946e9d024627b`.
-- Det publiserbare arkivet inneholder bare de åtte nødvendige filene, ingen
-  privat nøkkel. Ny utpakking bestod faktisk `migrate_fire.py check` uten COM.
-- [Maskinlesbart bevis](firmware/fire-os-1.2.0-rc2-evidence.json),
-  [device-rapport](M5Stack-device/DELIVERY_REPORT.md) og
-  [firmwareoversikt](firmware/README.md).
+Den distribuerte pakken gjenbruker bevisst **bootloader, partisjonstabell og
+recovery fra RC2**, kilde `7efbae95fa0a54aeb3e1d6a615390810b69279b4` /
+[kjøring 45431615060](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45431615060).
+Dette er de uendrede, fysisk testede grunnlagsfilene. Ny normal RC5 kommer
+fra den nye kjøringen. Pakken hevder ikke at alle fire bildene er bygget fra
+samme kildecommit. Signert migreringsplan binder eksakte byte for alle fire;
+komponentenes separate opphav står i utgivelsesbeviset.
+
+- Normal RC5: **2 408 576 byte**, SHA256
+  `6499092470f40287776fcac49fa73abc225c1f420b41ebb8c4ea76bce1d004e7`.
+- [Signert USB-arkiv](firmware/fire-os-1.2.0-rc5-usb.zip): **2 637 224 byte**,
+  SHA256 `31a22078f5441cf2428bac651aa18f1f89f3c73ba214996ad61392d68effb533`.
+- Bare de åtte nødvendige filene er i USB-arkivet. Ny utpakking bestod faktisk
+  `migrate_fire.py check` uten COM; ingen privat nøkkel følger med.
+- [Maskinlesbart bevis med komponentkilder og målinger](firmware/fire-os-1.2.0-rc5-evidence.json),
+  [device-rapport](M5Stack-device/DELIVERY_REPORT.md) og [firmwareoversikt](firmware/README.md).
 
 Cloudflare CLI 2026.11.2 er også hentet og SHA256-/versjonskontrollert lokalt.
 `scripts/cloudflare.ps1` bruker den lokale kopien. Ingen konto, tunnel, DNS
 eller offentlig tilgang er opprettet; det krever brukerens valgte oppsett.
 
-Etter publisering på main `5e5853936cc10d6083dc153450e0ae2495c7b8e5`
+Historisk RC2-kontroll: Etter publisering på main `5e5853936cc10d6083dc153450e0ae2495c7b8e5`
 er katalog, normalbinær, USB-arkiv, bevis og kontrollsummer hentet fra de
 offentlige GitHub-adressene og sammenlignet byte for byte med leveransen.
 Katalogsignaturen er verifisert på den nedlastede kopien. GitHub svarte 200
@@ -120,7 +134,8 @@ eller at enhetskilden aldri var endret, gjelder ikke lenger.
 ## Samles til slutt hos brukeren
 
 Domene/Cloudflare-innlogging, HA-installasjonstype/MQTT-vert, valgte entiteter,
-førstegangs USB-migrering og fysiske tester. Kode, pakker, dokumentasjon og
+de gjenstående fysiske testene. Førstegangs USB-migrering på Rikards FIRE er
+allerede utført og dokumentert. Kode, pakker, dokumentasjon og
 uavhengige kontroller er klargjort før disse opplysningene etterspørres.
 
 Produksjonsklar fysisk drift påstås først etter kontroll av oppstart,

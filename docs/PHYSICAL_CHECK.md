@@ -1,8 +1,16 @@
 # Sluttest på din M5Stack FIRE
 
-Dette er testen på din fysiske enhet. Punktene er ikke utført her. Bruk den
+Dette er testen på din fysiske enhet. USB-migrering og deler av oppstart/rollback
+er nå prøvd, som beskrevet i [USB-beviset](../M5Stack-device/PHYSICAL_USB_2026-11-24.md).
+De øvrige punktene er ikke dermed bestått. Bruk den
 ferdige leveransepakken og gjør ett punkt om gangen. Noter firmwareversjonen
 som vises under **Settings → Firmware**.
+
+Rikards FIRE er allerede migrert og kjører RC5 i **B / app1**. Gå videre med
+meny-/knappetestene og funksjonene under; første USB-migrering er utført.
+Hvis du prøver redning på denne enheten, velger du **B / app1** for å komme
+tilbake til RC5. A inneholder forrige private testversjon. Steg 1 nedenfor
+beskriver førstegangsoppsett på en ny enhet, der pakken skriver normal til A.
 
 A og C flytter valget. B åpner eller bekrefter. Følg også knappeteksten nederst
 på skjermen; redningsmenyen har egne valg.

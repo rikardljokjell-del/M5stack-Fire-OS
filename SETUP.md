@@ -115,19 +115,25 @@ offentlig eller skru av sertifikatkontroll for å hoppe over dette steget.
 
 ## 5. Firmware og førstegangsoppgradering
 
-Ny oppstartsløsning med uavhengig redning krever en førstegangs USB-migrering.
+Din FIRE er allerede USB-migrert, oppdatert til **RC5** og helsegodkjent.
+Den står nå i **OS-slot B / app1**, med forrige testversjon i A og separat
+redning beholdt. Bruk den fysiske sluttesten videre.
+
+På en annen FIRE krever den nye oppstartsløsningen en førstegangs USB-migrering.
 Etter migreringen skal normale oppdateringer hentes fra **Innstillinger på FIRE**
 direkte fra GitHub. Studio viser bare versjoner og informasjon.
 
-Den signerte testpakken **fire-os-1.2.0-rc2** er klar på denne PC-en i
-`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc2/`. Følg
-[USB-veiledningen](M5Stack-backend/docs/USB_MIGRATION.md) fra steg 1.
+Den signerte testpakken **fire-os-1.2.0-rc5** er klar på denne PC-en i
+`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc5/`. Følg
+[USB-veiledningen](M5Stack-backend/docs/USB_MIGRATION.md) fra steg 1 ved migrering
+av en annen FIRE; din enhet er allerede ferdig med dette.
 Pakken er også tilgjengelig som
-[USB-arkiv](firmware/fire-os-1.2.0-rc2-usb.zip) med
-[kontrollsummer](firmware/fire-os-1.2.0-rc2-SHA256SUMS.txt).
+[USB-arkiv](firmware/fire-os-1.2.0-rc5-usb.zip) med
+[kontrollsummer](firmware/fire-os-1.2.0-rc5-SHA256SUMS.txt).
 
-Versjonen er en testkandidat. Signatur- og pakkekontrollen er bestått;
-fysisk oppstart, tilbakeføring og redning står på sluttestlisten.
+Versjonen er en testkandidat. Signatur-/pakkekontroll, fysisk USB-oppstart,
+lagret helsegodkjenning og kontrollert SDK-tilbakeføring til factory er bestått.
+Visuelle/knapp-/lydtester, Home, AI/appflyt og GitHub-OTA står på sluttestlisten.
 
 ## Samlet sluttkontroll hos deg
 
@@ -136,7 +142,7 @@ Dette er de opplysningene som trengs for å fullføre ditt oppsett:
 1. Hvilket domene/Cloudflare-team og hvilken innlogging du vil bruke.
 2. HA-installasjonstype, eksisterende MQTT og hvilken alltid-på vert som finnes.
 3. Første valg av HA-entiteter/handlinger og eventuell Camper-installasjon.
-4. En fysisk FIRE for førstegangs USB-migrering og testen under.
+4. De resterende egenkontrollene på FIRE; USB-migreringen er allerede utført.
 
 Test i denne rekkefølgen etter oppsett:
 
