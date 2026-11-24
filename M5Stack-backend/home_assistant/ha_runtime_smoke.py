@@ -188,6 +188,7 @@ async def inside(directory: Path, phase: str):
     from homeassistant.components import mqtt
     from homeassistant.const import __version__
     from homeassistant.helpers import entity_registry as er, label_registry as lr
+    from homeassistant.helpers.template import Template
     from homeassistant.runner import RuntimeConfig
 
     logging.basicConfig(level=logging.INFO)
@@ -268,6 +269,39 @@ async def inside(directory: Path, phase: str):
         assert state["values"]["heat"]["mode"] == "off"
         assert (await catalog(remote))["cards"] == []
         checks.append("actual HA config/package, labels, native catalog/state and climate metadata")
+
+        # Exercise native auto-type conversion with deliberately decimal-only
+        # hashes, including leading/all zeros. Only SHA's output is supplied as
+        # a fixture; HA's actual template engine and generated expressions run.
+        generated = json.loads((directory / "packages/fire_home.yaml").read_text(encoding="utf-8"))
+        publisher = generated["script"][SLUG + "_publish"]["sequence"]
+        revision_expression = publisher[2]["variables"]["rev"]
+        bootstrap_data = generated["automation"][0]["actions"][0]["choose"][0]["sequence"][0]["data"]
+        for exact in ("0000000000000000", "0123456789012345", "1234567890123456"):
+            fixture = {"sha256": lambda unused, exact=exact: exact + "a" * 48,
+                       "policy_cards": [], "remote_entity": "input_boolean." + SLUG + "_remote"}
+            wrapped = Template(revision_expression, hass).async_render(fixture)
+            assert wrapped == {"text": exact} and type(wrapped["text"]) is str
+            epoch_data = Template(bootstrap_data, hass).async_render(fixture)
+            assert epoch_data == {"value": exact} and type(epoch_data["value"]) is str
+            await hass.services.async_call("input_text", "set_value",
+                {"entity_id": "input_text." + SLUG + "_epoch", **epoch_data}, blocking=True)
+            mark = time.monotonic()
+            await local.send({"v": 1, "type": "hello", "rid": secrets.token_hex(8)})
+            exact_catalog = await local.wait("catalog", lambda item: item.get("epoch") == exact, after=mark)
+            packet = {"v": 1, "type": "command", "rid": secrets.token_hex(8), "epoch": exact,
+                      "rev": exact_catalog["rev"], "seq": exact_catalog["last_seq"] + 1,
+                      "issued": int(time.time()), "ttl": 15, "card": "run", "op": "run", "value": None}
+            mark = time.monotonic()
+            await local.send(packet)
+            ack = await local.wait("ack", lambda item: item.get("rid") == packet["rid"], after=mark)
+            assert ack["status"] == ("rejected" if exact == "0" * 16 else "executed")
+            if exact == "0" * 16:
+                assert ack["code"] == "session"
+        await hass.services.async_call("automation", "reload", {}, blocking=True)
+        await settle()
+        await catalog(local, lambda item: item.get("epoch") != exact)
+        checks.append("native decimal-only/leading-zero/all-zero hash preservation; zero epoch fails closed")
 
         before = calls()
         replay, ack = await command(local)

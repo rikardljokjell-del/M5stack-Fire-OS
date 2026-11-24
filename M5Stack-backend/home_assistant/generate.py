@@ -114,21 +114,21 @@ def package(profile):
     common = {"mapping": mapping, "read_label": profile.read_label, "control_label": profile.control_label,
               "epoch_entity": ids["epoch"], "seq_entity": ids["seq"], "remote_entity": ids["remote"], "prefix": prefix}
     policy = [{"variables": common}, {"variables": {"policy_cards": POLICY_CARDS}},
-              {"variables": {"epoch": template("states(epoch_entity)"), "remote_allowed": template("is_state(remote_entity,'on')"),
-                 "rev": template("sha256((dict(cards=policy_cards,remote_allowed=is_state(remote_entity,'on')) | to_json))[:16]")}}]
+              {"variables": {"epoch": template("dict(text=states(epoch_entity))"), "remote_allowed": template("is_state(remote_entity,'on')"),
+                 "rev": template("dict(text=sha256((dict(cards=policy_cards,remote_allowed=is_state(remote_entity,'on')) | to_json))[:16])")}}]
     publish_steps = policy + [
         {"condition": "template", "value_template": template("route in ['local','remote']")},
         {"variables": {"cards": template("policy_cards if route == 'local' or remote_allowed else []")}},
         {"variables": {"values": STATE_VALUES}},
         {"action": "mqtt.publish", "data": {"topic": template("prefix ~ '/' ~ route ~ '/catalog'"), "qos": 1, "retain": True,
-            "payload": template("dict(v=1,site='"+profile.site+"',device='"+profile.device+"',route=route,epoch=epoch,rev=rev,issued=now().timestamp()|int,ttl=90,last_seq=states(seq_entity)|int(0),remote_allowed=remote_allowed,cards=cards)|to_json")}},
+            "payload": template("dict(v=1,site='"+profile.site+"',device='"+profile.device+"',route=route,epoch=epoch.text,rev=rev.text,issued=now().timestamp()|int,ttl=90,last_seq=states(seq_entity)|int(0),remote_allowed=remote_allowed,cards=cards)|to_json")}},
         {"action": "mqtt.publish", "data": {"topic": template("prefix ~ '/' ~ route ~ '/state'"), "qos": 1, "retain": True,
-            "payload": template("dict(v=1,epoch=epoch,rev=rev,issued=now().timestamp()|int,ttl=90,values=values)|to_json")}},
+            "payload": template("dict(v=1,epoch=epoch.text,rev=rev.text,issued=now().timestamp()|int,ttl=90,values=values)|to_json")}},
     ]
     publish_action = "script." + slug + "_publish"
     refresh = [{"action": publish_action, "data": {"route": r}} for r in ("local", "remote")]
     bootstrap = [
-        {"action": "input_text.set_value", "target": {"entity_id": ids["epoch"]}, "data": {"value": template("sha256(now().isoformat() ~ (range(0,65536)|random) ~ (range(0,65536)|random))[:16]")}},
+        {"action": "input_text.set_value", "target": {"entity_id": ids["epoch"]}, "data": template("dict(value=sha256(now().isoformat() ~ (range(0,65536)|random) ~ (range(0,65536)|random))[:16])")},
         {"action": "input_number.set_value", "target": {"entity_id": ids["seq"]}, "data": {"value": 0}},
     ] + refresh
     ack_base = {"action": "mqtt.publish", "data": {"topic": template("prefix ~ '/' ~ route ~ '/ack'"), "qos": 1, "retain": False,
@@ -157,8 +157,8 @@ def package(profile):
          "then": [{"action": publish_action, "data": {"route": template("route")}}, {"stop": "Hello returned current catalog"}]},
         {"condition": "template", "value_template": VALID_SCHEMA},
         rejection("m.issued > (now().timestamp()|int) + 2 or (now().timestamp()|int) > m.issued + m.ttl", "expired"),
-        rejection("epoch == '0000000000000000' or m.epoch != epoch", "session"),
-        rejection("m.rev != rev", "revision"),
+        rejection("epoch.text == '0000000000000000' or m.epoch != epoch.text", "session"),
+        rejection("m.rev != rev.text", "revision"),
         rejection("m.seq <= (states(seq_entity)|int(0))", "sequence", "unknown"),
         rejection("route == 'remote' and not remote_allowed", "denied"),
         {"variables": {"selected": template("(mapping | selectattr('id','eq',m.card)|list|first)|default({})")}},

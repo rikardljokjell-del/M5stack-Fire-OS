@@ -202,6 +202,27 @@ def test_native_dispatch_consumes_before_action_and_never_repeats(config):
     assert len(run.actions)==1 and run.ack()["code"]=="session"
 
 
+@pytest.mark.parametrize("epoch,revision,executed",[
+    ("1234567890123456","9876543210987654",True),
+    ("0123456789012345","0000000000000000",True),
+    ("0000000000000000","0000000000000000",False),
+    ("abcdef0123456789","0123456789012345",True),
+])
+def test_numeric_only_hex_epoch_and_revision_stay_wire_strings(config,epoch,revision,executed):
+    run=NativeRunner(config)
+    # HA's native template result parser coerces an all-decimal hash to int.
+    run.env.globals["sha256"]=lambda value:(revision if value.startswith("{") else epoch)+"a"*48
+    run.bootstrap()
+    for message in run.messages:
+        validate_wire(message["topic"].rsplit("/",1)[-1],message["payload"])
+    assert run.states[run.epoch_entity]==epoch
+    assert run.catalog()["epoch"]==epoch and run.catalog()["rev"]==revision
+    run.send(run.command())
+    assert len(run.actions)==int(executed)
+    assert run.ack()["status"]==("executed" if executed else "rejected")
+    if not executed:assert run.ack()["code"]=="session"
+
+
 @pytest.mark.parametrize("change,code",[
     ({"issued":1795499980},"expired"),({"issued":1795500003},"expired"),
     ({"rev":"b"*16},"revision"),({"card":"other"},"denied"),
