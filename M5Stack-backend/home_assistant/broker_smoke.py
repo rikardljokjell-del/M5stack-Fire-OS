@@ -94,16 +94,24 @@ def smoke(executable):
         (config/"passwords.local").write_text("\n".join(lines)+"\n"+probe_file.read_text())
         with (config/"fire.acl").open("a") as f:f.write("user fire_probe\ntopic readwrite #\n")
         log=(folder/"broker.log").open("w+")
+        def startup_error(message):
+            log.flush();log.seek(0)
+            tail=log.read()[-4000:]
+            for secret in (*creds.values(),probe_password):
+                tail=tail.replace(secret,"[redacted]")
+            return RuntimeError(message+"; broker log tail: "+(tail.strip() or "[empty]"))
         try:
             process=subprocess.Popen([str(executable),"-c",str(config/"smoke.conf")],stdout=log,stderr=log,
                    **({"creationflags":subprocess.CREATE_NO_WINDOW} if os.name=="nt" else {}))
             deadline=time.monotonic()+5
+            ready=False
             while time.monotonic()<deadline:
                 if process.poll() is not None:
-                    raise RuntimeError("Broker exited before ready; exit="+str(process.returncode)+". Check OS application-control or broker installation.")
+                    raise startup_error("Broker exited before ready; exit="+str(process.returncode))
                 try:
-                    with socket.create_connection(("127.0.0.1",port),timeout=.1):break
+                    with socket.create_connection(("127.0.0.1",port),timeout=.1):ready=True;break
                 except OSError:time.sleep(.05)
+            if not ready:raise startup_error("Broker did not open its TLS listener within 5 seconds")
             ca=config/"certs/ca.pem"
             def peer(user,remote_route=False,password=None):
                 p=Peer("127.0.0.1",remote if remote_route else port,user,password or creds["fire_home_"+user],ca=None if remote_route else ca,websocket=remote_route)
