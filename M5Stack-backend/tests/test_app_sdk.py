@@ -149,6 +149,13 @@ def test_font_evidence_distinguishes_sdk_from_unverified_legacy_font_settings():
     assert not old.metrics['native_raster_exact'] and not sdk.metrics['native_raster_exact']
 
 
+def test_unknown_font_diagnostic_identifies_actual_id_and_canonical_choices():
+    source='function init() end function update(dt) fire.ui.label(10,10,"Test",{font="ui16b"}) end'
+    with pytest.raises(Exception) as found:simulate(app(source))
+    assert "'ui16b'" in str(found.value)
+    assert all(name in str(found.value) for name in fonts())
+
+
 def test_assets_use_real_rle_transparency_and_ignore_tint_on_colored_assets():
     colored=next(a for a in assets().values() if not a.get('tintable'))
     assert asset_image(colored['id'],63488).tobytes()==asset_image(colored['id']).tobytes()

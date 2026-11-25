@@ -13,8 +13,14 @@ return function(display, fonts, assets, emit, charge)
   xy(x,y);whole(w,1,1024);whole(h,1,1024)
   return area(x,y,w,h)
  end
+ local font_ids={};for id in pairs(fonts) do font_ids[#font_ids+1]=id end;table.sort(font_ids)
+ local font_choices=table.concat(font_ids,",")
  local function font(name)
-  name=name or "ui16";if type(name)~="string" or not fonts[name] then error("Unknown SDK font") end
+  name=name or "ui16"
+  if type(name)~="string" or not fonts[name] then
+   local label=type(name)=="string" and #name<=20 and string.match(name,"^[A-Za-z][A-Za-z0-9_]*$") and name or "<invalid>"
+   error("Unknown SDK font '"..label.."'; choose "..font_choices)
+  end
   return name,fonts[name]
  end
  local function text_ok(s)

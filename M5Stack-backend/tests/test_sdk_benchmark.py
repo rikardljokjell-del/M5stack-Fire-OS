@@ -1,5 +1,6 @@
 """Benchmark wiring tested without any paid request or actual device."""
 from types import SimpleNamespace
+import pytest
 
 from fire_backend.app_quality import FireAppReview
 from fire_backend.app_sdk import DATA,SDK_VERSION
@@ -49,3 +50,44 @@ async def test_benchmark_reserves_whole_next_case_before_admission(tmp_path,monk
     config=SimpleNamespace(code_model='gpt-6-luna',review_model='gpt-6-luna')
     result=await benchmark.execute(tmp_path/'evaluation',config,'fake-key-only')
     assert len(calls)==4 and result['evaluation_stopped']=='insufficient_reserved_room_for_next_case'
+
+
+def test_stronger_pilot_plan_and_ledger_reservations_fit_without_profile_change(tmp_path):
+    from fire_backend.storage import Store
+    from fire_backend.security import Redactor
+    from fire_backend.usage import UsageLedger
+    config=SimpleNamespace(code_model='gpt-6.2-sol',review_model='gpt-6.1-terra',evaluation_output_cap=True)
+    plan=benchmark.plan(config,True,pilot=True)
+    assert plan['builds']==4 and plan['temporary_output_cap']==8000
+    assert plan['initial_control']['generate']=='gpt-6-luna'
+    assert all(c['profiles']==['sdk'] for c in plan['cases'])
+    settings=benchmark.case_settings(tmp_path/'case',config,'fake-key-only')
+    assert settings.fire_cost_limits_enabled and settings.fire_build_budget_usd==.25
+    assert settings.fire_output_limits_enabled
+    store=Store(settings.fire_workspace,Redactor('fake-key-only'),16*1024*1024)
+    ledger=UsageLedger(store,settings)
+    key=ledger.begin('generate','gpt-6.2-sol',25000,8000,build_id='build-pilot')
+    assert ledger.store.get('usage',key)['reserved_usd']<.25
+    ledger.finish(key,{'input_tokens':6000,'output_tokens':2000})
+    review=ledger.begin('review','gpt-6.1-terra',35000,6000,build_id='build-pilot')
+    assert ledger.store.get('usage',review)['reserved_usd']<.25
+    assert config.code_model=='gpt-6.2-sol'  # no saved config/vault is involved
+
+
+async def test_pilot_caps_actual_request_and_vetoes_output_expansion_before_request(tmp_path):
+    config=SimpleNamespace(code_model='gpt-6.2-sol',review_model='gpt-6.1-terra',evaluation_output_cap=True)
+    settings=benchmark.case_settings(tmp_path,config,'fake-key-only')
+    app=GeneratedApp(name='Test',required_services=[],main_lua='function init() end function update(dt) end')
+    requests=[]
+    class Responses:
+        async def parse(self,**values):
+            requests.append(values)
+            return SimpleNamespace(status='completed',output_parsed=app)
+    provider=benchmark.BenchmarkProvider(settings)
+    provider.client=SimpleNamespace(responses=Responses())
+    await provider.parsed('generate',settings.openai_code_model,'SDK',{},GeneratedApp,12000,'low')
+    assert len(requests)==1 and requests[0]['max_output_tokens']==8000
+    assert requests[0]['reasoning']=={'effort':'low'}
+    with pytest.raises(benchmark.GenerationResponseError,match='8000-token'):
+        with provider.metered('generate',settings.openai_code_model,{},16000):pass
+    assert len(requests)==1

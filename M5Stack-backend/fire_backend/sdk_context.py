@@ -5,11 +5,11 @@ import re
 
 from .app_sdk import SDK_VERSION, SDK_CONTRACT, available, classify
 
-VERSION='fire-sdk-generation-v2'
+VERSION='fire-sdk-generation-v3'
 MARKER='\nFIRE SDK request contract:\n'
 
 POLICY='''
-FIRE App SDK development and acceptance policy, version2:
+FIRE App SDK development and acceptance policy, version3:
 Build exactly the confirmed app with sensible defaults. Preserve working code
 during correction; fix concrete defects rather than redesigning or adding scope.
 Use the real fire.ui kit, shared fonts and selected canonical assets for standard
@@ -17,6 +17,11 @@ widgets. Use a tested ui.set_theme/theme palette, not guessed RGB565 constants.
 Do not recreate large digit fonts or standard UI from per-pixel/segment loops.
 Compose a polished readable320x240 frame with clear hierarchy and short labels.
 
+Define BOTH mandatory global callbacks init() and update(dt_ms), even if init
+has no work. Optional on_button(button,action) receives short "pressed" events.
+Minimal valid lifecycle (replace the screen with the complete requested app):
+function init() fire.ui.set_theme("modern_dark") end
+function update(dt_ms) fire.ui.screen("APP") end
 The OS clears its OFFSCREEN sprite before EVERY update and presents it afterwards.
 Draw the COMPLETE scene every update, including menu/pause/wait/end; init-only
 graphics vanish. Never alternate blank/drawn frames or split one visible scene

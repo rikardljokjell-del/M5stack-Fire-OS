@@ -23,7 +23,7 @@ layoutretning, fontmetrikker og maksimalt tolv ressursbeskrivelser. Hele katalog
 bitmapdataene og UI-modulen sendes ikke i prompten. Ved feil beholdes eksisterende
 avgrenset reparasjonsflyt og kildebundet feilhistorikk.
 
-`fire-sdk-generation-v2` erstatter de generelle legacyinstruksene i SDK-kall med
+`fire-sdk-generation-v3` erstatter de generelle legacyinstruksene i SDK-kall med
 én konsistent versjonsstyrt policy. Valgte komponenter får kanonisk hjelp og
 options, ekte temapalett og korte kjørbare Lua-eksempler. Norske sammensatte
 appnavn som «bilspill», «værapp» og «måleinstrument» samt engelske aliaser velges

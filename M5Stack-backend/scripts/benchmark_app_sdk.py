@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 
@@ -51,12 +52,12 @@ def profile():
     return config,key
 
 
-def plan(config,key_present):
+def plan(config,key_present,*,pilot=False):
     models={role:{'name':model,'usd_per_million_text_in':PRICES[model].text_in,
                         'usd_per_million_text_out':PRICES[model].text_out,
                         'usd_per_million_cached_in':PRICES[model].text_cache}
             for role,model in [('generate',config.code_model),('review',config.review_model)]}
-    return dict(execute=False,key_present=key_present,models=models,pricing_date=PRICING_DATE,
+    result=dict(execute=False,key_present=key_present,models=models,pricing_date=PRICING_DATE,
         pricing_source=SOURCE,pricing_basis='existing reviewed local catalog; estimated list-price USD, not invoice',
         sdk_contract=SDK_CONTRACT,sdk_data_sha256=data_fingerprint(),sdk_policy_version=SDK_POLICY_VERSION,
         cases=[{'case':key,'request':text,'profiles':['legacy','sdk'] if key in CONTROLS else ['sdk']} for key,text in CASES],
@@ -68,6 +69,17 @@ def plan(config,key_present):
         voices=False,dialogue='literal request confirmed without paid planning',
         control_scope='Three matched single-run controls; not a statistical performance guarantee',
         physical_verified=False,install=False,run=False,server=False,saved_settings_changed=False)
+    if pilot:
+        result.update(builds=4,case_order=['stopwatch-luna-v3-control','stopwatch-sol-terra','dashboard-sol-terra','racing-sol-terra'],
+            early_stop='budget/API guard; at most three stronger-model cases',cases=[{'case':name,'request':dict(CASES)[name],'profiles':['sdk']} for name in ('stopwatch','dashboard','racing')],
+            models={'generate':'gpt-6.2-sol','review':'gpt-6.1-terra'},
+            pilot_prices_usd_per_million={'generate':[2,.10,10],'review':[1,.05,5]},
+            initial_control={'case':'stopwatch','generate':'gpt-6-luna','review':'gpt-6-luna','output_cap':False},
+            temporary_output_cap=8000,review_initial_output_cap=6000,
+            cap_expansion_retry='veto before paid request; format retry remains allowed',
+            policy_delta='v3 restores mandatory init()+update(dt_ms); not a model-only causal comparison',
+            control_scope='One V3 Luna control then three Sol/Terra SDK cases; no new legacy controls')
+    return result
 
 
 class BenchmarkProvider(OpenAIProvider):
@@ -82,12 +94,18 @@ class BenchmarkProvider(OpenAIProvider):
         # Never applies to the saved Windows profile or production jobs.
         if self.evaluation_requests>=8:
             raise GenerationResponseError('benchmark_call_limit','Evaluation request envelope reached')
+        if self.settings.fire_output_limits_enabled and args[3]>8000:
+            raise GenerationResponseError('benchmark_output_limit','Temporary pilot 8000-token cap prevents expansion retry; saved production limits unchanged')
         self.evaluation_requests+=1
         try:
             with super().metered(*args,**kwargs) as state:yield state
         except Exception as error:
             self.evaluation_api_failures.append(type(error).__name__)
             raise
+
+    async def parsed(self,operation,model,instructions,payload,schema,max_output_tokens,effort,*,images=()):
+        if self.settings.fire_output_limits_enabled:max_output_tokens=min(max_output_tokens,8000)
+        return await super().parsed(operation,model,instructions,payload,schema,max_output_tokens,effort,images=images)
 
     async def connect_dialog(self,context):return None,None
 
@@ -97,14 +115,19 @@ class BenchmarkProvider(OpenAIProvider):
                            build_summary=history[-1]['content'],clarification_needed=False)
 
 
-async def run_case(root,config,key,label,request,variant):
-    folder=root/(label+'-'+variant)
-    settings=Settings(_env_file=None,openai_api_key=key,openai_code_model=config.code_model,
+def case_settings(folder,config,key):
+    return Settings(_env_file=None,openai_api_key=key,openai_code_model=config.code_model,
         openai_review_model=config.review_model,fire_ai_mode='openai',fire_workspace=folder,
         fire_device_tokens=json.dumps({'benchmark-fire':'benchmark-device-credential-only-123456'}),
         fire_audio_enabled=False,fire_speech_enabled=False,fire_max_corrections=1,
         fire_max_build_kb=2048,fire_max_workspace_mb=128,fire_ai_timeout_seconds=90,
-        fire_cost_limits_enabled=True,fire_build_budget_usd=.25,fire_output_limits_enabled=False)
+        fire_cost_limits_enabled=True,fire_build_budget_usd=.25,
+        fire_output_limits_enabled=bool(getattr(config,'evaluation_output_cap',False)))
+
+
+async def run_case(root,config,key,label,request,variant):
+    folder=root/(label+'-'+variant)
+    settings=case_settings(folder,config,key)
     backend=Backend(settings,BenchmarkProvider(settings))
     started=time.monotonic();build=None
     try:
@@ -127,6 +150,8 @@ async def run_case(root,config,key,label,request,variant):
             base=preview_folder(backend.store,build['id'],evidence['source_sha256'])
             screenshots=[str(base/(f['png_sha256'][:24]+'.png')) for f in evidence.get('frames',[])]
         return dict(case=label,request=request,profile=variant,status=saved['status'],
+            generate_model=settings.openai_code_model,review_model=settings.openai_review_model,
+            temporary_output_cap=8000 if settings.fire_output_limits_enabled else None,
             elapsed_seconds=round(time.monotonic()-started,3),generation_attempts=saved.get('attempts',0),
             calls=len(rows),generate_calls=sum(r['operation']=='generate' for r in rows),
             review_calls=sum(r['operation']=='review' for r in rows),
@@ -147,46 +172,52 @@ async def run_case(root,config,key,label,request,variant):
     finally:await backend.close()
 
 
-async def execute(root,config,key,*,prior_estimated_usd=0):
+async def execute(root,config,key,*,prior_estimated_usd=0,pilot=False):
     root.mkdir(parents=True,exist_ok=False)
-    report={'plan':plan(config,True),'prior_estimated_usd':prior_estimated_usd,'results':[]}
+    report={'plan':plan(config,True,pilot=pilot),'prior_estimated_usd':prior_estimated_usd,'results':[]}
     report['plan']['execute']=True
     def save():
         (root/'results.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
-    for label in ORDER:
+    specs=[(label,variant,config) for label in ORDER for variant in (['legacy','sdk'] if label in CONTROLS else ['sdk'])]
+    if pilot:
+        luna=SimpleNamespace(code_model='gpt-6-luna',review_model='gpt-6-luna',evaluation_output_cap=False)
+        stronger=SimpleNamespace(code_model='gpt-6.2-sol',review_model='gpt-6.1-terra',evaluation_output_cap=True)
+        specs=[('stopwatch','sdk-luna-v3-control',luna)]+[(label,'sdk',stronger) for label in ('stopwatch','dashboard','racing')]
+    for label,variant,roles in specs:
         request=dict(CASES)[label]
-        for variant in (['legacy','sdk'] if label in CONTROLS else ['sdk']):
-            if prior_estimated_usd+sum(r['estimated_usd'] for r in report['results'])+.25>1.0+1e-12:
-                report['evaluation_stopped']='insufficient_reserved_room_for_next_case'
-                save();return report
-            result=await run_case(root,config,key,label,request,variant)
-            report['results'].append(result)
-            # Incremental private results survive an interruption. No source,
-            # credentials, raw provider responses or private settings printed.
-            save()
-            print(json.dumps({k:result[k] for k in ('case','profile','status','generation_attempts','calls','elapsed_seconds','estimated_usd')},ensure_ascii=False),flush=True)
-            sdk_results=[r for r in report['results'] if r['profile']=='sdk']
-            if len(sdk_results)==3 and sum(r['status']!='ready' for r in sdk_results)>=2:
-                report['evaluation_stopped']='broad_failure_in_first_three_sdk_cases'
-                save();return report
-            if result['status']!='ready' and result.get('api_failure_types'):
-                report['evaluation_stopped']='unexpected_api_error'
-                save();return report
+        # Keep admission, accounting and per-case behavior identical in both modes.
+        if prior_estimated_usd+sum(r['estimated_usd'] for r in report['results'])+.25>1.0+1e-12:
+            report['evaluation_stopped']='insufficient_reserved_room_for_next_case'
+            save();return report
+        result=await run_case(root,roles,key,label,request,variant)
+        report['results'].append(result)
+        # Incremental private results survive an interruption. No source,
+        # credentials, raw provider responses or private settings printed.
+        save()
+        print(json.dumps({k:result[k] for k in ('case','profile','status','generation_attempts','calls','elapsed_seconds','estimated_usd')},ensure_ascii=False),flush=True)
+        sdk_results=[r for r in report['results'] if r['profile']=='sdk']
+        if not pilot and len(sdk_results)==3 and sum(r['status']!='ready' for r in sdk_results)>=2:
+            report['evaluation_stopped']='broad_failure_in_first_three_sdk_cases'
+            save();return report
+        if result['status']!='ready' and result.get('api_failure_types'):
+            report['evaluation_stopped']='unexpected_api_error'
+            save();return report
     return report
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute',action='store_true',help='Make real paid code/review calls; requires coordinated authorization')
+    parser.add_argument('--pilot-stronger',action='store_true',help='Authorized four-case V3 control and Sol/Terra pilot only')
     options=parser.parse_args()
     config,key=profile()
     if not options.execute:
-        print(json.dumps(plan(config,bool(key)),ensure_ascii=False,indent=2));return
+        print(json.dumps(plan(config,bool(key),pilot=options.pilot_stronger),ensure_ascii=False,indent=2));return
     if not key:raise ValueError('No saved OpenAI credential')
     base=Path(__file__).resolve().parents[1]/'workspace'/'sdk-benchmark'
     prior=sum(sum(r['estimated_usd'] for r in json.loads(p.read_text(encoding='utf-8')).get('results',[])) for p in base.glob('evaluation-*/results.json'))
     root=base/new_id('evaluation')
-    asyncio.run(execute(root,config,key,prior_estimated_usd=prior))
+    asyncio.run(execute(root,config,key,prior_estimated_usd=prior,pilot=options.pilot_stronger))
 
 
 if __name__=='__main__':main()
