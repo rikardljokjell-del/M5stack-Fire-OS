@@ -1,4 +1,6 @@
 #include "fire_home.h"
+#include "fire_ui.h"
+#include "fire_canvas_fill.h"
 #include "fire_async_client.h"
 #include "fire_json_guard.h"
 #include <WiFi.h>
@@ -12,8 +14,6 @@
 
 extern "C" esp_err_t arduino_esp_crt_bundle_attach(void* config);
 namespace {
-constexpr uint16_t bg = 0x0862, panel = 0x10E3, ink = 0xEF7E, muted = 0x94F4;
-constexpr uint16_t accent = 0x4F5A, amber = 0xFDA8;
 const char* operations[] = {"on", "off", "brightness", "temperature", "heat_mode", "run"};
 const cJSON* field(const cJSON* obj, const char* key) { return cJSON_GetObjectItemCaseSensitive(obj, key); }
 String str(const cJSON* obj, const char* key) { const auto* v = field(obj, key); return cJSON_IsString(v) ? String(v->valuestring) : String(); }
@@ -52,9 +52,7 @@ bool fresh(const cJSON* obj) {
 }
 String rid() { char value[17]; snprintf(value, sizeof(value), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random()); return value; }
 uint8_t operation(const String& name) { for (uint8_t i = 0; i < 6; ++i) if (name == operations[i]) return 1 << i; return 0; }
-void label(M5Canvas& c, int x, int y, const String& text, uint16_t color = ink, uint8_t scale = 1) {
-  c.setTextDatum(TL_DATUM); c.setTextColor(color, bg); c.setTextSize(scale); c.drawString(text, x, y);
-}
+
 }
 
 void FireHome::begin() {
@@ -485,105 +483,153 @@ void FireHome::button(uint8_t index) {
   } else status_ = "Venter på ferske data";
 }
 
-void FireHome::draw(M5Canvas& c) {
-  c.fillSprite(bg); c.setFont(&fonts::efontJA_12); c.setTextSize(1);
-  label(c, 12, 8, profileName(), ink, 2);
-  const String connection = !configured() ? "Oppsett" : !online_ ? "Frakoblet" : !current() ? "Utdatert" : remote_ ? "Internett" : "Lokalt";
-  label(c, 218, 14, connection, current() ? accent : amber);
-  c.drawFastHLine(12, 40, 296, panel);
-  auto footer = [&](const char* a, const char* b, const char* d) {
-    c.fillRect(0, 216, 320, 24, panel);
-    label(c, 10, 221, a, muted); label(c, 127, 221, b); label(c, 257, 221, d, muted);
+void FireHome::draw(M5Canvas& canvas) {
+  fire_canvas_fill::Surface<M5Canvas> c(canvas);
+  using namespace FireUI;
+  const bool freshState = stateFresh();
+  const bool pending = pendingRid_.length() != 0;
+  const bool receivedCatalog = catalogValid_ && catalogAt_ && time(nullptr) >= 1700000000 &&
+      millis() - catalogAt_ <= catalogTtl_ * 1000;
+  const char* connection = !configured() ? "Oppsett" :
+      !online_ ? (wanted_ && networkActive_ ? "Kobler til" : "Frakoblet") :
+      !catalogValid_ || !catalogAt_ ? "Venter data" : !receivedCatalog ? "Utdatert" :
+      remote_ && !remoteAllowed_ ? "Tilgang sperret" : !stateAt_ ? "Venter data" :
+      !freshState ? "Utdatert" : remote_ ? "Internett" : "Lokalt";
+  homeHeader(c, profile_ ? "Camper" : "Home", settings_ ? "INNSTILLINGER" : detail_ ? "STYRING" : "OVERSIKT",
+             pending ? "Venter på HA" : connection, pending || !freshState ? Amber : Green, profile_ != 0);
+  auto number = [](double v) {
+    char out[28];
+    if (fabs(v) < 1000000) snprintf(out, sizeof(out), fabs(v - round(v)) < .00001 ? "%.0f" : "%.1f", v);
+    else snprintf(out, sizeof(out), "%.2g", v);
+    return String(out);
   };
-  auto value = [](double number) {
-    char text[32]; snprintf(text, sizeof(text), fabs(number) < 1000000 ? "%.1f" : "%.2g", number); return String(text);
+  auto cardIcon = [](const Card& card) -> const char* {
+    return card.kind == "light" ? "icon.lightbulb" : card.kind == "climate" ? "icon.thermometer" :
+        card.kind == "switch" ? "icon.power" : card.kind == "binary_sensor" ? "icon.circle-dot" :
+        card.kind == "scene" ? "icon.sparkles" : card.kind == "script" ? "icon.circle-play" : "icon.activity";
   };
-  auto crop = [&](String text, int width, uint8_t scale = 1) -> String {
-    c.setTextSize(scale);
-    if (c.textWidth(text) <= width) return text;
-    while (text.length()) {
-      size_t end = text.length() - 1;
-      while (end && (static_cast<uint8_t>(text[end]) & 0xC0) == 0x80) --end;
-      text.remove(end);
-      if (c.textWidth(text + "…") <= width) return text + "…";
+  auto cardColor = [](const Card& card) -> uint16_t {
+    return card.kind == "light" ? Amber : card.kind == "climate" ? Green :
+        card.kind == "scene" || card.kind == "script" ? Purple : Blue;
+  };
+  auto available = [&](const Card& card) { return freshState && card.state != "unknown" && card.state != "unavailable"; };
+  auto reading = [&](const Card& card) -> String {
+    if (!freshState) return online_ ? "Utdatert" : "Frakoblet";
+    if (card.state == "unavailable") return "Utilgjengelig";
+    if (card.state == "unknown") return "Ukjent";
+    if (card.kind == "light" || card.kind == "switch" || card.kind == "binary_sensor") {
+      if (card.state == "on") return "På";
+      if (card.state == "off") return "Av";
+      if (card.kind == "binary_sensor" && card.hasValue) return card.value != 0 ? "På" : "Av";
+      return "Ukjent";
     }
-    return String();
+    if (card.kind == "script" || card.kind == "scene") return card.ops & 32 ? "Klar" : "Kun visning";
+    return card.hasValue ? number(card.value) + (card.unit.length() ? " " + card.unit : "") : "Ingen verdi";
+  };
+  auto modeName = [](const String& mode) -> const char* {
+    return mode == "heat" ? "Varme" : mode == "auto" ? "Auto" : mode == "off" ? "Av" : "Ukjent";
+  };
+  auto caption = [&](const Card& card) -> String {
+    if (!freshState) return "Venter data";
+    if (!available(card)) return "Ikke klar";
+    if (card.kind == "climate") return String("Mål ") + (card.hasTarget ? number(card.target) : "-") +
+        (layout_ || detail_ ? String("/") + modeName(card.mode) : String());
+    if (card.kind == "script" || card.kind == "scene") return card.ops & 32 ? "Kjør i meny" : "Kun visning";
+    if (card.kind == "light") return "Lys";
+    if (card.kind == "switch") return "Bryter";
+    return card.kind == "binary_sensor" ? "Tilstand" : "Måleverdi";
   };
   if (settings_) {
-    const char* modes[] = {"Auto", "Lokalt", "Internett"};
-    String rows[] = {"Profil: " + profileName(), "Forbindelse: " + String(modes[routeMode_]),
-        String("Visning: ") + (layout_ ? "Stort kort" : "2 x 2 kort"),
-        String("Favoritter: ") + (favoritesOnly_ ? "Bare favoritter" : "Alle kort"), "Oppsett på mobil", "Tilbake"};
-    for (uint8_t i = 0; i < 6; ++i) {
-      const int y = 49 + i * 24;
-      if (focus_ == i) c.fillRoundRect(8, y - 2, 304, 23, 5, panel);
-      label(c, 16, y, rows[i], focus_ == i ? accent : ink);
+    if (focus_ == 4 && setupHint_.length()) {
+      panel(c, 10, 56, 300, 145, true);
+      icon(c, "icon.wifi", 24, 70, Accent, 28);
+      text(c, 64, 75, "Mobiloppsett", Text, "ui16", 226);
+      text(c, 24, 113, "Koble mobilen til", Muted, "ui12", 270);
+      text(c, 24, 133, setupHint_.c_str(), Text, "ui12b", 270);
+      text(c, 24, 164, "192.168.4.1/home", Accent, "ui16", 270);
+    } else {
+      const char* modes[] = {"Auto", "Lokalt", "Internett"};
+      const char* labels[] = {"Profil", "Forbindelse", "Visning", "Favoritter", "Oppsett på mobil", "Tilbake"};
+      const char* icons[] = {"icon.house", "icon.wifi", "icon.layout-grid", "icon.star", "icon.sliders-horizontal", "icon.arrow-left"};
+      const char* values[] = {profile_ ? "Camper" : "Home", modes[routeMode_], layout_ ? "Stort kort" : "Fire kort",
+                              favoritesOnly_ ? "Bare valgte" : "Alle kort", "Åpne", ""};
+      for (uint8_t i = 0; i < 6; ++i) menuRow(c, 54 + i * 26, labels[i], values[i], focus_ == i, icons[i]);
     }
-    if (setupHint_.length()) { c.fillRect(0, 188, 320, 27, bg); label(c, 10, 188, setupHint_, amber); label(c, 10, 201, "192.168.4.1/home", muted); }
-    footer("Forrige", "Endre", "Neste"); return;
-  }
-  if (detail_) {
-    Card* card = nullptr; for (uint8_t i = 0; i < count_; ++i) if (cards_[i].id == detailCardId_) card = &cards_[i];
-    if (!card) { detail_ = false; return; }
-    label(c, 14, 50, crop(card->name, 292, 2), ink, 2);
-    String reading = card->hasValue ? value(card->value) + " " + card->unit : "—";
-    uint8_t scale = 3;
-    c.setTextSize(scale); while (scale > 1 && c.textWidth(reading) > 288) c.setTextSize(--scale);
-    label(c, 16, 84, crop(reading, 288, scale), stateFresh() ? ink : muted, scale);
-    if (card->kind == "climate") label(c, 18, 125, String("Mål: ") + (card->hasTarget ? value(card->target) : "—") + "  " + card->mode, muted);
-    else label(c, 18, 125, card->state, muted);
-    if (!stateFresh()) label(c, 225, 138, "Utdatert", amber);
-    uint8_t actions[9], n = 0; for (uint8_t i = 0; i < 6; ++i) if (card->ops & (1 << i)) actions[n++] = i;
-    actions[n++] = 6; actions[n++] = 7; actions[n++] = 8;
-    const char* names[] = {"Slå på", "Slå av", "Lysstyrke", "Måltemperatur", "Varmemodus", "Kjør", "Favoritt", "Flytt først", "Tilbake"};
-    const uint8_t action = actions[min<uint8_t>(detailAction_, n - 1)];
-    String choice = names[action];
-    if (editing_ || confirm_) choice += String(": ") + (action == 4 ? (editValue_ == 0 ? "off" : editValue_ == 1 ? "heat" : "auto") : action == 2 || action == 3 ? value(editValue_) : "");
-    c.fillRoundRect(10, 153, 300, 33, 7, panel); label(c, 20, 160, crop(choice, 278), confirm_ ? amber : accent);
-    label(c, 15, 194, confirm_ ? "Bekreft handlingen" : crop(status_, 290), muted);
-    if (confirm_) footer("Tilbake", "Bekreft", "Avbryt"); else if (editing_) footer("Mindre", "Velg", "Mer"); else footer("Forrige", "Velg", "Neste");
+    footer(c, "Forrige", "Velg", "Neste");
     return;
   }
-  uint8_t indices[12]; const uint8_t n = visible(indices);
+  if (detail_) {
+    Card* card = nullptr;
+    for (uint8_t i = 0; i < count_; ++i) if (cards_[i].id == detailCardId_) card = &cards_[i];
+    if (!card) { detail_ = false; return; }
+    const uint16_t color = cardColor(*card);
+    const bool enabled = available(*card);
+    panel(c, 10, 56, 300, 96);
+    icon(c, cardIcon(*card), 263, 71, enabled ? color : Muted, 30);
+    text(c, 24, 65, card->name.c_str(), Text, "ui16", 230);
+    const String displayValue = reading(*card), info = caption(*card);
+    const char* displayFont = width(displayValue.c_str(), "title20") <= 226 ? "title20" : "ui16";
+    text(c, 24, 93, displayValue.c_str(), enabled ? color : Muted, displayFont, 226);
+    text(c, 24, 130, info.c_str(), enabled ? Muted : Amber, "ui12", 272);
+    uint8_t actions[9], n = 0;
+    for (uint8_t i = 0; i < 6; ++i) if (card->ops & (1 << i)) actions[n++] = i;
+    actions[n++] = 6; actions[n++] = 7; actions[n++] = 8;
+    const uint8_t selectedAction = min<uint8_t>(detailAction_, n - 1);
+    const uint8_t action = actions[selectedAction];
+    const char* names[] = {"Slå på", "Slå av", "Lysstyrke", "Måltemperatur", "Varmemodus", "Kjør",
+                           card->favorite ? "Fjern favoritt" : "Legg til favoritt", "Flytt først", "Tilbake"};
+    String choice = names[action];
+    if (editing_ || confirm_) {
+      if (action == 4) choice += String(" / ") + (editValue_ == 0 ? "Av" : editValue_ == 1 ? "Varme" : "Auto");
+      else if (action == 2) choice += String(" / ") + number(round(editValue_ * 100 / 255)) + " %";
+      else if (action == 3) choice += String(" / ") + number(editValue_) + (card->unit.length() ? " " + card->unit : "");
+    }
+    panel(c, 10, 160, 300, 34, true, confirm_ ? Amber : Accent);
+    icon(c, confirm_ ? "icon.circle-check" : action == 6 ? "icon.star" : "icon.sliders-horizontal", 20, 167, confirm_ ? Amber : Accent, 20);
+    text(c, 50, 170, choice.c_str(), confirm_ ? Amber : Text, "ui12b", 229);
+    char position[12]; snprintf(position, sizeof(position), "%u/%u", unsigned(selectedAction + 1), unsigned(n));
+    if (!editing_ && !confirm_) text(c, 268, 170, position, Muted, "pixel8", 30, 2);
+    text(c, 12, 199, confirm_ ? "B bekrefter handlingen" : pending ? "Venter på svar fra Home Assistant" : status_.c_str(),
+         pending || confirm_ ? Amber : Muted, "ui12", 296);
+    if (confirm_) footer(c, "Tilbake", "Bekreft", "Avbryt");
+    else if (editing_) footer(c, "Mindre", "Velg", "Mer");
+    else footer(c, "Forrige", "Velg", "Neste");
+    return;
+  }
+  uint8_t indices[12];
+  const uint8_t n = visible(indices);
   if (!n) {
-    label(c, 18, 70, configured() ? "Venter på Home Assistant" : "Velkommen til Home", ink, 2);
-    label(c, 18, 107, "Direkte til ditt hjem. Ingen PC nødvendig.", muted);
-    label(c, 18, 139, "B åpner innstillinger og mobiloppsett", muted);
+    const bool emptyFavorites = favoritesOnly_ && count_;
+    panel(c, 10, 56, 300, 137);
+    icon(c, emptyFavorites ? "icon.star" : "icon.house", 24, 72, Accent, 36);
+    text(c, 76, 76, emptyFavorites ? "Ingen favoritter" : !configured() ? "Koble til hjemmet" : current() ? "Ingen delte kort" : "Venter på hjemmet",
+         Text, "ui16", 223);
+    text(c, 24, 124, !configured() ? "Velg hva FIRE kan styre i Home Assistant." : emptyFavorites ? "Velg Alle kort i innstillingene." : "Del ønskede enheter fra Home Assistant.", Muted, "ui12", 270);
+    text(c, 24, 155, "B åpner innstillinger", Accent, "ui12b", 270);
   } else {
     const uint8_t perPage = layout_ ? 1 : 4;
     const uint8_t page = min<uint8_t>(focus_, n - 1) / perPage;
     for (uint8_t slot = 0; slot < perPage; ++slot) {
-      uint8_t at = page * perPage + slot; if (at >= n) break;
-      Card& card = cards_[indices[at]];
-      const int x = layout_ ? 10 : 10 + (slot % 2) * 155;
-      const int y = layout_ ? 50 : 50 + (slot / 2) * 76;
-      const int w = layout_ ? 300 : 145, h = layout_ ? 139 : 68;
-      c.fillRoundRect(x, y, w, h, 8, panel);
-      c.drawRoundRect(x, y, w, h, 8, focus_ == at ? accent : panel);
-      if (focus_ == at) c.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 7, accent);
-      // Cheap native symbols; no bitmap/font downloads or per-card sprites.
-      if (card.kind == "light") { c.drawCircle(x + w - 17, y + 15, 6, accent); c.drawFastHLine(x + w - 21, y + 23, 8, accent); }
-      else if (card.kind == "climate" || card.kind == "sensor") { c.drawRoundRect(x + w - 21, y + 8, 7, 15, 3, accent); c.fillCircle(x + w - 18, y + 23, 5, accent); }
-      else if (card.kind == "script" || card.kind == "scene") c.fillTriangle(x + w - 22, y + 8, x + w - 22, y + 24, x + w - 10, y + 16, accent);
-      c.setTextColor(ink, panel); c.setTextSize(1); c.drawString(crop(card.name, w - 42), x + 10, y + 9);
-      const bool stale = !stateFresh();
-      String reading = card.kind == "light" || card.kind == "switch" ? (card.state == "on" ? "PÅ" : card.state == "off" ? "AV" : "—") :
-          card.kind == "script" || card.kind == "scene" ? "Kjør" : card.hasValue ? value(card.value) + " " + card.unit : "—";
-      uint8_t scale = layout_ ? 3 : 2;
-      c.setTextSize(scale); while (scale > 1 && c.textWidth(reading) > w - 20) c.setTextSize(--scale);
-      c.setTextColor(stale ? muted : ink, panel); c.drawString(crop(reading, w - 20, scale), x + 10, y + (layout_ ? 47 : 31));
-      if (!stale && card.kind == "climate" && card.hasTarget) { c.setTextSize(1); c.drawString(crop("Mål " + value(card.target), w - 20), x + 10, y + h - 16); }
-      else if (stale) { c.setTextSize(1); c.drawString("Utdatert", x + 10, y + h - 15); }
+      const uint8_t at = page * perPage + slot;
+      if (at >= n) break;
+      const Card& card = cards_[indices[at]];
+      const String displayValue = reading(card), info = caption(card);
+      homeCard(c, slot, layout_ != 0, card.name.c_str(), displayValue.c_str(), info.c_str(), cardIcon(card), cardColor(card), focus_ == at, available(card), card.favorite);
     }
+    char pageLabel[20]; snprintf(pageLabel, sizeof(pageLabel), "%u / %u", unsigned(page + 1), unsigned((n + perPage - 1) / perPage));
+    text(c, 256, 36, pageLabel, Muted, "pixel8", 52, 2);
   }
-  label(c, 12, 198, focus_ >= n ? "Innstillinger" : crop(status_, 296), focus_ >= n ? accent : muted);
-  footer("Forrige", focus_ >= n ? "Oppsett" : "Åpne", "Neste");
+  if (focus_ >= n) {
+    icon(c, "icon.settings", 12, 198, Accent, 16);
+    text(c, 35, 199, "Innstillinger", Accent, "ui12b", 270);
+  } else text(c, 12, 199, pending ? "Venter på svar fra Home Assistant" : status_.c_str(), pending ? Amber : Muted, "ui12", 296);
+  footer(c, "Forrige", focus_ >= n ? "Oppsett" : "Åpne", "Neste");
 }
 
 const char* FireHome::setupPage() const {
   return R"HOME(<!doctype html><html lang="no"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FIRE Home</title>
-<style>body{font:17px system-ui;max-width:560px;margin:30px auto;padding:16px;background:#0c1720;color:#e6f1f6}input,select,textarea,button{box-sizing:border-box;width:100%;margin:7px 0 16px;padding:12px;border-radius:8px;border:1px solid #516472;background:#142632;color:inherit}button{background:#277b73}label{display:block}</style>
-<h1>Home på FIRE</h1><p>Direkte MQTT til Home Assistant. Bruk egne brokerbrukere med begrensede rettigheter.</p><label>Importer device-profile.json<input id="profilefile" type="file" accept=".json,application/json"></label><form id="f">
+<style>:root{color-scheme:dark}*{box-sizing:border-box}body{font:15px/1.5 system-ui,sans-serif;max-width:720px;margin:0 auto;padding:28px 20px 48px;background:#090f19;color:#f1f6fc}h1{font-size:30px;letter-spacing:-1px;margin:10px 0 8px}p{color:#9eb1c7;margin:0 0 24px}.brand{display:inline-block;letter-spacing:3px;font-size:11px;font-weight:700;color:#45d8d9}label{display:block;color:#d9e3ef;font-size:13px;font-weight:600}input,select,textarea,button{font:inherit;box-sizing:border-box;width:100%;margin:7px 0 16px;padding:12px 14px;min-height:46px;border-radius:10px;border:1px solid #2b3a4d;background:#141d2c;color:#f1f6fc}input:focus,select:focus,textarea:focus{outline:2px solid #45d8d9;outline-offset:2px}textarea{min-height:120px;font:12px/1.5 monospace}button{border:0;background:#45d8d9;color:#09191f;font-weight:700;cursor:pointer}button:hover{background:#7ce6e7}form{padding:20px;border-radius:16px;background:#101824;border:1px solid #2b3a4d;margin-top:12px}#result{padding:12px;border-radius:10px;color:#45d8d9;overflow-wrap:anywhere}@media(min-width:600px){form{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}form label:has(textarea),form button{grid-column:1/-1}}</style>
+<span class="brand">FIRE / HOME</span><h1>Ditt hjem. Dine kontroller.</h1><p>Koble FIRE direkte til Home Assistant. Importer den ferdige profilfilen, eller fyll inn tilkoblingen nedenfor.</p><label>Importer device-profile.json<input id="profilefile" type="file" accept=".json,application/json"></label><form id="f">
 <label>Profil<select name="profile"><option value="0">Home</option><option value="1">Camper</option></select></label>
 <label>Site-ID<input name="site" required pattern="[a-z0-9][a-z0-9_-]{0,31}"></label><label>Device-ID<input name="device" value="fire01" required></label>
 <label>Lokal broker (vertsnavn, TLS port 8883)<input name="local_host"></label><label>Lokal brokerbruker<input name="local_user"></label><label>Lokalt passord<input type="password" name="local_password" autocomplete="new-password"></label>

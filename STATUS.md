@@ -18,6 +18,15 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
+### Visuell oppgradering av FIRE OS og Home – 1.4-kandidat
+
+Ny hovedmeny med fire appkort per side og uendret A/C/B-navigasjon er
+implementert. OS-menyer, ikoner, status-/knapperad og dialoger får en felles
+stil. Home har nye kontrollkort, tydelig datastatus og oppdatert mobiloppsett.
+Ingen endring av Home-rettigheter, MQTT, Lua/SDK eller Runtime AI-kontrakter.
+Kilde-/visuell kontroll pågår; ny firmware er ennå ikke fysisk installert.
+Se [kort UI-veiledning](M5Stack-backend/docs/FIRE_OS_UI.md).
+
 ### Runtime AI, kostnader og appflyt – sluttintegrasjon
 
 Runtime AI er implementert som en valgfri, asynkron SDK-tjeneste over samme

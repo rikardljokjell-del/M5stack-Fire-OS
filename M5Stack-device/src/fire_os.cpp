@@ -7,6 +7,7 @@
 #include "fire_app_sdk_data.h"
 #include "fire_runtime_ai_json.h"
 #include "fire_ai_workflow.h"
+#include "fire_ui.h"
 
 #include <M5Unified.h>
 #ifdef FIRE_OS_BLE
@@ -39,18 +40,19 @@
 
 namespace {
 constexpr uint8_t kSdCsPin = 4;
+const char* osMenuIcon(const String& label);
 constexpr char kSdNameCharset[] =
     " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.";
 constexpr uint8_t kButtonPins[] = {39, 38, 37};
-constexpr uint16_t kBg = 0x1082;
-constexpr uint16_t kPanel = 0x18E3;
-constexpr uint16_t kText = 0xE73C;
-constexpr uint16_t kMuted = 0x7BEF;
-constexpr uint16_t kCyan = 0x05FF;
-constexpr uint16_t kOrange = 0xFD20;
-constexpr uint16_t kGreen = 0x07E0;
-constexpr uint16_t kRed = 0xF800;
-constexpr uint16_t kPurple = 0xC81F;
+constexpr uint16_t kBg = FireUI::Bg;
+constexpr uint16_t kPanel = FireUI::Panel;
+constexpr uint16_t kText = FireUI::Text;
+constexpr uint16_t kMuted = FireUI::Muted;
+constexpr uint16_t kCyan = FireUI::Accent;
+constexpr uint16_t kOrange = FireUI::Amber;
+constexpr uint16_t kGreen = FireUI::Green;
+constexpr uint16_t kRed = FireUI::Red;
+constexpr uint16_t kPurple = FireUI::Purple;
 constexpr uint16_t kDurationMinutes[] = {
     0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
     11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
@@ -59,7 +61,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.3.0-rc7";
+constexpr char kFirmwareVersion[] = "fire-os-1.4.0-rc1";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -759,6 +761,8 @@ String cleanFooterLabel(const char* raw) {
       text.endsWith("  C")) {
     text.remove(text.length() - 3);
   }
+  if (text == "Select / Connect") return "Connect";
+  if (text == "BACKGROUND") return "Background";
   return text;
 }
 
@@ -1325,28 +1329,8 @@ void FireOS::update() {
   if (githubFirmware_)
     githubFirmware_->service(WiFi.status() == WL_CONNECTED, sdReady_);
   manageDisplayPower();
-  if (carouselAnimating_) {
-    const uint32_t now = millis();
-    const uint32_t elapsed = now - carouselLastStepAt_;
-    // Keep the same visual speed when the input loop runs faster than before.
-    // 48 px per 25 ms was the previous animation rate.
-    const int16_t step = static_cast<int16_t>(max<uint32_t>(1, elapsed * 48 / 25));
-    if (elapsed > 0) carouselLastStepAt_ = now;
-    carouselOffset_ += step;
-    if (carouselOffset_ >= kCarouselDistance) {
-      carouselOffset_ = kCarouselDistance;
-      carouselAnimating_ = false;
-      if (carouselQueuedDirection_ != 0) {
-        const int8_t queuedDirection = carouselQueuedDirection_;
-        carouselQueuedDirection_ = 0;
-        startMainSlide(nextVisibleMain(mainIndex_, queuedDirection),
-                       queuedDirection);
-      }
-    }
-  }
   const bool animatedScreen = screen_ == Screen::AiDeveloper ||
-                              screen_ == Screen::LuaApp ||
-                              carouselAnimating_;
+                              screen_ == Screen::LuaApp;
   const uint32_t drawInterval = screen_ == Screen::AiDeveloper
                                     ? 33
                                     : animatedScreen ? 25 : 50;
@@ -4585,7 +4569,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   if (index == 0) {
     if (screen_ == Screen::Main) {
       const uint8_t nextIndex = nextVisibleMain(mainIndex_, -1);
-      startMainSlide(nextIndex, 1);
+      selectMainItem(nextIndex);
     } else if (screen_ == Screen::Apps) {
       handleAppsButton(index);
     } else if (screen_ == Screen::Placeholder || screen_ == Screen::Debug ||
@@ -4597,7 +4581,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   } else if (index == 2) {
     if (screen_ == Screen::Main) {
       const uint8_t nextIndex = nextVisibleMain(mainIndex_, 1);
-      startMainSlide(nextIndex, -1);
+      selectMainItem(nextIndex);
     } else if (screen_ == Screen::Apps) {
       handleAppsButton(index);
     } else if (screen_ == Screen::Placeholder || screen_ == Screen::Debug ||
@@ -4935,20 +4919,9 @@ uint8_t FireOS::nextVisibleMain(uint8_t current, int8_t direction) const {
   return mainItemAtPosition(position);
 }
 
-void FireOS::startMainSlide(uint8_t nextIndex, int8_t direction) {
-  if (carouselAnimating_) {
-    carouselQueuedDirection_ = direction;
-    return;
-  }
-  if (nextIndex == mainIndex_) return;
-  carouselFromIndex_ = mainIndex_;
-  carouselToIndex_ = nextIndex;
-  carouselDirection_ = direction;
-  carouselOffset_ = 0;
-  carouselLastStepAt_ = millis();
-  carouselQueuedDirection_ = 0;
-  carouselAnimating_ = true;
+void FireOS::selectMainItem(uint8_t nextIndex) {
   mainIndex_ = nextIndex;
+  redrawRequested_ = true;
 }
 
 void FireOS::back() {
@@ -4987,10 +4960,6 @@ void FireOS::goToBootApp() {
   // future installed-app boot target cannot create a second Home behavior.
   screen_ = Screen::Main;
   mainIndex_ = mainItemAtPosition(0);
-  carouselAnimating_ = false;
-  carouselOffset_ = 0;
-  carouselLastStepAt_ = 0;
-  carouselQueuedDirection_ = 0;
 }
 
 void FireOS::openQuickSettings() {
@@ -9557,7 +9526,7 @@ void FireOS::draw() {
     M5.Display.fillRect(0, 28, 320, 188, kBg);
     bool drawn = false;
     if (!sdImageBuffer_ || sdImageBufferSize_ == 0) {
-      M5.Display.setTextColor(TFT_ORANGE, kBg);
+      M5.Display.setTextColor(kOrange, kBg);
       M5.Display.drawString("Image buffer unavailable", 24, 100);
       sdImageRendered_ = true;
       return;
@@ -9573,7 +9542,7 @@ void FireOS::draw() {
                                  300, 182, 0, 0, 1.0f, 0.0f);
     }
     if (!drawn) {
-      M5.Display.setTextColor(TFT_ORANGE, kBg);
+      M5.Display.setTextColor(kOrange, kBg);
       M5.Display.drawString("Image preview failed", 24, 100);
     }
     sdImageRendered_ = true;
@@ -9662,14 +9631,13 @@ void FireOS::drawScreen(Screen screen) {
 
 void FireOS::drawStatusBar(const char* title) {
   (void)title;
-  ui.fillRect(0, 0, 320, 28, kPanel);
-  const String statusDateTime = dateTime_.statusDateTime();
-  const String clock = statusDateTime.substring(0, 5);
-  drawText(6, 9, clock, TFT_WHITE, 1, kPanel);
-  drawText(7, 9, clock, TFT_WHITE, 1, kPanel);  // compact bold clock
-  ui.setTextDatum(MC_DATUM);
-  drawText(160, 14, statusDateTime.substring(8), TFT_WHITE, 1, kPanel);
   ui.setTextDatum(TL_DATUM);
+  ui.fillRect(0, 0, 320, 28, kBg);
+  ui.drawFastHLine(10, 27, 300, FireUI::Border);
+  const String statusDateTime = dateTime_.statusDateTime();
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::text(surface, 10, 7, statusDateTime.substring(0, 5).c_str(), kText, "ui12b", 48);
+  FireUI::text(surface, 72, 7, statusDateTime.substring(8).c_str(), kMuted, "ui12", 138, 1);
   const uint8_t wifiState = WiFi.status() == WL_CONNECTED
                                 ? 2
                                 : (wifiConnectActive_ || wifiScanActive_ ||
@@ -9714,247 +9682,93 @@ void FireOS::drawStatusBar(const char* title) {
 }
 
 void FireOS::drawFooter(const char* left, const char* middle, const char* right) {
-  ui.fillRect(0, 216, 320, 24, kPanel);
-  drawText(8, 222, cleanFooterLabel(left), kMuted, 1, kPanel);
-  ui.setTextDatum(MC_DATUM);
-  drawText(160, 222, cleanFooterLabel(middle), TFT_WHITE, 1, kPanel);
-  ui.setTextDatum(MR_DATUM);
-  drawText(312, 222, cleanFooterLabel(right), kMuted, 1, kPanel);
+  const String a = cleanFooterLabel(left), b = cleanFooterLabel(middle), c = cleanFooterLabel(right);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::footer(surface, a.c_str(), b.c_str(), c.c_str());
   ui.setTextDatum(TL_DATUM);
 }
 
 void FireOS::drawMain() {
-  drawStatusBar(safeMode_ ? "FIRE OS  SAFE" : "FIRE OS");
-  // Visibility can change in Menu Layout while the previous carousel index is
-  // still cached. Normalize before drawing so a hidden card is never shown at
-  // boot or after returning Home.
-  if (mainIndex_ < kSystemMainCount && !mainVisible_[mainIndex_])
-    mainIndex_ = mainItemAtPosition(0);
-  constexpr int32_t kLargeCard = 150;
-  constexpr int32_t kSmallCard = 58;
-  constexpr int32_t kCenterX = 160;
-  constexpr int32_t kCenterY = 120;
-  if (carouselAnimating_) {
-    const uint8_t previous = nextVisibleMain(carouselToIndex_, -1);
-    const uint8_t next = nextVisibleMain(carouselToIndex_, 1);
-    if (visibleMainCount() > 1) {
-      drawMainCard(previous, 48 - kSmallCard / 2, kCenterY - kSmallCard / 2,
-                   kSmallCard);
-      drawMainCard(next, 272 - kSmallCard / 2, kCenterY - kSmallCard / 2,
-                   kSmallCard);
-    }
-    const int32_t oldSize = kLargeCard -
-                            (kLargeCard - kSmallCard) * carouselOffset_ /
-                                kCarouselDistance;
-    const int32_t newSize = kSmallCard +
-                            (kLargeCard - kSmallCard) * carouselOffset_ /
-                                kCarouselDistance;
-    const int32_t oldCenter = kCenterX + carouselDirection_ * carouselOffset_;
-    const int32_t newCenter = kCenterX - carouselDirection_ *
-                                          (kCarouselDistance - carouselOffset_);
-    drawMainCard(carouselFromIndex_, oldCenter - oldSize / 2,
-                 kCenterY - oldSize / 2, oldSize);
-    drawMainCard(carouselToIndex_, newCenter - newSize / 2,
-                 kCenterY - newSize / 2, newSize);
-  } else {
-    const uint8_t previous = nextVisibleMain(mainIndex_, -1);
-    const uint8_t next = nextVisibleMain(mainIndex_, 1);
-    if (visibleMainCount() > 1) {
-      drawMainCard(previous, 48 - kSmallCard / 2, kCenterY - kSmallCard / 2,
-                   kSmallCard);
-      drawMainCard(next, 272 - kSmallCard / 2, kCenterY - kSmallCard / 2,
-                   kSmallCard);
-    }
-    drawMainCard(mainIndex_, kCenterX - kLargeCard / 2,
-                 kCenterY - kLargeCard / 2, kLargeCard);
+  drawStatusBar(safeMode_ ? "FIRE OS SAFE" : "FIRE OS");
+  const uint8_t count = max<uint8_t>(1, visibleMainCount());
+  uint8_t position = 0;
+  bool found = false;
+  for (uint8_t i = 0; i < count; ++i) {
+    if (mainItemAtPosition(i) == mainIndex_) { position = i; found = true; break; }
   }
+  if (!found) mainIndex_ = mainItemAtPosition(0);
+  const uint8_t page = position / 4;
+  const uint8_t pages = max<uint8_t>(1, (count + 3) / 4);
+  drawText(14, 36, safeMode_ ? "Safe mode" : "FIRE OS", kMuted, 1);
+  ui.setTextDatum(TR_DATUM);
+  drawText(306, 36, String(page + 1) + " / " + String(pages), kMuted, 1);
   ui.setTextDatum(TL_DATUM);
-  const uint8_t count = visibleMainCount();
-  const int firstDot = 160 - static_cast<int>(count - 1) * 5;
-  for (uint8_t position = 0; position < count; ++position) {
-    const uint8_t item = mainItemAtPosition(position);
-    const uint16_t color = item == 0 ? kCyan
-                          : item == 1 ? kPurple
-                          : item == 2 ? kOrange
-                          : item == 3 ? kGreen
-                          : kCyan;
-    ui.fillCircle(firstDot + position * 10, 207, 3,
-                  item == mainIndex_ ? color : kMuted);
-  }
-  if (false && buildNoticeActive_) {
-    ui.fillRoundRect(22, 48, 276, 112, 10, kPanel);
-    ui.setTextDatum(MC_DATUM);
-    drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
-    String notice = buildNoticeName_.length() > 0 ? buildNoticeName_ : "Ny versjon";
-    drawText(160, 88, notice, kText, 1, kPanel);
-    drawText(160, 108, compactStatusText(buildNoticeMessage_), kMuted, 1,
-             kPanel);
-    drawText(82, 140, "Åpne", kCyan, 1, kPanel);
-    drawText(238, 140, "Avbryt", kMuted, 1, kPanel);
-    ui.setTextDatum(TL_DATUM);
-  }
-  if (false && buildNoticeActive_) {
-    ui.fillRoundRect(22, 48, 276, 112, 10, kPanel);
-    ui.setTextDatum(MC_DATUM);
-    drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
-    String notice = buildNoticeName_.length() > 0 ? buildNoticeName_ : "Ny versjon";
-    drawText(160, 88, notice, kText, 1, kPanel);
-    drawText(160, 108, compactStatusText(buildNoticeMessage_), kMuted, 1,
-             kPanel);
-    drawText(82, 140, "Åpne", kCyan, 1, kPanel);
-    drawText(238, 140, "Avbryt", kMuted, 1, kPanel);
-    ui.setTextDatum(TL_DATUM);
+  for (uint8_t cell = 0; cell < 4; ++cell) {
+    const uint8_t at = page * 4 + cell;
+    if (at >= count) break;
+    const uint8_t item = mainItemAtPosition(at);
+    drawMainCard(item, 12 + (cell % 2) * 152, 56 + (cell / 2) * 77,
+                 item == mainIndex_);
   }
   drawFooter("Previous", "Open", "Next");
 }
 
 void FireOS::drawBuildNoticeOverlay() {
-  ui.fillRoundRect(22, 48, 276, 112, 10, kPanel);
-  ui.setTextDatum(MC_DATUM);
-  drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
-  String notice = buildNoticeName_.length() > 0 ? buildNoticeName_ : "Ny versjon";
-  drawText(160, 88, clipUtf8(notice, 28), kText, 1, kPanel);
-  drawText(160, 108, compactStatusText(buildNoticeMessage_), kMuted, 1, kPanel);
-  drawText(82, 140, buildNoticePackageId_.length()?"Kjør":"Åpne", kCyan, 1, kPanel);
-  drawText(238, 140, "Avbryt", kMuted, 1, kPanel);
-  ui.setTextDatum(TL_DATUM);
-  drawFooter("", buildNoticePackageId_.length()?"Kjør":"Åpne", "Avbryt");
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::panel(surface, 20, 48, 280, 140);
+  FireUI::icon(surface, "icon.circle-check", 36, 64, kGreen, 24);
+  FireUI::text(surface, 72, 66, "Appen er klar", kText, "ui16", 208);
+  const String name = buildNoticeName_.length() ? buildNoticeName_ : String("Ny versjon");
+  FireUI::text(surface, 36, 100, name.c_str(), kText, "ui12b", 248);
+  const String status = compactStatusText(buildNoticeMessage_);
+  FireUI::text(surface, 36, 123, status.c_str(), kMuted, "ui12", 248);
+  FireUI::pill(surface, 36, 153, 114, buildNoticePackageId_.length() ? "Kjør app" : "Åpne", kCyan);
+  FireUI::pill(surface, 164, 153, 120, "Avbryt", kMuted);
+  drawFooter("", buildNoticePackageId_.length() ? "Kjør" : "Åpne", "Avbryt");
 }
 
-void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size) {
-  const uint16_t accent = item == 0 ? kCyan
-                        : item == 1 ? kPurple
-                        : item == 2 ? kOrange
-                        : item == 3 ? kGreen
-                        : item >= kSystemMainCount ? kCyan
-                                                    : kCyan;
-  const bool large = size >= 100;
-  const int32_t centerX = x + size / 2;
-  const int32_t centerY = y + size / 2;
-  const int32_t iconCenterY = large ? centerY : y + size - 20;
-  ui.setTextDatum(MC_DATUM);
-  String title = item == 0 ? "Apps"
-                : item == 1 ? "Settings"
-                : item == 2 ? "Power"
-                : item == 3 ? "Files"
-                : item == 4 ? "AI Developer"
-                : item == 5 ? "Home"
-                : (item - kSystemMainCount < luaAppCount_
-                       ? luaAppDisplayNames_[item - kSystemMainCount]
-                       : String("App"));
-  if (title.length() > (large ? 14 : 9))
-    title = title.substring(0, large ? 14 : 9);
-  drawText(centerX, y + (large ? 20 : 11), title, TFT_WHITE,
-           large ? 2 : 1, kBg);
-  const int iconSize = large ? 78 : 36;
-  ui.fillRoundRect(centerX - iconSize / 2, iconCenterY - iconSize / 2,
-                   iconSize, iconSize, large ? 10 : 6, kBg);
-  ui.drawRoundRect(centerX - iconSize / 2, iconCenterY - iconSize / 2,
-                   iconSize, iconSize, large ? 10 : 6, accent);
-
-  if (item == 0) {
-    const int tile = large ? 22 : 9;
-    const int gap = large ? 5 : 3;
-    const int startX = centerX - tile - gap / 2;
-    const int startY = iconCenterY - tile - gap / 2;
-    for (uint8_t row = 0; row < 2; ++row) {
-      for (uint8_t column = 0; column < 2; ++column) {
-        ui.fillRoundRect(startX + column * (tile + gap),
-                         startY + row * (tile + gap), tile, tile,
-                         large ? 5 : 3, accent);
-      }
-    }
-  } else if (item == 1) {
-    const int radius = large ? 25 : 12;
-    ui.drawCircle(centerX, iconCenterY, radius, accent);
-    ui.drawCircle(centerX, iconCenterY, large ? 9 : 5, accent);
-    const int tooth = large ? 10 : 6;
-    ui.fillRect(centerX - tooth / 2, iconCenterY - radius - 4, tooth, tooth,
-                accent);
-    ui.fillRect(centerX - tooth / 2, iconCenterY + radius - 5, tooth, tooth,
-                accent);
-    ui.fillRect(centerX - radius - 4, iconCenterY - tooth / 2, tooth, tooth,
-                accent);
-    ui.fillRect(centerX + radius - 5, iconCenterY - tooth / 2, tooth, tooth,
-                accent);
-  } else if (item == 2) {
-    const int radius = large ? 26 : 13;
-    ui.drawCircle(centerX, iconCenterY, radius, accent);
-    ui.drawLine(centerX, iconCenterY - radius - 8, centerX, iconCenterY, accent);
-    ui.drawArc(centerX, iconCenterY, radius - 5, radius - 5, 45, 315, accent);
-  } else if (item == 3) {
-    const int width = large ? 54 : 26;
-    const int height = large ? 42 : 21;
-    ui.drawRoundRect(centerX - width / 2, iconCenterY - height / 2,
-                     width, height, large ? 5 : 3, accent);
-    ui.drawLine(centerX - width / 2, iconCenterY - height / 2 + 7,
-                centerX + width / 2, iconCenterY - height / 2 + 7, accent);
-    ui.drawLine(centerX - width / 2 + 8, iconCenterY - height / 2,
-                centerX - width / 2 + 14, iconCenterY - height / 2 - 6,
-                accent);
-  } else if (item == 4) {
-    const int radius = large ? 25 : 12;
-    ui.drawCircle(centerX, iconCenterY, radius, accent);
-    ui.fillCircle(centerX - (large ? 9 : 5), iconCenterY - (large ? 5 : 3),
-                  large ? 4 : 2, accent);
-    ui.fillCircle(centerX + (large ? 9 : 5), iconCenterY - (large ? 5 : 3),
-                  large ? 4 : 2, accent);
-    ui.drawArc(centerX, iconCenterY + (large ? 5 : 3), large ? 14 : 7,
-               large ? 8 : 4, 205, 335, accent);
-  } else {
-    const int dot = large ? 9 : 4;
-    const int gap = large ? 16 : 8;
-    for (uint8_t row = 0; row < 2; ++row) {
-      for (uint8_t column = 0; column < 2; ++column) {
-        ui.fillCircle(centerX - gap / 2 + column * gap,
-                      iconCenterY - gap / 2 + row * gap, dot / 2, accent);
-      }
-    }
-  }
-
-  ui.setTextDatum(TL_DATUM);
+void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, bool selected) {
+  const uint16_t accent = item == 1 ? kPurple : item == 2 ? kOrange :
+                          item == 3 ? kGreen : item == 5 ? FireUI::Blue : kCyan;
+  const String title = item == 0 ? "Apps" : item == 1 ? "Settings" :
+                 item == 2 ? "Power" : item == 3 ? "Files" :
+                 item == 4 ? "AI Developer" : item == 5 ? "Home" :
+                 item - kSystemMainCount < luaAppCount_ ?
+                   luaAppDisplayNames_[item - kSystemMainCount] : String("App");
+  const char* icon = item == 0 ? "icon.layout-grid" : item == 1 ? "icon.settings" :
+                     item == 2 ? "icon.power" : item == 3 ? "icon.folder" :
+                     item == 4 ? "icon.sparkles" : item == 5 ? "icon.house" : "icon.code";
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::tile(surface, x, y, 144, 70, title.c_str(), icon, accent, selected);
 }
 
 void FireOS::drawApps() {
   drawStatusBar("Apps");
-  drawText(16, 35, "SD /apps", kMuted, 1);
+  drawText(16, 35, "Applications", kText, 2);
   const uint8_t appCount = externalAppCount_ + luaAppCount_;
   const uint8_t itemCount = appCount + 1;
   const uint8_t visible = min<uint8_t>(5, itemCount - externalAppOffset_);
   for (uint8_t row = 0; row < visible; ++row) {
     const uint8_t item = externalAppOffset_ + row;
-    const int y = 60 + row * 25;
+    const int y = 60 + row * 27;
     const bool selected = item == externalAppSelection_;
-    if (selected) ui.fillRoundRect(12, y - 3, 296, 21, 4, kCyan);
+    fire_canvas_fill::Surface<M5Canvas> surface(ui);
     if (item == appCount) {
-      drawText(22, y + 1, "Back", selected ? kBg : kText, 1,
-               selected ? kCyan : kBg);
+      FireUI::menuRow(surface, y, "Back", "", selected, "icon.chevron-left");
       continue;
     }
     const bool luaApp = item >= externalAppCount_;
     const uint8_t appIndex = luaApp ? item - externalAppCount_ : item;
-    String name = luaApp ? luaAppNames_[appIndex] : externalAppNames_[appIndex];
-    if (name.length() > 28) name = name.substring(0, 25) + "...";
-    const uint16_t nameColor = selected
-                                   ? kBg
-                                   : (luaApp || externalAppCompatible_[appIndex] ? kText
-                                                                   : kOrange);
-    drawText(22, y + 1, name, nameColor, 1,
-             selected ? kCyan : kBg);
-    ui.setTextDatum(MR_DATUM);
-    drawText(300, y + 1,
-             luaApp ? "Lua" : formatBytes(externalAppSizes_[appIndex]),
-             selected ? kBg
-                      : (luaApp || externalAppCompatible_[appIndex] ? kMuted : kOrange),
-             1, selected ? kCyan : kBg);
-    ui.setTextDatum(TL_DATUM);
+    const String& name = luaApp ? luaAppNames_[appIndex] : externalAppNames_[appIndex];
+    const String value = luaApp ? "Lua" : formatBytes(externalAppSizes_[appIndex]);
+    FireUI::menuRow(surface, y, name.c_str(), value.c_str(), selected,
+                    luaApp ? "icon.code" : "icon.package");
+    if (!luaApp && !externalAppCompatible_[appIndex])
+      ui.fillCircle(301, y + 5, 3, kOrange);
   }
-  if (appCount == 0)
-    drawText(18, 182, "No apps in /apps; select Back", kMuted, 1);
-  if (externalAppMessage_.length() > 0) {
-    drawText(16, 190, externalAppMessage_, kOrange, 1);
-  }
-  drawFooter("A  UP", "B  OPEN", "DOWN  C");
+  if (externalAppMessage_.length()) drawText(16, 199, compactStatusText(externalAppMessage_), kOrange, 1);
+  else if (!appCount) drawText(16, 199, "No apps in /apps", kMuted, 1);
+  drawFooter("Previous", "Open", "Next");
 }
 
 void FireOS::drawSettings() {
@@ -9994,7 +9808,7 @@ void FireOS::drawDateTime() {
                                  "Day",       "Hour",     "Minute", "Timezone",
                                  "Summer time", "Save",    "Back"};
   drawStatusBar("Date / Time");
-  drawText(16, 31, dateTime_.localDateTime(), TFT_WHITE, 1);
+  drawText(16, 31, dateTime_.localDateTime(), kText, 1);
   String status = timeSyncPending_ ? timeSyncStatus_ : timeSyncLast_;
   if (!timeSyncPending_ && status.length() > 0) {
     status = "Last Wi-Fi sync: " + status;
@@ -10012,12 +9826,12 @@ void FireOS::drawDateTime() {
     const int y = 62 + row * 14;
     const bool selected = row == dateField_;
     const uint16_t highlight = dateEditing_ && row == dateField_ ? kOrange : kCyan;
-    if (selected) ui.fillRoundRect(10, y - 1, 300, 14, 4, highlight);
-    drawText(18, y + 1, fields[row], selected ? kBg : kText, 1,
-             selected ? highlight : kBg);
+    if (selected) drawSelection(10, y - 1, 300, 14, highlight);
+    drawText(18, y + 1, fields[row], kText, 1,
+             selected ? FireUI::Selected : kBg);
     ui.setTextDatum(MR_DATUM);
-    drawText(302, y + 1, values[row], selected ? kBg : TFT_WHITE, 1,
-             selected ? highlight : kBg);
+    drawText(302, y + 1, values[row], kText, 1,
+             selected ? FireUI::Selected : kBg);
     ui.setTextDatum(TL_DATUM);
   }
   drawFooter("Previous", dateEditing_ ? "Finish" : "Edit", "Next");
@@ -10042,15 +9856,15 @@ void FireOS::drawDisplaySound() {
 void FireOS::drawWifi() {
   drawStatusBar("Wi-Fi");
   if (wifiSavedDialog_) {
-    ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
-    drawText(24, 42, "Saved networks", TFT_WHITE, 2, kPanel);
+    drawPanel(12, 32, 296, 180);
+    drawText(24, 42, "Saved networks", kText, 2, kPanel);
     const uint8_t itemCount = wifiSavedCount_ + 4;
     const int visible = min<int>(itemCount - wifiSavedOffset_, 6);
     for (int row = 0; row < visible; ++row) {
       const uint8_t item = wifiSavedOffset_ + row;
       const int y = 67 + row * 22;
       const bool selected = item == wifiSavedSelection_;
-      if (selected) ui.fillRoundRect(18, y - 4, 284, 19, 4, kCyan);
+      if (selected) drawSelection(18, y - 4, 284, 19, kCyan);
       String label;
       if (item < wifiSavedCount_) {
         label = wifiSavedSsid_[item];
@@ -10063,16 +9877,16 @@ void FireOS::drawWifi() {
       } else {
         label = "Back";
       }
-      drawText(24, y, label, selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+      drawText(24, y, label, kText, 1,
+               selected ? FireUI::Selected : kPanel);
     }
     if (wifiSavedCount_ == 0) drawText(24, 67, "No saved networks", kMuted, 1, kPanel);
     drawFooter("Previous", "Select / Connect", "Next");
     return;
   }
   if (wifiScanDialog_) {
-    ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
-    drawText(24, 42, "Networks found", TFT_WHITE, 2, kPanel);
+    drawPanel(12, 32, 296, 180);
+    drawText(24, 42, "Networks found", kText, 2, kPanel);
     const int visible = min(wifiScanCount_ - static_cast<int>(wifiScanOffset_), 5);
     for (int row = 0; row < visible; ++row) {
       const int index = wifiScanOffset_ + row;
@@ -10081,13 +9895,13 @@ void FireOS::drawWifi() {
       if (ssid.length() > 25) ssid = ssid.substring(0, 25);
       const int y = 76 + row * 23;
       if (index == wifiScanSelection_) {
-        ui.fillRoundRect(18, y - 4, 284, 20, 4, kCyan);
+        drawSelection(18, y - 4, 284, 20, kCyan);
       }
-      drawText(24, y, ssid, index == wifiScanSelection_ ? kBg : kText, 1,
-               index == wifiScanSelection_ ? kCyan : kPanel);
+      drawText(24, y, ssid, kText, 1,
+               index == wifiScanSelection_ ? FireUI::Selected : kPanel);
       drawText(270, y, String(WiFi.RSSI(index)),
-               index == wifiScanSelection_ ? kBg : kMuted, 1,
-               index == wifiScanSelection_ ? kCyan : kPanel);
+               index == wifiScanSelection_ ? kText : kMuted, 1,
+               index == wifiScanSelection_ ? FireUI::Selected : kPanel);
     }
     if (visible == 0) drawText(24, 85, "No networks found", kMuted, 1, kPanel);
     if (wifiScanCount_ > 5) {
@@ -10101,8 +9915,8 @@ void FireOS::drawWifi() {
   }
 
   if (wifiSetupActive_) {
-    ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
-    drawText(24, 41, "Mobile Wi-Fi setup", TFT_WHITE, 2, kPanel);
+    drawPanel(12, 32, 296, 180);
+    drawText(24, 41, "Mobile Wi-Fi setup", kText, 2, kPanel);
     const String url = "http://" + WiFi.softAPIP().toString() +
                        "/?token=" + wifiSetupToken_;
     ui.qrcode(url, 190, 60, 112, 4);
@@ -10186,10 +10000,10 @@ void FireOS::drawBluetooth() {
 }
 
 void FireOS::drawBluetoothScanDialog() {
-  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
+  drawPanel(8, 31, 304, 181);
   ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
   drawText(18, 39, bluetoothUnknownDialog_ ? "Unknown devices" : "BLE devices",
-           TFT_WHITE, 2, kPanel);
+           kText, 2, kPanel);
 
   const uint8_t deviceCount = bluetoothDeviceListCount(bluetoothUnknownDialog_);
   if (deviceCount == 0) {
@@ -10201,7 +10015,7 @@ void FireOS::drawBluetoothScanDialog() {
       const uint8_t item = bluetoothScanOffset_ + row;
       const bool selected = item == bluetoothScanSelection_;
       const int y = 64 + row * 25;
-      if (selected) ui.fillRoundRect(15, y - 3, 290, 21, 4, kCyan);
+      if (selected) drawSelection(15, y - 3, 290, 21, kCyan);
       const int8_t deviceIndex =
           bluetoothDeviceListIndex(item, bluetoothUnknownDialog_);
       String name;
@@ -10214,21 +10028,21 @@ void FireOS::drawBluetoothScanDialog() {
         name = bluetoothNames_[deviceIndex];
         signal = String(bluetoothRssi_[deviceIndex]) + " dBm";
       }
-      if (name.length() > 23) name = name.substring(0, 23);
-      drawText(22, y + 1, name, selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+
+      drawText(22, y + 1, name, kText, 1,
+               selected ? FireUI::Selected : kPanel);
       ui.setTextDatum(MR_DATUM);
       drawText(298, y + 1, signal,
-               selected ? kBg : kMuted, 1, selected ? kCyan : kPanel);
+               selected ? kText : kMuted, 1, selected ? FireUI::Selected : kPanel);
       ui.setTextDatum(TL_DATUM);
     }
   }
 
   const uint8_t backItem = deviceCount;
   const bool backSelected = bluetoothScanSelection_ == backItem;
-  if (backSelected) ui.fillRoundRect(15, 188, 290, 18, 4, kCyan);
-  drawText(22, 191, "Back", backSelected ? kBg : kText, 1,
-           backSelected ? kCyan : kPanel);
+  if (backSelected) drawSelection(15, 188, 290, 18, kCyan);
+  drawText(22, 191, "Back", kText, 1,
+           backSelected ? FireUI::Selected : kPanel);
   ui.setTextDatum(MC_DATUM);
   drawText(160, 204, bluetoothUnknownDialog_ ? "A/C move   B pair/back"
                                              : "A/C move   B select",
@@ -10237,9 +10051,9 @@ void FireOS::drawBluetoothScanDialog() {
 }
 
 void FireOS::drawBluetoothSavedDialog() {
-  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
+  drawPanel(8, 31, 304, 181);
   ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
-  drawText(18, 39, "Saved devices", TFT_WHITE, 2, kPanel);
+  drawText(18, 39, "Saved devices", kText, 2, kPanel);
 
   const uint8_t itemCount = bluetoothSavedCount_ + 2;
   const uint8_t visible = min<uint8_t>(5, itemCount - bluetoothSavedOffset_);
@@ -10247,7 +10061,7 @@ void FireOS::drawBluetoothSavedDialog() {
     const uint8_t item = bluetoothSavedOffset_ + row;
     const bool selected = item == bluetoothSavedSelection_;
     const int y = 64 + row * 25;
-    if (selected) ui.fillRoundRect(15, y - 3, 290, 21, 4, kCyan);
+    if (selected) drawSelection(15, y - 3, 290, 21, kCyan);
     String label;
     if (item < bluetoothSavedCount_) {
       label = bluetoothSavedNames_[item];
@@ -10256,9 +10070,9 @@ void FireOS::drawBluetoothSavedDialog() {
     } else {
       label = "Back";
     }
-    if (label.length() > 29) label = label.substring(0, 29);
-    drawText(22, y + 1, label, selected ? kBg : kText, 1,
-             selected ? kCyan : kPanel);
+
+    drawText(22, y + 1, label, kText, 1,
+             selected ? FireUI::Selected : kPanel);
   }
   ui.setTextDatum(MC_DATUM);
   drawText(160, 204, "A/C move   B connect/select", kMuted, 1, kPanel);
@@ -10287,28 +10101,28 @@ void FireOS::drawBoot() {
   drawText(16, 177, "App auto-boot becomes available", kMuted, 1);
   drawText(16, 192, "when the app registry is installed.", kMuted, 1);
   if (bootAppPicker_) {
-    ui.fillRoundRect(12, 32, 296, 180, 10, kPanel);
-    drawText(24, 40, "Choose Boot App", TFT_WHITE, 2, kPanel);
+    drawPanel(12, 32, 296, 180);
+    drawText(24, 40, "Choose Boot App", kText, 2, kPanel);
     const uint8_t itemCount = externalAppCount_ + luaAppCount_ + 1;
     const uint8_t visible = min<uint8_t>(6, itemCount - bootAppOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = bootAppOffset_ + row;
       const bool selected = item == bootAppSelection_;
       const int y = 72 + row * 22;
-      if (selected) ui.fillRoundRect(18, y - 3, 284, 19, 4, kCyan);
+      if (selected) drawSelection(18, y - 3, 284, 19, kCyan);
       String name = "FIRE OS (Default)";
       if (item > 0 && item - 1 < externalAppCount_) {
         name = externalAppNames_[item - 1];
       } else if (item > externalAppCount_) {
         name = luaAppDisplayNames_[item - 1 - externalAppCount_];
       }
-      if (name.length() > 25) name = name.substring(0, 22) + "...";
-      drawText(26, y, name, selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+
+      drawText(26, y, name, kText, 1,
+               selected ? FireUI::Selected : kPanel);
       if (item > externalAppCount_) {
         ui.setTextDatum(MR_DATUM);
-        drawText(298, y, "Lua", selected ? kBg : kCyan, 1,
-                 selected ? kCyan : kPanel);
+        drawText(298, y, "Lua", selected ? kText : kCyan, 1,
+                 selected ? FireUI::Selected : kPanel);
         ui.setTextDatum(TL_DATUM);
       }
     }
@@ -10321,7 +10135,7 @@ void FireOS::drawBoot() {
 void FireOS::drawFirmware() {
   drawStatusBar("Firmware");
   if (firmwareBusy()) {
-    ui.fillRoundRect(12, 44, 296, 142, 12, kPanel);
+    drawPanel(12, 44, 296, 142);
     drawText(24, 58, "Firmwareoppdatering", kCyan, 2, kPanel);
     const String status = ota_.busy() ? ota_.message() : firmwareMessage_;
     drawText(24, 101, status.substring(0, 42), kText, 1, kPanel);
@@ -10344,22 +10158,22 @@ void FireOS::drawFirmware() {
     drawFooter("Avbryt", "Vent", "Vent"); return;
   }
   if (firmwareInstallConfirm_) {
-    ui.fillRoundRect(14, 40, 292, 150, 12, kPanel);
+    drawPanel(14, 40, 292, 150);
     const bool reinstall = firmwareInstallFromGithub_ && firmwareGithubRelease_.version == kFirmwareVersion;
     drawText(28, 52, reinstall ? "Reinstaller firmware?" : "Installer firmware?", kOrange, 2, kPanel);
     String name = firmwareInstallFromGithub_ ? firmwareGithubRelease_.version : sdBaseName(firmwarePendingSdPath_);
-    if (name.length() > 28) name = name.substring(0,25) + "...";
-    drawText(28, 88, name, TFT_WHITE, 1, kPanel);
+
+    drawText(28, 88, name, kText, 1, kPanel);
     drawText(28, 114, firmwareInstallFromGithub_ ? "Hentes direkte fra GitHub" : "Kontrollerer signert SD-kopi", kMuted, 1, kPanel);
     drawText(28, 138, "Installerer og starter pa nytt", kCyan, 1, kPanel);
     drawFooter("Avbryt", reinstall ? "Reinstaller" : "Installer", "Avbryt"); return;
   }
   if (firmwareGithubOverwriteConfirm_) {
-    ui.fillRoundRect(12, 44, 296, 142, 12, kPanel);
+    drawPanel(12, 44, 296, 142);
     drawText(26, 56, "Last ned til SD?", kOrange, 2, kPanel);
     String name = firmwareGithubRelease_.name;
-    if (name.length() > 28) name = name.substring(0,25) + "...";
-    drawText(26, 92, name, TFT_WHITE, 1, kPanel);
+
+    drawText(26, 92, name, kText, 1, kPanel);
     drawText(26, 116, "Lagrer uten installering/omstart", kMuted, 1, kPanel);
     drawText(26, 137, "Gammel kopi beholdes som backup", kMuted, 1, kPanel);
     drawFooter("Avbryt", "Last ned", "Avbryt"); return;
@@ -10370,34 +10184,20 @@ void FireOS::drawFirmware() {
         "Reinstaller direkte fra GitHub" : "Installer direkte fra GitHub", "Last ned til SD", "Tilbake"};
     for (uint8_t i=0; i<3; ++i) {
       const int y = 85 + i*28; const bool selected = i == firmwareGithubActionIndex_;
-      if (selected) ui.fillRoundRect(10,y-4,300,23,4,kCyan);
-      drawText(20,y,actions[i],selected?kBg:kText,1,selected?kCyan:kBg);
+      if (selected) drawSelection(10,y-4,300,23, kCyan);
+      drawText(20,y,actions[i],selected? kText :kText,1,selected ? FireUI::Selected :kBg);
     }
     drawFooter("Forrige", "Velg", "Neste"); return;
   }
   if (firmwareGithubDialog_) { drawGithubFirmwareDialog(); return; }
   if (firmwareSdDialog_) { drawSdFirmwareDialog(); return; }
-  drawText(16, 34, "Running", kCyan, 1);
-  drawText(16, 48, firmwareVersionLabel(), TFT_WHITE, 2);
-
-  const uint8_t itemCount = 3;
-  const uint8_t visible = min<uint8_t>(3, itemCount - firmwareOffset_);
-  for (uint8_t row = 0; row < visible; ++row) {
-    const uint8_t item = firmwareOffset_ + row;
-    const bool selected = item == firmwareSelection_;
-    const int y = 70 + row * 22;
-    if (selected) ui.fillRoundRect(10, y - 3, 300, 19, 4, kCyan);
-    if (item == 0) {
-      drawText(20, y, "Oppdater fra GitHub", selected ? kBg : kText, 1,
-               selected ? kCyan : kBg);
-    } else if (item == 1) {
-      drawText(20, y, "Installer fra SD", selected ? kBg : kText, 1,
-               selected ? kCyan : kBg);
-    } else {
-      drawText(20, y, "Back", selected ? kBg : kText, 1,
-               selected ? kCyan : kBg);
-    }
-  }
+  drawText(16, 35, "Firmware", kText, 2);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  const String version = firmwareVersionLabel();
+  FireUI::pill(surface, 136, 34, 170, version.c_str(), kMuted);
+  drawRow(0, "Oppdater fra GitHub", firmwareSelection_ == 0);
+  drawRow(1, "Installer fra SD", firmwareSelection_ == 1);
+  drawRow(2, "Back", firmwareSelection_ == 2);
 
   String status = firmwareStorage_ && firmwareStorage_->busy()
                       ? firmwareStorage_->status()
@@ -10410,120 +10210,73 @@ void FireOS::drawFirmware() {
 }
 
 void FireOS::drawSdFirmwareDialog() {
-  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
-  ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
-  drawText(18, 39, "Installer fra SD", TFT_WHITE, 2, kPanel);
-  const uint8_t itemCount = firmwareCount_ + 1;
-  if (firmwareCount_ == 0) {
-    ui.setTextDatum(MC_DATUM);
-    drawText(160, 105, sdReady_ ? "No .bin files" : "SD not detected",
-             kMuted, 1, kPanel);
-    ui.setTextDatum(TL_DATUM);
-  } else {
-    const uint8_t visible = min<uint8_t>(5, itemCount - firmwareOffset_);
-    for (uint8_t row = 0; row < visible; ++row) {
-      const uint8_t item = firmwareOffset_ + row;
-      const bool selected = item == firmwareSelection_;
-      const int y = 68 + row * 25;
-      if (selected) ui.fillRoundRect(15, y - 3, 290, 21, 4, kCyan);
-      if (item < firmwareCount_) {
-        String name = firmwareNames_[item];
-        if (name.length() > 22) name = name.substring(0, 19) + "...";
-        drawText(22, y, name, selected ? kBg : kText, 1,
-                 selected ? kCyan : kPanel);
-        drawText(250, y, "Local", selected ? kBg : kGreen, 1,
-                 selected ? kCyan : kPanel);
-        ui.setTextDatum(MR_DATUM);
-        drawText(300, y, formatBytes(firmwareSizes_[item]),
-                 selected ? kBg : kMuted, 1, selected ? kCyan : kPanel);
-        ui.setTextDatum(TL_DATUM);
-      } else {
-        drawText(22, y, "Back", selected ? kBg : kText, 1,
-                 selected ? kCyan : kPanel);
-      }
-    }
+  drawPanel(8, 31, 304, 181);
+  drawText(18, 39, "Saved firmware", kText, 2, kPanel);
+  const uint8_t visible = min<uint8_t>(5, firmwareCount_ + 1 - firmwareOffset_);
+  for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = firmwareOffset_ + row;
+    const bool selected = item == firmwareSelection_;
+    String name = item < firmwareCount_ ? firmwareNames_[item] : String("Back");
+    if (name.startsWith("fire-os-")) name = name.substring(8);
+    if (name.endsWith(".bin")) name.remove(name.length() - 4);
+    const String value = item < firmwareCount_ ? formatBytes(firmwareSizes_[item]) : String();
+    fire_canvas_fill::Surface<M5Canvas> surface(ui);
+    FireUI::menuRow(surface, 62 + row * 26, name.c_str(), value.c_str(), selected,
+                    item < firmwareCount_ ? "icon.download" : "icon.chevron-left");
   }
-  String status = firmwareMessage_;
-  if (status.length() > 35) status = status.substring(0, 35);
-  ui.setTextDatum(MC_DATUM);
-  drawText(160, 190, status, kMuted, 1, kPanel);
-  ui.setTextDatum(TL_DATUM);
-  drawFooter("A  UP", "B  FLASH", "DOWN  C");
+  const String status = compactStatusText(firmwareMessage_);
+  drawText(18, 197, status, kMuted, 1, kPanel);
+  drawFooter("Previous", "Select", "Next");
 }
 
 void FireOS::drawGithubFirmwareDialog() {
-  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
-  ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
-  drawText(18, 39, "GitHub firmware", TFT_WHITE, 2, kPanel);
-  const uint8_t remoteCount = githubFirmware_ ? githubFirmware_->entryCount() : 0;
-  const uint8_t itemCount = remoteCount + 1;
-  const uint8_t visible = min<uint8_t>(5, itemCount - firmwareGithubOffset_);
-  if (remoteCount == 0 && githubFirmware_ && githubFirmware_->busy()) {
-    ui.setTextDatum(MC_DATUM);
-    drawText(160, 105, "Loading catalog...", kCyan, 1, kPanel);
-    ui.setTextDatum(TL_DATUM);
-  } else if (remoteCount == 0) {
-    ui.setTextDatum(MC_DATUM);
-    drawText(160, 105, "No GitHub files", kOrange, 1, kPanel);
-    ui.setTextDatum(TL_DATUM);
-  } else {
-    for (uint8_t row = 0; row < visible; ++row) {
-      const uint8_t item = firmwareGithubOffset_ + row;
-      const bool selected = item == firmwareGithubSelection_;
-      const int y = 68 + row * 25;
-      if (selected) ui.fillRoundRect(15, y - 3, 290, 21, 4, kCyan);
-      if (item < remoteCount) {
-        String name = githubFirmware_->entryName(item);
-        if (name.length() > 22) name = name.substring(0, 19) + "...";
-        drawText(22, y, name, selected ? kBg : kText, 1,
-                 selected ? kCyan : kPanel);
-        const bool local = sdReady_ && SD.exists("/firmware/" +
-                                                  githubFirmware_->entryName(item));
-        drawText(230, y, local ? "Both" : "Cloud",
-                 selected ? kBg : (local ? kGreen : kCyan), 1,
-                 selected ? kCyan : kPanel);
-        ui.setTextDatum(MR_DATUM);
-        drawText(300, y, formatBytes(githubFirmware_->entrySize(item)),
-                 selected ? kBg : kMuted, 1, selected ? kCyan : kPanel);
-        ui.setTextDatum(TL_DATUM);
-      } else {
-        drawText(22, y, "Back", selected ? kBg : kText, 1,
-                 selected ? kCyan : kPanel);
-      }
-    }
+  drawPanel(8, 31, 304, 181);
+  drawText(18, 39, "GitHub firmware", kText, 2, kPanel);
+  const uint8_t count = githubFirmware_ ? githubFirmware_->entryCount() : 0;
+  const uint8_t visible = min<uint8_t>(5, count + 1 - firmwareGithubOffset_);
+  if (!count) {
+    drawText(24, 94, githubFirmware_ && githubFirmware_->busy() ?
+             "Loading signed catalog" : "No available releases", kMuted, 1, kPanel);
+  } else for (uint8_t row = 0; row < visible; ++row) {
+    const uint8_t item = firmwareGithubOffset_ + row;
+    const bool selected = item == firmwareGithubSelection_;
+    String name = item < count ? githubFirmware_->entryVersion(item) : String("Back");
+    if (name.startsWith("fire-os-")) name = name.substring(8);
+    const String value = item < count ? formatBytes(githubFirmware_->entrySize(item)) : String();
+    const bool local = item < count && sdReady_ && SD.exists("/firmware/" + githubFirmware_->entryName(item));
+    fire_canvas_fill::Surface<M5Canvas> surface(ui);
+    FireUI::menuRow(surface, 62 + row * 26, name.c_str(), value.c_str(), selected,
+                    item == count ? "icon.chevron-left" : local ? "icon.hard-drive" : "icon.download");
   }
-  String status = firmwareMessage_;
-  if (status.length() > 35) status = status.substring(0, 35);
-  ui.setTextDatum(MC_DATUM);
-  drawText(160, 190, status, kMuted, 1, kPanel);
-  ui.setTextDatum(TL_DATUM);
-  drawFooter("A  UP", "B  SELECT", "DOWN  C");
+  const String status = compactStatusText(firmwareMessage_);
+  drawText(18, 197, status, kMuted, 1, kPanel);
+  drawFooter("Previous", "Select", "Next");
 }
 
 void FireOS::drawMainMenuSettings() {
   drawStatusBar("Menu Layout");
   if (luaMenuPicker_) {
-    drawText(16, 37, "Select Lua apps for carousel", kMuted, 1);
+    drawText(16, 37, "Choose apps for the home grid", kMuted, 1);
     const uint8_t itemCount = luaAppCount_ + 1;
     const uint8_t visible = min<uint8_t>(7, itemCount - luaMenuOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = luaMenuOffset_ + row;
       const bool selected = item == luaMenuSelection_;
       const int y = 57 + row * 21;
-      if (selected) ui.fillRoundRect(10, y - 3, 300, 18, 4, kCyan);
+      if (selected) drawSelection(10, y - 3, 300, 18, kCyan);
       if (item < luaAppCount_) {
         String name = luaAppDisplayNames_[item];
-        if (name.length() > 24) name = name.substring(0, 21) + "...";
-        drawText(18, y, name, selected ? kBg : kText, 1,
-                 selected ? kCyan : kBg);
+
+        drawText(18, y, name, kText, 1,
+                 selected ? FireUI::Selected : kBg);
         ui.setTextDatum(MR_DATUM);
         drawText(300, y, luaMenuSelected_[item] ? "Shown" : "Hidden",
-                 selected ? kBg : (luaMenuSelected_[item] ? kGreen : kMuted),
-                 1, selected ? kCyan : kBg);
+                 selected ? kText : (luaMenuSelected_[item] ? kGreen : kMuted),
+                 1, selected ? FireUI::Selected : kBg);
         ui.setTextDatum(TL_DATUM);
       } else {
-        drawText(18, y, "Back", selected ? kBg : kText, 1,
-                 selected ? kCyan : kBg);
+        drawText(18, y, "Back", kText, 1,
+                 selected ? FireUI::Selected : kBg);
       }
     }
     if (luaAppCount_ == 0)
@@ -10531,17 +10284,18 @@ void FireOS::drawMainMenuSettings() {
     drawFooter("Previous", "Toggle", "Next");
     return;
   }
-  drawText(16, 38, "System menu layout", kMuted, 1);
-  drawRow(0, "Apps", detailIndex_ == 0, mainVisible_[0] ? "Visible" : "Hidden");
-  drawRow(1, "Settings", detailIndex_ == 1, mainVisible_[1] ? "Visible" : "Hidden");
-  drawRow(2, "Power", detailIndex_ == 2, mainVisible_[2] ? "Visible" : "Hidden");
-  drawRow(3, "File Explorer", detailIndex_ == 3,
-          mainVisible_[3] ? "Visible" : "Hidden");
-  drawRow(4, "AI Developer", detailIndex_ == 4,
-          mainVisible_[4] ? "Visible" : "Hidden");
-  drawRow(5, "Show selected apps", detailIndex_ == 5);
-  drawRow(6, "Back", detailIndex_ == 6);
-  drawText(16, 192, "B toggles visibility.", kMuted, 1);
+  drawText(16, 34, "System menu layout", kText, 2);
+  drawText(16, 49, "B toggles visibility", kMuted, 1);
+  const char* labels[] = {"Apps", "Settings", "Power", "Files", "AI Developer",
+                          "Show selected apps", "Back"};
+  const String values[] = {mainVisible_[0] ? "Visible" : "Hidden",
+      mainVisible_[1] ? "Visible" : "Hidden", mainVisible_[2] ? "Visible" : "Hidden",
+      mainVisible_[3] ? "Visible" : "Hidden", mainVisible_[4] ? "Visible" : "Hidden", "", ""};
+  const uint8_t first = detailIndex_ < 6 ? 0 : detailIndex_ - 5;
+  for (uint8_t row = 0; row < 6 && first + row < 7; ++row) {
+    const uint8_t item = first + row;
+    drawRow(row, labels[item], item == detailIndex_, values[item]);
+  }
   drawFooter("Previous", "Select", "Next");
 }
 
@@ -10558,21 +10312,21 @@ void FireOS::drawShortcuts() {
   for (uint8_t row = 0; row < 7; ++row) {
     const int y = 53 + row * 22;
     const bool selected = row == detailIndex_;
-    if (selected) ui.fillRoundRect(10, y - 2, 300, 19, 5, kCyan);
-    drawText(20, y + 2, labels[row], selected ? kBg : kText, 1,
-             selected ? kCyan : kBg);
+    if (selected) drawSelection(10, y - 2, 300, 19, kCyan);
+    drawText(20, y + 2, labels[row], kText, 1,
+             selected ? FireUI::Selected : kBg);
     if (values[row].length() > 0) {
       ui.setTextDatum(MR_DATUM);
       String value = values[row];
       if (value.length() > 17) value = value.substring(0, 14) + "...";
-      drawText(300, y + 2, value, selected ? kBg : kMuted, 1,
-               selected ? kCyan : kBg);
+      drawText(300, y + 2, value, selected ? kText : kMuted, 1,
+               selected ? FireUI::Selected : kBg);
       ui.setTextDatum(TL_DATUM);
     }
   }
   if (shortcutPicker_) {
-    ui.fillRoundRect(12, 32, 296, 180, 10, kPanel);
-    drawText(24, 40, "Choose shortcut", TFT_WHITE, 2, kPanel);
+    drawPanel(12, 32, 296, 180);
+    drawText(24, 40, "Choose shortcut", kText, 2, kPanel);
     const uint8_t actionCount = shortcutActionCount();
     const uint8_t visible = min<uint8_t>(7, actionCount - shortcutPickerOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
@@ -10580,11 +10334,11 @@ void FireOS::drawShortcuts() {
       const uint8_t action = shortcutActionAtPosition(position);
       const int y = 70 + row * 19;
       const bool selected = action == shortcutPickerAction_;
-      if (selected) ui.fillRoundRect(18, y - 3, 284, 17, 4, kCyan);
+      if (selected) drawSelection(18, y - 3, 284, 17, kCyan);
       String label = shortcutActionLabel(action);
-      if (label.length() > 27) label = label.substring(0, 24) + "...";
-      drawText(26, y, label, selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+
+      drawText(26, y, label, kText, 1,
+               selected ? FireUI::Selected : kPanel);
     }
   }
   drawFooter("Previous", "Select", "Next");
@@ -10592,11 +10346,11 @@ void FireOS::drawShortcuts() {
 
 void FireOS::drawAiDeveloper() {
   // AI Developer is intentionally immersive: no system status bar or panel.
-  ui.fillSprite(TFT_BLACK);
+  ui.fillSprite(kBg);
   if (aiProjectPickerActive_) {
-    ui.fillRoundRect(12, 28, 296, 188, 12, kPanel);
+    drawPanel(12, 28, 296, 188);
     ui.setTextDatum(MC_DATUM);
-    drawText(160, 45, "AI DEVELOPER", TFT_WHITE, 2, kPanel);
+    drawText(160, 45, "AI DEVELOPER", kText, 2, kPanel);
     String backendLabel = "BACKEND: ";
     uint16_t backendColor = kMuted;
     if (!backendClient_ || !backendClient_->configured()) {
@@ -10631,7 +10385,7 @@ void FireOS::drawAiDeveloper() {
       const uint8_t item = aiProjectOffset_ + row;
       const bool selected = item == aiProjectSelection_;
       const int y = 72 + row * 22;
-      if (selected) ui.fillRoundRect(20, y - 4, 280, 19, 4, kCyan);
+      if (selected) drawSelection(20, y - 4, 280, 19, kCyan);
        String label = repairResume && item == 0
                           ? "Resume feilretting"
                           : aiResumeAvailable_ && item == repairOffset
@@ -10647,9 +10401,9 @@ void FireOS::drawAiDeveloper() {
                                           : item == itemCount - 1
                                               ? "Back"
                                               : luaAppNames_[item - repairOffset - buildOffset - 4];
-      if (label.length() > 28) label = label.substring(0, 25) + "...";
-      drawText(160, y, label, selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+
+      drawText(160, y, label, kText, 1,
+               selected ? FireUI::Selected : kPanel);
     }
     const uint8_t buildResumeItem = repairOffset;
     if (aiResumeAvailable_ && aiProjectSelection_ == buildResumeItem &&
@@ -10667,9 +10421,9 @@ void FireOS::drawAiDeveloper() {
       drawText(160, 216, "ID " + id, kMuted, 1, kPanel);
       ui.setTextDatum(TL_DATUM);
     }
-    drawText(48, 232, "PREV", kMuted, 1, TFT_BLACK);
-    drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
-    drawText(272, 232, "NEXT", kMuted, 1, TFT_BLACK);
+    drawText(48, 232, "PREV", kMuted, 1, kBg);
+    drawText(160, 232, "SELECT", kMuted, 1, kBg);
+    drawText(272, 232, "NEXT", kMuted, 1, kBg);
     ui.setTextDatum(TL_DATUM);
     return;
   }
@@ -10691,7 +10445,7 @@ void FireOS::drawAiDeveloper() {
   const bool blink = now < blinkUntil;
   const int cx = 160;
   const int cy = 108;
-  const uint16_t line = TFT_WHITE;
+  const uint16_t line = kText;
   if (aiDeveloperMode_ == 0 && aiRestPhaseStarted_ != 0 &&
       now - aiRestPhaseStarted_ >= aiRestPhaseDuration_) {
     aiRestPhase_ = static_cast<uint8_t>((aiRestPhase_ + 1) % 3);
@@ -10820,7 +10574,7 @@ void FireOS::drawAiDeveloper() {
   const bool failedBuildView = aiBuildResumePending_ &&
                                aiBuildErrorStatus_.length() > 0;
   ui.setTextDatum(MC_DATUM);
-  if (!failedBuildView) drawText(cx, 190, stateLabel, kMuted, 1, TFT_BLACK);
+  if (!failedBuildView && aiWorkflowState_ != 4) drawText(cx, 190, stateLabel, kMuted, 1, kBg);
   String workflowLabel = aiWorkflowText_.length() > 0
                              ? aiWorkflowText_
                              : workflowLabels[min<uint8_t>(aiWorkflowState_, 6)];
@@ -10832,22 +10586,22 @@ void FireOS::drawAiDeveloper() {
       aiWorkflowText_.length() == 0)
     workflowLabel = "CHAT - PRESS B TO SPEAK";
   workflowLabel = compactStatusText(workflowLabel);
-  drawText(cx, 207, workflowLabel, kMuted, 1, TFT_BLACK);
+  drawText(cx, 207, workflowLabel, kMuted, 1, kBg);
   if (failedBuildView) {
     drawText(cx, 174, compactStatusText(aiBuildErrorStatus_), kOrange, 1,
-             TFT_BLACK);
+             kBg);
     if (aiBuildDiagnosticMessage_.length() > 0)
       drawText(cx, 190, compactStatusText(aiBuildDiagnosticMessage_), kMuted, 1,
-               TFT_BLACK);
+               kBg);
   } else if (aiAssistantText_.length() > 0) {
     String assistant = compactStatusText(aiAssistantText_);
-    drawText(cx, 174, assistant, 0xBDF7, 1, TFT_BLACK);
+    drawText(cx, 174, assistant, kText, 1, kBg);
   }
   if (aiWorkflowState_ == 4) {
-    ui.drawRoundRect(45, 214, 230, 6, 3, 0x5AEB);
-    ui.fillRoundRect(47, 216,
+    ui.drawRoundRect(45, 184, 230, 7, 3, FireUI::Border);
+    ui.fillRoundRect(47, 186,
                      static_cast<int32_t>(226 * aiBuildProgress_ / 100), 3,
-                     1, 0x5AEB);
+                     1, kCyan);
   }
   const char* leftHint = "HOLD HOME";
   const char* centerHint = "SPEAK";
@@ -10889,11 +10643,7 @@ void FireOS::drawAiDeveloper() {
                      : aiVoiceTestPlaybackActive_ ? "NEW TEST" : "RECORD";
     rightHint = aiVoiceTestPlaybackActive_ ? "CANCEL" : "HOLD BACK";
   }
-  ui.setTextDatum(MC_DATUM);
-  drawText(46, 232, leftHint, kMuted, 1, TFT_BLACK);
-  drawText(160, 232, centerHint, kMuted, 1, TFT_BLACK);
-  drawText(274, 232, rightHint, kMuted, 1, TFT_BLACK);
-  ui.setTextDatum(TL_DATUM);
+  drawFooter(leftHint, centerHint, rightHint);
 
 #ifdef FIRE_OS_BLE
   static uint32_t lastLedUpdate = 0;
@@ -10909,8 +10659,8 @@ void FireOS::drawAiDeveloper() {
 void FireOS::drawAiApi() {
   drawStatusBar("Backend / AI");
   if (wifiSetupActive_) {
-    ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
-    drawText(24, 41, "Backend config", TFT_WHITE, 2, kPanel);
+    drawPanel(12, 32, 296, 180);
+    drawText(24, 41, "Backend config", kText, 2, kPanel);
     const String url = "http://" + WiFi.softAPIP().toString() +
                        "/?token=" + wifiSetupToken_;
     ui.qrcode(url, 190, 60, 112, 4);
@@ -10959,22 +10709,24 @@ void FireOS::drawLuaApp() {
   luaSdkFrame_.invalidate();
   if (sdk && !luaAppActive_ && luaAppError_.length()>0) ui.fillSprite(TFT_BLACK);
   if (!luaAppActive_ && luaAppError_.length() > 0) {
+    ui.fillSprite(kBg);
+    drawPanel(10, 40, 300, 164);
     ui.setTextDatum(MC_DATUM);
-    drawText(160, 28, "APP ERROR", kOrange, 2, TFT_BLACK);
+    drawText(160, 28, "APP ERROR", kOrange, 2, kBg);
     String appLabel = luaErrorAppName_.length() > 0 ? luaErrorAppName_
                                                      : luaAppName_;
     if (appLabel.length() > 24) appLabel = appLabel.substring(0, 21) + "...";
-    drawText(160, 55, appLabel, kText, 2, TFT_BLACK);
+    drawText(160, 55, appLabel, kText, 2, kBg);
     String version = luaErrorAppVersion_.length() > 0
                          ? "v" + luaErrorAppVersion_
                          : "version unavailable";
-    drawText(160, 78, version, kMuted, 1, TFT_BLACK);
+    drawText(160, 78, version, kMuted, 1, kBg);
     String error = luaAppError_.substring(0, 38);
-    drawText(160, 101, error, kText, 1, TFT_BLACK);
+    drawText(160, 101, error, kText, 1, kBg);
     String status = luaRepairMessage_.length() > 0 ? luaRepairMessage_
                                                    : "Press B to fix this app";
     status = compactStatusText(status);
-    drawText(160, 125, status, kMuted, 1, TFT_BLACK);
+    drawText(160, 125, status, kMuted, 1, kBg);
     const bool wifiConnected = WiFi.status() == WL_CONNECTED;
     const String wifiLabel = wifiMode_ == 2
                                  ? "Wi-Fi: OFF"
@@ -10985,9 +10737,9 @@ void FireOS::drawLuaApp() {
                                              : wifiSsid_.length() > 0
                                                    ? "Wi-Fi: waiting"
                                                    : "Wi-Fi: not configured";
-    drawText(16, 139, wifiLabel,
+    drawText(160, 139, wifiLabel,
              wifiConnected ? kGreen : wifiMode_ == 2 ? kMuted : kOrange, 1,
-             TFT_BLACK);
+             kBg);
     const String backendLabel =
         !backendClient_ || !backendClient_->configured()
             ? "Backend: not configured"
@@ -10995,11 +10747,11 @@ void FireOS::drawLuaApp() {
                   ? "Backend: connected"
                   : backendClient_->active() ? "Backend: connecting"
                                              : "Backend: disconnected";
-    drawText(16, 152, backendLabel,
+    drawText(160, 152, backendLabel,
              backendClient_ && backendClient_->sessionReady()
                  ? kGreen
                  : kOrange,
-             1, TFT_BLACK);
+             1, kBg);
     if (luaRepairProgress_ > 0 && luaRepairStatus_ != "ready") {
       ui.drawRoundRect(32, 160, 256, 10, 4, kMuted);
       ui.fillRoundRect(34, 162,
@@ -11007,30 +10759,18 @@ void FireOS::drawLuaApp() {
                        kCyan);
     }
     const uint16_t actionColor = luaErrorAction_ == 0 ? kCyan : kGreen;
-    ui.fillRoundRect(58, 170, 204, 30, 7, actionColor);
     const bool waitingForRepair = luaRepairRequested_ && luaErrorAction_ == 0;
-    drawText(160, 179,
-             luaErrorAction_ == 0 ? "Fiks feil" : "Kjør rettet app", kBg, 2,
-             actionColor);
-    if (waitingForRepair) {
-      ui.fillRoundRect(58, 170, 204, 30, 7, actionColor);
-      drawText(160, 179, "VENT...", kBg, 2, actionColor);
-    }
+    drawSelection(58, 170, 204, 30, actionColor);
+    drawText(160, 185, waitingForRepair ? "Venter" :
+             luaErrorAction_ == 0 ? "Fiks feil" : "Kjør rettet app", kText, 2,
+             FireUI::Selected);
     if (luaRepairStatus_ == "ready")
     drawText(160, 207,
                "Ny versjon " + luaRepairReadyVersion_, kGreen, 1,
-               TFT_BLACK);
+               kBg);
     else
-      drawText(160, 207, "B starter valgt handling", kMuted, 1, TFT_BLACK);
-    const bool repairActive = luaRepairRequested_ || luaRepairId_.length() > 0 ||
-                              luaRepairStatus_ == "ready" ||
-                              luaRepairStatus_ == "building" ||
-                              luaRepairStatus_ == "testing" ||
-                              luaRepairStatus_ == "queued" ||
-                              luaRepairStatus_ == "awaiting_confirmation";
-    drawText(46, 232, "MINIMER", kMuted, 1, TFT_BLACK);
-    drawText(160, 232, "SELECT", kMuted, 1, TFT_BLACK);
-    drawText(274, 232, "AVBRYT", kMuted, 1, TFT_BLACK);
+      drawText(160, 207, "B starter valgt handling", kMuted, 1, kBg);
+    drawFooter("Minimer", "Velg", "Avbryt");
     ui.setTextDatum(TL_DATUM);
   }
 }
@@ -11038,8 +10778,8 @@ void FireOS::drawLuaApp() {
 void FireOS::drawAppsSettings() {
   drawStatusBar("App Manager");
   if (appManagerDeleteConfirm_) {
-    ui.fillRoundRect(18, 54, 284, 112, 10, kPanel);
-    drawText(32, 68, "Delete app?", TFT_WHITE, 2, kPanel);
+    drawPanel(18, 54, 284, 112);
+    drawText(32, 68, "Delete app?", kText, 2, kPanel);
     const bool luaSelected = externalAppSelection_ >= externalAppCount_ &&
                              externalAppSelection_ < externalAppCount_ + luaAppCount_;
     const uint8_t selectedIndex = luaSelected
@@ -11050,14 +10790,14 @@ void FireOS::drawAppsSettings() {
                       : (selectedIndex < externalAppCount_
                              ? externalAppNames_[selectedIndex]
                              : "Selected app");
-    if (name.length() > 27) name = name.substring(0, 24) + "...";
+
     drawText(32, 101, name, kText, 1, kPanel);
     drawText(32, 128, "B delete   A/C cancel", kOrange, 1, kPanel);
     drawFooter("Cancel", "Delete", "Cancel");
     return;
   }
   if (appManagerActionMenu_) {
-    ui.fillRoundRect(18, 40, 284, 150, 10, kPanel);
+    drawPanel(8, 32, 304, 182);
     const bool luaSelected = externalAppSelection_ >= externalAppCount_ &&
                              externalAppSelection_ < externalAppCount_ + luaAppCount_;
     const uint8_t selectedIndex = luaSelected
@@ -11065,15 +10805,14 @@ void FireOS::drawAppsSettings() {
                                       : externalAppSelection_;
     String name = luaSelected ? luaAppNames_[selectedIndex]
                               : externalAppNames_[selectedIndex];
-    if (name.length() > 26) name = name.substring(0, 23) + "...";
-    drawText(30, 50, name, TFT_WHITE, 1, kPanel);
+
+    drawText(24, 40, name, kText, 1, kPanel);
     static const char* actions[] = {"Launch", "Delete", "Back"};
     for (uint8_t row = 0; row < 3; ++row) {
-      const int y = 82 + row * 27;
-      const bool selected = row == appManagerActionIndex_;
-      if (selected) ui.fillRoundRect(26, y - 4, 268, 22, 5, kCyan);
-      drawText(38, y, actions[row], selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+      const String label = actions[row];
+      fire_canvas_fill::Surface<M5Canvas> surface(ui);
+      FireUI::menuRow(surface, 62 + row * 25, label.c_str(), "",
+                      row == appManagerActionIndex_, osMenuIcon(label));
     }
     drawFooter("A  UP", "B  SELECT", "DOWN  C");
     return;
@@ -11087,29 +10826,27 @@ void FireOS::drawAppsSettings() {
     const uint8_t item = externalAppOffset_ + row;
     const int y = 54 + row * 22;
     const bool selected = item == externalAppSelection_;
-    if (selected) ui.fillRoundRect(12, y - 3, 296, 19, 4, kCyan);
+    if (selected) drawSelection(12, y - 3, 296, 19, kCyan);
     if (item == appCount) {
-      drawText(22, y, "Back", selected ? kBg : kText, 1,
-               selected ? kCyan : kBg);
+      drawText(22, y, "Back", kText, 1,
+               selected ? FireUI::Selected : kBg);
       continue;
     }
     const bool luaSelected = item >= externalAppCount_;
     const uint8_t selectedIndex = luaSelected ? item - externalAppCount_ : item;
     String name = luaSelected ? luaAppNames_[selectedIndex]
                               : externalAppNames_[selectedIndex];
-    if (name.length() > 26) name = name.substring(0, 23) + "...";
+
     const uint16_t nameColor = selected
-                                   ? kBg
-                                   : (luaSelected || externalAppCompatible_[selectedIndex]
+                                   ? kText : (luaSelected || externalAppCompatible_[selectedIndex]
                                           ? kText
                                           : kOrange);
     drawText(22, y, name, nameColor, 1,
-             selected ? kCyan : kBg);
+             selected ? FireUI::Selected : kBg);
     ui.setTextDatum(MR_DATUM);
     drawText(300, y, luaSelected ? "Lua" : formatBytes(externalAppSizes_[selectedIndex]),
-             selected ? kBg
-                      : (luaSelected || externalAppCompatible_[selectedIndex] ? kMuted : kOrange),
-             1, selected ? kCyan : kBg);
+             selected ? kText : (luaSelected || externalAppCompatible_[selectedIndex] ? kMuted : kOrange),
+             1, selected ? FireUI::Selected : kBg);
     ui.setTextDatum(TL_DATUM);
   }
   if (appCount == 0)
@@ -11126,14 +10863,14 @@ void FireOS::drawAppsSettingsBackend() {
     return;
   }
   if (appManagerDeleteConfirm_) {
-    ui.fillRoundRect(18, 54, 284, 112, 10, kPanel);
+    drawPanel(18, 54, 284, 112);
     drawText(32, 68, appManagerDeleteMode_ == 2 ? "Delete backend?"
                                                 : "Delete local?",
-             TFT_WHITE, 2, kPanel);
+             kText, 2, kPanel);
     String name = appManagerDeleteName_;
     if (name.length() == 0 && managerSelection_ < managerItemCount_)
       name = managerItems_[managerSelection_].name;
-    if (name.length() > 27) name = name.substring(0, 24) + "...";
+
     drawText(32, 101, name, kText, 1, kPanel);
     drawText(32, 128, appManagerDeleteMode_ == 2
                           ? "ALL backend versions"
@@ -11143,18 +10880,17 @@ void FireOS::drawAppsSettingsBackend() {
     return;
   }
   if (appManagerActionMenu_) {
-    ui.fillRoundRect(18, 40, 284, 150, 10, kPanel);
+    drawPanel(8, 32, 304, 182);
     String name = managerSelection_ < managerItemCount_
                       ? managerItems_[managerSelection_].name
                       : String();
-    if (name.length() > 26) name = name.substring(0, 23) + "...";
-    drawText(30, 50, name, TFT_WHITE, 1, kPanel);
+
+    drawText(24, 40, name, kText, 1, kPanel);
     for (uint8_t row = 0; row < appManagerActionCount_; ++row) {
-      const int y = 82 + row * 27;
-      const bool selected = row == appManagerActionIndex_;
-      if (selected) ui.fillRoundRect(26, y - 4, 268, 22, 5, kCyan);
-      drawText(38, y, appManagerActionLabels_[row], selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+      const String label = appManagerActionLabels_[row];
+      fire_canvas_fill::Surface<M5Canvas> surface(ui);
+      FireUI::menuRow(surface, 62 + row * 25, label.c_str(), "",
+                      row == appManagerActionIndex_, osMenuIcon(label));
     }
     drawFooter("A  UP", "B  SELECT", "DOWN  C");
     return;
@@ -11167,56 +10903,45 @@ void FireOS::drawAppsSettingsBackend() {
   const uint8_t visible = min<uint8_t>(6, itemCount - managerOffset_);
   for (uint8_t row = 0; row < visible; ++row) {
     const uint8_t item = managerOffset_ + row;
-    const int y = 54 + row * 22;
     const bool selected = item == managerSelection_;
-    if (selected) ui.fillRoundRect(12, y - 3, 296, 19, 4, kCyan);
+    fire_canvas_fill::Surface<M5Canvas> surface(ui);
     if (item == managerItemCount_) {
-      drawText(22, y, "Back", selected ? kBg : kText, 1,
-               selected ? kCyan : kBg);
+      FireUI::menuRow(surface, 52 + row * 25, "Back", "", selected, "icon.chevron-left");
       continue;
     }
-    const ManagerItem& managerItem = managerItems_[item];
-    String name = managerItem.name;
-    if (name.length() > 26) name = name.substring(0, 23) + "...";
-    drawText(22, y, name, selected ? kBg : kText, 1,
-             selected ? kCyan : kBg);
-    ui.setTextDatum(MR_DATUM);
-    String value = managerItem.backend && managerItem.local
-                       ? "Both"
-                   : managerItem.backend
-                       ? (managerItem.downloadable ? "Cloud" : "Locked")
-                   : managerItem.kind == 0 ? "BIN" : "Lua";
-    drawText(300, y, value, selected ? kBg : kMuted, 1,
-             selected ? kCyan : kBg);
-    ui.setTextDatum(TL_DATUM);
+    const ManagerItem& entry = managerItems_[item];
+    const char* value = entry.backend && entry.local ? "Both" : entry.backend ?
+        (entry.downloadable ? "Cloud" : "Locked") : entry.kind == 0 ? "BIN" : "Lua";
+    FireUI::menuRow(surface, 52 + row * 25, entry.name.c_str(), value, selected,
+                    entry.local ? "icon.package" : "icon.download");
   }
   String status = managerStatus_.length() > 0 ? managerStatus_ : externalAppMessage_;
   status = compactStatusText(status);
-  drawText(16, 190, status, kMuted, 1);
+  drawText(16, 203, status, kMuted, 1);
   drawFooter("A  UP", "B  ACTIONS", "DOWN  C");
 }
 
 void FireOS::drawAppManagerVersions() {
   drawStatusBar("App versions");
-  ui.fillRoundRect(8, 31, 304, 181, 8, kPanel);
-  drawText(18, 39, "Choose version", TFT_WHITE, 2, kPanel);
+  drawPanel(8, 31, 304, 181);
+  drawText(18, 39, "Choose version", kText, 2, kPanel);
   const uint8_t itemCount = appManagerVersionCount_ + 1;
   const uint8_t visible = min<uint8_t>(6, itemCount - appManagerVersionOffset_);
   for (uint8_t row = 0; row < visible; ++row) {
     const uint8_t item = appManagerVersionOffset_ + row;
     const bool selected = item == appManagerVersionSelection_;
     const int y = 64 + row * 23;
-    if (selected) ui.fillRoundRect(15, y - 3, 290, 19, 4, kCyan);
+    if (selected) drawSelection(15, y - 3, 290, 19, kCyan);
     if (item == appManagerVersionCount_) {
-      drawText(22, y, "Back", selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+      drawText(22, y, "Back", kText, 1,
+               selected ? FireUI::Selected : kPanel);
     } else {
       String label = appManagerVersionLabels_[item];
       if (label.length() == 0) label = "Version";
       if (!appManagerVersionDownloadable_[item]) label += " (locked)";
-      if (label.length() > 28) label = label.substring(0, 25) + "...";
-      drawText(22, y, label, selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+
+      drawText(22, y, label, kText, 1,
+               selected ? FireUI::Selected : kPanel);
     }
   }
   drawFooter("A  UP", "B  DOWNLOAD", "DOWN  C");
@@ -11247,12 +10972,8 @@ void FireOS::drawHelp() {
 }
 
 void FireOS::drawQuickSettings() {
-  ui.fillRoundRect(12, 32, 296, 180, 12, kPanel);
-  drawText(24, 40, "Quick Settings", TFT_WHITE, 2, kPanel);
-  drawLevelRow(0, "Brightness", brightnessStep_, kBrightnessStepCount,
-               quickIndex_ == 0, kCyan, quickEditing_ && quickIndex_ == 0);
-  drawLevelRow(1, "Volume", volumeStep_, kVolumeStepCount, quickIndex_ == 1,
-               kGreen, quickEditing_ && quickIndex_ == 1);
+  drawPanel(12, 32, 296, 180);
+  drawText(24, 40, "Quick Settings", kText, 2, kPanel);
   const String wifiModeLabel = wifiMode_ == 0 ? "Auto" : wifiMode_ == 1 ? "On" : "Off";
   String wifiValue;
   if (wifiMode_ == 2) {
@@ -11315,43 +11036,33 @@ void FireOS::drawQuickSettings() {
   if (backendValue.length() > 21) backendValue = backendValue.substring(0, 21);
   const String sdValue = sdStorageLabel();
 
-  auto drawQuickRow = [&](uint8_t item, const String& label,
-                          const String& value) {
-    // Keep the first status row below the volume control. The seven compact
-    // rows then fit inside the panel without touching the footer.
-    const int y = 114 + static_cast<int>(item - 2) * 13;
-    const bool selected = quickIndex_ == item;
-    if (selected) ui.fillRoundRect(10, y - 2, 300, 15, 5, kCyan);
-    drawText(20, y + 1, label, selected ? kBg : kText, 1,
-             selected ? kCyan : kPanel);
-    if (value.length() > 0) {
-      ui.setTextDatum(MR_DATUM);
-      drawText(300, y + 1, value, selected ? kBg : kMuted, 1,
-               selected ? kCyan : kPanel);
-      ui.setTextDatum(TL_DATUM);
-    }
-  };
-  drawQuickRow(2, "Wi-Fi", wifiValue);
-  drawQuickRow(3, "Bluetooth", bluetoothValue);
-  drawQuickRow(4, "Backend-sync", backendValue);
-  drawQuickRow(5, "SD card", sdValue);
-  drawQuickRow(6, "Power", "");
-  drawQuickRow(7, "All settings", "");
-  drawQuickRow(8, "Back", "");
+  const char* labels[] = {"Brightness", "Volume", "Wi-Fi", "Bluetooth",
+      "Backend-sync", "SD card", "Power", "All settings", "Back"};
+  const String values[] = {"", "", wifiValue, bluetoothValue, backendValue,
+      sdValue, "", "", ""};
+  const uint8_t first = quickIndex_ < 6 ? 0 : quickIndex_ - 5;
+  for (uint8_t row = 0; row < 6 && first + row < kQuickCount; ++row) {
+    const uint8_t item = first + row;
+    if (item == 0) drawLevelRow(row, labels[item], brightnessStep_, kBrightnessStepCount,
+                               quickIndex_ == item, kCyan, quickEditing_ && quickIndex_ == item);
+    else if (item == 1) drawLevelRow(row, labels[item], volumeStep_, kVolumeStepCount,
+                                    quickIndex_ == item, kGreen, quickEditing_ && quickIndex_ == item);
+    else drawRow(row, labels[item], quickIndex_ == item, values[item]);
+  }
   drawFooter("", quickEditing_ ? "Adjust" : "Select", "");
 }
 
 void FireOS::drawFileExplorer() {
   drawStatusBar("File Explorer");
   if (sdImagePreview_) {
-    drawText(20, 42, "Image preview", TFT_WHITE, 2, kPanel);
+    drawText(20, 42, "Image preview", kText, 2, kPanel);
     drawText(20, 68, sdBaseName(sdImagePreviewPath_), kMuted, 1, kPanel);
     drawFooter("", "Close", "");
     return;
   }
   if (sdPreview_) {
-    ui.fillRoundRect(10, 32, 300, 180, 10, kPanel);
-    drawText(20, 40, sdBaseName(sdEntryPaths_[sdSelection_]), TFT_WHITE, 1,
+    drawPanel(10, 32, 300, 180);
+    drawText(20, 40, sdBaseName(sdEntryPaths_[sdSelection_]), kText, 1,
              kPanel);
     for (uint8_t line = 0; line < sdPreviewLineCount_; ++line) {
       drawText(18, 62 + line * 17, sdPreviewLines_[line], kText, 1, kPanel);
@@ -11360,8 +11071,8 @@ void FireOS::drawFileExplorer() {
     return;
   }
   if (sdNameEditor_) {
-    ui.fillRoundRect(10, 32, 300, 180, 10, kPanel);
-    drawText(20, 42, sdNameIsNewFolder_ ? "New folder" : "Rename", TFT_WHITE,
+    drawPanel(10, 32, 300, 180);
+    drawText(20, 42, sdNameIsNewFolder_ ? "New folder" : "Rename", kText,
              2, kPanel);
     drawText(20, 80, sdNameBuffer_, kCyan, 2, kPanel);
     ui.drawLine(20 + sdNameCursor_ * 12, 102,
@@ -11372,7 +11083,7 @@ void FireOS::drawFileExplorer() {
     return;
   }
   if (sdDeleteConfirm_) {
-    ui.fillRoundRect(18, 54, 284, 120, 10, kPanel);
+    drawPanel(18, 54, 284, 120);
     drawText(32, 68, "Delete selected?", kOrange, 2, kPanel);
     drawText(32, 104, sdSelection_ < sdEntryCount_ ? sdEntryNames_[sdSelection_]
                                                    : "", kText, 1, kPanel);
@@ -11383,15 +11094,15 @@ void FireOS::drawFileExplorer() {
   if (sdActionMenu_) {
     static const char* actions[] = {"Open",  "Copy", "Move", "Rename",
                                     "Delete", "New folder", "Sort", "Back"};
-    ui.fillRoundRect(12, 32, 296, 180, 10, kPanel);
-    drawText(24, 40, "File actions", TFT_WHITE, 2, kPanel);
+    drawPanel(12, 32, 296, 180);
+    drawText(24, 40, "File actions", kText, 2, kPanel);
     for (uint8_t row = 0; row < 7; ++row) {
       const uint8_t action = (sdActionIndex_ + row) % 8;
       const int y = 70 + row * 19;
       const bool selected = row == 0;
-      if (selected) ui.fillRoundRect(18, y - 3, 284, 17, 4, kCyan);
-      drawText(26, y, actions[action], selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+      if (selected) drawSelection(18, y - 3, 284, 17, kCyan);
+      drawText(26, y, actions[action], kText, 1,
+               selected ? FireUI::Selected : kPanel);
     }
     drawFooter("Previous", "Select", "Next");
     return;
@@ -11420,9 +11131,9 @@ void FireOS::drawFileExplorer() {
     const uint8_t item = sdOffset_ + row;
     const int y = 70 + row * 23;
     const bool selected = item == sdSelection_;
-    if (selected) ui.fillRoundRect(12, y - 3, 296, 20, 4, kCyan);
+    if (selected) drawSelection(12, y - 3, 296, 20, kCyan);
     if (item < sdEntryCount_) {
-      const uint16_t color = selected ? kBg : kCyan;
+      const uint16_t color = selected ? kText : kCyan;
       if (sdEntryDirectories_[item]) {
         ui.drawRect(20, y + 2, 13, 10, color);
         ui.drawLine(21, y + 2, 26, y - 1, color);
@@ -11431,17 +11142,17 @@ void FireOS::drawFileExplorer() {
         ui.drawLine(23, y + 4, 30, y + 4, color);
       }
       String name = sdEntryNames_[item];
-      if (name.length() > 25) name = name.substring(0, 22) + "...";
-      drawText(40, y + 1, name, selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+
+      drawText(40, y + 1, name, kText, 1,
+               selected ? FireUI::Selected : kPanel);
       ui.setTextDatum(MR_DATUM);
       drawText(302, y + 1,
                sdEntryDirectories_[item] ? "DIR" : formatBytes(sdEntrySizes_[item]),
-               selected ? kBg : kMuted, 1, selected ? kCyan : kPanel);
+               selected ? kText : kMuted, 1, selected ? FireUI::Selected : kPanel);
       ui.setTextDatum(TL_DATUM);
     } else {
-      drawText(20, y + 1, "Back", selected ? kBg : kText, 1,
-               selected ? kCyan : kPanel);
+      drawText(20, y + 1, "Back", kText, 1,
+               selected ? FireUI::Selected : kPanel);
     }
   }
   drawFooter("Previous", "Open", "Next");
@@ -11535,21 +11246,20 @@ void FireOS::drawDebug() {
   };
   auto drawTitle = [&](const char* title, const char* subtitle) {
     ui.setTextDatum(MC_DATUM);
-    drawText(160, 34, title, kCyan, 2, kBg);
-    drawText(160, 45, subtitle, kMuted, 1, kBg);
+    drawText(160, 36, title, kText, 2, kBg);
+    drawText(160, 52, subtitle, kMuted, 1, kBg);
     ui.setTextDatum(TL_DATUM);
   };
-  auto drawStatusRow = [&](uint8_t row, const String& label,
-                           const String& status) {
-    const int y = 56 + row * 24;
-    drawText(16, y, label, kMuted, 2, kBg);
-    ui.setTextDatum(MR_DATUM);
-    drawText(307, y, status, statusColor(status), 2, kBg);
-    ui.setTextDatum(TL_DATUM);
+  auto drawStatusRow = [&](uint8_t row, const String& label, const String& status) {
+    const int y = 65 + row * 23;
+    ui.fillRoundRect(10, y, 300, 21, 5, kPanel);
+    fire_canvas_fill::Surface<M5Canvas> surface(ui);
+    FireUI::text(surface, 20, y + 4, label.c_str(), kMuted, "ui12", 170);
+    FireUI::text(surface, 195, y + 4, status.c_str(), statusColor(status), "ui12b", 105, 2);
   };
   auto drawValueRow = [&](uint8_t row, const String& label,
                           const String& value) {
-    const int y = 57 + row * 22;
+    const int y = 68 + row * 22;
     drawText(16, y, label, kMuted, 1, kBg);
     ui.setTextDatum(MR_DATUM);
     drawText(307, y, value, kText, 1, kBg);
@@ -11602,9 +11312,7 @@ void FireOS::drawDebug() {
       drawStatusRow(4, "Lua API / audio", "READY");
       drawStatusRow(5, "Loop max us", String(maxLoopUs_));
     }
-    ui.setTextDatum(MR_DATUM);
-    drawText(307, 193, "READY = FW/API", kMuted, 1, kBg);
-    ui.setTextDatum(TL_DATUM);
+    drawText(16, 202, "Firmware/API status", kMuted, 1, kBg);
   } else if (detailIndex_ == 3) {
     drawTitle("Hardware tests", "Buttons and RGB");
     drawStatusRow(0, "Button A", buttons_[0].down ? "DOWN" : "UP");
@@ -11622,32 +11330,32 @@ void FireOS::drawDebug() {
     m5::imu_data_t imu{};
     const bool imuReady = M5.Imu.isEnabled();
     if (imuReady) M5.Imu.getImuData(&imu);
-    ui.drawRoundRect(12, 55, 70, 64, 5, kPanel);
-    ui.drawRect(18, 61, 58, 50, kMuted);
-    ui.drawLine(47, 63, 47, 109, kMuted);
-    ui.drawLine(21, 86, 73, 86, kMuted);
+    ui.drawRoundRect(12, 65, 70, 64, 5, kPanel);
+    ui.drawRect(18, 71, 58, 50, kMuted);
+    ui.drawLine(47, 73, 47, 119, kMuted);
+    ui.drawLine(21, 96, 73, 96, kMuted);
     int bubbleX = 47;
-    int bubbleY = 86;
+    int bubbleY = 96;
     if (imuReady) {
       bubbleX += constrain(static_cast<int>(imu.accel.x * 24.0f), -22, 22);
       bubbleY -= constrain(static_cast<int>(imu.accel.y * 20.0f), -18, 18);
       ui.fillCircle(bubbleX, bubbleY, 7, kCyan);
     }
     ui.setTextDatum(MC_DATUM);
-    drawText(47, 115, imuReady ? "TILT" : "N/A", kText, 1, kPanel);
+    drawText(47, 125, imuReady ? "TILT" : "N/A", kText, 1, kPanel);
     ui.setTextDatum(TL_DATUM);
-    drawValueAt(57, "Accel g", imuReady
+    drawValueAt(67, "Accel g", imuReady
                                    ? String(imu.accel.x, 2) + "  " +
                                          String(imu.accel.y, 2) + "  " +
                                          String(imu.accel.z, 2)
                                    : "UNAVAILABLE");
-    drawValueAt(79, "Gyro dps", imuReady
+    drawValueAt(89, "Gyro dps", imuReady
                                   ? String(imu.gyro.x, 1) + "  " +
                                         String(imu.gyro.y, 1) + "  " +
                                         String(imu.gyro.z, 1)
                                   : "UNAVAILABLE");
     float temperature = 0.0f;
-    drawValueAt(101, "IMU temp", imuReady && M5.Imu.getTemp(&temperature)
+    drawValueAt(111, "IMU temp", imuReady && M5.Imu.getTemp(&temperature)
                                    ? String(temperature, 1) + " C"
                                    : "UNAVAILABLE");
     drawValueRow(3, "Mic test", debugMicStatus_);
@@ -11656,7 +11364,7 @@ void FireOS::drawDebug() {
                                        "  G36 ADC=" + String(analogRead(36)));
     drawValueRow(5, "I2C raw", String("G21=") + String(digitalRead(21)) +
                                    "  G22=" + String(digitalRead(22)));
-    drawText(16, 190, "B: record/stop/play mic test", kMuted, 1, kBg);
+    drawText(16, 198, "B: record/stop/play mic test", kMuted, 1, kBg);
   }
   ui.setTextDatum(MR_DATUM);
   drawText(307, 207, String("Page ") + String(detailIndex_ + 1) + "/5",
@@ -11730,47 +11438,21 @@ void FireOS::refreshBatteryStatus() const {
 }
 
 void FireOS::drawBackendIcon(int32_t x, int32_t y, uint8_t state) {
-  uint16_t color = kMuted;
-  if (state == 2) {
-    color = kGreen;
-  } else if (state == 1) {
-    color = (millis() / 250) % 2 == 0 ? kGreen : kMuted;
-  }
-  ui.drawCircle(x + 4, y + 6, 3, color);
-  ui.drawCircle(x + 10, y + 6, 3, color);
-  ui.drawLine(x + 6, y + 4, x + 8, y + 8, color);
+  const uint16_t color = state == 2 ? kGreen : state == 1 ? kCyan : kMuted;
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::icon(surface, "icon.cloud", x, y, color, 16);
 }
 
 void FireOS::drawWifiIcon(int32_t x, int32_t y, uint8_t state) {
-  uint16_t color = kMuted;
-  if (state == 2) {
-    color = kGreen;
-  } else if (state == 1) {
-    color = (millis() / 250) % 2 == 0 ? kGreen : kMuted;
-  }
-  ui.drawLine(x, y + 3, x + 6, y, color);
-  ui.drawLine(x + 6, y, x + 12, y + 3, color);
-  ui.drawLine(x + 3, y + 7, x + 6, y + 5, color);
-  ui.drawLine(x + 6, y + 5, x + 9, y + 7, color);
-  ui.fillCircle(x + 6, y + 11, 1, color);
+  const uint16_t color = state == 2 ? kGreen : state == 1 ? kCyan : kMuted;
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::icon(surface, state ? "icon.wifi" : "icon.wifi-off", x, y, color, 16);
 }
 
 void FireOS::drawBluetoothIcon(int32_t x, int32_t y, uint8_t state) {
-  uint16_t color = kMuted;
-  if (state == 2) {
-    color = kGreen;
-  } else if (state == 3) {
-    color = kCyan;
-  } else if (state == 1) {
-    color = (millis() / 250) % 2 == 0 ? kCyan : kMuted;
-  }
-  ui.drawLine(x + 5, y, x + 5, y + 14, color);
-  ui.drawLine(x + 5, y, x + 10, y + 4, color);
-  ui.drawLine(x + 10, y + 4, x + 5, y + 8, color);
-  ui.drawLine(x + 5, y + 8, x + 10, y + 12, color);
-  ui.drawLine(x + 10, y + 12, x + 5, y + 14, color);
-  ui.drawLine(x + 5, y + 7, x, y + 2, color);
-  ui.drawLine(x + 5, y + 7, x, y + 12, color);
+  const uint16_t color = state == 2 ? kGreen : state ? kCyan : kMuted;
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::icon(surface, "icon.bluetooth", x, y, color, 16);
 }
 
 void FireOS::drawBatteryIcon(int32_t x, int32_t y, int level, bool charging) {
@@ -11790,62 +11472,96 @@ void FireOS::drawBatteryIcon(int32_t x, int32_t y, int level, bool charging) {
 
 void FireOS::drawFactoryReset() {
   drawStatusBar("Factory Reset");
-  drawText(18, 58, "Reset all settings?", kOrange, 2);
-  drawText(18, 92, factoryResetArmed_ ? "Ready - confirm again"
-                                     : "Select to arm reset",
-           TFT_WHITE, 1);
-  drawText(18, 120, "App data is not removed yet.", kMuted, 1);
-  drawText(18, 140, "This will restart the OS.", kMuted, 1);
-  drawFooter("", "B  CONFIRM", "BACK  C");
+  drawPanel(10, 40, 300, 160);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::icon(surface, "icon.shield", 26, 56, kOrange, 24);
+  FireUI::text(surface, 64, 60, "Reset all settings?", kText, "ui16", 228);
+  FireUI::text(surface, 26, 98, factoryResetArmed_ ? "Ready - confirm again" :
+                "Select to arm reset", kOrange, "ui12b", 268);
+  FireUI::text(surface, 26, 128, "App data is not removed yet.", kMuted, "ui12", 268);
+  FireUI::text(surface, 26, 153, "This will restart the OS.", kMuted, "ui12", 268);
+  drawFooter("", "Confirm", "Back");
+}
+
+void FireOS::drawSelection(int x, int y, int width, int height, uint16_t accent) {
+  ui.fillRoundRect(x, y, width, height, min<int>(6, height / 2), FireUI::Selected);
+  ui.drawRoundRect(x, y, width, height, min<int>(6, height / 2), FireUI::Border);
+  ui.fillRect(x, y + 4, 3, max<int>(1, height - 8), accent);
+}
+
+void FireOS::drawPanel(int x, int y, int width, int height) {
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::panel(surface, x, y, width, height);
+}
+
+namespace {
+const char* osMenuIcon(const String& label) {
+  if (label == "Back" || label == "Tilbake") return "icon.chevron-left";
+  if (label.indexOf("Wi-Fi") >= 0) return "icon.wifi";
+  if (label.indexOf("Bluetooth") >= 0) return "icon.bluetooth";
+  if (label.indexOf("Brightness") >= 0 || label.indexOf("Display") >= 0) return "icon.sun";
+  if (label.indexOf("Volume") >= 0 || label.indexOf("sound") >= 0 || label.indexOf("melody") >= 0) return "icon.volume-2";
+  if (label.indexOf("Date") >= 0 || label.indexOf("Time") >= 0 || label.indexOf("after") >= 0) return "icon.clock";
+  if (label.indexOf("File") >= 0 || label.indexOf("SD") >= 0) return "icon.folder";
+  if (label.indexOf("Firmware") >= 0) return "icon.download";
+  if (label.indexOf("App") >= 0) return "icon.package";
+  if (label.indexOf("Backend") >= 0 || label.indexOf("AI") >= 0) return "icon.cloud";
+  if (label.indexOf("Power") >= 0 || label.indexOf("Sleep") >= 0 || label.indexOf("Boot") >= 0) return "icon.power";
+  if (label.indexOf("Restart") >= 0 || label.indexOf("Reset") >= 0) return "icon.rotate-ccw";
+  if (label.indexOf("Debug") >= 0) return "icon.activity";
+  if (label.indexOf("Help") >= 0 || label.indexOf("Info") >= 0) return "icon.info";
+  if (label.indexOf("Save") >= 0) return "icon.check";
+  if (label.indexOf("Delete") >= 0) return "icon.circle-x";
+  if (label.indexOf("Download") >= 0) return "icon.download";
+  if (label.indexOf("Launch") >= 0) return "icon.circle-play";
+  if (label.indexOf("RGB") >= 0) return "icon.sun";
+  if (label.indexOf("Menu") >= 0) return "icon.layout-grid";
+  return "icon.settings";
+}
 }
 
 void FireOS::drawRow(uint8_t row, const String& label, bool selected,
                      const String& value, bool editing) {
-  const int y = 65 + row * 25;
-  const int height = 21;
-  const uint16_t highlight = editing ? kOrange : kCyan;
-  if (selected) ui.fillRoundRect(10, y - 3, 300, height, 5, highlight);
-  drawText(20, y + 2, label, selected ? kBg : kText, 1,
-           selected ? highlight : kBg);
-  if (value.length() > 0) {
-    ui.setTextDatum(MR_DATUM);
-    drawText(300, y + 2, value, selected ? kBg : kMuted, 1,
-             selected ? highlight : kBg);
-    ui.setTextDatum(TL_DATUM);
+  const int y = 62 + row * 25;
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::menuRow(surface, y, label.c_str(), value.c_str(), selected, osMenuIcon(label));
+  if (selected && editing) {
+    ui.fillRect(10, y + 7, 3, 11, kOrange);
+    ui.drawRoundRect(10, y, 300, 25, 7, kOrange);
   }
 }
 
 void FireOS::drawLevelRow(uint8_t row, const String& label, uint8_t step,
                           uint8_t stepCount, bool selected, uint16_t accent,
                           bool editing) {
-  const int y = 65 + row * 25;
-  const uint16_t highlight = editing ? kOrange : kCyan;
-  if (selected) ui.fillRoundRect(10, y - 3, 300, 21, 5, highlight);
-  drawText(20, y + 2, label, selected ? kBg : kText, 1,
-           selected ? highlight : kBg);
-
-  constexpr int kSegments = 10;
-  constexpr int kSegmentWidth = 11;
-  constexpr int kSegmentGap = 2;
-  const int firstX = 159;
-  const uint8_t filled = stepCount <= 1
-                             ? 0
-                             : static_cast<uint8_t>(step * kSegments /
-                                                    (stepCount - 1));
-  for (int segment = 0; segment < kSegments; ++segment) {
-    const bool on = segment < filled || (step == stepCount - 1 && segment == kSegments - 1);
-    const uint16_t selectedAccent = accent == kCyan ? kGreen : accent;
-    const uint16_t color = on ? (selected ? selectedAccent : accent)
-                              : (selected ? kMuted : kPanel);
-    ui.fillRoundRect(firstX + segment * (kSegmentWidth + kSegmentGap), y + 3,
-                     kSegmentWidth, 9, 2, color);
+  const int y = 62 + row * 25;
+  ui.fillRoundRect(10, y, 300, 25, 7, kPanel);
+  if (selected) drawSelection(10, y, 300, 25, editing ? kOrange : kCyan);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::icon(surface, osMenuIcon(label), 18, y + 3, selected ? kCyan : kMuted, 19);
+  FireUI::text(surface, 42, y + 5, label.c_str(), kText, "ui12", 108);
+  constexpr int segments = 10;
+  const uint8_t filled = stepCount <= 1 ? 0 : uint8_t(step * segments / (stepCount - 1));
+  for (int segment = 0; segment < segments; ++segment) {
+    const uint16_t color = segment < filled ? (editing ? kOrange : accent) : FireUI::Border;
+    ui.fillRoundRect(166 + segment * 13, y + 8, 10, 9, 2, color);
   }
 }
 
 void FireOS::drawText(int32_t x, int32_t y, const String& text, uint16_t color,
                       uint8_t size, uint16_t background) {
-  ui.setTextSize(size);
-  ui.setTextColor(color, background);
-  ui.drawString(text, x, y);
+  (void)background;  // OS screens are freshly composed; text is transparent.
+  const char* font = size >= 3 ? "title20" : size == 2 ? "ui16" : "ui12";
+  const auto datum = ui.getTextDatum();
+  const bool centered = datum == MC_DATUM;
+  const bool right = datum == MR_DATUM || datum == TR_DATUM;
+  const int available = right ? x - 10 : centered ? 2 * min<int>(x, 320 - x) - 20 : 310 - x;
+  if (available <= 0) return;
+  const int width = min<int>(available, FireUI::width(text.c_str(), font));
+  if (width <= 0) return;
+  const int left = right ? x - width : centered ? x - width / 2 : x;
+  const int top = centered || datum == MR_DATUM ? y - FireUI::font(font).lineHeight / 2 : y;
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::text(surface, left, top, text.c_str(), color, font, width,
+               right ? 2 : centered ? 1 : 0);
 }
-

@@ -120,7 +120,6 @@ class FireOS {
   static constexpr uint8_t kBaseDoubleClickActionCount = 9;
   static constexpr uint8_t kDoubleClickActionCount =
       kBaseDoubleClickActionCount + kMaxLuaApps;
-  static constexpr int16_t kCarouselDistance = 112;
   static constexpr uint32_t kLongPressMs = 650;
   static constexpr uint32_t kDoubleClickWindowMs = 350;
   static constexpr uint32_t kButtonDebounceMs = 18;
@@ -143,13 +142,6 @@ class FireOS {
   bool luaMenuPicker_ = false;
   uint8_t luaMenuSelection_ = 0;
   uint8_t luaMenuOffset_ = 0;
-  uint8_t carouselFromIndex_ = 0;
-  uint8_t carouselToIndex_ = 0;
-  int8_t carouselDirection_ = 0;
-  int16_t carouselOffset_ = 0;
-  uint32_t carouselLastStepAt_ = 0;
-  int8_t carouselQueuedDirection_ = 0;
-  bool carouselAnimating_ = false;
   uint8_t appsIndex_ = 0;
   uint8_t settingsIndex_ = 0;
   uint8_t quickIndex_ = 0;
@@ -826,7 +818,7 @@ class FireOS {
   void onDoubleClick(uint8_t index);
   void playButtonSound(uint8_t index, bool longPress);
   void open(Screen screen);
-  void startMainSlide(uint8_t nextIndex, int8_t direction);
+  void selectMainItem(uint8_t nextIndex);
   uint8_t visibleMainCount() const;
   uint8_t mainItemAtPosition(uint8_t position) const;
   uint8_t nextVisibleMain(uint8_t current, int8_t direction) const;
@@ -959,7 +951,7 @@ class FireOS {
   void drawFooter(const char* left, const char* middle, const char* right);
   void drawMain();
   void drawBuildNoticeOverlay();
-  void drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size);
+  void drawMainCard(uint8_t item, int32_t x, int32_t y, bool selected);
   void drawApps();
   void drawSettings();
   void drawDateTime();
@@ -1004,6 +996,8 @@ class FireOS {
   int batteryLevel() const;
   bool batteryCharging() const;
   void refreshBatteryStatus() const;
+  void drawSelection(int x, int y, int width, int height, uint16_t accent);
+  void drawPanel(int x, int y, int width, int height);
   void drawRow(uint8_t row, const String& label, bool selected,
                const String& value = String(), bool editing = false);
   void drawText(int32_t x, int32_t y, const String& text, uint16_t color,
