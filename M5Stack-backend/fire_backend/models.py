@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
 from .api_registry import ALL_SERVICES,BASE_SERVICES,BASE_API,HARDWARE_API,API_CONTRACT,service_closure
+from .app_sdk import SDK_VERSION,SDK_CONTRACT
 
 Identifier = str
 ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
@@ -57,7 +58,7 @@ class GeneratedApp(StrictModel):
     @classmethod
     def short_name(cls, value):
         if not value.strip() or any(ord(c) < 32 for c in value):
-            raise ValueError("Appnavnet mÃ¥ vÃ¦re kort, lesbart og uten kontrolltegn")
+            raise ValueError("Appnavnet må være kort, lesbart og uten kontrolltegn")
         return " ".join(value.split())
 
     @field_validator("required_services",mode="before")
@@ -83,7 +84,7 @@ class Manifest(StrictModel):
     id: str = Field(pattern=ID_PATTERN)
     name: str = Field(min_length=1, max_length=64)
     version: str = Field(pattern=r"^0\.1\.[1-9][0-9]*$")
-    api_version: Literal["fire-lua-0.1","fire-lua-0.2"] = "fire-lua-0.1"
+    api_version: Literal["fire-lua-0.1","fire-lua-0.2","fire-app-sdk-1.0"] = "fire-lua-0.1"
     api_contract: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
     entry: Literal["main.lua"] = "main.lua"
     required_services: list[str]
@@ -101,6 +102,8 @@ class Manifest(StrictModel):
             raise ValueError("Legacy manifest has no hardware contract field")
         if self.api_version==HARDWARE_API and self.api_contract!=API_CONTRACT:
             raise ValueError("Hardware manifest contract mismatch")
+        if self.api_version==SDK_VERSION and self.api_contract!=SDK_CONTRACT:
+            raise ValueError('SDK manifest contract mismatch')
         if set(service_closure(self.required_services,self.api_version))!=set(self.required_services):
             raise ValueError("Hardware service dependencies invalid")
         if sorted(self.permissions) != sorted("fire." + s for s in self.required_services):
@@ -168,6 +171,17 @@ class HardwareResources(StrictModel):
         return self
 
 
+class AppSdkCapability(StrictModel):
+    version: Literal['fire-app-sdk-1.0']
+    contract: str = Field(pattern=r'^[a-f0-9]{64}$',json_schema_extra={'const':SDK_CONTRACT})
+
+    @field_validator('contract')
+    @classmethod
+    def same_contract(cls,value):
+        if value!=SDK_CONTRACT:raise ValueError('SDK capability contract mismatch')
+        return value
+
+
 class Capabilities(StrictModel):
     api_version: Literal["fire-lua-0.1","fire-lua-0.2"] = "fire-lua-0.1"
     services: list[str] = Field(max_length=24)
@@ -180,6 +194,7 @@ class Capabilities(StrictModel):
     firmware_version: str = Field(default="unknown", max_length=64)
     firmware_storage: bool = Field(default=False,strict=True)
     firmware_max_bytes: int = Field(default=4194304,ge=1024,le=4194304,strict=True)
+    app_sdk: AppSdkCapability | None = None
 
     @field_validator("services")
     @classmethod
@@ -192,6 +207,8 @@ class Capabilities(StrictModel):
     def negotiated_api(self):
         if self.api_version==BASE_API and not set(self.services)<=BASE_SERVICES:
             raise ValueError("Hardware services require fire-lua-0.2")
+        if self.app_sdk and (self.api_version!=HARDWARE_API or 'display' not in self.services):
+            raise ValueError('SDK capability requires hardware API and display')
         if self.api_version==HARDWARE_API:
             if self.api_contract!=API_CONTRACT:raise ValueError("Hardware API contract mismatch")
             from .api_registry import methods_for
@@ -200,6 +217,12 @@ class Capabilities(StrictModel):
             if set(self.services)&{"gpio","adc","dac","pwm","i2c","uart","spi"} and self.hardware is None:
                 raise ValueError("Hardware profile must announce its resources")
         return self
+
+    @model_serializer(mode='wrap')
+    def serialize_extensions(self,handler):
+        result=handler(self)
+        if self.app_sdk is None:result.pop('app_sdk',None)
+        return result
 
 
 class SessionAction(StrictModel):
@@ -229,7 +252,7 @@ APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
                       "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None,
                       "repair_id":None,"app_version":None,"build_id":None,"notification_action":None}
-CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None}
+CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None}
 
 
 class DeviceDiagnostics(StrictModel):

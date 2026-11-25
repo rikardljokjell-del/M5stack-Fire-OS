@@ -14,6 +14,7 @@ dependencies = [
   "qrcode>=8.2,<9",
   "tzdata>=2026.1",
   "PyJWT[crypto]>=2.10,<3",
+  "Pillow>=12.3,<13",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +28,7 @@ fire-mock = "fire_backend.mock_device:main"
 include = ["fire_backend*"]
 
 [tool.setuptools.package-data]
-fire_backend = ["data/*.md", "data/*.lua", "data/*.json", "web/*"]
+fire_backend = ["data/*.md", "data/*.lua", "data/*.json", "data/app_sdk/*", "data/app_sdk/**/*", "web/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

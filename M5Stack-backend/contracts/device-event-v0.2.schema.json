@@ -1,5 +1,27 @@
 {
   "$defs": {
+    "AppSdkCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "fire-app-sdk-1.0",
+          "title": "Version",
+          "type": "string"
+        },
+        "contract": {
+          "const": "e6972ef535053a898babec4b532be7418941d6adc00c5fd477828bb0b9940e57",
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Contract",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "contract"
+      ],
+      "title": "AppSdkCapability",
+      "type": "object"
+    },
     "Capabilities": {
       "additionalProperties": false,
       "properties": {
@@ -83,6 +105,17 @@
           "minimum": 1024,
           "title": "Firmware Max Bytes",
           "type": "integer"
+        },
+        "app_sdk": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppSdkCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

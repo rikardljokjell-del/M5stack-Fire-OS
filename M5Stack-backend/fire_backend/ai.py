@@ -5,6 +5,7 @@ import math
 import struct
 import io
 import wave
+import hashlib
 from contextlib import contextmanager
 from importlib.resources import files
 
@@ -106,7 +107,20 @@ class OpenAIProvider:
         if ledger:
             # A deliberately conservative bound, not a token count presented as
             # measured usage. Actual returned usage replaces it after completion.
-            bound=len(json.dumps(payload,ensure_ascii=False).encode('utf-8'))+512
+            # Base64 is transport encoding, not a text-token estimate. Keep a
+            # conservative image allowance; returned provider usage is authoritative.
+            image_count=0
+            def usage_view(value):
+                nonlocal image_count
+                if isinstance(value,dict):
+                    if value.get('type')=='input_image':
+                        image_count+=1
+                        return {'type':'input_image','detail':value.get('detail','low')}
+                    return {k:usage_view(v) for k,v in value.items()}
+                if isinstance(value,list):return [usage_view(v) for v in value]
+                return value
+            view=usage_view(payload)
+            bound=len(json.dumps(view,ensure_ascii=False).encode('utf-8'))+512+image_count*1024
             scope=dict(usage_scope.get());active=usage_session.get()
             if active is not None and not scope.get('build_id'):
                 scope.update(project_id=active.project_id,session_id=active.id,turn_id=active.turn_id)
@@ -125,12 +139,19 @@ class OpenAIProvider:
         state['usage']=getattr(response,'usage',None)
         state['request_id']=getattr(response,'_request_id',None) or getattr(response,'id',None)
 
-    async def parsed(self,operation,model,instructions,payload,schema,max_output_tokens,effort):
+    async def parsed(self,operation,model,instructions,payload,schema,max_output_tokens,effort,*,images=()):
         # Stable developer prefix is cache eligible; project data and
         # corrections stay in the following untrusted user message.
         request={'model':model,'input':[{'role':'developer','content':instructions},
             {'role':'user','content':json.dumps(payload,ensure_ascii=False)}],
             'text_format':schema,'store':False,'max_output_tokens':max_output_tokens}
+        if images:
+            content=[{'type':'input_text','text':request['input'][1]['content']}]
+            for item in images:
+                content.extend([{'type':'input_text','text':json.dumps({k:item.get(k) for k in
+                    ('source_sha256','image_id','profile','scenario','at_ms')},ensure_ascii=False)},
+                    {'type':'input_image','image_url':item['image_url'],'detail':'low'}])
+            request['input'][1]['content']=content
         if model.startswith(('gpt-6','gpt-5')):request['reasoning']={'effort':effort}
         from .model_catalog import EXPLICIT_CACHE_MODELS
         if model in EXPLICIT_CACHE_MODELS:
@@ -287,6 +308,25 @@ class OpenAIProvider:
         context=scoped_review_context(context)
         identity=validation.get('source_identity',{'candidate_sha256':source_hash(generated.main_lua),
             'historical_device_failures':[],'exact_source_has_device_failure':False,'candidate_physical_status':'not_verified'})
+        images=validation.get('_visual_review_images',[])
+        if not isinstance(images,list) or len(images)>6:
+            raise ValueError('Invalid bounded visual review image set')
+        for item in images:
+            uri=item.get('image_url','')
+            if (item.get('source_sha256')!=source_hash(generated.main_lua)
+                    or not uri.startswith('data:image/png;base64,') or len(uri)>320030):
+                raise ValueError('Visual review image source mismatch')
+            data=base64.b64decode(uri.split(',',1)[1],validate=True)
+            if (len(data)>240000 or data[:8]!=b'\x89PNG\r\n\x1a\n'
+                    or hashlib.sha256(data).hexdigest()!=item.get('image_id')):
+                raise ValueError('Visual review image checksum mismatch')
+        visual_instruction=(
+            'Representative 320x240 screenshots are attached from executed, source-bound PC profiles. '
+            'Inspect their actual typography, contrast, composition, clipping, overlap, controls and visual identity. '
+            'Use profile/scenario/time captions to distinguish states; do not claim that unshown states were seen. '
+            'A software screenshot proves neither physical performance nor hardware behavior. '
+            'Respect recorded font/native-raster limitations rather than inventing device observations. '
+            if images else 'No screenshots are attached. Evaluate layout from drawing code; do not pretend to have seen rendered output. ')
         response = await self.parsed(
             "review", self.settings.openai_review_model,
             context + ("" if APP_QUALITY_POLICY in context else APP_QUALITY_POLICY) + ("" if DEVELOPMENT_POLICY in context else DEVELOPMENT_POLICY) + "\nIndependently review this candidate before user-visible delivery. "
@@ -303,7 +343,7 @@ class OpenAIProvider:
             "PC tests passed but do not prove ESP32 timing, numeric parity or requirement coverage. "
             "Inspect the actual source for missing features, state/index/reset bugs, native API assumptions, "
             "expensive host/string work, resource/async error paths and blank/clipped/incoherent screens. "
-            "Evaluate the visual layout from its drawing code; do not pretend you saw a rendered screenshot. "
+            + visual_instruction +
             "IMU profiles supply unit-g vectors: flat (0,0,1), tilt (-.5,.5,sqrt(.5)), vertical (1,0,0), "
             "zero (0,0,0); calibration presses B at1s on tilt. Recovery calibrates tilt, then zero at2-4s, "
             "vertical at4-6s, then restores tilt, with invalid B attempts at3/5s. "
@@ -335,8 +375,8 @@ class OpenAIProvider:
             "Approve only if EVERY named check passes with no concrete unresolved issues.",
             {"confirmed_app":summary,"candidate":generated.model_dump(),"source_identity":identity,
              "review_correction":validation.get('review_correction'),
-             "pc_validation":compact_validation({k:v for k,v in validation.items() if k not in {'source_identity','review_correction'}})},
-            FireAppReview, 6000, "low",
+             "pc_validation":compact_validation({k:v for k,v in validation.items() if k not in {'source_identity','review_correction','_visual_review_images'}})},
+            FireAppReview, 6000, "low", images=images,
         )
         if response.status!="completed" or response.output_parsed is None:
             raise ValueError("Pre-delivery review incomplete or refused")

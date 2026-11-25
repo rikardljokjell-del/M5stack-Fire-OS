@@ -4,6 +4,7 @@ from typing import Literal,Annotated
 from pydantic import Field
 
 from .models import StrictModel
+from .app_sdk import available as sdk_available
 
 UX_POLICY_VERSION = "fire-experience-v2"
 
@@ -13,6 +14,7 @@ def experience_contract(capabilities=None):
     caps=capabilities or {}
     services=set(caps.get("services",["display","buttons","rgb","imu","time"]))
     sound=bool({"speaker","jobs"}<=services)
+    sdk=sdk_available(caps)
     return {
         "version":UX_POLICY_VERSION,"screen":{"width":320,"height":240,"os_insets":0},
         "navigation":{"A":"previous/up","B":"select/confirm","C":"next/down"},
@@ -26,9 +28,9 @@ def experience_contract(capabilities=None):
         "game_audio_required":True,
         "os_settings":{"volume":"OS master/mute authoritative; app gain can only attenuate","backlight":"OS-owned; apps must not override"},
         "audio_gain":{"default":255,"maximum":255,"meaning":"relative channel gain, NOT OS volume percent","master_zero":"silent"},
-        "text":"fixed textSize1, black background; no font/size/transparent-text API; use supported geometry/grid for larger hierarchy",
-        "limits":{"lua_bytes":caps.get("max_memory",131072),"callback_ms":12,"display_calls":24,
-                  "text_bytes":256,"display_work":120000,"rgb_calls":1,"grid_cells":128,"grid_pixels":32768},
+        "text":("Shared bitmap fonts and transparent text_style with aligned clipping; use fire.ui and real SDK assets" if sdk else "fixed textSize1, black background; no font/size/transparent-text API; use supported geometry/grid for larger hierarchy"),
+        "limits":{"lua_bytes":caps.get("max_memory",131072),"callback_ms":12,"display_calls":64 if sdk else 24,
+                  "text_bytes":256,"display_work":None if sdk else 120000,"rgb_calls":1,"grid_cells":384 if sdk else 128,"grid_pixels":32768},
         "lifetime":"until user exits" if caps.get("max_runtime_ms")==0 else "legacy advertised positive lifetime only",
     }
 
@@ -148,12 +150,17 @@ continuous gameplay must not trigger a second menu action or claim OS gestures.
 Design specifically for the full 320x240 canvas; no desktop-style tiny centered
 panel or wasted margins. Full screen means coherent use of the area, not clutter
 or filling every pixel. Use short text, generous readable graphics and consistent
-icons. Actual display.text is small fixed-size with BLACK background: do not put
+icons. Legacy display.text is small fixed-size with BLACK background: do not put
 it on coloured panels expecting transparency. Use short labels on suitable dark
 areas and supported geometry/grid bitmap digits/icons for larger emphasis. Never
 invent font-size APIs, sprite/image loaders, particle engines or audio drivers.
 Balance visual quality with native 32-bit Lua, 128KiB typical heap, 12ms callbacks,
-24 output calls/256 text bytes, one OS sprite presentation per complete frame.
+legacy24 output calls/256 text bytes, one OS sprite presentation per complete frame.
+When fire-app-sdk-1.0 is explicitly negotiated, use its shared bitmap fonts,
+transparent text_style, real assets and fire.ui components instead. SDK permits
+64 TOTAL I/O calls and384 cumulative grid cells, with the same256 text bytes
+INCLUDING measurements and existing memory/time guards. The legacy120000-work
+proxy is not a native SDK timing limit. Follow the selected SDK signatures.
 Cache geometry/strings; bound particles and effects, use elapsed dt and no waits.
 
 Every GAME needs a quick, compact menu BEFORE play: New game/Start, RGB on/off,

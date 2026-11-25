@@ -3,6 +3,7 @@ import copy
 import json
 from pathlib import Path
 
+from .app_sdk import SDK_VERSION,SDK_CONTRACT
 from .models import DeviceEvent, Manifest, PROTOTYPE_SERVICES
 from .api_registry import REGISTRY,API_CONTRACT,ALL_SERVICES
 
@@ -82,7 +83,11 @@ def schemas():
     manifest["required"]+= ["api_version","api_contract"]
     manifest["properties"]["required_services"].update(items={"enum": sorted(ALL_SERVICES)}, uniqueItems=True)
     manifest["properties"]["permissions"].update(items={"enum": ["fire." + name for name in sorted(ALL_SERVICES)]}, uniqueItems=True)
-    return {"device-event-v0.2.schema.json": event, "manifest-fire-lua-0.1.schema.json": legacy,
+    sdk=copy.deepcopy(manifest)
+    sdk["properties"]["api_version"]={"const":SDK_VERSION,"type":"string"}
+    sdk["properties"]["api_contract"]={"const":SDK_CONTRACT,"type":"string"}
+    sdk["allOf"]=[{"properties":{"required_services":{"contains":{"const":"display"}},"permissions":{"contains":{"const":"fire.display"}}}}]
+    return {"manifest-fire-app-sdk-1.0.schema.json":sdk,"device-event-v0.2.schema.json": event, "manifest-fire-lua-0.1.schema.json": legacy,
             "manifest-fire-lua-0.2.schema.json":manifest,"HARDWARE_API-v0.2.json":{"api_contract":API_CONTRACT,"registry":REGISTRY}}
 
 

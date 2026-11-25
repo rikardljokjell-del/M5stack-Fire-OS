@@ -16,6 +16,7 @@ from importlib import metadata
 from pathlib import Path
 from openai import APIStatusError,APIConnectionError
 
+from .app_sdk import SDK_VERSION,SDK_CONTRACT,package_api,selected_context
 from .models import Manifest,AppTestSequence,GeneratedApp
 from .storage import canonical
 from .app_names import app_id_for
@@ -47,10 +48,13 @@ def worker_timeout(app):
 
 async def validate_release(app, store, build_id):
     """Fresh isolated VM per input/timing profile; no 180-frame release gate."""
-    results = []
+    results, visual_candidates = [], []
+    captures={'idle':[16,1400,5400], 'cycle':[1400,5400],
+              'start_b_idle':[16,1400], 'play_directions':[1400,5400],
+              'io_error':[1400], 'long_session':[600000]}
     if app.get("experience_policy_version")==UX_POLICY_VERSION:
         app={**app,"native_host_policy":NATIVE_HOST_POLICY}
-    profiles=RELEASE_PROFILES+(("io_error","io_timeout","io_disconnect") if app.get("api_version")==HARDWARE_API and set(app["required_services"])-BASE_SERVICES else ())
+    profiles=RELEASE_PROFILES+(("io_error","io_timeout","io_disconnect") if app.get("api_version") in {HARDWARE_API,SDK_VERSION} and set(app["required_services"])-BASE_SERVICES else ())
     if app.get("experience_policy_version")==UX_POLICY_VERSION:
         profiles+=("os_long_a","os_long_b","os_long_c","os_double","start_b_idle","play_directions","long_session")
     if 'imu' in app['required_services']:
@@ -58,18 +62,23 @@ async def validate_release(app, store, build_id):
     for profile in profiles:
         try:
             result = await simulate({**app, "profile": profile,
+                'capture_at_ms':captures.get(profile,[]) if 'display' in app['required_services'] else [],
                 **({"test_horizon_ms":600000} if profile=="long_session" and app.get("max_runtime_ms")==0 else {})}, store, build_id)
         except (ValueError, asyncio.TimeoutError) as error:
             raise ValueError(f"Release profile {profile}: {str(error) or 'worker timeout'}") from error
+        visual_candidates.extend({'profile':profile,**frame} for frame in result.pop('visual_frames',[]))
         results.append({"profile": profile, **{k:v for k,v in result.items() if k != "trace"}})
     for raw in app.get("test_sequences",[]):
         scenario=AppTestSequence.model_validate(raw)
         for fault in ("idle","io_error","io_timeout","io_disconnect"):
             try:
                 result=await simulate({**app,"profile":fault,"button_sequence":scenario.buttons,
+                    'capture_at_ms':[min(60000,16+(len(scenario.buttons)-1)*scenario.interval_ms+500)]
+                        if fault in {'idle','io_error'} and 'display' in app['required_services'] else [],
                     "interval_ms":scenario.interval_ms},store,build_id)
             except (ValueError,asyncio.TimeoutError) as error:
                 raise ValueError(f"Scenario {scenario.name}/{fault}: {str(error) or 'worker timeout'}") from error
+            visual_candidates.extend({'profile':fault,'scenario':scenario.name,**frame} for frame in result.pop('visual_frames',[]))
             results.append({"profile":fault,"scenario":scenario.name,**{k:v for k,v in result.items() if k!="trace"}})
     calls,jobs={},{}
     for result in results:
@@ -89,7 +98,10 @@ async def validate_release(app, store, build_id):
     resources={}
     for result in results:
         for kind,values in result.get("resources_used",{}).items():resources[kind]=sorted(set(resources.get(kind,[]))|set(values))
+    from .visual_preview import save_screenshots
+    visual=await asyncio.to_thread(save_screenshots,visual_candidates,store,build_id,sha256(app['main_lua'].encode('utf-8')))
     return {**results[0], "profiles": results, "resources_used":resources,"io_calls":calls,"jobs_started":jobs,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
+            'visual_evidence':visual,
             "native_host_policy":app.get("native_host_policy"),
             "native_numeric_parity": False}
 
@@ -113,9 +125,11 @@ async def simulate(app, store, build_id):
             process.kill()
         await process.wait()
         raise
-    store.log(build_id, "stdout: " + stdout.decode("utf-8", errors="replace"))
+    if len(stdout)>262144:
+        raise ValueError('Lua worker output exceeds bound')
     store.log(build_id, "stderr: " + stderr.decode("utf-8", errors="replace"))
     result = json.loads(stdout)
+    store.log(build_id, "stdout: " + json.dumps({k:v for k,v in result.items() if k!='visual_frames'},ensure_ascii=True))
     if process.returncode != 0 or not result.get("ok"):
         raise ValueError(result.get("error", "Lua worker failed"))
     return result
@@ -130,7 +144,7 @@ async def simulate_bundled(app, store, build_id, child_env):
         payload = canonical(app)
         if len(payload) > 220000:
             raise ValueError("Lua worker input exceeds limit")
-        store.reserve(len(payload) + 40000)
+        store.reserve(len(payload) + 262144)
         request.write_bytes(payload)
         child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         flags = {"creationflags": 0x08000000} if os.name == "nt" else {}
@@ -144,10 +158,10 @@ async def simulate_bundled(app, store, build_id, child_env):
                 process.kill()
             await process.wait()
             raise
-        if not response.exists() or response.stat().st_size > 40000:
+        if not response.exists() or response.stat().st_size > 262144:
             raise ValueError("Lua worker did not return a bounded result")
         result = json.loads(response.read_text(encoding="utf-8"))
-        store.log(build_id, "Bundled Lua worker: " + json.dumps(result, ensure_ascii=True))
+        store.log(build_id, "Bundled Lua worker: " + json.dumps({k:v for k,v in result.items() if k!='visual_frames'}, ensure_ascii=True))
         if process.returncode != 0 or not result.get("ok"):
             raise ValueError(result.get("error", "Lua worker failed"))
         return result
@@ -265,6 +279,8 @@ class Builder:
         if APP_QUALITY_POLICY not in context:
             context += APP_QUALITY_POLICY
         if DEVELOPMENT_POLICY not in context:context+=DEVELOPMENT_POLICY
+        sdk_context=selected_context(build["summary"],capabilities)
+        if sdk_context and sdk_context not in context:context+=sdk_context
         ux_contract=experience_contract(capabilities)
         context+="\nBackend-authored FIRE experience contract:\n"+json.dumps(ux_contract,ensure_ascii=False)
         from .quality import Quality
@@ -337,7 +353,7 @@ class Builder:
                 mark_context_applied(self.store,build_id,context_revision,attempt+1)
                 # Redact before persisting, validating or packaging any model output.
                 generated = type(generated).model_validate(self.store.redactor.value(generated.model_dump()))
-                api_version=(capabilities or {}).get("api_version",BASE_API)
+                api_version=package_api(capabilities)
                 payload = generated.main_lua.encode("utf-8")
                 source_hash=sha256(payload)
                 candidate_key=(source_hash,sha256(canonical([s.model_dump() for s in generated.test_sequences])))
@@ -371,12 +387,13 @@ class Builder:
                     if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
                         raise ValueError("Generated app requests services absent from actual device capabilities")
                     budgets = {"max_memory": capabilities["max_memory"], "max_runtime_ms": capabilities["max_runtime_ms"]} if capabilities else {}
-                    api_version=(capabilities or {}).get("api_version",BASE_API)
+                    api_version=package_api(capabilities)
                     coverage=set(generated.required_services)
                     if 'speaker' in coverage:
                         from .lua_worker import without_literals
                         if not re.search(r'\bfire\s*\.\s*sd\b',without_literals(generated.main_lua)):coverage.discard('sd')
                     result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
+                        "api_contract":SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
                         "coverage_services":sorted(coverage),
                         "hardware":(capabilities or {}).get("hardware") or {},
                         "require_io_coverage":self.settings.fire_ai_mode=="openai",
@@ -399,12 +416,15 @@ class Builder:
                             raise ValueError("Pre-delivery review is required for live generation")
                         from .ai import MockProvider
                         reviewer=MockProvider().review
-                    review=await self.provider_call(build,'testing',progress,reviewer,summary,context,generated,result)
+                    from .visual_preview import image_inputs
+                    review_input={**result,'_visual_review_images':image_inputs(result['visual_evidence'],self.store,build_id,source_hash)}
+                    review=await self.provider_call(build,'testing',progress,reviewer,summary,context,generated,review_input)
                     conflicts=review_conflicts(review,result['source_identity'],require_source=self.settings.fire_ai_mode=='openai')
                     if conflicts:
                         self.store.write(folder/f'review-{attempt+1}-evidence-conflict.json',{'review':review.model_dump(),'conflicts':conflicts})
                         result['review_correction']={'conflicts':conflicts,'instruction':'Re-evaluate THIS SAME candidate against backend source_identity. Different-source device history is not a failure of this candidate. Keep all concrete source/local-test defects; place unmeasured physical timing in verification_notes.'}
-                        review=await self.provider_call(build,'testing',progress,reviewer,summary,context,generated,result)
+                        review=await self.provider_call(build,'testing',progress,reviewer,summary,context,generated,
+                            {**review_input,'review_correction':result['review_correction']})
                         if review_conflicts(review,result['source_identity'],require_source=self.settings.fire_ai_mode=='openai'):
                             raise GenerationResponseError('ai_review_evidence','Kodekontrollen blander kildeversjoner. Den lokalt testede koden er bevart; ingen ny omskriving eller utestet levering er gjort. Velg Resume for å fortsette kodekontrollen.')
                     review_data=self.store.redactor.value(review.model_dump())
@@ -459,7 +479,7 @@ class Builder:
             manifest = Manifest(
                 id=app_id_for(generated.name, project, self.store), name=generated.name, version=f"0.1.{version}",
                 api_version=api_version,
-                api_contract=API_CONTRACT if api_version==HARDWARE_API else None,
+                api_contract=SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
                 required_services=generated.required_services,
                 **budgets,
                 permissions=[f"fire.{s}" for s in generated.required_services], checksum=sha256(payload),

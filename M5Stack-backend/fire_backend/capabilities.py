@@ -1,6 +1,7 @@
 """Hardware-first policy: simulator support never grants a device capability."""
 import json
 
+from .app_sdk import package_api,SDK_VERSION,SDK_CONTRACT
 from .models import PROTOTYPE_SERVICES
 from .api_registry import ALL_SERVICES,BASE_API,generation_contract
 
@@ -23,7 +24,9 @@ def policy(settings, target, capabilities):
     output_declared = bool(caps.get("audio_output", False)) if device else True
     return {
         "target": target, "lua_services": sorted(caps.get("services", [] if device else PROTOTYPE_SERVICES)),
-        "api_version":caps.get("api_version",BASE_API),"api_contract":caps.get("api_contract"),
+        "api_version":package_api(caps),"api_contract":SDK_CONTRACT if package_api(caps)==SDK_VERSION else caps.get("api_contract"),
+        "hardware_api_version":caps.get("api_version",BASE_API),
+        "hardware_api_contract":caps.get("api_contract"),
         "hardware_resources":caps.get("hardware") or {},
         "max_memory": caps.get("max_memory", 131072 if device else 262144),
         "max_runtime_ms": caps.get("max_runtime_ms", 10000),
@@ -78,7 +81,8 @@ def generation_policy(settings, session):
         + ". Conversation audio flags NEVER grant fire.mic/fire.speaker or other Lua APIs. "
         "App lifetime: max_runtime_ms=0 means until user exit, NOT a zero-duration app. "
         "Keep callback/instruction/memory protection; never implement an app auto-close timer. "
-        "Keep each callback below24 display operations,256 text bytes and120000 estimated display-work units. "
+        + ("SDK callbacks: 64 total I/O calls,256 text bytes including measurements,2048 I/O bytes; native12ms time guard remains. " if effective["api_version"]==SDK_VERSION else "Keep each callback below24 display operations,256 text bytes and120000 estimated display-work units. ")
+        +
         "Simplify the complete scene; never split its visible rendering across updates. A legacy ten-second lifetime note is not a requested ten-second game round. "
         "Use announced hardware through OS-owned adapters only. Keep the exact requested app when a firmware adapter is missing; explain the firmware prerequisite without replacing it with an unrelated demo. "
         "Never claim GPS is built in; an external GNSS module may use an announced UART. Jobs must be polled without waiting, closed after success/failure, and timeouts/busy/errors must leave the app responsive. "

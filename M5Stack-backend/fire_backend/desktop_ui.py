@@ -15,6 +15,7 @@ from .desktop_runtime import DesktopRuntime, check_api_key, configure_firewall, 
 from .token_qr import token_matrix
 from .model_catalog import ROLE_MODELS, PRICING_DATE, choice_label, price_detail
 from .status_text import error_text
+from .app_sdk import SDK_VERSION
 
 
 BG, INK, MUTED, ORANGE, NAV = "#f2f4f8", "#182231", "#637083", "#e95725", "#172231"
@@ -774,7 +775,7 @@ class DesktopUI:
     def edit_saved(self):
         app=self.selected_app()
         if app and app.get("device_id"):
-            self.work(lambda:self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"],hardware_preview=app.get("api_version")=="fire-lua-0.2"),
+            self.work(lambda:self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"],hardware_preview=app.get("api_version") in {"fire-lua-0.2",SDK_VERSION}),
                       done=self.choose_pc_session,message="Åpner valgt versjon i AI-dialog på PC …")
 
     def delete_saved(self,only_version=False):
@@ -791,7 +792,7 @@ class DesktopUI:
         app=self.selected_app()
         if app and app.get("device_id"):
             def repair():
-                result=self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"],hardware_preview=app.get("api_version")=="fire-lua-0.2")
+                result=self.runtime.desktop_conversation(app["device_id"],project_id=app["project_id"],base_package_id=app["package_id"],hardware_preview=app.get("api_version") in {"fire-lua-0.2",SDK_VERSION})
                 self.runtime.send_text(result["session_id"],"Undersøk appen og reparer feilen. Behold funksjonene.")
                 return result
             self.work(repair,done=self.choose_pc_session,message="Undersøker valgt app automatisk …")

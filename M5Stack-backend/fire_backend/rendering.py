@@ -18,14 +18,17 @@ and omit it when the black host background suffices. Never alternate empty and d
 frames, flash backgrounds or toggle visibility as a refresh technique. A clear and
 complete redraw in the SAME offscreen frame is safe; never split those across updates.
 Keep text readable, short, aligned and within bounds, with a consistent palette and
-layout. Reserve at least 6 pixels per UTF-8 byte and 8 pixels of height for each
+layout. For legacy display.text reserve at least 6 pixels per UTF-8 byte and 8 pixels of height for each
 single-line label; use simple supported glyphs. Keep entire circles/rectangles
 inside the screen, not merely their anchors. Never redraw only a changed object
 assuming the old canvas survives. Stay
 within callback budgets; choose a simpler complete scene over partial/blank frames.
 Each callback has a cumulative 256-byte text budget, including unchanged labels.
 Native host safety gate (also applies on the FIRST frame): at most ONE rgb.set
-call per callback, at most 128 total grid CELLS and 32768 grid pixels per callback.
+call per callback, at most 128 total grid CELLS and 32768 grid pixels per callback
+for legacy0.2 policy. Explicitly negotiated fire-app-sdk-1.0 instead permits
+384 cumulative grid cells with32768 grid pixels. Use shared bitmap font metrics
+for SDK text_style; its aligned text box clips transparently.
 Older firmware transmits the whole strip synchronously per rgb.set; newer
 firmware buffers writes and flushes outside Lua. Keep this conservative shared
 baseline until a negotiated timing contract permits more. Queue desired colours

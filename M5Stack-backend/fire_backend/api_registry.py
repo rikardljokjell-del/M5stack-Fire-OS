@@ -2,6 +2,7 @@
 import hashlib
 import json
 from importlib.resources import files
+from .app_sdk import SDK_VERSION,SDK_CONTRACT,available as sdk_available,contract as sdk_contract
 
 BASE_API="fire-lua-0.1"
 HARDWARE_API="fire-lua-0.2"
@@ -12,21 +13,24 @@ ALL_SERVICES=set(REGISTRY["services"])
 
 
 def methods_for(api_version):
-    if api_version not in {BASE_API,HARDWARE_API}:raise ValueError("Unsupported Lua API version")
-    return {service:{name:method for name,method in spec["methods"].items() if api_version==HARDWARE_API or method["since"]==BASE_API}
-            for service,spec in REGISTRY["services"].items() if api_version==HARDWARE_API or service in BASE_SERVICES}
+    if api_version not in {BASE_API,HARDWARE_API,SDK_VERSION}:raise ValueError("Unsupported Lua API version")
+    result={service:{name:method for name,method in spec["methods"].items() if api_version!=BASE_API or method["since"]==BASE_API}
+            for service,spec in REGISTRY["services"].items() if api_version!=BASE_API or service in BASE_SERVICES}
+    if api_version==SDK_VERSION:result['display'].update(sdk_contract()['registry']['display']['methods'])
+    return result
 
 
 def generation_contract(api_version,services):
     methods=methods_for(api_version)
-    return {"api_version":api_version,"api_contract":API_CONTRACT if api_version==HARDWARE_API else None,
+    return {"api_version":api_version,"api_contract":SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
             "services":{name:methods[name] for name in sorted(services) if name in methods},
             "limits":REGISTRY["limits"],"semantics":REGISTRY["semantics"],
-            "result_shapes":REGISTRY["result_shapes"],"environment":REGISTRY["environment"] if api_version==HARDWARE_API else {}}
+            "result_shapes":REGISTRY["result_shapes"],"environment":REGISTRY["environment"] if api_version!=BASE_API else {}}
 
 
 def preview_capabilities():
     return {"api_version":HARDWARE_API,"api_contract":API_CONTRACT,"services":sorted(ALL_SERVICES),
+            "app_sdk":{"version":SDK_VERSION,"contract":SDK_CONTRACT},
             "max_memory":131072,"max_runtime_ms":0,"audio_input":False,"audio_output":False,
             "firmware_version":"PC hardware simulation ONLY","hardware":{
                 "gpio_read":[26,36],"gpio_write":[26],"adc":[36],"dac":[26],"pwm":[26],
@@ -35,6 +39,7 @@ def preview_capabilities():
 
 def service_closure(services,api_version=HARDWARE_API):
     required=set(services);methods=methods_for(api_version)
+    if api_version==SDK_VERSION:required.add('display')
     if not required<=set(methods):raise ValueError("Unknown service for this API")
     while True:
         dependencies={dep for name in required for method in methods[name].values() for dep in method.get("requires",[])}
@@ -44,6 +49,11 @@ def service_closure(services,api_version=HARDWARE_API):
 
 def package_compatibility(package,capabilities):
     manifest=package["manifest"]
+    if manifest.get('api_version')==SDK_VERSION:
+        if not sdk_available(capabilities):return 'Appen krever annonsert FIRE App SDK med samme kontrakt i firmware.'
+        if (manifest.get('api_contract')!=SDK_CONTRACT or capabilities.get('api_version')!=HARDWARE_API
+                or capabilities.get('api_contract')!=API_CONTRACT):
+            return 'SDK-pakken og firmware har ulike SDK-/maskinvarekontrakter.'
     if set(service_closure(manifest['required_services'],manifest.get('api_version',BASE_API)))!=set(manifest['required_services']):
         return "Appakken mangler nødvendige maskinvareavhengigheter; bygg en korrigert versjon."
     if manifest.get("api_version",BASE_API)==HARDWARE_API and capabilities.get("api_version",BASE_API)!=HARDWARE_API:

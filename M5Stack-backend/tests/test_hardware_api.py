@@ -5,6 +5,7 @@ from importlib.resources import files
 import pytest
 
 from fire_backend.api_registry import API_CONTRACT, BASE_API, HARDWARE_API, REGISTRY, package_compatibility, preview_capabilities
+from fire_backend.app_sdk import SDK_VERSION,SDK_CONTRACT
 from fire_backend.builds import validate_release
 from fire_backend.hardware_requests import hardware_goal
 from fire_backend.lua_worker import simulate
@@ -206,7 +207,10 @@ async def test_negotiated_sdk_builds_versioned_package_and_legacy_device_cannot_
         assert pc.proposal_id and not backend.store.list('packages')
         await backend.confirm_build(pc,pc.proposal_id);await pc.task
         package=backend.store.get('packages',pc.package_id)
-        assert package['manifest']['api_version']==HARDWARE_API and package['validation']['hardware_simulated']
+        # Explicit PC hardware preview now also advertises the optional App SDK;
+        # the hardware wire contract itself remains 0.2 and unchanged.
+        assert package['manifest']['api_version']==SDK_VERSION and package['manifest']['api_contract']==SDK_CONTRACT
+        assert package['validation']['hardware_simulated']
         assert package_compatibility(package,CAPS)
         assert not package_compatibility(package,preview_capabilities())
         bad=preview_capabilities();bad['hardware']['i2c']=[]

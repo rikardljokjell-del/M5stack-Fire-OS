@@ -21,7 +21,7 @@ async def revalidate_package(store,package_id,*,apply=False):
         from .app_quality import UX_POLICY_VERSION
         validation=await validate_release({'main_lua':source,'required_services':manifest['required_services'],
             **({'experience_policy_version':UX_POLICY_VERSION} if package.get('mode')=='openai' else {}),
-            'api_version':manifest['api_version'],'max_memory':manifest['max_memory'],
+            'api_version':manifest['api_version'],'api_contract':manifest.get('api_contract'),'max_memory':manifest['max_memory'],
             'max_runtime_ms':manifest['max_runtime_ms'],'hardware':package.get('validation',{}).get('resources_used',{})},store,package_id)
     except ValueError as error:
         if apply:

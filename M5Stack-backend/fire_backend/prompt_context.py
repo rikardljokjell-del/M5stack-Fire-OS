@@ -69,7 +69,7 @@ def compact_validation(validation):
     checkpoint content are retained, with identical records referenced once.
     """
     if not isinstance(validation,dict):return validation
-    result={k:copy.deepcopy(v) for k,v in validation.items() if k not in {'trace','profiles','imu_scenes'}}
+    result={k:copy.deepcopy(v) for k,v in validation.items() if k not in {'trace','profiles','imu_scenes','_visual_review_images'}}
     scenes=[];scene_ids={};groups=[];group_ids={}
     for profile in validation.get('profiles',[]):
         metrics={k:copy.deepcopy(v) for k,v in profile.items() if k not in {'profile','scenario','trace','imu_scenes'}}

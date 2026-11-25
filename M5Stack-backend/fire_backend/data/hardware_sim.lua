@@ -9,11 +9,11 @@ return function(available, specs, resources, profile, now, trace, services)
     if not contains(resources[kind],value) then error("Unannounced hardware resource: "..kind) end
     used[kind]=used[kind] or {};used[kind][value]=true
   end
-  local function note(name,bytes)
+  local function note(name,bytes,quiet)
     io_calls=io_calls+1;io_bytes=io_bytes+(bytes or 0)
     peak_io=math.max(peak_io,io_calls);peak_bytes=math.max(peak_bytes,io_bytes)
     if io_calls>64 or io_bytes>2048 then error("Hardware callback I/O budget exceeded") end
-    trace(name,bytes or 0)
+    if not quiet then trace(name,bytes or 0) end
   end
   local function check(v,s)
     local t=s.type
@@ -198,6 +198,8 @@ return function(available, specs, resources, profile, now, trace, services)
     return result
   end end
   return {begin_callback=function()io_calls,io_bytes=0,0 end,string=safe_string,table=safe_table,
+    charge_sdk=function(name,bytes)local k="display."..name;calls[k]=(calls[k] or 0)+1;note(k,bytes,true)end,
+    charge_base=function(name,bytes)calls[name]=(calls[name] or 0)+1;note(name,bytes,true)end,
     metrics=function()
       local resources_used={};for kind,values in pairs(used) do local list={};for v in pairs(values) do list[#list+1]=v end;table.sort(list);resources_used[kind]=list end
       return {resources_used=resources_used,max_io_calls=peak_io,max_io_bytes=peak_bytes,max_jobs=peak_jobs,calls=calls,jobs_started=jobs_started}

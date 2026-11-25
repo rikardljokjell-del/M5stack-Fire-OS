@@ -60,9 +60,12 @@ function update(dt) fire.display.text(0,0,'Seen:'..seen,65535) end'''), 'profile
 
 
 async def test_every_imu_release_includes_sensor_profiles_and_keeps_physical_unverified(tmp_path):
-    class Log:
-        def log(self,*args): pass
-    result=await validate_release(app('function update(dt) fire.imu.accel() fire.display.text(0,0,"Level",65535) end'),Log(),'build-imu')
+    from fire_backend.storage import Store
+    from fire_backend.security import Redactor
+    # Release validation now persists real source-bound screenshots as well as
+    # logs, so use the actual bounded store instead of a log-only stub.
+    store=Store(tmp_path,Redactor('test-key-only'),16*1024*1024)
+    result=await validate_release(app('function update(dt) fire.imu.accel() fire.display.text(0,0,"Level",65535) end'),store,'build-imu')
     sensor={r['profile']:r for r in result['profiles'] if r['profile'].startswith('imu_')}
     assert set(sensor)=={'imu_flat','imu_tilt','imu_vertical','imu_zero','imu_calibration','imu_recovery','imu_tolerance','imu_motion'}
     assert all(len(r['imu_scenes'])==5 for r in sensor.values())

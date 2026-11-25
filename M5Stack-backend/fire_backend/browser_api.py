@@ -5,6 +5,7 @@ import hmac
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
@@ -33,8 +34,15 @@ class Text(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
+class PreviewInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    buttons: list[Literal['A','B','C']] = Field(default_factory=list,max_length=32)
+    elapsed_ms: int = Field(default=1000,ge=16,le=12000,strict=True)
+
+
 def busy(service):
     return bool(service.device_builds or service.build_lock.locked() or service.repairs.tasks or service.active_downloads
+                or getattr(service,'preview_service',None) and service.preview_service.lock.locked()
                 or any(s.lock.locked() or any(t and not t.done() for t in
                        (s.task, s.operation_task, s.input_task, s.speech_task)) for s in service.sessions.values()))
 
@@ -326,6 +334,13 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
         if not s:
             raise Conflict("Koble til FIRE før installasjon. Pakken er lagret i biblioteket.")
         return await service.install_saved(s, package_id)
+
+    @app.post('/web/packages/{package_id}/preview',dependencies=[Depends(signed_in)])
+    async def package_preview(package_id:str,body:PreviewInput,service=Depends(backend)):
+        from .visual_preview import PreviewService
+        if not hasattr(service,'preview_service'):
+            service.preview_service=PreviewService(service)
+        return await service.preview_service.package(package_id,body.buttons,body.elapsed_ms)
 
     @app.delete("/web/apps/{project_id}", dependencies=[Depends(signed_in)])
     async def delete_app(project_id: str, service=Depends(backend)):
