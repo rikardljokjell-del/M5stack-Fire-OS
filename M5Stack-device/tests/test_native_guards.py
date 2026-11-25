@@ -7,6 +7,8 @@ occurs. A missing host compiler is reported as SKIPPED, never as a passing test.
 """
 
 import os
+import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -59,6 +61,30 @@ class NativeGuardTests(unittest.TestCase):
             checked = subprocess.run([str(output)], cwd=directory, capture_output=True, text=True, timeout=90)
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
             return checked.stdout
+
+    def test_start_receipt_source_binding(self):
+        # Evaluate the production serializer's bounded field expression without
+        # hardware/network stubs; missing wire identity must fail this guard.
+        source = (ROOT / "src/fire_backend_client.cpp").read_text(encoding="utf-8")
+        method = source.split("bool FireBackendClient::appStarted(", 1)[1].split(
+            "bool FireBackendClient::appHealthy(", 1)[0]
+        expression = method.split("String fields =", 1)[1].split(";", 1)[0]
+        values = {"runId": 'run-"escaped', "packageId": "build-tested", "sourceHash": "a" * 64}
+        tokens = re.findall(r'"(?:\\.|[^"\\])*"|jsonEscape\((?:runId|packageId|sourceHash)\)|\+|\s+', expression)
+        self.assertEqual("".join(tokens), expression)
+        fields = ""
+        for token in tokens:
+            if token.startswith('"'):
+                fields += json.loads(token)
+            elif token.startswith("jsonEscape("):
+                fields += json.dumps(values[token[11:-1]])[1:-1]
+        self.assertEqual(json.loads("{" + fields[1:] + "}"), {
+            "run_id": values["runId"], "package_id": values["packageId"],
+            "source_sha256": values["sourceHash"],
+        })
+        calls = re.findall(r'appStarted\(\s*runId\s*,\s*packageId\s*,\s*([^,)]+)',
+                           (ROOT / "src/fire_os.cpp").read_text(encoding="utf-8"))
+        self.assertEqual(calls, ["luaSourceHash_"] * 3)
 
     def test_actual_cpp_guards(self):
         output = self.run_native("native_guards.cpp")

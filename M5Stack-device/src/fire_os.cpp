@@ -59,7 +59,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.3.0-rc6";
+constexpr char kFirmwareVersion[] = "fire-os-1.3.0-rc7";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -7656,7 +7656,7 @@ void FireOS::handleBackendMessage(const String& message) {
     if(admission==fire_run_receipts::Admission::Duplicate) {
       const bool started=receipt->state==fire_run_receipts::State::Started || receipt->state==fire_run_receipts::State::Healthy;
       if(started && luaAppActive_ && luaRuntime_ && luaRuntime_->running() && luaRunId_==runId &&
-         luaPackageId_==packageId && luaSourceHash_==commandSource) backendClient_->appStarted(runId,packageId);
+         luaPackageId_==packageId && luaSourceHash_==commandSource) backendClient_->appStarted(runId,packageId,luaSourceHash_);
       else backendClient_->appFailed(runId,packageId,"previous_failure","Run command was already consumed");
       return;
     }
@@ -7676,7 +7676,7 @@ void FireOS::handleBackendMessage(const String& message) {
       // Bind the normal authorized command without resetting measurements/UI.
       luaRunId_=runId;luaHealthySent_=false;luaAiBindPackageId_=String();luaAiBindSent_=false;
       receipt->state=fire_run_receipts::State::Started;
-      if(backendClient_) backendClient_->appStarted(runId,packageId,luaDiagnosticsJson("start"));
+      if(backendClient_) backendClient_->appStarted(runId,packageId,luaSourceHash_,luaDiagnosticsJson("start"));
       redrawRequested_=true;return;
     }
     if (path.length() > 0 &&
@@ -7695,7 +7695,7 @@ void FireOS::handleBackendMessage(const String& message) {
       }
       receipt->state=fire_run_receipts::State::Started;
       if (backendClient_)
-        backendClient_->appStarted(runId, packageId,
+        backendClient_->appStarted(runId, packageId, luaSourceHash_,
                                    luaDiagnosticsJson("start"));
     } else {
       receipt->state=fire_run_receipts::State::Failed;

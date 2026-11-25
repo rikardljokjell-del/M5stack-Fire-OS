@@ -683,9 +683,10 @@ bool FireBackendClient::deviceInstallResult(const String& installId,
 }
 
 bool FireBackendClient::appStarted(const String& runId, const String& packageId,
-                                   const String& diagnostics) {
+                                   const String& sourceHash, const String& diagnostics) {
   String fields = ",\"run_id\":\"" + jsonEscape(runId) +
-                  "\",\"package_id\":\"" + jsonEscape(packageId) + "\"";
+                  "\",\"package_id\":\"" + jsonEscape(packageId) +
+                  "\",\"source_sha256\":\"" + jsonEscape(sourceHash) + "\"";
   if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
   return sendEvent("app_started", fields);
 }

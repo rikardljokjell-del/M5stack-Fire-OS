@@ -66,8 +66,14 @@ async def built_and_started(tmp_path,kind='analysis'):
     run=await b.confirm_run(s,package['id'])
     assert b.device_record(s).get('active_run_id') is None
     ack=DeviceEvent(device_id=owner,event='app_started',protocol_version='0.2',event_id='started-test',session_id=s.id,
-        boot_id=s.boot_id,run_id=run['run_id'],package_id=package['id'],source_sha256=package['manifest']['checksum'])
-    with pytest.raises(ValueError,match='checksum'):await dispatch(b,s,ack.model_copy(update={'event_id':'wrong-source','source_sha256':'0'*64}))
+        boot_id=s.boot_id,run_id=run['run_id'],package_id=package['id'],source_sha256=package['manifest']['checksum'],
+        diagnostics={'phase':'start','callback_us':60499})
+    for event_id,checksum in [('missing-source',None),('wrong-source','0'*64)]:
+        with pytest.raises(ValueError,match='checksum'):
+            await dispatch(b,s,ack.model_copy(update={'event_id':event_id,'source_sha256':checksum}))
+        record=b.device_record(s)
+        assert record.get('active_run_id') is None and record.get('pending_run_id')==run['run_id']
+        assert record['runtime_status']=='starting' and b.store.get('commands',run['run_id'])['status']=='pending'
     await dispatch(b,s,ack)
     assert b.device_record(s)['active_run_id']==run['run_id']
     return b,s,package,run,socket,provider

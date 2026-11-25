@@ -88,7 +88,7 @@ class FireBackendClient {
                            bool ok, const String& archiveHash,
                            const String& message);
   bool appStarted(const String& runId, const String& packageId,
-                  const String& diagnostics = String());
+                  const String& sourceHash, const String& diagnostics = String());
   bool appHealthy(const String& runId, const String& packageId,
                   const String& diagnostics = String());
   bool appFailed(const String& runId, const String& packageId,
