@@ -169,6 +169,40 @@ For the original matched legacy/SDK controls, final source sizes were
 for racing. All six builds failed. Those observations alone establish
 neither a successful before/after delivery nor general code-size savings.
 
+## Targeted repairs after the standards checkpoint
+
+These runs reuse the same projects, builds and retained source, rather than
+starting new apps. The historical cohorts remain unchanged. Temporary
+Sol/Terra roles apply only to evaluation; saved Windows models are unchanged.
+
+| Retained case | New generations / reviews | Seconds | Estimated USD | Result |
+| --- | ---: | ---: | ---: | --- |
+| Weather: font repair | 1 / 1 | 64.064 | 0.073389000 | Rejected: stale data without freshness/date |
+| Weather: freshness continuation | 1 / 1 | 69.871 | 0.072275000 | Rejected: local timestamp comparison across autumn DST |
+| Platform game: audio cleanup | 2 / 2 | 107.027 | 0.135415200 | Pipeline-ready and deterministic RGB/audio pass |
+
+The first repair's next request was blocked before API access by the
+benchmark's conservative USD0.25 per-case reservation, rather than a provider
+outage. Only the temporary evaluation limits then changed to USD0.35 per case
+and 4,000/2,000 output tokens for generation/review; the production ledger
+and profiles were preserved. The global experimental USD1 admission guard
+remained. Expected completion of a bounded case is now distinguished from
+an API/adapter failure in the test runner.
+
+The platform source is
+`f4a16ec14dc5cf55bd7942e97f7938f4374ca7cc20a90e06ceb2e6b461c3fbe5`.
+Seven source-/PNG-verified images show menus, settings, play and LED off/on.
+The coordinator independently inspected all seven. An initial suspicion of
+title/score overlap was withdrawn after image and pixel-coordinate checks:
+title ink occupies x13..183, while score ink occupies x256..303. No source
+or measured result was changed because of that mistaken suspicion. This is
+PC visual evidence, not physical play/audio/timing verification.
+
+Across all runs through this checkpoint, actual provider-reported requests
+have an estimated list-price cost of USD0.663989390. No physical AI-app
+installation or RUN command was created. Weather remains rejected with its
+source preserved; no additional weather request is authorized in this batch.
+
 One simulator accounting defect was reproduced with the same gallery source
 and duration: retaining more diagnostic frames increased the reported app
 memory, and eight captures could falsely exhaust the 128 KiB quota. The
@@ -249,6 +283,34 @@ The 45.038-second return observation recorded an 86,010-microsecond loop gap;
 a subsequent ordinary restart was observed and COM3 closed. The consumed
 private image remains in inactive B until a separately verified replacement;
 this is an intermediate test state, not the final firmware handoff.
+
+## Third physical SDK probe: isolated baselines
+
+SDKQA3 retained the exact same production base and guards, adding bounded
+timing checkpoints and small baseline fixtures. Actual callback measurements
+confirmed 240 MHz on core1 and the existing 320×240, 16-bit PSRAM canvas.
+Legacy arithmetic took 735 microseconds on its first update and at most
+3,066; SDK arithmetic took 712 and at most 908. An empty SDK update took
+59 and at most 158 microseconds. Those observations do not support treating
+the earlier 145 ms residual as ordinary VM execution time.
+
+The first black-clear callback took 11,044 microseconds. A later clear reached
+12,341, including 12,100 in the native wrapper and 12,050 in the Host, and
+failed the unchanged final time check after a normal `lua_pcall` return.
+There was no throw/catch event to time in this run. The four prior baseline
+phases completed; the rest, including theme-color clearing and all gallery
+pages, did not run. Full-screen canvas filling is therefore a measured
+bottleneck, while the cost of the earlier exception path remains unmeasured.
+
+The retained RC9 returned through ordinary health approval to A/app0,
+sequence25 VALID/CRC. The coordinator independently checked both metadata
+CRCs and all three raw observation-log hashes. The return observation lasted
+45.090 seconds with a 96,004-microsecond maximum loop gap, followed by a
+20.148-second ordinary reboot observation. Neither showed panic/watchdog;
+COM3 was closed. Inactive B contains the consumed private SDKQA3 image until
+later cleanup. No clean SDK installation or physical visual approval is
+claimed. A bounded fill optimization using the existing canvas is the next
+code change; no VM allocation policy or resource quota is increased.
 
 ## Compile-time footprint
 

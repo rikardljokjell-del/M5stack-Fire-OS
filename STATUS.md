@@ -29,10 +29,10 @@ Den registrerte firmware-SD-skrivefeilen over undersøkes ikke i dette arbeidet.
 
 Backendens reviderte SDK-integrasjon har bestått 835 regresjonstester, og
 koordinatoren har prøvd faktisk Studio-forhåndsvisning med virtuelle A/B/C,
-nullstilling og tidsfremdrift. Dette er PC-verifikasjon. Begge de private
+nullstilling og tidsfremdrift. Dette er PC-verifikasjon. De private
 SDK-prøvene på FIRE stoppet ved den uendrede 12 ms callbackgrensen; ren SDK-
 firmware er derfor ikke godkjent eller offentlig publisert. Enheten er
-ført tilbake til RC9 i A/app0, sekvens 23 VALID/CRC, med COM3 lukket.
+ført tilbake til RC9 i A/app0, sekvens 25 VALID/CRC, med COM3 lukket.
 Native tegneytelse og AI-generering forbedres og måles videre. Den første
 AI-kohorten ga ingen godkjente leveranser; dette skjules ikke av grønne
 adaptertester. Se [den løpende SDK-evalueringen](M5Stack-backend/docs/FIRE_APP_SDK_EVALUATION.md).
