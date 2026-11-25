@@ -3,6 +3,7 @@
 #include "fire_json_guard.h"
 #include "fire_app_graphics.h"
 #include "fire_app_bitmap.h"
+#include "fire_canvas_fill.h"
 #include "fire_app_sdk_data.h"
 
 #include <M5Unified.h>
@@ -7457,7 +7458,10 @@ void FireOS::handleBackendMessage(const String& message) {
 
 void FireOS::luaDisplayClear(void* context, int color) {
   auto* os = static_cast<FireOS*>(context);
-  if (os) ui.fillSprite(static_cast<uint16_t>(color));
+  if (os) {
+    fire_canvas_fill::Surface<M5Canvas> surface(ui);
+    surface.fillRect(0,0,ui.width(),ui.height(),static_cast<uint16_t>(color));
+  }
 }
 
 void FireOS::luaDisplayCircle(void* context, int x, int y, int radius,
@@ -7517,7 +7521,8 @@ void FireOS::luaDisplayGrid(void* context, int x, int y, int cellWidth,
 bool FireOS::luaDisplayTextStyle(void*,int x,int y,const char* text,size_t length,
                                 int color,const char* id,int align,int width) {
   const auto* font=fire_app_bitmap::find(FireSdkData::kFonts,FireSdkData::kFontCount,id);
-  return font && fire_app_bitmap::text(ui,*font,x,y,text,length,uint16_t(color),align,width);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  return font && fire_app_bitmap::text(surface,*font,x,y,text,length,uint16_t(color),align,width);
 }
 bool FireOS::luaDisplayMeasureText(void*,const char* text,size_t length,const char* id,int* w,int* h) {
   const auto* font=fire_app_bitmap::find(FireSdkData::kFonts,FireSdkData::kFontCount,id);
@@ -7525,10 +7530,12 @@ bool FireOS::luaDisplayMeasureText(void*,const char* text,size_t length,const ch
 }
 bool FireOS::luaDisplayAsset(void*,int x,int y,const char* id,int scale,int tint,bool flipX,bool flipY) {
   const auto* entry=fire_app_bitmap::find(FireSdkData::kAssets,FireSdkData::kAssetCount,id);
-  return entry && fire_app_bitmap::asset(ui,*entry,x,y,scale,tint,flipX,flipY);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  return entry && fire_app_bitmap::asset(surface,*entry,x,y,scale,tint,flipX,flipY);
 }
 void FireOS::luaDisplayRoundRect(void*,int x,int y,int w,int h,int r,int color,bool filled) {
-  fire_app_graphics::roundRect(ui,x,y,w,h,r,uint16_t(color),filled);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  fire_app_graphics::roundRect(surface,x,y,w,h,r,uint16_t(color),filled);
 }
 void FireOS::luaDisplayTriangle(void* ctx,int x1,int y1,int x2,int y2,int x3,int y3,int color,bool filled) {
   const int16_t points[]={int16_t(x1),int16_t(y1),int16_t(x2),int16_t(y2),int16_t(x3),int16_t(y3)};
@@ -7540,17 +7547,20 @@ void FireOS::luaDisplayPolyline(void*,const int16_t* values,size_t count,int col
     if (count>fire_app_graphics::kMaxPolygonPoints) return;
     fire_app_graphics::Point points[fire_app_graphics::kMaxPolygonPoints];
     for (size_t i=0;i<count;++i) points[i]={values[i*2],values[i*2+1]};
-    fire_app_graphics::polygon(ui,points,count,uint16_t(color));
+    fire_canvas_fill::Surface<M5Canvas> surface(ui);
+    fire_app_graphics::polygon(surface,points,count,uint16_t(color));
   } else {
     for (size_t i=1;i<count;++i) ui.drawLine(values[(i-1)*2],values[(i-1)*2+1],values[i*2],values[i*2+1],color);
     if (closed) ui.drawLine(values[(count-1)*2],values[(count-1)*2+1],values[0],values[1],color);
   }
 }
 void FireOS::luaDisplayGradient(void*,int x,int y,int w,int h,int a,int b,bool vertical) {
-  fire_app_graphics::gradient(ui,x,y,w,h,uint16_t(a),uint16_t(b),vertical);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  fire_app_graphics::gradient(surface,x,y,w,h,uint16_t(a),uint16_t(b),vertical);
 }
 void FireOS::luaDisplayArc(void*,int x,int y,int radius,int start,int end,int color,int thickness) {
-  fire_app_graphics::arc(ui,x,y,radius,start,end,uint16_t(color),thickness);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  fire_app_graphics::arc(surface,x,y,radius,start,end,uint16_t(color),thickness);
 }
 
 bool FireOS::luaButtonPressed(void* context, const char* button) {

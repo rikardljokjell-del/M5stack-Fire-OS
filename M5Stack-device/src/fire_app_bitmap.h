@@ -7,8 +7,15 @@
 namespace fire_app_bitmap {
 template<class Entry>
 const Entry* find(const Entry* entries,size_t count,const char* id) {
-  if (!id) return nullptr;
-  // Does not require the generator to sort IDs.
+  if (!id || !entries) return nullptr;
+  // Canonical assets/fonts are ID-sorted. Retain a linear fallback for portable
+  // callers with unsorted tables, and preserve unknown-ID rejection.
+  size_t low=0,high=count;
+  while (low<high) {
+    const size_t middle=low+(high-low)/2;
+    if (strcmp(entries[middle].id,id)<0) low=middle+1;else high=middle;
+  }
+  if (low<count && !strcmp(entries[low].id,id)) return entries+low;
   for (size_t i=0;i<count;++i) if (!strcmp(entries[i].id,id)) return entries+i;
   return nullptr;
 }

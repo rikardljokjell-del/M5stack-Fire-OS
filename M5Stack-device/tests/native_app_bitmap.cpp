@@ -19,6 +19,11 @@ int main() {
   const Font fonts[]={{"test",5,4,1,glyphs,3}};
   const auto& font=fonts[0];int w=0,h=0;
   assert(fire_app_bitmap::find(fonts,1,"test")==fonts && !fire_app_bitmap::find(fonts,1,"bad"));
+  assert(!fire_app_bitmap::find(fonts,1,nullptr) && !fire_app_bitmap::find(fonts,0,"test"));
+  assert(!fire_app_bitmap::find(static_cast<const Font*>(nullptr),1,"test"));
+  const Font unsorted[]={{"z",5,4,1,glyphs,3},{"a",5,4,1,glyphs,3},{"m",5,4,1,glyphs,3}};
+  for(size_t i=0;i<3;++i) assert(fire_app_bitmap::find(unsorted,3,unsorted[i].id)==unsorted+i);
+  assert(!fire_app_bitmap::find(unsorted,3,"missing") && !fire_app_bitmap::find(unsorted,3,""));
   assert(fire_app_bitmap::measure(font,"A\xc3\xa6",3,w,h) && w==9 && h==5);
   assert(fire_app_bitmap::measure(font,"\xf0\x9f\x98\x80",4,w,h) && w==4);
   assert(!fire_app_bitmap::measure(font,"\xc0\xaf",2,w,h));
@@ -51,15 +56,19 @@ int main() {
   assert(fire_app_bitmap::asset(tinted,icon,-1,-1,1,0x1234,false,false));
   assert(tinted.pixels[0]==0x1234);
   for (const auto& entry:FireSdkData::kAssets) {
+    assert(fire_app_bitmap::find(FireSdkData::kAssets,FireSdkData::kAssetCount,entry.id)==&entry);
     assert(fire_app_bitmap::validAsset(entry));
     assert(fire_app_bitmap::asset(tinted,entry,-4,-3,2,-1,true,false));
   }
   for (const auto& entry:FireSdkData::kFonts) {
+    assert(fire_app_bitmap::find(FireSdkData::kFonts,FireSdkData::kFontCount,entry.id)==&entry);
     for(size_t i=0;i<entry.glyphCount;++i)
       assert(fire_app_bitmap::glyph(entry,entry.glyphs[i].codepoint)==entry.glyphs+i);
     assert(fire_app_bitmap::measure(entry,"FIRE 123",8,w,h) && h==entry.lineHeight);
     assert(fire_app_bitmap::text(tinted,entry,0,0,"FIRE 123",8,0xffff,0,320));
     assert(fire_app_bitmap::measure(entry," ",1,w,h));
   }
+  assert(!fire_app_bitmap::find(FireSdkData::kAssets,FireSdkData::kAssetCount,"missing.asset"));
+  assert(!fire_app_bitmap::find(FireSdkData::kFonts,FireSdkData::kFontCount,"missing.font"));
   puts("PASS bitmap font UTF-8 metrics alignment clipping and palette RLE transparency flips tint");
 }
