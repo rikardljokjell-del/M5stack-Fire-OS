@@ -396,7 +396,8 @@ class FireOS {
     SdRemove,
     PowerSleep,
     SpeakerTone,
-    SpeakerPlay
+    SpeakerPlay,
+    RuntimeAi
   };
   struct LuaHardwareJob {
     uint16_t id = 0;
@@ -418,6 +419,7 @@ class FireOS {
     uint16_t addressCount = 0;
     uint32_t written = 0;
     String text;
+    String aiRequestId, aiSchema;
     String errorCode;
     String path;
     uint32_t offset = 0;
@@ -436,6 +438,12 @@ class FireOS {
   static constexpr uint8_t kMaxLuaJobs = 4;
   LuaHardwareJob luaJobs_[kMaxLuaJobs];
   uint16_t nextLuaJobId_ = 1;
+  uint32_t nextRuntimeAiRequest_ = 0;
+  bool luaRuntimeAiAllowed_ = false, runtimeAiEnabled_ = true;
+  bool aiRuntimeAuto_ = true, aiRuntimeModeAcked_ = false;
+  String luaAiBindPackageId_;
+  uint32_t luaAiBindAt_ = 0;
+  bool luaAiBindSent_ = false;
   bool luaGpioClaimed_[40] = {};
   uint8_t luaGpioMode_[40] = {};
   int8_t luaPwmPin_ = -1;
@@ -557,12 +565,14 @@ class FireOS {
   int64_t lastLoopStartedUs_ = 0;
   uint32_t minLargestInternal_ = UINT32_MAX;
   String buildNoticeName_;
+  String buildNoticePackageId_, buildNoticeRunBuildId_, buildNoticeRunPackageId_;
   String buildNoticeMessage_ = "Appen er klar";
   uint8_t buildProgress_ = 0;
   String buildPhase_;
   String buildStatusMessage_;
   String aiProposalId_;
   String aiPackageId_;
+  String aiReadyPackageId_;
   String aiInstallId_;
   String luaRunId_;
   bool luaHealthySent_ = false;
@@ -738,6 +748,8 @@ class FireOS {
   uint8_t shortcutPositionForAction(uint8_t action) const;
   String shortcutActionLabel(uint8_t action) const;
   void serviceLuaHardwareJobs();
+  void cancelLuaRuntimeAi(LuaHardwareJob& job,const char* reason);
+  void handleRuntimeAiResult(const String& message);
   void releaseLuaHardware();
   LuaHardwareJob* findLuaJob(uint16_t id);
   const LuaHardwareJob* findLuaJob(uint16_t id) const;
@@ -793,6 +805,8 @@ class FireOS {
   static bool luaJobResultCallback(void*, uint16_t, FireLuaRuntime::JobSnapshot*);
   static bool luaJobCloseCallback(void*, uint16_t);
   static bool luaJobCancelCallback(void*, uint16_t);
+  static uint16_t luaAiRequestCallback(void*,const char*,size_t,const char*,size_t,
+                                       const char*,size_t,uint32_t,const char**);
   void rebuildAppManagerItems();
   int8_t managerItemForAppId(const String& appId) const;
   void sendAppInventory();
@@ -880,7 +894,8 @@ class FireOS {
                            const char* phase, bool releaseBuffer = true);
   void handleAiApiButton(uint8_t index);
   bool startLuaApp(const String& path, const String& name = String(),
-                   const String& launchPackageId = String());
+                   const String& launchPackageId = String(),
+                   const String& expectedSourceHash = String());
   void stopLuaApp(const String& reason = String());
   void updateLuaApp();
   bool runningSdkLuaApp() const;
@@ -911,7 +926,8 @@ class FireOS {
   static void backendState(void* context, bool connected, const String& status);
   static void packageStatus(void* context, const String& status);
   static void packageResult(void* context, bool ok, const String& packageId,
-                            const String& archiveHash, const String& message);
+                            const String& installId, const String& archiveHash,
+                            const String& message);
   static void firmwareStatus(void* context, const String& status);
   static void firmwareResult(void* context, const String& transferId,
                              const String& firmwareId, bool ok,

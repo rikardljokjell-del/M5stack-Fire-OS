@@ -16,6 +16,7 @@ class FireBackendClient {
                  const String& deviceId, const String& firmwareVersion);
   void setProjectId(const String& projectId) { projectId_ = projectId; }
   void setConversationMode(const String& mode);
+  void setRuntimeAiMode(const String& mode,bool publish=true);
   void setAppMode(const String& mode, const String& basePackageId = String());
   void setCallbacks(void* context, MessageCallback message,
                     StateCallback state);
@@ -65,6 +66,11 @@ class FireBackendClient {
   bool confirmBuild(const String& proposalId,
                     const String& repairId = String());
   bool confirmRun(const String& packageId);
+  bool runtimeAiRequest(const String& requestId,const String& appId,const String& packageId,
+                        const String& sourceHash,const String& runId,const String& instructions,
+                        const String& data,const String& schema,uint32_t timeoutMs);
+  bool runtimeAiCancel(const String& requestId,const String& appId,const String& packageId,
+                       const String& sourceHash,const String& runId);
   bool appRepairPrepare(const String& appId, const String& packageId,
                         const String& appVersion, const String& sha256,
                         const String& errorCode, const String& message,
@@ -126,6 +132,7 @@ class FireBackendClient {
   String sessionId_;
   String resumeSessionId_;
   String conversationMode_;
+  String runtimeAiMode_ = "auto";
   String pendingAppMode_;
   String pendingBasePackageId_;
   bool sessionStarted_ = false;

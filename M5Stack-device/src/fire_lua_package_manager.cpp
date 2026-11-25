@@ -102,6 +102,7 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
   reverseGeneration_ = reverseTransport_ ? reverseTransport_->generation() : 0;
   installedPath_ = "";
   received_ = 0;
+  progress_=0;
   contentLength_ = 0;
   headerBuffer_ = "";
   lastDataAt_ = millis();
@@ -120,7 +121,7 @@ void FireLuaPackageManager::service(bool wifiConnected) {
   io_.wifi = wifiConnected;
   if (io_.poll(status_) && statusCallback_) statusCallback_(callbackContext_, status_);
   if (!io_.running && io_.completed.exchange(false) && resultCallback_)
-    resultCallback_(callbackContext_, io_.ok, io_.first, io_.second, io_.message);
+    resultCallback_(callbackContext_, io_.ok, io_.first, io_.completionId, io_.second, io_.message);
 }
 void FireLuaPackageManager::task(void* context) {
   auto* self = static_cast<FireLuaPackageManager*>(context);
@@ -203,6 +204,7 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
     }
     headerBuffer_ = "";
     state_ = State::Downloading;
+    progress_=contentLength_?min<uint32_t>(100,uint64_t(received_)*100/contentLength_):0;
     emitStatus("Downloading " + String(received_) + "/" + String(contentLength_));
   }
   if (state_ == State::Downloading) {
@@ -221,6 +223,7 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
       budget -= min<size_t>(budget, amount);
       lastDataAt_ = millis();
     }
+    progress_=contentLength_?min<uint32_t>(100,uint64_t(received_)*100/contentLength_):0;
     emitStatus("Downloading " + String(received_) + "/" + String(contentLength_));
     if (received_ == contentLength_) {
       archive_.flush();
@@ -257,7 +260,7 @@ void FireLuaPackageManager::finishDownload() {
   }
   if (SD.exists(path)) SD.remove(path);
   mbedtls_sha256_free(&sha256_);
-  io_.result(false, ok, packageId_, archiveHash, ok ? String("installed") : reason);
+  io_.result(false, ok, packageId_, archiveHash, ok ? String("installed") : reason,installId_);
   emitStatus(ok ? "Package installed" : reason);
 }
 
@@ -274,7 +277,7 @@ void FireLuaPackageManager::fail(const String& reason) {
   mbedtls_sha256_free(&sha256_);
   state_ = State::Idle;
   emitStatus(reason);
-  io_.result(false, false, packageId_, "", reason);
+  io_.result(false, false, packageId_, "", reason,installId_);
 }
 
 uint16_t FireLuaPackageManager::read16(File& file) {

@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <string>
 #include <algorithm>
+#include <string.h>
 using std::min;
 using std::max;
 template<class A,class B,class C> A constrain(A value,B low,C high) {
@@ -24,3 +25,7 @@ class String {
 };
 extern int64_t fireTestClockUs;
 inline uint32_t millis() {return uint32_t(fireTestClockUs/1000);}
+inline void delay(uint32_t milliseconds) {fireTestClockUs+=int64_t(milliseconds)*1000;}
+inline size_t strlcpy(char* target,const char* source,size_t size) {
+  const size_t length=strlen(source);if(size) {const size_t copied=std::min(length,size-1);memcpy(target,source,copied);target[copied]=0;}return length;
+}

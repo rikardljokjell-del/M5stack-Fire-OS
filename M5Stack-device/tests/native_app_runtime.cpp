@@ -2,6 +2,8 @@
 #include "fire_app_sdk_data.h"
 #include "fire_app_bitmap.h"
 #include "fire_app_frame.h"
+#include "fire_runtime_ai_contract.h"
+#include "fire_io_mailbox.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -327,12 +329,93 @@ static void manifestApiTests() {
   puts("PASS installer manifest API gate exact SDK/current contract, legacy preservation and invalid/stale/cross-profile rejection");
 }
 
+static unsigned aiRequests=0,aiCloses=0,aiCancels=0;static uint8_t aiState=0;
+static std::string aiResponse;static int64_t aiDelay=0;
+static uint16_t aiHost(void*,const char* instructions,size_t ni,const char* data,size_t nd,
+    const char* schema,size_t ns,uint32_t timeout,const char**) {
+  assert(ni && nd && ns && ni<=512 && nd<=768 && ns<=512 && ni+nd+ns<=1536);
+  assert(instructions && data && schema && timeout>=1000 && timeout<=60000);
+  ++aiRequests;fireTestClockUs+=aiDelay;return 7;
+}
+static bool aiPoll(void*,uint16_t id,FireLuaRuntime::JobSnapshot* snapshot) {
+  if(id!=7) return false;snapshot->state=aiState;return true;
+}
+static bool aiResult(void*,uint16_t id,FireLuaRuntime::JobSnapshot* snapshot) {
+  if(!aiPoll(nullptr,id,snapshot)) return false;
+  snapshot->resultKind=FireLuaRuntime::JobSnapshot::RuntimeAi;snapshot->text=String(aiResponse);return true;
+}
+static void runtimeAiTests() {
+  const auto aiHostCallbacks=[]() {
+    auto h=host();h.aiRequest=aiHost;h.jobPoll=aiPoll;h.jobResult=aiResult;
+    h.jobClose=[](void*,uint16_t id) {++aiCloses;return id==7;};
+    h.jobCancel=[](void*,uint16_t id) {if(id!=7 || aiState!=0) return false;++aiCancels;aiState=3;return true;};return h;
+  };
+  for(bool sdk:{false,true}) for(uint32_t mask:{3u,33u,1048577u}) {
+    FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(sdk);r.setServiceMask(mask);assert(r.begin(aiHostCallbacks()));
+    const char* source="function init() end function update(dt) assert(fire.ai==nil) end";
+    assert(r.loadSource(reinterpret_cast<const uint8_t*>(source),strlen(source)) && r.update(16));r.stop();
+  }
+  FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(true);r.setServiceMask(1u|32u|(1u<<20));assert(r.begin(aiHostCallbacks()));
+  const char* initDenied="function init() local id,e=fire.ai.request('a','{}','{}');assert(id==nil and e=='stale_run') end function update(dt) end";
+  assert(r.loadSource(reinterpret_cast<const uint8_t*>(initDenied),strlen(initDenied)) && aiRequests==0);
+  const char* source=R"AI(local step,id=0,nil
+function init() end
+function update(dt)
+ if step==0 then
+  id=fire.ai.request('Analyse',[[{"samples":[1,2,3]}]],[[{"type":"object","properties":{"value":{"type":"number"}},"required":["value"],"additionalProperties":false}]],30000)
+  assert(id==7 and fire.jobs.poll(id).state=='pending' and fire.jobs.result(id).error_code=='not_ready')
+ else
+  local result=fire.jobs.result(id);assert(result.ok and result.data.v[16].d==4)
+  assert(not fire.jobs.cancel(id) and fire.jobs.close(id))
+ end
+ step=step+1
+end)AI";
+  aiState=0;aiDelay=0;assert(r.loadSource(reinterpret_cast<const uint8_t*>(source),strlen(source)) && r.update(16));
+  aiResponse="{\"v\":[";for(unsigned i=0;i<16;++i) {if(i) aiResponse+=",";aiResponse+="{\"a\":1,\"b\":2,\"c\":3,\"d\":4}";}aiResponse+="]}";
+  aiState=1;assert(aiResponse.size()<=512 && r.update(16));assert(aiRequests==1 && aiCloses==1 && aiCancels==0);r.stop();
+  const auto check=[&](const char* body,const std::string& response,bool expected) {
+    FireLuaRuntime vm;vm.setHardwareApi(true);vm.setAppSdk(true);vm.setServiceMask(1u|32u|(1u<<20));
+    assert(vm.begin(aiHostCallbacks()));aiResponse=response;aiState=1;
+    const std::string app=std::string("function init() end function update(dt) ")+body+" end";
+    assert(vm.loadSource(reinterpret_cast<const uint8_t*>(app.data()),app.size()));
+    assert(vm.update(16)==expected);vm.stop();assert(vm.memoryUsed()==0);
+  };
+  check("assert(fire.jobs.result(7).error_code=='invalid_result')","{\"x\":1,\"x\":2}",true);
+  check("assert(fire.jobs.result(7).error_code=='invalid_result')","{\"x\":1e100}",true);
+  check("local r=fire.jobs.result(7);assert(r.ok and r.data.value>0)","{\"value\":9223372036854775808}",true);
+  check("local r=fire.jobs.result(7);assert(r.ok and r.data.value<0)","{\"value\":-9223372036854775809}",true);
+  check("local r=fire.jobs.result(7);assert(r.ok and r.data.value>0)","{\"value\":2147483648}",true);
+  check("local r=fire.jobs.result(7);assert(r.ok and r.data.value<0)","{\"value\":-2147483648}",true);
+  check("local id,e=fire.ai.request('a','[]','{}');assert(id==nil and e=='invalid_json')","{}",true);
+  check("local id,e=fire.ai.request('a','{}','[]');assert(id==nil and e=='invalid_schema')","{}",true);
+  check("local id,e=fire.ai.request('a','{}','{}',999);assert(id==nil and e=='invalid_json')","{}",true);
+  aiDelay=25000;check("fire.ai.request('a','{}','{}')","{}",false);aiDelay=0;
+  puts("PASS actual Lua Runtime AI permission gating async request/jobs bounded decoded result and unchanged24ms wall guard");
+}
+
+static void installCompletionTest() {
+  FireIoMailbox mailbox;mailbox.running=true;
+  mailbox.result(false,true,"package-a","hash-a","installed","install-a");
+  assert(mailbox.busy());mailbox.running=false;
+  // UI can receive a different command before it drains this completion. The
+  // completed installation identity belongs to the worker receipt, not that UI.
+  String currentUiInstall="install-b";
+  assert(mailbox.busy() && mailbox.completed.exchange(false));
+  assert(!strcmp(mailbox.completionId.c_str(),"install-a") && strcmp(mailbox.completionId.c_str(),currentUiInstall.c_str()));
+  assert(mailbox.ok && !strcmp(mailbox.first.c_str(),"package-a") && !mailbox.busy());
+  mailbox.result(false,false,"package-c","","failed","install-c");
+  assert(!mailbox.ok && !strcmp(mailbox.completionId.c_str(),"install-c"));
+  puts("PASS install completion retains exact worker package/install identity across unrelated UI command");
+}
+
 int main(int argc,char** argv) {
   if(argc==2 && !strcmp(argv[1],"--old-instruction-counter")) {instructionResetTest(true);return 0;}
   static_assert(sizeof(lua_Integer)==4 && sizeof(lua_Number)==4,"match ESP32 Lua numeric profile");
   assert(!strcmp(FireLuaRuntime::hardwareApiContract(),"0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40"));
   assert(!strcmp(FireLuaRuntime::appSdkContract(),FireSdkData::kContract));
   manifestApiTests();
+  runtimeAiTests();
+  installCompletionTest();
   instructionResetTest(false);backgroundTests();
   uiLoadMeasurement(false);uiLoadMeasurement(true);
   assert(run("fire.ui.screen('FIRE');fire.ui.card(10,60,300,100,'Status',42)"));

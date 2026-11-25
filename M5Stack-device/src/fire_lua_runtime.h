@@ -29,7 +29,8 @@ class FireLuaRuntime {
       BluetoothScan,
       Handle,
       Recording,
-      Http
+      Http,
+      RuntimeAi
     };
     uint8_t state = 0;  // 0=pending, 1=ready, 2=failed, 3=cancelled
     ResultKind resultKind = None;
@@ -125,6 +126,8 @@ class FireLuaRuntime {
     bool (*jobResult)(void*, uint16_t, JobSnapshot*) = nullptr;
     bool (*jobClose)(void*, uint16_t) = nullptr;
     bool (*jobCancel)(void*, uint16_t) = nullptr;
+    uint16_t (*aiRequest)(void*, const char*, size_t, const char*, size_t,
+                          const char*, size_t, uint32_t, const char**) = nullptr;
   };
 
   static constexpr size_t kMaxSourceBytes = 100000;
@@ -271,6 +274,7 @@ class FireLuaRuntime {
   static int jobsResult(lua_State* state);
   static int jobsClose(lua_State* state);
   static int jobsCancel(lua_State* state);
+  static int aiRequest(lua_State* state);
   static void setFunction(lua_State* state, const char* name, lua_CFunction fn);
   static bool serviceAllowed(const FireLuaRuntime* runtime, uint32_t bit);
   bool chargeIo(size_t bytes, bool text = false);

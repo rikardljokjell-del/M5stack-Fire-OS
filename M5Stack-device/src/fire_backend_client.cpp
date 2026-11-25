@@ -4,6 +4,7 @@
 #include <esp_system.h>
 #include <esp_timer.h>
 #include "fire_lua_runtime.h"
+#include "fire_runtime_ai_contract.h"
 #include "fire_json_guard.h"
 #include "fire_ws_handshake.h"
 #include <mbedtls/sha1.h>
@@ -21,6 +22,9 @@ String jsonEscape(const String& input) {
       output += "\\n";
     } else if (value == '\r') {
       output += "\\r";
+    } else if (static_cast<uint8_t>(value)<32) {
+      const char hex[]="0123456789abcdef";output+="\\u00";
+      output+=hex[(static_cast<uint8_t>(value)>>4)&15];output+=hex[static_cast<uint8_t>(value)&15];
     } else {
       output += value;
     }
@@ -114,6 +118,11 @@ void FireBackendClient::setAppMode(const String& mode,
       pendingBasePackageId_ = "";
     }
   }
+}
+
+void FireBackendClient::setRuntimeAiMode(const String& mode,bool publish) {
+  if(mode!="auto" && mode!="off") return;runtimeAiMode_=mode;
+  if(publish && sessionReady()) sendEvent("mode_select",",\"runtime_ai_mode\":\""+mode+"\"");
 }
 
 void FireBackendClient::setCallbacks(void* context, MessageCallback message,
@@ -567,6 +576,24 @@ bool FireBackendClient::confirmRun(const String& packageId) {
                    jsonEscape(packageId) + "\"");
 }
 
+static String runtimeIdentityFields(const String& requestId,const String& appId,const String& packageId,
+                                    const String& sourceHash,const String& runId) {
+  return ",\"request_id\":\""+jsonEscape(requestId)+"\",\"app_id\":\""+jsonEscape(appId)+
+    "\",\"package_id\":\""+jsonEscape(packageId)+"\",\"source_sha256\":\""+jsonEscape(sourceHash)+
+    "\",\"run_id\":\""+jsonEscape(runId)+"\"";
+}
+bool FireBackendClient::runtimeAiRequest(const String& requestId,const String& appId,const String& packageId,
+                                       const String& sourceHash,const String& runId,const String& instructions,
+                                       const String& data,const String& schema,uint32_t timeoutMs) {
+  return sendEvent("runtime_ai_request",runtimeIdentityFields(requestId,appId,packageId,sourceHash,runId)+
+    ",\"instructions\":\""+jsonEscape(instructions)+"\",\"data_json\":\""+jsonEscape(data)+
+    "\",\"schema_json\":\""+jsonEscape(schema)+"\",\"timeout_ms\":"+String(timeoutMs));
+}
+bool FireBackendClient::runtimeAiCancel(const String& requestId,const String& appId,const String& packageId,
+                                      const String& sourceHash,const String& runId) {
+  return sendEvent("runtime_ai_cancel",runtimeIdentityFields(requestId,appId,packageId,sourceHash,runId));
+}
+
 bool FireBackendClient::appRepairPrepare(
     const String& appId, const String& packageId, const String& appVersion,
     const String& sha256, const String& errorCode, const String& message,
@@ -865,8 +892,9 @@ void FireBackendClient::handleHandshake() {
                         FireLuaRuntime::hardwareApiContract() +
                         "\",\"app_sdk\":{\"version\":\"" + FireLuaRuntime::appSdkVersion() +
                         "\",\"contract\":\"" + FireLuaRuntime::appSdkContract() +
-                        "\"}" +
-                        ",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\",\"jobs\",\"gpio\",\"pwm\",\"i2c\",\"uart\",\"adc\",\"dac\",\"spi\",\"sd\",\"rtc\",\"speaker\"],\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":[64],\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":false,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
+                        "\"},\"runtime_ai\":{\"version\":\""+FireRuntimeAiContract::kVersion+
+                        "\",\"contract\":\""+FireRuntimeAiContract::kContract+"\"}" +
+                        ",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\",\"jobs\",\"gpio\",\"pwm\",\"i2c\",\"uart\",\"adc\",\"dac\",\"spi\",\"sd\",\"rtc\",\"speaker\",\"ai\"],\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":[64],\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":false,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
                         jsonEscape(firmwareVersion_) + "\"}";
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +
@@ -886,7 +914,7 @@ void FireBackendClient::handleHandshake() {
                                    ? ",\"base_package_id\":\"" + jsonEscape(pendingBasePackageId_) + "\""
                                    : String())
                         : String()) +
-                   fields + "}";
+                   ",\"runtime_ai_mode\":\""+runtimeAiMode_+"\""+fields + "}";
   if (sendFrame(0x1, reinterpret_cast<const uint8_t*>(payload.c_str()),
                 payload.length())) {
     // Explicit app selection is one-shot. Reconnect must resume, not select a

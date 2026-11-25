@@ -1,5 +1,7 @@
 #include "fire_lua_runtime.h"
 #include "fire_app_sdk_data.h"
+#include "fire_runtime_ai_json.h"
+#include "fire_app_bitmap.h"
 
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -34,6 +36,7 @@ constexpr uint32_t kServiceSpeaker = 1u << 16;
 constexpr uint32_t kServiceSd = 1u << 17;
 constexpr uint32_t kServicePower = 1u << 18;
 constexpr uint32_t kServiceRtc = 1u << 19;
+constexpr uint32_t kServiceAi = 1u << 20;
 
 int boundedInt(lua_State* state, int index, int minimum, int maximum) {
   const lua_Integer value = luaL_checkinteger(state, index);
@@ -244,6 +247,10 @@ void FireLuaRuntime::registerApi(lua_State* state) {
     setFunction(state, "close", jobsClose);
     setFunction(state, "cancel", jobsCancel);
     lua_setfield(state, -2, "jobs");
+  }
+  if (runtime->appSdk_ && serviceAllowed(runtime,kServiceAi) &&
+      serviceAllowed(runtime,kServiceJobs) && runtime->host_.aiRequest) {
+    lua_newtable(state);setFunction(state,"request",aiRequest);lua_setfield(state,-2,"ai");
   }
   if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceGpio)) {
     lua_newtable(state);
@@ -1720,6 +1727,27 @@ static void pushJobState(lua_State* state,
   lua_setfield(state, -2, "error_code");
 }
 
+struct AiLuaJsonSink {
+  lua_State* state;
+  bool object() {lua_newtable(state);return true;}
+  bool array() {lua_newtable(state);return true;}
+  bool key(const char* value,size_t length) {lua_pushlstring(state,value,length);return true;}
+  bool index(unsigned value) {lua_pushinteger(state,value);return true;}
+  bool pair() {lua_rawset(state,-3);return true;}
+  bool end() {return true;}
+  bool string(const char* value,size_t length) {lua_pushlstring(state,value,length);return true;}
+  bool number(double value) {
+    const lua_Number number=static_cast<lua_Number>(value);if(!isfinite(number)) return false;
+    const double upper=-static_cast<double>(LUA_MININTEGER);
+    if(value>=static_cast<double>(LUA_MININTEGER) && value<upper && floor(value)==value)
+      lua_pushinteger(state,static_cast<lua_Integer>(value));
+    else lua_pushnumber(state,number);
+    return true;
+  }
+  bool boolean(bool value) {lua_pushboolean(state,value);return true;}
+  bool null() {lua_pushnil(state);return true;}
+};
+
 static void pushJobResult(lua_State* state,
                           const FireLuaRuntime::JobSnapshot& snapshot) {
   if (snapshot.state == 0) {
@@ -1741,7 +1769,16 @@ static void pushJobResult(lua_State* state,
   lua_newtable(state);
   lua_pushboolean(state, 1);
   lua_setfield(state, -2, "ok");
-  if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::I2cScan) {
+  if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::RuntimeAi) {
+    const int top=lua_gettop(state);AiLuaJsonSink sink{state};
+    const bool valid=snapshot.text.length()<=FireRuntimeAiContract::kResultBytes &&
+      fire_runtime_ai_json::Reader<AiLuaJsonSink>(snapshot.text.c_str(),snapshot.text.length(),sink,FireRuntimeAiContract::kJsonDepth).object();
+    if(valid) lua_setfield(state,-2,"data");
+    else {
+      lua_settop(state,top);lua_pushboolean(state,0);lua_setfield(state,-2,"ok");
+      lua_pushliteral(state,"invalid_result");lua_setfield(state,-2,"error_code");
+    }
+  } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::I2cScan) {
     lua_newtable(state);
     for (uint16_t index = 0; index < snapshot.addressCount; ++index) {
       lua_pushinteger(state, snapshot.addresses[index]);
@@ -1798,8 +1835,42 @@ int FireLuaRuntime::jobsResult(lua_State* state) {
   if (!runtime->host_.jobResult ||
       !runtime->host_.jobResult(runtime->host_.context, id, &snapshot))
     return pushError(state, "invalid_handle");
+  if(snapshot.resultKind==JobSnapshot::RuntimeAi &&
+     !runtime->chargeIo(snapshot.text.length())) return luaL_error(state,"hardware io budget exceeded");
   pushJobResult(state, snapshot);
   return 1;
+}
+
+int FireLuaRuntime::aiRequest(lua_State* state) {
+  auto* runtime=self(state);
+  if(!runtime->appSdk_ || !serviceAllowed(runtime,kServiceAi) || !serviceAllowed(runtime,kServiceJobs))
+    return pushError(state,"permission_denied");
+  if(runtime->callbackPhase_!=CallbackPhase::Update && runtime->callbackPhase_!=CallbackPhase::OnButton)
+    return pushError(state,"stale_run");
+  if(lua_gettop(state)<3 || lua_gettop(state)>4 || lua_type(state,1)!=LUA_TSTRING ||
+     lua_type(state,2)!=LUA_TSTRING || lua_type(state,3)!=LUA_TSTRING) return pushError(state,"invalid_json");
+  size_t ni=0,nd=0,ns=0;
+  const char* instructions=lua_tolstring(state,1,&ni);const char* data=lua_tolstring(state,2,&nd);const char* schema=lua_tolstring(state,3,&ns);
+  if(!ni || !nd || !ns || ni>FireRuntimeAiContract::kInstructionsBytes || nd>FireRuntimeAiContract::kDataBytes ||
+     ns>FireRuntimeAiContract::kSchemaBytes || ni+nd+ns>FireRuntimeAiContract::kRequestBytes) return pushError(state,"payload_too_large");
+  size_t offset=0;uint32_t cp=0;
+  while(offset<ni) if(!fire_app_bitmap::codepoint(instructions,ni,offset,cp)) return pushError(state,"invalid_json");
+  if(!fire_runtime_ai_json::validObject(data,nd,FireRuntimeAiContract::kDataBytes)) return pushError(state,"invalid_json");
+  // Schema structural nesting exceeds result nesting (properties/items wrappers).
+  // Semantic schema validation occurs at the OS host and again in the backend.
+  if(!fire_runtime_ai_json::validObject(schema,ns,FireRuntimeAiContract::kSchemaBytes,12)) return pushError(state,"invalid_schema");
+  uint32_t timeout=FireRuntimeAiContract::kTimeoutDefaultMs;
+  if(lua_gettop(state)==4 && !lua_isnil(state,4)) {
+    if(!lua_isinteger(state,4)) return pushError(state,"invalid_json");
+    const lua_Integer value=lua_tointeger(state,4);
+    if(value<static_cast<lua_Integer>(FireRuntimeAiContract::kTimeoutMinMs) ||
+       value>static_cast<lua_Integer>(FireRuntimeAiContract::kTimeoutMaxMs)) return pushError(state,"invalid_json");
+    timeout=static_cast<uint32_t>(value);
+  }
+  if(!runtime->chargeIo(ni+nd+ns)) return luaL_error(state,"hardware io budget exceeded");
+  const char* error="unavailable";
+  const uint16_t id=runtime->host_.aiRequest?runtime->host_.aiRequest(runtime->host_.context,instructions,ni,data,nd,schema,ns,timeout,&error):0;
+  if(!id) return pushError(state,error?error:"unavailable");lua_pushinteger(state,id);return 1;
 }
 
 int FireLuaRuntime::jobsClose(lua_State* state) {

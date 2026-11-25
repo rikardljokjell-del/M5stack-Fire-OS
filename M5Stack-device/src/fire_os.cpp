@@ -5,6 +5,8 @@
 #include "fire_app_bitmap.h"
 #include "fire_canvas_fill.h"
 #include "fire_app_sdk_data.h"
+#include "fire_runtime_ai_json.h"
+#include "fire_ai_workflow.h"
 
 #include <M5Unified.h>
 #ifdef FIRE_OS_BLE
@@ -56,7 +58,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.3.0-rc2";
+constexpr char kFirmwareVersion[] = "fire-os-1.3.0-rc3";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -95,6 +97,7 @@ constexpr uint32_t kLuaServiceSpeaker = 1u << 16;
 constexpr uint32_t kLuaServiceSd = 1u << 17;
 constexpr uint32_t kLuaServicePower = 1u << 18;
 constexpr uint32_t kLuaServiceRtc = 1u << 19;
+constexpr uint32_t kLuaServiceAi = 1u << 20;
 constexpr uint32_t kBootMelodySampleRate = 8000;
 constexpr size_t kBootMelodySampleCount = 3160;  // 395 ms at 8 kHz
 int8_t kBootMelodyPcm[kBootMelodySampleCount] = {};
@@ -465,6 +468,17 @@ String compactStatusText(const String& raw) {
   value.trim();
   String lower = value;
   lower.toLowerCase();
+  if(lower.indexOf("callback time budget")>=0) return "Appen brukte for lang tid";
+  if(lower.indexOf("instruction budget")>=0 || lower.indexOf("io budget")>=0) return "Appens arbeidsgrense nådd";
+  if(lower.indexOf("memory")>=0 && (lower.indexOf("budget")>=0 || lower.indexOf("error")>=0)) return "Appen mangler minne";
+  if(lower.indexOf("checksum")>=0 || lower.indexOf("sha256 mismatch")>=0) return "Appkontroll feilet";
+  if(lower.indexOf("failed")>=0 || lower.indexOf("rejected")>=0 || lower.indexOf("feilet")>=0) return "Apphandling feilet";
+  if(lower=="package ready" || lower=="ready to run" || lower=="installed") return "App klar til kjøring";
+  if(lower=="sending run" || lower=="running") return "Starter app";
+  if(lower=="sending build") return "Starter bygging";
+  if(lower=="connected" || lower=="connected - state restored") return "Tilkoblet";
+  if(lower=="answer - speak again") return "Svar mottatt";
+  if(lower=="transcribed - waiting for ai") return "Tale mottatt – vurderer";
   if (lower == "preparing" || lower.indexOf("preparing repair") >= 0)
     return "Forbereder reparasjon";
   if (lower == "awaiting_confirmation" ||
@@ -491,7 +505,8 @@ String compactStatusText(const String& raw) {
     return "Kobler til backend";
   if (lower.indexOf("waiting for backend") >= 0)
     return "Venter på backend";
-  if (value.length() <= 28) return value;
+  if (value.length() <= 28 && value.indexOf("...")<0 && value.indexOf("…")<0 &&
+      value.indexOf('\n')<0 && lower.indexOf("du spurte om")<0) return value;
   return "Arbeider";
 }
 
@@ -556,13 +571,13 @@ bool jsonBoolField(const String& json, const char* key, bool fallback = false) {
   return fallback;
 }
 
-int buildProgressField(const String& json) {
+int buildProgressField(const String& json,int fallback=0) {
   int progress = jsonIntField(json, "progress_percent", -1);
   if (progress >= 0) return progress;
   const int progressAt = json.indexOf("\"progress\"");
-  if (progressAt < 0) return 0;
+  if (progressAt < 0) return fallback;
   const int colon = json.indexOf(':', progressAt);
-  if (colon < 0) return 0;
+  if (colon < 0) return fallback;
   int valueAt = colon + 1;
   while (valueAt < json.length() &&
          (json[valueAt] == ' ' || json[valueAt] == '\t' ||
@@ -576,7 +591,7 @@ int buildProgressField(const String& json) {
       if (progress < 0) progress = jsonIntField(object, "progress", -1);
       if (progress >= 0) return progress;
     }
-    return 0;
+    return fallback;
   }
   return json.substring(valueAt).toInt();
 }
@@ -620,6 +635,7 @@ bool luaManifestServiceMask(const String& manifest, uint32_t& mask) {
     else if (service == "sd") bit = kLuaServiceSd;
     else if (service == "rtc") bit = kLuaServiceRtc;
     else if (service == "speaker") bit = kLuaServiceSpeaker;
+    else if (service == "ai") bit = kLuaServiceAi;
     else return false;
     if ((mask & bit) != 0) return false;
     mask |= bit;
@@ -642,6 +658,23 @@ const char* luaFailureCode(const String& error) {
     return "memory_error";
   if (error == "runtime_limit") return "runtime_limit";
   return "load_error";
+}
+
+bool luaRuntimeAiManifest(const String& manifest,bool sdk,uint32_t mask) {
+  cJSON* root=cJSON_Parse(manifest.c_str());if(!root) return false;
+  const cJSON* extension=cJSON_GetObjectItemCaseSensitive(root,"runtime_ai");
+  const bool ai=(mask&kLuaServiceAi)!=0;
+  bool permitted=false;
+  const cJSON* permissions=cJSON_GetObjectItemCaseSensitive(root,"permissions");
+  const cJSON* entry=nullptr;
+  if(cJSON_IsArray(permissions)) {cJSON_ArrayForEach(entry,permissions)
+    if(cJSON_IsString(entry) && !strcmp(entry->valuestring,"fire.ai")) permitted=true;}
+  const cJSON* version=cJSON_GetObjectItemCaseSensitive(extension,"version");
+  const cJSON* contract=cJSON_GetObjectItemCaseSensitive(extension,"contract");
+  const bool valid=ai?(sdk && (mask&kLuaServiceJobs) && permitted && cJSON_IsObject(extension) &&
+    cJSON_IsString(version) && !strcmp(version->valuestring,FireRuntimeAiContract::kVersion) &&
+    cJSON_IsString(contract) && !strcmp(contract->valuestring,FireRuntimeAiContract::kContract)):!extension;
+  cJSON_Delete(root);return valid;
 }
 
 String durationLabel(uint8_t option) {
@@ -1034,6 +1067,7 @@ void FireOS::begin() {
     backendClient_->setCallbacks(this, backendMessage, backendState);
     backendClient_->configure(backendHost_, backendPort_, backendToken_,
                               backendDeviceId_, kFirmwareVersion);
+    backendClient_->setRuntimeAiMode(aiRuntimeAuto_?"auto":"off");
     backendStatus_ = backendClient_->status();
   }
   reverseTransport_.configure(backendDeviceId_, backendToken_);
@@ -1423,6 +1457,7 @@ void FireOS::loadSettings() {
                   ? min<uint8_t>(preferences.getUChar("wifi_mode", 0), 2)
                   : (legacyWifi ? 1 : 0);
   backendMode_ = min<uint8_t>(preferences.getUChar("backend_mode", 0), 2);
+  aiRuntimeAuto_=preferences.getBool("runtime_ai_auto",true);
   wifiTimeSync_ = preferences.getBool("wifi_time_sync", false);
   timeSyncLast_ = preferences.getString("wifi_time_last", "");
   wifiEnabled_ = false;
@@ -2567,6 +2602,9 @@ bool FireOS::luaI2cAllowed(uint8_t bus, uint8_t address, bool write) const {
 }
 
 void FireOS::releaseLuaHardware() {
+  for(LuaHardwareJob& job:luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.state==0)
+    cancelLuaRuntimeAi(job,"cancelled");
+  luaRuntimeAiAllowed_=false;luaAiBindPackageId_=String();luaAiBindSent_=false;
   // Lua currently has no microphone service, but keeping this reset here
   // makes the exit boundary safe if an audio adapter or an interrupted app
   // owns the capture path in a future build.
@@ -3332,6 +3370,69 @@ bool FireOS::luaJobPollCallback(void* context, uint16_t id,
   return true;
 }
 
+uint16_t FireOS::luaAiRequestCallback(void* context,const char* instructions,size_t ni,
+    const char* data,size_t nd,const char* schema,size_t ns,uint32_t timeout,const char** error) {
+  auto* os=static_cast<FireOS*>(context);
+  if(!os || !os->luaAppActive_ || !os->luaRuntimeAiAllowed_ || !os->luaRuntime_ || !os->luaRuntime_->running())
+    {setLuaError(error,"permission_denied");return 0;}
+  if(!os->runtimeAiEnabled_) {setLuaError(error,"disabled");return 0;}
+  if(os->luaRunId_.length()==0 && os->luaPackageId_.length()) {
+    if(os->luaAiBindPackageId_!=os->luaPackageId_) {
+      os->luaAiBindPackageId_=os->luaPackageId_;os->luaAiBindAt_=millis();os->luaAiBindSent_=false;
+    }
+  }
+  if(!os->backendClient_ || !os->backendClient_->sessionReady() || !os->luaRunId_.length())
+    {setLuaError(error,"not_connected");return 0;}
+  for(const LuaHardwareJob& job:os->luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.id && job.state==0)
+    {setLuaError(error,"busy");return 0;}
+  if(os->nextRuntimeAiRequest_==UINT32_MAX) {setLuaError(error,"busy");return 0;}
+  const uint16_t id=os->createLuaJob(LuaJobKind::RuntimeAi,error);if(!id) return 0;
+  auto* job=os->findLuaJob(id);job->timeoutMs=timeout;
+  job->aiRequestId="rai-"+os->backendClient_->bootId()+"-"+String(++os->nextRuntimeAiRequest_)+"-"+String(id);
+  const bool copied=job->text.concat(instructions,ni) && job->path.concat(data,nd) && job->aiSchema.concat(schema,ns);
+  if(!copied || job->text.length()!=ni || job->path.length()!=nd || job->aiSchema.length()!=ns) {
+    *job=LuaHardwareJob();setLuaError(error,"busy");return 0;
+  }
+  return id;
+}
+
+void FireOS::cancelLuaRuntimeAi(LuaHardwareJob& job,const char* reason) {
+  if(job.kind!=LuaJobKind::RuntimeAi || job.state!=0) return;
+  if(job.started && backendClient_ && backendClient_->sessionReady())
+    backendClient_->runtimeAiCancel(job.aiRequestId,luaAppId_,luaPackageId_,luaSourceHash_,luaRunId_);
+  job.state=!strcmp(reason,"cancelled")?3:2;job.errorCode=reason;
+  job.text=String();job.path=String();job.aiSchema=String();
+}
+
+void FireOS::handleRuntimeAiResult(const String& message) {
+  if(!luaAppActive_ || !luaRuntimeAiAllowed_ || !luaRuntime_ || !luaRuntime_->running() || !backendClient_) return;
+  if(jsonStringField(message,"app_id")!=luaAppId_ || jsonStringField(message,"package_id")!=luaPackageId_ ||
+     jsonStringField(message,"source_sha256")!=luaSourceHash_ || jsonStringField(message,"run_id")!=luaRunId_ ||
+     jsonStringField(message,"boot_id")!=backendClient_->bootId()) return;
+  const String requestId=jsonStringField(message,"request_id");
+  for(LuaHardwareJob& job:luaJobs_) {
+    if(!job.id || job.kind!=LuaJobKind::RuntimeAi || job.state!=0 || !job.started || job.aiRequestId!=requestId) continue;
+    if(millis()-job.startedAt>job.timeoutMs) {cancelLuaRuntimeAi(job,"timeout");return;}
+    cJSON* root=cJSON_Parse(message.c_str());if(!root) {cancelLuaRuntimeAi(job,"invalid_result");return;}
+    const cJSON* state=cJSON_GetObjectItemCaseSensitive(root,"state");
+    const cJSON* data=cJSON_GetObjectItemCaseSensitive(root,"result_json");
+    const cJSON* code=cJSON_GetObjectItemCaseSensitive(root,"error_code");
+    if(!runtimeAiEnabled_) {job.state=2;job.errorCode="disabled";}
+    else if(cJSON_IsString(state) && !strcmp(state->valuestring,"completed")) {
+      const size_t bytes=cJSON_IsString(data)?strlen(data->valuestring):0;
+      if(bytes>FireRuntimeAiContract::kResultBytes) {job.state=2;job.errorCode="result_too_large";}
+      else if(!fire_runtime_ai_json::validObject(cJSON_IsString(data)?data->valuestring:nullptr,bytes,FireRuntimeAiContract::kResultBytes))
+        {job.state=2;job.errorCode="invalid_result";}
+      else if(!job.text.concat(data->valuestring,bytes) || job.text.length()!=bytes) {job.state=2;job.errorCode="invalid_result";}
+      else job.state=1;
+    } else if(cJSON_IsString(state) && (!strcmp(state->valuestring,"failed") || !strcmp(state->valuestring,"cancelled"))) {
+      job.state=!strcmp(state->valuestring,"cancelled")?3:2;
+      job.errorCode=cJSON_IsString(code) && strlen(code->valuestring)<=64?code->valuestring:"provider_error";
+    } else {job.state=2;job.errorCode="invalid_result";}
+    cJSON_Delete(root);if(job.state!=1) job.text=String();return;
+  }
+}
+
 bool FireOS::luaJobResultCallback(void* context, uint16_t id,
                                   FireLuaRuntime::JobSnapshot* snapshot) {
   auto* os = static_cast<FireOS*>(context);
@@ -3364,6 +3465,8 @@ bool FireOS::luaJobResultCallback(void* context, uint16_t id,
                              ? FireLuaRuntime::JobSnapshot::Bytes
                          : job->kind == LuaJobKind::SdList
                              ? FireLuaRuntime::JobSnapshot::Files
+                         : job->kind == LuaJobKind::RuntimeAi
+                             ? FireLuaRuntime::JobSnapshot::RuntimeAi
                          : FireLuaRuntime::JobSnapshot::Write;
   return true;
 }
@@ -3372,6 +3475,7 @@ bool FireOS::luaJobCloseCallback(void* context, uint16_t id) {
   auto* os = static_cast<FireOS*>(context);
   LuaHardwareJob* job = os ? os->findLuaJob(id) : nullptr;
   if (!job) return false;
+  if(job->kind==LuaJobKind::RuntimeAi && job->state==0) os->cancelLuaRuntimeAi(*job,"cancelled");
   if (os && id == os->luaSpeakerJobId_) {
     if (M5.Speaker.isEnabled()) M5.Speaker.stop(kLuaSpeakerChannel);
     os->luaSpeakerFile_.close();
@@ -3387,6 +3491,7 @@ bool FireOS::luaJobCancelCallback(void* context, uint16_t id) {
   auto* os = static_cast<FireOS*>(context);
   LuaHardwareJob* job = os ? os->findLuaJob(id) : nullptr;
   if (!job || job->state != 0) return false;
+  if(job->kind==LuaJobKind::RuntimeAi) {os->cancelLuaRuntimeAi(*job,"cancelled");return true;}
   job->state = 3;
   job->errorCode = "cancelled";
   if (os && id == os->luaSpeakerJobId_) {
@@ -3407,11 +3512,23 @@ void FireOS::serviceLuaHardwareJobs() {
     if (job.id == 0 || job.state != 0) continue;
     const uint32_t now = millis();
     if (now - job.startedAt > job.timeoutMs) {
+      if(job.kind==LuaJobKind::RuntimeAi) {cancelLuaRuntimeAi(job,"timeout");continue;}
       job.state = 2;
       job.errorCode = "timeout";
       continue;
     }
-    if (job.kind == LuaJobKind::I2cScan) {
+    if(job.kind==LuaJobKind::RuntimeAi) {
+      if(!luaAppActive_ || !luaRuntimeAiAllowed_ || !luaRuntime_ || !luaRuntime_->running()) {cancelLuaRuntimeAi(job,"stale_run");continue;}
+      if(!runtimeAiEnabled_) {cancelLuaRuntimeAi(job,"disabled");continue;}
+      if(!backendClient_ || !backendClient_->sessionReady()) {cancelLuaRuntimeAi(job,"not_connected");continue;}
+      if(!job.started) {
+        if(backendClient_->runtimeAiRequest(job.aiRequestId,luaAppId_,luaPackageId_,luaSourceHash_,luaRunId_,
+              job.text,job.path,job.aiSchema,job.timeoutMs)) {
+          job.started=true;job.text=String();job.path=String();job.aiSchema=String();
+        } else cancelLuaRuntimeAi(job,"not_connected");
+      }
+      continue;
+    } else if (job.kind == LuaJobKind::I2cScan) {
       uint8_t processed = 0;
       while (job.step < 127 && processed++ < 2) {
         const uint8_t address = static_cast<uint8_t>(job.step++);
@@ -4206,6 +4323,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   if (buildNoticeActive_) {
     if (index == 1) {
       const String noticeBuild = buildNoticeId_;
+      buildNoticeRunBuildId_=noticeBuild;buildNoticeRunPackageId_=buildNoticePackageId_;
       buildNoticePendingId_ = noticeBuild;
       buildNoticePendingAction_ = "open";
       buildNoticePendingEvent_ = "";
@@ -4215,7 +4333,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       aiBuildId_ = noticeBuild;
       backgroundBuildActive_ = true;
       aiWorkflowState_ = 4;
-      aiWorkflowText_ = "Resume bygging";
+      aiWorkflowText_ = "Åpner ferdig app";
     } else if (index == 2) {
       buildNoticePendingId_ = buildNoticeId_;
       buildNoticePendingAction_ = "dismiss";
@@ -4614,6 +4732,7 @@ void FireOS::open(Screen screen) {
     aiTurnId_ = "";
     aiProposalId_ = "";
     aiPackageId_ = "";
+    aiReadyPackageId_=String();
     aiInstallId_ = "";
     aiAssistantText_ = "";
     aiWorkflowText_ = "";
@@ -5069,7 +5188,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
                               luaRepairStatus_ != "unavailable";
     const uint8_t repairOffset = repairResume ? 1 : 0;
     const uint8_t buildOffset = aiResumeAvailable_ ? 1 : 0;
-    const uint8_t itemCount = luaAppCount_ + 4 + repairOffset + buildOffset;
+    const uint8_t itemCount = luaAppCount_ + 5 + repairOffset + buildOffset;
     if (index == 0) {
       aiProjectSelection_ =
           (aiProjectSelection_ + itemCount - 1) % itemCount;
@@ -5102,10 +5221,16 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiWorkflowState_ = failedJob ? 2 : 4;
       aiDeveloperMode_ = 2;
       aiWorkflowText_ = failedJob && aiBuildErrorStatus_.length() > 0
-                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            ? compactStatusText(aiBuildErrorStatus_)
                             : "Resume bygging";
       aiAssistantText_ = aiBuildErrorStatus_;
       if (backendClient_) backendClient_->buildResume(aiBuildId_);
+    } else if(aiProjectSelection_==repairOffset+buildOffset+3) {
+      if(backgroundBuildActive_ || aiWorkflowState_==4) {aiWorkflowText_="Fullfør byggingen først";redrawRequested_=true;return;}
+      aiRuntimeAuto_=!aiRuntimeAuto_;aiRuntimeModeAcked_=false;
+      preferences.putBool("runtime_ai_auto",aiRuntimeAuto_);
+      if(backendClient_) backendClient_->setRuntimeAiMode(aiRuntimeAuto_?"auto":"off");
+      redrawRequested_=true;return;
     } else {
       aiProjectPickerActive_ = false;
       const uint8_t selection = aiProjectSelection_ - repairOffset - buildOffset;
@@ -5140,7 +5265,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       } else {
         aiVoiceTestMode_ = false;
         aiConversationMode_ = 0;
-        const uint8_t selected = selection - 3;
+        const uint8_t selected = selection - 4;
         const String source = luaAppPaths_[selected];
         const int slash = source.lastIndexOf('/');
         const String appFolder = slash > 0 ? source.substring(0, slash) : source;
@@ -5262,8 +5387,8 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     aiBuildProgress_ = 0;
     aiWorkflowStarted_ = millis();
   } else if (index == 0 && aiWorkflowState_ == 5) {
-    if (backendClient_ && backendClient_->connected() && aiPackageId_.length() > 0) {
-      if (backendClient_->confirmRun(aiPackageId_)) {
+    if (backendClient_ && backendClient_->sessionReady() && aiReadyPackageId_.length() > 0) {
+      if (backendClient_->confirmRun(aiReadyPackageId_)) {
         aiWorkflowText_ = "SENDING RUN";
         aiWorkflowState_ = 6;
         aiDeveloperMode_ = 3;
@@ -5587,11 +5712,13 @@ void FireOS::failAiAudioPlayback(const String& audioId, const String& turnId,
   // Preserve the proposal/build confirmation state. Without a proposal the
   // user is returned to the normal B-to-speak state instead of being trapped
   // in workflowState=2 after an audio-only failure.
-  aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 0;
-  aiDeveloperMode_ = aiProposalId_.length() > 0 ? 2 : 0;
-  aiWorkflowText_ = aiProposalId_.length() > 0
-                        ? "A BUILD / B SPEAK"
-                        : "AUDIO ERROR - B SPEAK AGAIN";
+  aiWorkflowState_ = fireConversationState(aiWorkflowState_,aiProposalId_.length()>0?3:0);
+  if(aiWorkflowState_<4) {
+    aiDeveloperMode_ = aiProposalId_.length() > 0 ? 2 : 0;
+    aiWorkflowText_ = aiProposalId_.length() > 0
+                          ? "Klar til bygging"
+                          : "Lydfeil – prøv igjen";
+  }
 }
 
 void FireOS::updateAiAudioOutput() {
@@ -5710,12 +5837,12 @@ void FireOS::updateAiAudioOutput() {
   aiAudioOutputTurnId_ = "";
   aiAudioDownloadUrl_ = "";
   aiDeveloperMode_ = 0;
-  aiWorkflowState_ = 0;
-  aiWorkflowText_ = "ANSWER - SPEAK AGAIN";
+  aiWorkflowState_ = fireConversationState(aiWorkflowState_,0);
+  if(aiWorkflowState_<3) aiWorkflowText_ = "Svar mottatt";
 }
 
 bool FireOS::startLuaApp(const String& path, const String& name,
-                         const String& launchPackageId) {
+                         const String& launchPackageId,const String& expectedSourceHash) {
   luaSdkFrame_.invalidate();
   if (!luaRuntime_) {
     luaAppError_ = "Lua runtime unavailable";
@@ -5799,10 +5926,13 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaAppError_ = "SD card unavailable";
     return false;
   }
-  // Recreate API tables when switching SDK versus legacy, even if a caller
-  // requests another valid app without first stopping the old VM.
-  if (luaRuntimeReady_ && luaRuntime_->appSdkEnabled()!=appSdk)
-    stopLuaApp("os_navigation");
+  if(!luaRuntimeAiManifest(manifest,appSdk,serviceMask)) {
+    luaAppError_="Runtime AI permission or contract invalid";return false;
+  }
+  // A new verified source starts with its own API/permissions and no live jobs
+  // from the previous app. An identical authorized active run is handled before
+  // entering this loader, preserving its local measurement/game state.
+  if(luaRuntimeReady_) stopLuaApp("os_navigation");
   if (!luaRuntimeReady_) {
     FireLuaRuntime::Host luaHost;
     luaHost.context = this;
@@ -5869,6 +5999,7 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaHost.jobResult = luaJobResultCallback;
     luaHost.jobClose = luaJobCloseCallback;
     luaHost.jobCancel = luaJobCancelCallback;
+    luaHost.aiRequest = luaAiRequestCallback;
     luaRuntime_->setHardwareApi(hardwareApi);
     luaRuntime_->setAppSdk(appSdk);
     luaRuntime_->setServiceMask(serviceMask);
@@ -5936,7 +6067,8 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     sourceHash += hex[value >> 4];
     sourceHash += hex[value & 0x0F];
   }
-  if (readBytes != length || !sourceHash.equalsIgnoreCase(manifestHash)) {
+  if (readBytes != length || !sourceHash.equalsIgnoreCase(manifestHash) ||
+      (expectedSourceHash.length() && sourceHash!=expectedSourceHash)) {
     free(buffer);
     luaAppError_ = "App source checksum mismatch";
     reportLocalLoadFailure("source_hash", luaAppError_);
@@ -5977,6 +6109,10 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   luaRgbLastFlushAt_ = millis();
   luaAppActive_ = true;
   luaRunId_ = "";
+  luaRuntimeAiAllowed_=(serviceMask&kLuaServiceAi)!=0;
+  if(luaRuntimeAiAllowed_ && packageId.length()) {
+    luaAiBindPackageId_=packageId;luaAiBindAt_=millis();luaAiBindSent_=false;
+  }
   luaHealthySent_ = false;
   luaLastFrameAt_ = millis();
   previousScreen_ = screen_;
@@ -6259,7 +6395,7 @@ void FireOS::serviceLuaRepair() {
             luaErrorDiagnostics_, luaErrorRunId_)) {
       luaRepairPrepareSent_ = true;
       luaRepairStatus_ = "preparing";
-      luaRepairMessage_ = "Waiting for repair proposal...";
+      luaRepairMessage_ = "Forbereder reparasjon";
     } else {
       luaRepairMessage_ = "Backend unavailable - retrying";
     }
@@ -6308,9 +6444,10 @@ void FireOS::handleLuaRepairStatus(const String& message) {
   if (incomingVersion.length() > 0) luaRepairReadyVersion_ = incomingVersion;
   luaRepairStatus_ = jsonStringField(message, "status");
   luaRepairPhase_ = jsonStringField(message, "phase");
-  luaRepairMessage_ = jsonStringField(message, "message");
+  luaRepairMessage_ = jsonStringField(message, "display_text");
+  if(!luaRepairMessage_.length()) luaRepairMessage_=compactStatusText(jsonStringField(message,"message"));
   luaRepairProgress_ = static_cast<uint8_t>(
-      constrain(jsonIntField(message, "progress"), 0, 100));
+      constrain(jsonIntField(message, "progress",luaRepairProgress_), 0, 100));
   luaRepairPrepareSent_ = true;
   if (luaRepairId_.length() > 0) {
     preferences.putString("repair_id", luaRepairId_);
@@ -6385,7 +6522,7 @@ void FireOS::startLuaRepairRun() {
     luaRepairRunAfterInstall_ = true;
     luaRepairStatus_ = "downloading";
     luaRepairPhase_ = "installing";
-    luaRepairMessage_ = "Downloading fixed app...";
+    luaRepairMessage_ = "Laster ned reparert app";
   } else {
     luaRepairMessage_ = "Download request failed";
   }
@@ -6472,7 +6609,8 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
             jsonBoolField(item, "can_open", false);
       buildJobCanRetry_[jobIndex] = jsonBoolField(item, "can_retry", false);
       const String phase = jsonStringField(item, "phase");
-      const String messageText = jsonStringField(item, "message");
+      String messageText = jsonStringField(item, "display_text");
+      if(!messageText.length()) messageText=jsonStringField(item,"message");
       const bool finished = buildJobStatuses_[jobIndex] == "ready" ||
                             buildJobStatuses_[jobIndex] == "failed" ||
                             buildJobStatuses_[jobIndex] == "cancelled";
@@ -6490,13 +6628,13 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
         aiBuildId_ = buildJobIds_[jobIndex];
         aiBuildResumeCount_ = jsonIntField(item, "resume_count", -1);
         buildProgress_ = static_cast<uint8_t>(
-            constrain(buildProgressField(item), 0, 100));
+            constrain(buildProgressField(item,aiBuildProgress_), 0, 100));
         aiBuildProgress_ = buildProgress_;
         buildPhase_ = phase;
         buildStatusMessage_ = messageText;
         aiWorkflowText_ = messageText.length() > 0
                               ? messageText
-                              : phase.length() > 0 ? phase : "Bygger...";
+                              : phase.length() > 0 ? phase : "Lager app";
         aiWorkflowState_ = 4;
         aiDeveloperMode_ = 2;
         backgroundBuildActive_ = true;
@@ -6528,6 +6666,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
   }
   if (buildEvent && buildId.length() > 0 && buildId != aiBuildId_ &&
       !independentNotice) {
+    aiReadyPackageId_=String();aiBuildProgress_=0;buildProgress_=0;
     aiBuildErrorCode_ = "";
     aiBuildErrorStatus_ = "";
     aiBuildDiagnosticMessage_ = "";
@@ -6552,6 +6691,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     const String status = jsonStringField(message, "status");
     const String state = jsonStringField(message, "state");
     const String incomingPhase = jsonStringField(message, "phase");
+    const String readyPackage=jsonStringField(message,"package_id");
     const String errorCode = jsonStringField(message, "error_code");
     const String errorStatus = jsonStringField(message, "error_status");
     const String diagnostic = jsonStringField(message, "diagnostic_message");
@@ -6571,9 +6711,10 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
         (state == "awaiting_build_confirmation" ||
          state == "awaiting_confirmation")) {
       buildProgress_ = static_cast<uint8_t>(
-          constrain(buildProgressField(message), 0, 100));
+          constrain(buildProgressField(message,aiBuildProgress_), 0, 100));
       buildPhase_ = incomingPhase;
-      buildStatusMessage_ = jsonStringField(message, "message");
+      buildStatusMessage_ = jsonStringField(message, "display_text");
+      if(!buildStatusMessage_.length()) buildStatusMessage_=jsonStringField(message,"message");
       aiBuildProgress_ = buildProgress_;
       aiProposalId_ = jsonStringField(message, "proposal_id");
       aiBuildResumePending_ = true;
@@ -6582,7 +6723,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 2;
       aiDeveloperMode_ = 2;
       aiWorkflowText_ = aiBuildErrorStatus_.length() > 0
-                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            ? compactStatusText(aiBuildErrorStatus_)
                             : "READY TO RETRY";
       aiAssistantText_ = aiBuildErrorStatus_;
       redrawRequested_ = true;
@@ -6601,17 +6742,27 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       aiAssistantText_ = "";
     }
     buildProgress_ = static_cast<uint8_t>(
-        constrain(buildProgressField(message), 0, 100));
+        constrain(buildProgressField(message,aiBuildProgress_), 0, 100));
     buildPhase_ = incomingPhase;
-    buildStatusMessage_ = jsonStringField(message, "message");
+    buildStatusMessage_ = jsonStringField(message, "display_text");
+    if(!buildStatusMessage_.length()) buildStatusMessage_=jsonStringField(message,"message");
     aiBuildProgress_ = buildProgress_;
     aiWorkflowText_ = buildStatusMessage_.length() > 0
                           ? buildStatusMessage_
                           : buildPhase_;
     if (buildPhase_ == "ready" || status == "ready") {
+      if(readyPackage.length()) {aiReadyPackageId_=readyPackage;aiPackageId_=readyPackage;}
       aiWorkflowState_ = 5;
       backgroundBuildActive_ = false;
       aiBuildResumePending_ = false;
+      if(type=="build_resumed" && buildNoticeRunBuildId_==buildId &&
+         buildNoticeRunPackageId_.length() && buildNoticeRunPackageId_==readyPackage) {
+        const String target=buildNoticeRunPackageId_;
+        buildNoticeRunBuildId_=String();buildNoticeRunPackageId_=String();
+        if(backendClient_ && backendClient_->confirmRun(target)) {
+          aiWorkflowState_=6;aiWorkflowText_="Starter app";
+        } else aiWorkflowText_="App klar – velg Kjør";
+      }
     } else if (buildPhase_ == "failed" || status == "failed") {
       aiWorkflowState_ = 0;
       aiDeveloperMode_ = 2;
@@ -6619,7 +6770,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       aiResumeAvailable_ = true;
       aiBuildResumePending_ = false;
       aiWorkflowText_ = aiBuildErrorStatus_.length() > 0
-                            ? clipUtf8(aiBuildErrorStatus_, 28)
+                            ? compactStatusText(aiBuildErrorStatus_)
                             : "BUILD FAILED";
     } else {
       aiWorkflowState_ = 4;
@@ -6634,8 +6785,10 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     }
     buildNoticeActive_ = true;
     buildNoticeId_ = buildId;
+    buildNoticePackageId_=jsonStringField(message,"package_id");
     buildNoticeName_ = jsonStringField(message, "name");
-    buildNoticeMessage_ = jsonStringField(message, "message");
+    buildNoticeMessage_ = jsonStringField(message, "display_text");
+    if(!buildNoticeMessage_.length()) buildNoticeMessage_=jsonStringField(message,"message");
     if (buildNoticeMessage_.length() == 0) buildNoticeMessage_ = "Appen er klar";
   } else if (type == "build_notice_closed" || type == "event_ack") {
     bool acknowledged = type == "build_notice_closed" &&
@@ -6746,6 +6899,8 @@ void FireOS::updateBackend() {
                          WiFi.status() == WL_CONNECTED &&
                          !backendBootAttempted_;
   const bool backendDemand = screen_ == Screen::AiDeveloper ||
+                              (luaAppActive_ && luaRuntimeAiAllowed_) ||
+                              luaAiBindPackageId_.length()>0 ||
                               screen_ == Screen::AiApi ||
                               screen_ == Screen::LuaApp ||
                               screen_ == Screen::Settings ||
@@ -6813,6 +6968,13 @@ void FireOS::updateBackend() {
     buildJobsRequested_ = false;
   }
   serviceLuaRepair();
+  if(luaAiBindPackageId_.length()) {
+    if(!luaAppActive_ || !luaRuntimeAiAllowed_ || luaPackageId_!=luaAiBindPackageId_ ||
+       millis()-luaAiBindAt_>30000) {luaAiBindPackageId_=String();luaAiBindSent_=false;}
+    else if(!luaAiBindSent_ && !appInventoryPending_ && !luaScanPending_ &&
+            luaCacheComplete_ && !backendClient_->pendingWrites() && backendClient_->sessionReady())
+      luaAiBindSent_=backendClient_->confirmRun(luaAiBindPackageId_);
+  }
   if (luaRepairStatusQueryPending_ && backendClient_->sessionReady()) {
     if (backendClient_->appRepairStatus(luaRepairId_, luaErrorAppId_))
       luaRepairStatusQueryPending_ = false;
@@ -6825,6 +6987,16 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   os->backendStatus_ = status;
+  if(!connected) {
+    for(LuaHardwareJob& job:os->luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.state==0)
+      os->cancelLuaRuntimeAi(job,"not_connected");
+    if(os->luaAppActive_ && os->luaRuntimeAiAllowed_) {
+      // A new authenticated session must bind the real VM again. Failed jobs
+      // stay failed; reconnect never replays a paid request.
+      os->luaRunId_=String();os->luaAiBindPackageId_=os->luaPackageId_;
+      os->luaAiBindAt_=millis();os->luaAiBindSent_=false;
+    }
+  }
   if (connected) {
     os->buildJobsRequested_ = false;
     os->buildJobsRequestAt_ = 0;
@@ -6860,14 +7032,18 @@ void FireOS::packageStatus(void* context, const String& status) {
   os->aiWorkflowText_ = status;
   if (os->screen_ == Screen::AppsSettings) os->managerStatus_ = status;
   os->aiDeveloperMode_ = 2;
+  if(os->packageManager_ && os->packageManager_->busy()) {
+    os->aiBuildProgress_=os->packageManager_->progress();os->aiWorkflowState_=4;
+  }
 }
 
 void FireOS::packageResult(void* context, bool ok, const String& packageId,
-                           const String& archiveHash, const String& message) {
+                           const String& installId, const String& archiveHash,
+                           const String& message) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
-  os->aiPackageId_ = packageId;
-  os->aiWorkflowText_ = ok ? "INSTALLED" : message;
+  const bool selected=os->aiReadyPackageId_.length()?packageId==os->aiReadyPackageId_:packageId==os->aiPackageId_;
+  if(selected) {os->aiPackageId_=packageId;os->aiWorkflowText_=ok?"App installert":message;}
   if (os->screen_ == Screen::AppsSettings) {
     os->managerStatus_ = ok ? "Downloaded to FIRE" : message;
   }
@@ -6898,23 +7074,23 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
     // RUN resolves lp_/lh_ and loads the installed path directly, independent
     // of the asynchronously refreshed menu/inventory snapshot.
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
-        os->aiInstallId_, packageId, true, archiveHash, "installed");
+        installId, packageId, true, archiveHash, "installed");
     if (os->luaRepairRunAfterInstall_ &&
         packageId == os->luaRepairReadyPackageId_) {
       os->luaRepairRunAfterInstall_ = false;
       if (os->backendClient_ && os->backendClient_->confirmRun(packageId)) {
         os->luaRepairStatus_ = "starting";
         os->luaRepairPhase_ = "starting";
-        os->luaRepairMessage_ = "Starting fixed app...";
+        os->luaRepairMessage_ = "Starter reparert app";
       } else {
         os->luaRepairMessage_ = "Run authorization failed";
       }
     }
-    os->aiWorkflowState_ = 5;
+    if(selected) os->aiWorkflowState_ = 5;
   } else {
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
-        os->aiInstallId_, packageId, false, archiveHash, message);
-    os->aiWorkflowState_ = 0;
+        installId, packageId, false, archiveHash, message);
+    if(selected) os->aiWorkflowState_ = 0;
   }
 }
 
@@ -6964,6 +7140,16 @@ void FireOS::backendMessage(void* context, const String& message) {
 void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
+  if(type=="runtime_ai_result") {handleRuntimeAiResult(message);return;}
+  if(type=="session_started" || type=="session_snapshot") {
+    const String mode=jsonStringField(message,"runtime_ai_mode");
+    if(mode=="auto" || mode=="off") {
+      const bool selected=mode=="auto";if(aiRuntimeAuto_!=selected) preferences.putBool("runtime_ai_auto",selected);
+      aiRuntimeAuto_=selected;aiRuntimeModeAcked_=true;
+      if(backendClient_) backendClient_->setRuntimeAiMode(mode,false);
+    }
+    runtimeAiEnabled_=jsonBoolField(message,"runtime_ai_enabled",runtimeAiEnabled_);
+  }
   if (type == "session_started") {
     // An event's identity is bound to its session. Retry the user's pending
     // notice choice with a fresh event after reauthentication.
@@ -6999,18 +7185,28 @@ void FireOS::handleBackendMessage(const String& message) {
     const String packageId = jsonStringField(message, "package_id");
     if (proposal.length() > 0) aiProposalId_ = proposal;
     if (packageId.length() > 0) aiPackageId_ = packageId;
+    const String restoredState=jsonStringField(message,"state");
+    if(packageId.length() && (restoredState=="ready_to_run" || restoredState=="installed")) {
+      aiReadyPackageId_=packageId;aiWorkflowState_=5;aiWorkflowText_="App klar til kjøring";
+    }
+    if(restoredState=="building" || restoredState=="testing" || restoredState=="awaiting_install") {
+      aiWorkflowState_=4;aiBuildProgress_=constrain(buildProgressField(message,aiBuildProgress_),0,100);
+    }
     const String activity = jsonStringField(message, "activity");
     if (activity == "listening") {
-      aiWorkflowState_ = 1;
+      aiWorkflowState_ = fireConversationState(aiWorkflowState_,1);
       aiDeveloperMode_ = 1;
     } else if (activity == "processing") {
-      aiWorkflowState_ = 2;
+      aiWorkflowState_ = fireConversationState(aiWorkflowState_,2);
       aiDeveloperMode_ = 2;
     } else if (activity == "speaking") {
       aiDeveloperMode_ = 3;
-      aiWorkflowState_ = 2;
+      aiWorkflowState_ = fireConversationState(aiWorkflowState_,2);
     }
-    aiWorkflowText_ = "CONNECTED - STATE RESTORED";
+    const String display=jsonStringField(message,"display_text");
+    aiWorkflowText_ = display.length()?display:
+      (restoredState=="ready_to_run" || restoredState=="installed")?String("App klar til kjøring"):
+      (restoredState=="building" || restoredState=="testing")?compactStatusText(jsonStringField(message,"phase")):String("Tilkoblet");
     return;
   }
   if (type == "app_inventory_request") {
@@ -7086,22 +7282,24 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "assistant_message" || type == "transcript") {
     const String text = jsonStringField(message, "text");
+    String display=jsonStringField(message,"display_text");
+    if(!display.length()) display=type=="transcript"?String("Tale mottatt"):compactStatusText(text);
     if (type == "transcript") {
       aiTranscriptText_ = text;
-      aiAssistantText_ = "Jeg hørte: " + text;
+      aiAssistantText_ = display;
     } else {
-      aiAssistantText_ = text;
+      aiAssistantText_ = display;
     }
     if (type == "assistant_message") {
       // A completed answer returns to the conversational idle state so B can
       // start another turn and add context before the user builds.
       aiDeveloperMode_ = 3;
-      aiWorkflowState_ = 0;
-      aiWorkflowText_ = "ANSWER - SPEAK AGAIN";
+      aiWorkflowState_ = fireConversationState(aiWorkflowState_,0);
+      if(aiWorkflowState_<3) aiWorkflowText_ = "Svar mottatt";
     } else {
       aiDeveloperMode_ = 2;
-      aiWorkflowState_ = 2;
-      aiWorkflowText_ = "TRANSCRIBED - WAITING FOR AI";
+      aiWorkflowState_ = fireConversationState(aiWorkflowState_,2);
+      if(aiWorkflowState_<3) aiWorkflowText_ = "Tale mottatt – vurderer";
     }
     return;
   }
@@ -7123,29 +7321,48 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "ui_event") {
+    if(jsonStringField(message,"event")=="runtime_ai_policy") {
+      const String mode=jsonStringField(message,"mode");
+      if(mode=="auto" || mode=="off") {
+        const bool selected=mode=="auto";if(aiRuntimeAuto_!=selected) preferences.putBool("runtime_ai_auto",selected);
+        aiRuntimeAuto_=selected;aiRuntimeModeAcked_=true;
+        if(backendClient_) backendClient_->setRuntimeAiMode(mode,false);
+      }
+      runtimeAiEnabled_=jsonBoolField(message,"enabled",runtimeAiEnabled_);
+      if(!runtimeAiEnabled_) for(LuaHardwareJob& job:luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.state==0)
+        cancelLuaRuntimeAi(job,"disabled");
+      return;
+    }
     String state = jsonStringField(message, "state");
     if (state.length() == 0) state = jsonStringField(message, "activity");
     if (state == "listening") {
-      aiWorkflowState_ = 1;
+      aiWorkflowState_ = fireConversationState(aiWorkflowState_,1);
       aiDeveloperMode_ = 1;
     } else if (state == "processing" || state == "thinking") {
-      aiWorkflowState_ = 2;
+      aiWorkflowState_ = fireConversationState(aiWorkflowState_,2);
       aiDeveloperMode_ = 2;
     } else if (state == "speaking") {
       aiDeveloperMode_ = 3;
+    } else if(state=="building" || state=="testing" || state=="awaiting_install") {
+      aiWorkflowState_=4;aiDeveloperMode_=2;
+    } else if((state=="ready_to_run" || state=="installed") && aiReadyPackageId_.length()) {
+      aiWorkflowState_=5;aiBuildProgress_=100;
     }
-    aiWorkflowText_ = state;
+    if(aiWorkflowState_<3 || state=="building" || state=="testing" || state=="awaiting_install" ||
+       state=="ready_to_run" || state=="installed") aiWorkflowText_ = compactStatusText(state);
     return;
   }
   if (type == "build_proposal") {
+    aiReadyPackageId_=String();
     aiProposalId_ = jsonStringField(message, "proposal_id");
     const String summary = jsonStringField(message, "summary");
-    aiAssistantText_ = summary.length() > 0 ? summary : aiBuildErrorStatus_;
+    const String display=jsonStringField(message,"display_text");
+    aiAssistantText_ = display.length()?display:compactStatusText(summary.length()?summary:aiBuildErrorStatus_);
     aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 0;
     aiDeveloperMode_ = 2;
     aiWorkflowText_ = aiBuildResumePending_
                           ? (aiBuildErrorStatus_.length() > 0
-                                 ? clipUtf8(aiBuildErrorStatus_, 28)
+                                 ? compactStatusText(aiBuildErrorStatus_)
                                  : "READY TO RETRY")
                           : "READY TO BUILD";
     return;
@@ -7214,8 +7431,8 @@ void FireOS::handleBackendMessage(const String& message) {
       return;
     }
     aiDeveloperMode_ = 3;
-    aiWorkflowState_ = 2;
-    aiWorkflowText_ = "QUEUED AI VOICE";
+    aiWorkflowState_ = fireConversationState(aiWorkflowState_,2);
+    if(aiWorkflowState_<3) aiWorkflowText_ = "Spiller av svar";
     return;
   }
   if (type == "firmware_store_request") {
@@ -7229,6 +7446,7 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "package_ready") {
     aiPackageId_ = jsonStringField(message, "package_id");
+    aiReadyPackageId_=aiPackageId_;
     const String projectId = jsonStringField(message, "project_id");
     if (projectId.length() > 0 && aiPackageId_.length() > 0) {
       preferences.putString(compactPreferenceKey("pr_", aiPackageId_).c_str(),
@@ -7239,8 +7457,8 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "install_request") {
-    aiPackageId_ = jsonStringField(message, "package_id");
-    aiInstallId_ = jsonStringField(message, "install_id");
+    const String packageId = jsonStringField(message, "package_id");
+    const String installId = jsonStringField(message, "install_id");
     const String url = jsonStringField(message, "download_url");
     const String hash = jsonStringField(message, "archive_sha256");
     const String projectId = jsonStringField(message, "project_id");
@@ -7249,28 +7467,37 @@ void FireOS::handleBackendMessage(const String& message) {
     const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
     if (backendClient_ && commandBoot.length() > 0 &&
         commandBoot != backendClient_->bootId()) {
-      backendClient_->deviceInstallResult(aiInstallId_, aiPackageId_, false,
+      backendClient_->deviceInstallResult(installId, packageId, false,
                                            hash, "stale boot_id");
       aiWorkflowText_ = "DOWNLOAD REJECTED";
       return;
     }
     if (!backendCommandUnexpired(expiresAt)) {
       if (backendClient_) backendClient_->deviceInstallResult(
-          aiInstallId_, aiPackageId_, false, hash, "expired install command");
+          installId, packageId, false, hash, "expired install command");
       aiWorkflowText_ = "DOWNLOAD EXPIRED";
       return;
     }
-    invalidateLuaApps();
+    if (packageManager_ && packageManager_->busy()) {
+      // Replay of the SAME command must not turn an in-flight installation
+      // into a failed receipt. A different command cannot replace its identity.
+      if (!packageManager_->matchesInstall(packageId, installId, hash, size) && backendClient_)
+        backendClient_->deviceInstallResult(installId, packageId, false, hash, "installer busy");
+      return;
+    }
     const bool accepted = packageManager_ && packageManager_->startDownload(
-        backendHost_, backendPort_, backendToken_, url, aiPackageId_, aiInstallId_,
+        backendHost_, backendPort_, backendToken_, url, packageId, installId,
         hash, size);
-    if (projectId.length() > 0 && aiPackageId_.length() > 0) {
-      preferences.putString(compactPreferenceKey("pr_", aiPackageId_).c_str(),
+    if (accepted) {
+      aiPackageId_ = packageId;aiInstallId_ = installId;invalidateLuaApps();
+    }
+    if (accepted && projectId.length() > 0 && packageId.length() > 0) {
+      preferences.putString(compactPreferenceKey("pr_", packageId).c_str(),
                             projectId);
       saveSettings();
     }
     if (!accepted && backendClient_)
-      backendClient_->deviceInstallResult(aiInstallId_, aiPackageId_, false,
+      backendClient_->deviceInstallResult(installId, packageId, false,
                                           hash, "download rejected");
     aiWorkflowText_ = accepted ? "DOWNLOADING" : "DOWNLOAD REJECTED";
     return;
@@ -7280,6 +7507,7 @@ void FireOS::handleBackendMessage(const String& message) {
     const String packageId = jsonStringField(message, "package_id");
     const String commandBoot = jsonStringField(message, "boot_id");
     const String commandHash = jsonStringField(message, "archive_sha256");
+    const String commandSource = jsonStringField(message,"source_sha256");
     const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
     if (runId.length() == 0 || packageId.length() == 0 ||
         (backendClient_ && commandBoot.length() > 0 &&
@@ -7300,7 +7528,9 @@ void FireOS::handleBackendMessage(const String& message) {
     const String consumedKey = compactPreferenceKey("rr_", runId);
     const String previousRun = preferences.getString(consumedKey.c_str(), "");
     if (previousRun.length() > 0) {
-      if (backendClient_ && (previousRun == "started" || previousRun == "healthy"))
+      if (backendClient_ && (previousRun == "started" || previousRun == "healthy") &&
+          luaAppActive_ && luaRuntime_ && luaRuntime_->running() && luaRunId_==runId &&
+          luaPackageId_==packageId && (!commandSource.length() || luaSourceHash_==commandSource))
         backendClient_->appStarted(runId, packageId);
       else if (backendClient_)
         backendClient_->appFailed(runId, packageId, "previous_failure",
@@ -7325,10 +7555,20 @@ void FireOS::handleBackendMessage(const String& message) {
     }
     preferences.putString(consumedKey.c_str(), "starting");
     saveSettings();
+    if(luaAppActive_ && luaRuntime_ && luaRuntime_->running() && luaPackageId_==packageId &&
+       luaAppPath_==path && validSha256Hex(commandSource) && luaSourceHash_==commandSource) {
+      // The real local VM is already executing these exact verified bytes.
+      // Bind the normal authorized command without resetting measurements/UI.
+      luaRunId_=runId;luaHealthySent_=false;luaAiBindPackageId_=String();luaAiBindSent_=false;
+      preferences.putString(consumedKey.c_str(),"started");saveSettings();
+      if(backendClient_) backendClient_->appStarted(runId,packageId,luaDiagnosticsJson("start"));
+      redrawRequested_=true;return;
+    }
     if (path.length() > 0 &&
-        startLuaApp(path, sdBaseName(path), packageId)) {
+        startLuaApp(path, sdBaseName(path), packageId,commandSource)) {
       luaRunId_ = runId;
       luaPackageId_ = packageId;
+      luaAiBindPackageId_=String();luaAiBindSent_=false;
       luaHealthySent_ = false;
       aiWorkflowState_ = 6;
       aiDeveloperMode_ = 3;
@@ -7458,7 +7698,8 @@ void FireOS::handleBackendMessage(const String& message) {
   if (type == "error" || type == "app_failed") {
     aiWorkflowState_ = 0;
     aiDeveloperMode_ = 0;
-    aiWorkflowText_ = jsonStringField(message, "message");
+    aiWorkflowText_ = jsonStringField(message, "display_text");
+    if(!aiWorkflowText_.length()) aiWorkflowText_=compactStatusText(jsonStringField(message,"message"));
     if (aiWorkflowText_.length() == 0) aiWorkflowText_ = "BACKEND ERROR";
   }
 }
@@ -9511,11 +9752,11 @@ void FireOS::drawBuildNoticeOverlay() {
   drawText(160, 62, "Appen er klar", kGreen, 2, kPanel);
   String notice = buildNoticeName_.length() > 0 ? buildNoticeName_ : "Ny versjon";
   drawText(160, 88, clipUtf8(notice, 28), kText, 1, kPanel);
-  drawText(160, 108, clipUtf8(buildNoticeMessage_, 28), kMuted, 1, kPanel);
-  drawText(82, 140, "Åpne", kCyan, 1, kPanel);
+  drawText(160, 108, compactStatusText(buildNoticeMessage_), kMuted, 1, kPanel);
+  drawText(82, 140, buildNoticePackageId_.length()?"Kjør":"Åpne", kCyan, 1, kPanel);
   drawText(238, 140, "Avbryt", kMuted, 1, kPanel);
   ui.setTextDatum(TL_DATUM);
-  drawFooter("", "Åpne", "Avbryt");
+  drawFooter("", buildNoticePackageId_.length()?"Kjør":"Åpne", "Avbryt");
 }
 
 void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, int32_t size) {
@@ -10322,7 +10563,7 @@ void FireOS::drawAiDeveloper() {
                               luaRepairStatus_ != "unavailable";
     const uint8_t repairOffset = repairResume ? 1 : 0;
     const uint8_t buildOffset = aiResumeAvailable_ ? 1 : 0;
-    const uint8_t itemCount = luaAppCount_ + 4 + repairOffset + buildOffset;
+    const uint8_t itemCount = luaAppCount_ + 5 + repairOffset + buildOffset;
     const uint8_t visible = min<uint8_t>(6, itemCount - aiProjectOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = aiProjectOffset_ + row;
@@ -10339,9 +10580,11 @@ void FireOS::drawAiDeveloper() {
                                       ? "Voice test"
                                       : item == repairOffset + buildOffset + 2
                                           ? "New app"
+                                          : item == repairOffset + buildOffset + 3
+                                              ? String("Runtime AI: ")+(aiRuntimeAuto_?"AUTO":"OFF")+(aiRuntimeModeAcked_?"":" *")
                                           : item == itemCount - 1
                                               ? "Back"
-                                              : luaAppNames_[item - repairOffset - buildOffset - 3];
+                                              : luaAppNames_[item - repairOffset - buildOffset - 4];
       if (label.length() > 28) label = label.substring(0, 25) + "...";
       drawText(160, y, label, selected ? kBg : kText, 1,
                selected ? kCyan : kPanel);
@@ -10529,14 +10772,13 @@ void FireOS::drawAiDeveloper() {
   workflowLabel = compactStatusText(workflowLabel);
   drawText(cx, 207, workflowLabel, kMuted, 1, TFT_BLACK);
   if (failedBuildView) {
-    drawText(cx, 174, clipUtf8(aiBuildErrorStatus_, 30), kOrange, 1,
+    drawText(cx, 174, compactStatusText(aiBuildErrorStatus_), kOrange, 1,
              TFT_BLACK);
     if (aiBuildDiagnosticMessage_.length() > 0)
-      drawText(cx, 190, clipUtf8(aiBuildDiagnosticMessage_, 34), kMuted, 1,
+      drawText(cx, 190, compactStatusText(aiBuildDiagnosticMessage_), kMuted, 1,
                TFT_BLACK);
   } else if (aiAssistantText_.length() > 0) {
-    String assistant = aiAssistantText_;
-    if (assistant.length() > 34) assistant = assistant.substring(0, 31) + "...";
+    String assistant = compactStatusText(aiAssistantText_);
     drawText(cx, 174, assistant, 0xBDF7, 1, TFT_BLACK);
   }
   if (aiWorkflowState_ == 4) {

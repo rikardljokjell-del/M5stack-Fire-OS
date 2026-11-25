@@ -22,6 +22,8 @@ jobs:
       - run: python -m pip install platformio==6.2.0 cryptography==50.0.2
       - name: Verify shared App SDK contract and generated flash data
         run: python M5Stack-backend/scripts/build_app_sdk.py --check
+      - name: Verify optional Runtime AI contract and generated constants
+        run: python M5Stack-backend/scripts/build_runtime_ai_contract.py --check
       - name: Native guards and release tests
         run: |
           python -m unittest discover -s M5Stack-device/tests -p 'test_*.py' -v

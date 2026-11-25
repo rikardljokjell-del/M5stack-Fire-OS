@@ -12,7 +12,7 @@ class FireLuaPackageManager {
  public:
   using StatusCallback = void (*)(void*, const String&);
   using ResultCallback = void (*)(void*, bool, const String&, const String&,
-                                  const String&);
+                                  const String&, const String&);
 
   void setCallbacks(void* context, StatusCallback status, ResultCallback result);
   void setReverseTransport(FireReverseTransport* transport) {
@@ -24,8 +24,14 @@ class FireLuaPackageManager {
                      uint32_t expectedSize);
   void service(bool wifiConnected);
   bool busy() const { return io_.busy(); }
+  bool matchesInstall(const String& packageId, const String& installId,
+                      const String& hash, uint32_t size) const {
+    return busy() && packageId_ == packageId && installId_ == installId &&
+           expectedHash_.equalsIgnoreCase(hash) && expectedSize_ == size;
+  }
   const String& status() const { return status_; }
   const String& installedPath() const { return installedPath_; }
+  uint8_t progress() const { return progress_.load(std::memory_order_relaxed); }
 
  private:
   enum class State : uint8_t { Idle, Connecting, Headers, Downloading, Verify };
@@ -49,6 +55,7 @@ class FireLuaPackageManager {
   uint32_t expectedSize_ = 0;
   uint32_t contentLength_ = 0;
   uint32_t received_ = 0;
+  std::atomic<uint8_t> progress_{0};
   uint32_t lastDataAt_ = 0;
   String headerBuffer_;
   String status_;

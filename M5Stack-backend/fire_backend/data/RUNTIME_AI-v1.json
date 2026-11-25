@@ -1,0 +1,122 @@
+{
+  "api_contract": "bef762941dad713217d70bbc1a9fd6cfbe7de825263dba246b5c170331ba4693",
+  "registry": {
+    "api_version": "fire-runtime-ai-1.0",
+    "service": "ai",
+    "requires": [
+      "jobs"
+    ],
+    "app_api": "fire-app-sdk-1.0",
+    "capability_field": "runtime_ai",
+    "manifest_field": "runtime_ai",
+    "permission": "fire.ai",
+    "hardware_contract_unchanged": true,
+    "sdk_contract_unchanged": true,
+    "methods": {
+      "request": {
+        "args": [
+          {
+            "name": "instructions",
+            "type": "string",
+            "max_bytes": 512
+          },
+          {
+            "name": "data_json",
+            "type": "string",
+            "max_bytes": 768
+          },
+          {
+            "name": "schema_json",
+            "type": "string",
+            "max_bytes": 512
+          },
+          {
+            "name": "timeout_ms",
+            "type": "integer",
+            "optional": true,
+            "default": 30000,
+            "min": 1000,
+            "max": 60000
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      }
+    },
+    "limits": {
+      "instructions_bytes": 512,
+      "data_bytes": 768,
+      "schema_bytes": 512,
+      "request_bytes": 1536,
+      "result_bytes": 512,
+      "timeout_min_ms": 1000,
+      "timeout_default_ms": 30000,
+      "timeout_max_ms": 60000,
+      "pending_per_app": 1,
+      "json_depth": 4,
+      "json_object_keys": 16,
+      "json_array_items": 16,
+      "json_string_bytes": 256
+    },
+    "semantics": {
+      "capability": "Capability and AI manifest extension require the exact version and extension hash. ai requires jobs and fire.ai permission; extension is absent from unchanged legacy/non-AI manifests. Only SDK apps may request AI.",
+      "async": "request never waits for transport or model output. Use existing jobs.poll/result/cancel/close. One pending AI job per app, within the unchanged four outstanding jobs. All input bytes charge existing callback I/O; no additional frame buffer or timing credit.",
+      "data": "data_json is a finite JSON object. App aggregates, samples and labels measurements locally before sending relevant data automatically. No arbitrary files, URLs, tools, credentials or automatic whole-log upload. instructions and data are untrusted app content.",
+      "schema": "schema_json is a JSON Schema object for an object result using bounded objects, arrays and string/number/integer/boolean/null values. All object properties required, additionalProperties false; no references, external resources or executable expressions. Apply the JSON limits to both data and results.",
+      "result": "Ready job result is {ok=true,data=<bounded parsed JSON object>}; operational failure is {ok=false,error_code=string}. Entire compact UTF-8 result_json is at most result_bytes; reject oversized, invalid, nonfinite or schema-invalid output, never truncate JSON.",
+      "identity": "OS supplies app_id, package_id, source_sha256, run_id and boot_id from the actually running verified package. Lua cannot select another identity, model, URL or credentials. Backend authenticates the existing device connection and checks current run/package identity and global/per-app permission.",
+      "lifecycle": "Timeout, cancellation, close, app exit, reboot and disconnect prevent completion effects. Backend and device reject stale identity/request results. Cancel does not undo already incurred provider usage. Reconnect requires a fresh request; no automatic charged replay.",
+      "controls": "Runtime AI has global and per-app enabled controls and dedicated backend model/configuration. AI Developer AUTO/OFF controls generation of AI-enabled features. AUTO includes AI only for real benefit or an explicit user request. OFF must not silently enable it; explain the conflict. Standard local features remain usable without AI where sensible.",
+      "presentation": "Use button-driven actions and clear pending/result/error states. Separate actual observations from AI assessments. Mark offline/fallback content as local; never present fixture or fallback content as real AI output.",
+      "usage": "Meter runtime_ai separately from generation/review/dialog, attributed to actual app and request. Report calls, provider tokens, cost confidence and response latency; conservative admission reserves are never displayed as measured spend."
+    },
+    "transport": {
+      "request_event": "runtime_ai_request",
+      "cancel_event": "runtime_ai_cancel",
+      "result_message": "runtime_ai_result",
+      "identity_fields": [
+        "request_id",
+        "app_id",
+        "package_id",
+        "source_sha256",
+        "run_id",
+        "boot_id"
+      ],
+      "request_fields": [
+        "instructions",
+        "data_json",
+        "schema_json",
+        "timeout_ms"
+      ],
+      "result_fields": [
+        "state",
+        "result_json",
+        "error_code"
+      ],
+      "result_states": [
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "binding": "Existing authenticated device WebSocket, existing event envelope and event acknowledgement/dedup; no second server, API key or transport. Runtime event identity must match the actual run. No source comments or app-supplied assertions establish physical execution."
+    },
+    "errors": [
+      "disabled",
+      "permission_denied",
+      "not_connected",
+      "busy",
+      "invalid_json",
+      "invalid_schema",
+      "payload_too_large",
+      "timeout",
+      "cancelled",
+      "result_too_large",
+      "invalid_result",
+      "provider_error",
+      "budget_exceeded",
+      "stale_run"
+    ]
+  }
+}
