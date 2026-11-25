@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "candidate": true,
+  "production_verified": false,
+  "guide": "M5Stack-backend/docs/FIRE_OS_UI.md",
+  "version": "fire-os-1.4.0-rc2",
+  "source_commit": "007a35d6318d37466949ba45ff2c1dbeee233194",
+  "ci": {
+    "run": 45685543151,
+    "job": 139457055679,
+    "artifact": 15055089142,
+    "native_tests": 24,
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "strict_native_run": 45685543156
+  },
+  "firmware": {
+    "name": "fire-os-1.4.0-rc2.bin",
+    "size": 2525072,
+    "sha256": "225ba6d95d9744b1d6cb28b78d3de6e8716bd3fc6db4684c30e7a42fba6de1e8"
+  },
+  "migration": {
+    "name": "fire-os-1.4.0-rc2-usb.zip",
+    "size": 2584080,
+    "sha256": "22f8c7270796acbc4b3eabb3d82a8fcb6958c9e8c8c7493fb8c089f51a4c46d3",
+    "manifest_sha256": "a547efb8b7058ceacad51246b0de7fe95c38b8ea433718e9a1220f39f706209b",
+    "files": [
+      "APP_SDK_NOTICES.txt",
+      "app-sdk-licenses/1-bit-pack.txt",
+      "app-sdk-licenses/atkinson-OFL.txt",
+      "app-sdk-licenses/legacy-font.txt",
+      "app-sdk-licenses/lucide.txt",
+      "app-sdk-licenses/pixel-OFL.txt",
+      "app-sdk-licenses/pixel-platformer.txt",
+      "app-sdk-licenses/tiny-dungeon.txt",
+      "app-sdk-licenses/tiny-town.txt",
+      "bootloader.bin",
+      "catalog-v2.json",
+      "migration.json",
+      "migration.sig",
+      "normal.bin",
+      "partitions.bin",
+      "recovery.bin",
+      "release-public.pem"
+    ],
+    "required_signed_core_files": 8,
+    "license_notice_files": 9
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "225ba6d95d9744b1d6cb28b78d3de6e8716bd3fc6db4684c30e7a42fba6de1e8",
+      "size": 2525072
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "foundation": "Unchanged physically verified RC2 bootloader/table/recovery from RC9 bundle",
+  "changes": [
+    "OS-only 4-bit font coverage from pinned Atkinson sources, unchanged existing font metrics",
+    "Proportional small OS labels replace retro pixel labels; SDK fonts untouched",
+    "Lucide icons rasterized directly at their displayed size",
+    "Rounded panel fill/border composed once against the real canvas background"
+  ],
+  "unchanged": [
+    "App SDK and Runtime AI contracts, rendering and quotas",
+    "Home protocol, permissions, settings, commands and persistence",
+    "Existing A/C/B navigation and layouts",
+    "No new device framebuffer, heap image cache, download or backend process"
+  ],
+  "compile_footprint": {
+    "static_ram_bytes": 63796,
+    "iram_spare_bytes": 1128,
+    "previous_ui_rc1_normal_bytes": 2369616,
+    "normal_bytes_increase": 155456,
+    "compile_numbers_are_runtime_performance_proof": false
+  },
+  "pc_visual_verification": {
+    "actual_cpp_fonts_icons_and_drawing_helpers": true,
+    "representative_screens": 6,
+    "preview_artifact": 15056621245,
+    "preview_artifact_sha256": "91002ecec4bd4376bcf8a9d92cdca526f4aa1bcccc0d7ed5ff023e6bdf683e6a",
+    "bounded_surface_writes": true,
+    "new_device_framebuffers": 0,
+    "physical_home_assistant_verified": false
+  },
+  "physical_usb": {
+    "verified": true,
+    "active": "B/app1 sequence48 VALID/CRC",
+    "fallback": "UI RC1 A/app0 sequence47 VALID/CRC",
+    "flash_md5_verified": true,
+    "exact_normal_length_sha256_readback": true,
+    "full_slot_ff_suffix_rechecked": false,
+    "health_seconds": 45.168,
+    "ordinary_reboot_seconds": 35.15,
+    "panic": 0,
+    "abort": 0,
+    "watchdog": 0,
+    "com_closed": true,
+    "local_evidence_sha256": "9a519673e3d9bf3dc53b12a3875196db060d9f264bc056597ee66185676c0b8f",
+    "health_loop_max_us": 113653,
+    "normal_reboot_loop_max_us": 120350,
+    "health_gap_max_us": 118998,
+    "normal_reboot_gap_max_us": 126016,
+    "these_are_not_measured_button_latencies": true,
+    "backend_observation_sha256": "525bf44a34fb4a3d64d326a44b15b0759b7d7a935a7c8a1a9b4384404cff7004"
+  },
+  "user_visual_acceptance": false,
+  "all_old_versioned_artifacts_preserved": true,
+  "limitations": [
+    "User appearance and navigation acceptance pending",
+    "No new live Home Assistant control, Runtime AI request or OTA/SD transfer was triggered by this UI verification",
+    "No claim that the fixed 320x240 physical resolution is increased"
+  ],
+  "backend_physical_observation": {
+    "firmware": "fire-os-1.4.0-rc2",
+    "new_boot": true,
+    "sdk_contract_unchanged": true,
+    "runtime_ai_contract_unchanged": true,
+    "storage_ready": true,
+    "current_boot_epoch_inventory_complete": true,
+    "present_count": 12,
+    "original_app_ids_preserved": 7,
+    "versions_unchanged_claimed": false,
+    "app_commands_or_agent_ai_calls": 0
+  }
+}

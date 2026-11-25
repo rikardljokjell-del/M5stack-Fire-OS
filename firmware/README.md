@@ -1,6 +1,35 @@
 # FIRE OS firmware
 
-## Aktuell testkandidat: fire-os-1.4.0-rc1
+## Aktuell testkandidat: fire-os-1.4.0-rc2
+
+Polert OS og Home med kantutjevnet tekst, proporsjonale små etiketter,
+ikoner tegnet i riktig størrelse og jevnere avrundede kort-/knappekanter.
+Fire appkort per side og samme A/C/B beholdes. Ingen ekstra skjermbuffer.
+SDK, Runtime AI, Home-tilgang, innstillinger og eksisterende apper er uendret.
+
+Eksakt CI-bilde er installert og MD5/SHA256-tilbakekontrollert i B48 VALID/CRC;
+forrige UI RC1 A47 er beholdt som reserve. Helsekontroll 45,168s og vanlig
+omstart 35,15s hadde ingen panic/abort/watchdog. COM er lukket. Brukerens
+visuelle prøve pågår; fysisk HA-styring eller ny OTA/SD-overføring inngår ikke.
+
+[Normal firmware](fire-os-1.4.0-rc2.bin) ·
+[signert USB-pakke](fire-os-1.4.0-rc2-usb.zip) ·
+[kontrollsummer](fire-os-1.4.0-rc2-SHA256SUMS.txt) ·
+[utgivelsesbevis](fire-os-1.4.0-rc2-evidence.json) ·
+[lisensinformasjon](fire-os-1.4.0-rc2-NOTICES.txt).
+
+Kilde `007a35d`, CI45685543151: 24 native tester og tre bygg; strenge
+C++-kontroller består separat. Seks skjermer er kontrollert med de faktiske
+tegnehjelperne. Normalbildet er 2 525 072 byte; statisk RAM er fortsatt
+63 796 byte og IRAM-margin 1 128 byte. Den signerte USB-pakken beholder
+fysisk testet RC2-bootloader/tabell/recovery og alle lisens-/varselfiler.
+
+Alle eldre publiserte versjonsfiler er bytebevart. Aktiv katalog har åtte
+valg; eldre utgaver, inkludert [1.2-RC2-katalogen](fire-os-1.2.0-rc2-catalog.json),
+[firmware](fire-os-1.2.0-rc2.bin) og [USB-pakke](fire-os-1.2.0-rc2-usb.zip),
+ligger fortsatt i arkivet. Se [UI-veiledningen](../M5Stack-backend/docs/FIRE_OS_UI.md).
+
+## Historisk første UI-kandidat: fire-os-1.4.0-rc1
 
 Ny visuell utforming for FIRE OS og Home:
 

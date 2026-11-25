@@ -1,7 +1,7 @@
 # Engangs USB-migrering til FIRE med recovery
 
-**Rikards FIRE er allerede migrert og kjører ren fire-os-1.4.0-rc1 i A47
-VALID/CRC. Fungerende RC7 er bevart som reserve i B46. Ingen ny USB-migrering trengs.**
+**Rikards FIRE er allerede migrert og kjører ren fire-os-1.4.0-rc2 i B48
+VALID/CRC. Forrige UI-utgave RC1 er bevart som reserve i A47. Ingen ny USB-migrering trengs.**
 Eksakt CI-bilde er kontrollert med flash-MD5 og SHA256-tilbakeavlesning,
 helsegodkjenning og vanlig omstart. Se den kanoniske
 [UI-veiledningen og fysiske kontrollen](FIRE_OS_UI.md).
@@ -134,15 +134,15 @@ du skal slå av for å tvinge fram migrering.
 ## 1. Kontroller pakken uten enhet
 
 Åpne PowerShell i `M5Stack-backend`. Den ferdige pakken ligger for eksempel i
-`workspace\migration\fire-os-1.4.0-rc1` og inneholder:
+`workspace\migration\fire-os-1.4.0-rc2` og inneholder:
 
 - `migration.json` og `migration.sig` (signert plan for alle fire bildene).
 - `bootloader.bin`, `partitions.bin`, `normal.bin`, `recovery.bin`.
 - `catalog-v2.json` og `release-public.pem`.
 
-USB-pakken publiseres som `firmware/fire-os-1.4.0-rc1-usb.zip` i repoet.
+USB-pakken publiseres som `firmware/fire-os-1.4.0-rc2-usb.zip` i repoet.
 Den lokale kontrollerte kopien ligger i
-`workspace/releases/fire-os-1.4.0-rc1-usb.zip`.
+`workspace/releases/fire-os-1.4.0-rc2-usb.zip`.
 Pakk ut alle 17 filer, inkludert de ni SDK-lisens-/varselfilene, til mappen
 over før kontroll. De åtte kjernefilene er listet ovenfor. En separat publisert
 `fire-os-1.2.0-rc9.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
@@ -151,7 +151,7 @@ og kreves ikke av migreringsverktøyet. Lokal `component-provenance.json` er ogs
 en ekstra revisjonsfil, ikke en av de åtte nødvendige filene i USB-ZIP-en.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.4.0-rc1
+.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.4.0-rc2
 ```
 
 Standardkommandoen åpner **ingen serieport** og skriver ingenting til FIRE.
@@ -175,7 +175,7 @@ tilhører FIRE, for eksempel COM3; verktøyet gjetter aldri en port.
 ## 3. Kun forhåndskontroll av tilkoblet FIRE
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.4.0-rc1 --port COM3
+.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.4.0-rc2 --port COM3
 ```
 
 Enheten går midlertidig til ROM-nedlastingsmodus for kontroll, og startes tilbake
@@ -189,7 +189,7 @@ brukes enhetens dokumenterte USB-bootprosedyre; ingen sikkerhetsdialog omgås.
 Kjør først når riktig signert pakke og riktig serieport er kontrollert:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.4.0-rc1 --port COM3 --confirm MIGRATE-FIRE
+.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.4.0-rc2 --port COM3 --confirm MIGRATE-FIRE
 ```
 
 Før skriving gjør verktøyet dette i rekkefølge:

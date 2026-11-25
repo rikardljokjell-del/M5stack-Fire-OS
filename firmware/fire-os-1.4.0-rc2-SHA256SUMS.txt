@@ -1,0 +1,5 @@
+61622dc19658576d62629d4c34768276cec883fe3fde8127d1da5deeaff912cd  fire-os-1.4.0-rc2-catalog.json
+a96861447f562f9003d77be036bd79e5a661ace654d120a097de5e4fcfe534e1  fire-os-1.4.0-rc2-evidence.json
+bddffb07be70302fd3b23c561f0c360218e4829ad727d208d6d0b54c49e6288e  fire-os-1.4.0-rc2-NOTICES.txt
+22f8c7270796acbc4b3eabb3d82a8fcb6958c9e8c8c7493fb8c089f51a4c46d3  fire-os-1.4.0-rc2-usb.zip
+225ba6d95d9744b1d6cb28b78d3de6e8716bd3fc6db4684c30e7a42fba6de1e8  fire-os-1.4.0-rc2.bin

@@ -18,17 +18,22 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-### Visuell oppgradering av FIRE OS og Home – 1.4-kandidat
+### Polert FIRE OS og Home – installert 1.4.0-rc2
 
-Ny hovedmeny med fire appkort per side og uendret A/C/B-navigasjon er
-implementert. OS-menyer, ikoner, status-/knapperad og dialoger får en felles
-stil. Home har nye kontrollkort, tydelig datastatus og oppdatert mobiloppsett.
-Ingen endring av Home-rettigheter, MQTT, Lua/SDK eller Runtime AI-kontrakter.
-22 native tester, alle tre bygg og strenge C++-kontroller består. Eksakt
-1.4.0-rc1 er fysisk tilbakekontrollert og helsegodkjent i A47; fungerende
-RC7 B46 er urørt reserve. Vanlig omstart bestod uten panic/watchdog.
-Brukerens utseende-/A/B/C-prøve pågår; HA-styring er ikke bekreftet av dette.
-Se [kort UI-veiledning](M5Stack-backend/docs/FIRE_OS_UI.md).
+Fire appkort per side, uendret A/C/B og felles utforming i OS/Home er på plass.
+Etter brukerens første prøve er tekst og ikoner nå kantutjevnet fra originale
+font-/ikonfiler. Små etiketter er proporsjonale, og kort/knapper har jevnere
+avrundede kanter. Ingen ekstra skjermbuffer eller endring av SDK/Runtime AI,
+Home-rettigheter, protokoll, lagrede valg eller appdata.
+
+24 native tester, alle tre bygg og strenge C++-kontroller består. Seks
+faktiske C++-tegnede forhåndsvisninger er kontrollert. Statisk RAM/IRAM-margin
+er uendret. Eksakt CI-bilde er fysisk MD5/SHA256-kontrollert og helsegodkjent
+i B48 VALID/CRC; UI RC1 A47 er urørt reserve. Vanlig omstart bestod uten
+panic/watchdog, COM er lukket. Ingen ny stor løkkestopp ble observert i de
+korte oppstartsloggene; brukerens utseende-/responsprøve pågår.
+Alle eldre publiserte firmwareversjoner beholdes. HA-styring er ikke
+bekreftet av denne UI-prøven. Se [UI-veiledningen](M5Stack-backend/docs/FIRE_OS_UI.md).
 
 ### Runtime AI, kostnader og appflyt – tidligere RC7-prøve
 
