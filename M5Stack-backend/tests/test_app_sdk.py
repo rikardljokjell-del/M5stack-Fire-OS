@@ -93,23 +93,6 @@ def test_sdk_200_cell_board_and_legacy_policy_remain_separate():
     with pytest.raises(Exception,match='grid cell budget'):simulate(request)
 
 
-@pytest.mark.parametrize('sdk',[True,False])
-def test_generational_gc_is_sdk_only_after_init_without_app_gc_api(monkeypatch,sdk):
-    import fire_backend.lua_worker as worker
-    expected='generational' if sdk else 'incremental'
-    # Trusted test probe observes the real collector mode, not an app-visible
-    # diagnostic/API. Restore it before executing the ordinary frame loop.
-    probe="local previous_gc_mode=collectgarbage('incremental');if previous_gc_mode~='"+expected+"' then error('Unexpected GC mode') end;collectgarbage(previous_gc_mode)\n"
-    monkeypatch.setattr(worker,'HARNESS',worker.HARNESS.replace('for frame=1,frames do',probe+'for frame=1,frames do',1))
-    source='function init() end function update(dt) fire.display.text(4,4,"GC",65535) end'
-    request=app(source);request.update(preview_duration_ms=32,capture_at_ms=[32])
-    if not sdk:request.update(api_version='fire-lua-0.2',api_contract=API_CONTRACT)
-    result=simulate(request)
-    assert result['app_memory_peak']<=131072 and not result['native_timing_measured']
-    with pytest.raises(ValueError,match='Forbidden Lua capability'):
-        simulate({**request,'main_lua':'function init() collectgarbage("collect") end function update(dt) end'})
-
-
 @pytest.mark.parametrize('service,method,arguments',[('time','millis',''),('imu','accel',''),('buttons','pressed','"A"')])
 def test_sdk_counts_base_queries_in_combined_native_io_quota(service,method,arguments):
     request=app('function init() end function update(dt) for i=1,65 do fire.'+service+'.'+method+'('+arguments+') end fire.display.pixel(0,0,1) end')

@@ -420,7 +420,6 @@ end
 if env.on_button~=nil and type(env.on_button)~="function" then error("Invalid on_button") end
 callback_phase="init"
 call(env.init)
-if sdk_enabled then collectgarbage("generational",20,100) end
 for frame=1,frames do
   local dt=16
   if profile=="jitter" then dt=({7,16,33,80,120})[(frame-1)%5+1] end
