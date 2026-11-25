@@ -678,7 +678,8 @@ bool FireBackendClient::deviceInstallResult(const String& installId,
                    jsonEscape(packageId) + "\",\"status\":\"" +
                    (ok ? "ok" : "failed") + "\",\"archive_sha256\":\"" +
                    jsonEscape(archiveHash) + "\",\"message\":\"" +
-                   jsonEscape(message.substring(0, 240)) + "\"");
+                   jsonEscape(message.substring(0, 240)) + "\"" +
+                   (!ok && message=="metadata_error"?String(",\"error_code\":\"metadata_error\""):String()));
 }
 
 bool FireBackendClient::appStarted(const String& runId, const String& packageId,

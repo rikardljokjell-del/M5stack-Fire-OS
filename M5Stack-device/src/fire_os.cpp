@@ -15,6 +15,7 @@
 #endif
 #include <utility/led/LED_Strip_Class.hpp>
 #include <Preferences.h>
+#include <nvs.h>
 #include <SD.h>
 #include <WiFi.h>
 #include <Wire.h>
@@ -58,7 +59,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.3.0-rc4";
+constexpr char kFirmwareVersion[] = "fire-os-1.3.0-rc5";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -848,6 +849,25 @@ size_t normalizePcmDuration(int16_t* pcm, size_t inputSamples,
 
 void DateTimeService::begin() {
   preferences.begin("fire_os", false);
+  // Only prior-boot FIRE run receipts are disposable. Namespace/settings and
+  // all package/rollback indices are retained. New runs use a boot-local ring.
+  char oldRunKeys[32][16];size_t oldRunCount=0;
+  nvs_iterator_t iterator=nvs_entry_find("nvs","fire_os",NVS_TYPE_STR);
+  while(iterator && oldRunCount<32) {
+    nvs_entry_info_t info;nvs_entry_info(iterator,&info);
+    if(fire_run_receipts::legacyKey(info.key)) {
+      const String value=preferences.getString(info.key,"");
+      if(fire_run_receipts::legacyValue(value.c_str())) strlcpy(oldRunKeys[oldRunCount++],info.key,16);
+    }
+    iterator=nvs_entry_next(iterator);
+  }
+  nvs_release_iterator(iterator);
+  size_t removed=0;
+  for(size_t i=0;i<oldRunCount;++i) {
+    const String value=preferences.getString(oldRunKeys[i],"");
+    if(fire_run_receipts::legacyValue(value.c_str()) && preferences.remove(oldRunKeys[i])) ++removed;
+  }
+  Serial.printf("FIRE prior-boot run receipts removed=%u\n",unsigned(removed));
   timezoneIndex_ = min<uint8_t>(preferences.getUChar("tz", 1), kTimezoneCount - 1);
   dstAuto_ = preferences.getBool("dst", true);
   applyTimezone();
@@ -2393,7 +2413,13 @@ void FireOS::serviceLuaAppScan() {
         if (!item.displayName.length()) item.displayName = item.name;
         item.version = field("version");
         item.checksum = field("checksum");
-        item.packageId = preferences.getString(compactPreferenceKey("ap_", item.name).c_str(), "");
+        fire_lua_install::Identity identity;
+        const auto identityStatus=fire_lua_install::read(SD,(luaScanFolder_+"/"+fire_lua_install::kFilename).c_str(),identity);
+        if(identityStatus==fire_lua_install::Read::Valid && item.id==identity.app &&
+           item.name==identity.app && item.checksum.equalsIgnoreCase(identity.source)) item.packageId=identity.package;
+        else if(identityStatus==fire_lua_install::Read::Absent)
+          item.packageId=preferences.getString(compactPreferenceKey("ap_",item.name).c_str(),"");
+        else luaScanComplete_=false;
         if (item.id.length() > 96 || item.displayName.length() > 128 ||
             item.version.length() > 64 || item.checksum.length() > 64 ||
             item.packageId.length() > 128) luaScanComplete_ = false;
@@ -4216,17 +4242,112 @@ bool FireOS::allButtonsHeldAtBoot() const {
          digitalRead(kButtonPins[1]) == LOW && digitalRead(kButtonPins[2]) == LOW;
 }
 
+uint32_t FireOS::backendCommandNow() const {
+  if(backendServerTime_>0) return backendServerTime_+(millis()-backendServerSeenAt_)/1000UL;
+  const time_t now=time(nullptr);
+  return now>=1577836800?static_cast<uint32_t>(now):0;
+}
 bool FireOS::backendCommandUnexpired(uint32_t expiresAt) const {
-  if (expiresAt == 0) return false;
-  uint32_t now = 0;
-  if (backendServerTime_ > 0) {
-    now = backendServerTime_ + (millis() - backendServerSeenAt_) / 1000UL;
-  } else {
-    const time_t localNow = time(nullptr);
-    if (localNow < 1577836800) return false;
-    now = static_cast<uint32_t>(localNow);
+  const uint32_t now=backendCommandNow();return now && expiresAt>now;
+}
+
+bool FireOS::resolveLuaPackage(const String& packageId,const String& archiveHash,
+                               const String& sourceHash,String& path) {
+  path=String();luaAppError_=String();
+  const auto candidate=[&](const String& source,bool legacy) {
+    if(!source.startsWith("/apps/") || !source.endsWith("/main.lua")) return false;
+    const String folder=source.substring(0,source.lastIndexOf('/'));
+    const String app=sdBaseName(folder);
+    if(!fire_lua_install::id(app.c_str())) return false;
+    fire_lua_install::Identity identity;
+    const auto status=fire_lua_install::read(SD,(folder+"/"+fire_lua_install::kFilename).c_str(),identity);
+    if(status==fire_lua_install::Read::Valid) {
+      if(!identity.matches(app.c_str(),packageId.c_str(),archiveHash.c_str(),sourceHash.c_str())) return false;
+      path=source;return true;
+    }
+    if(status==fire_lua_install::Read::Invalid) {luaAppError_="metadata_error";return false;}
+    if(!legacy) return false;
+    // Older installations alone may use the retained NVS index. The incoming
+    // source digest is still checked against actual bytes in startLuaApp.
+    const String saved=preferences.getString(compactPreferenceKey("lh_",packageId).c_str(),"");
+    if(!validSha256Hex(saved) || !saved.equalsIgnoreCase(archiveHash)) {luaAppError_="archive_mismatch";return false;}
+    path=source;return true;
+  };
+  // The completed worker path covers an immediate RUN before incremental scan
+  // publishes; current cache covers reconnect/reboot without any NVS write.
+  if(packageManager_ && !packageManager_->busy() && candidate(packageManager_->installedPath(),false)) return true;
+  if(luaCacheValid_ && luaCacheComplete_ && !luaScanPending_) {
+    for(uint8_t i=0;i<luaAppCount_;++i)
+      if(luaAppPackageIds_[i]==packageId && luaAppChecksums_[i]==sourceHash && candidate(luaAppPaths_[i],false)) return true;
   }
-  return expiresAt > now;
+  return candidate(preferences.getString(compactPreferenceKey("lp_",packageId).c_str(),""),true);
+}
+
+
+bool FireOS::rollbackLuaPackage(const String& packageId,const String& archiveHash,const String& sourceHash) {
+  if(!fire_lua_install::id(packageId.c_str()) || !fire_lua_install::hash(archiveHash.c_str()) ||
+     !fire_lua_install::hash(sourceHash.c_str()) || (packageManager_ && packageManager_->busy())) return false;
+  const auto filesMatch=[&](const String& folder,const String& app) {
+    File manifest=SD.open(folder+"/manifest.json",FILE_READ);
+    if(!manifest || manifest.isDirectory() || !manifest.size() || manifest.size()>8192) {manifest.close();return false;}
+    String body;const size_t size=manifest.size();bool ok=body.reserve(size);uint8_t block[256];
+    while(ok && body.length()<size) {
+      const size_t got=manifest.read(block,min(sizeof(block),size-body.length()));
+      ok=got && body.concat(reinterpret_cast<const char*>(block),got);
+    }
+    manifest.close();
+    if(!ok || body.length()!=size || jsonStringField(body,"id")!=app ||
+       !jsonStringField(body,"checksum").equalsIgnoreCase(sourceHash)) return false;
+    const String api=jsonStringField(body,"api_version"),contract=jsonStringField(body,"api_contract");
+    if(!FireLuaRuntime::supportsManifestApi(api.c_str(),api.length(),contract.c_str(),contract.length())) return false;
+    File source=SD.open(folder+"/main.lua",FILE_READ);
+    const bool bounded=source && !source.isDirectory() && source.size()>0 && source.size()<=FireLuaRuntime::kMaxSourceBytes;
+    source.close();return bounded && sha256File(folder+"/main.lua")==sourceHash;
+  };
+  const String legacy=preferences.getString(compactPreferenceKey("lp_",packageId).c_str(),"");
+  const String legacyArchive=preferences.getString(compactPreferenceKey("lh_",packageId).c_str(),"");
+  bool attempted=false;
+  const auto candidate=[&](const String& source) {
+    if(!source.startsWith("/apps/") || !source.endsWith("/main.lua")) return false;
+    const String folder=source.substring(0,source.lastIndexOf('/')),app=sdBaseName(folder);
+    if(!fire_lua_install::id(app.c_str())) return false;
+    const String previous="/apps/.previous-"+app;
+    for(unsigned version=0;version<2;++version) {
+      const String selected=version?previous:folder;
+      fire_lua_install::Identity identity;
+      const auto status=fire_lua_install::read(SD,(selected+"/"+fire_lua_install::kFilename).c_str(),identity);
+      const bool exact=status==fire_lua_install::Read::Valid &&
+        identity.matches(app.c_str(),packageId.c_str(),archiveHash.c_str(),sourceHash.c_str());
+      const bool old=status==fire_lua_install::Read::Absent && source==legacy &&
+        validSha256Hex(legacyArchive) && legacyArchive.equalsIgnoreCase(archiveHash);
+      if((!exact && !old) || !filesMatch(selected,app)) continue;
+      attempted=true;
+      if(luaAppActive_) stopLuaApp("rollback");
+      if(old) {
+        strlcpy(identity.app,app.c_str(),sizeof(identity.app));strlcpy(identity.package,packageId.c_str(),sizeof(identity.package));
+        strlcpy(identity.archive,archiveHash.c_str(),sizeof(identity.archive));strlcpy(identity.source,sourceHash.c_str(),sizeof(identity.source));
+        const String project=preferences.getString(compactPreferenceKey("pr_",packageId).c_str(),"");
+        if(fire_lua_install::id(project.c_str(),true)) strlcpy(identity.project,project.c_str(),sizeof(identity.project));
+        if(!fire_lua_install::writeVerified(SD,(selected+"/"+fire_lua_install::kFilename).c_str(),identity)) return false;
+      }
+      if(version && !fire_lua_install::swapPrevious(SD,folder,previous,String("/apps/.rollback-")+app)) return false;
+      fire_lua_install::Identity back;
+      const bool verified=fire_lua_install::read(SD,(folder+"/"+fire_lua_install::kFilename).c_str(),back)==fire_lua_install::Read::Valid &&
+        back==identity && filesMatch(folder,app);
+      if(!verified && version) fire_lua_install::swapPrevious(SD,folder,previous,String("/apps/.rollback-")+app);
+      return verified;
+    }
+    return false;
+  };
+  if(candidate(legacy)) return true;
+  if(attempted) return false;
+  if(packageManager_ && candidate(packageManager_->installedPath())) return true;
+  if(attempted) return false;
+  for(uint8_t i=0;i<luaAppCount_;++i) {
+    if(candidate(luaAppPaths_[i])) return true;
+    if(attempted) return false;
+  }
+  return false;
 }
 
 void FireOS::pollButtons() {
@@ -5270,8 +5391,15 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
         const int slash = source.lastIndexOf('/');
         const String appFolder = slash > 0 ? source.substring(0, slash) : source;
         const String appId = sdBaseName(appFolder);
-        aiProjectId_ = preferences.getString(
-            compactPreferenceKey("pr_", appId).c_str(), appId);
+        fire_lua_install::Identity identity;
+        const auto identityStatus=fire_lua_install::read(SD,(appFolder+"/"+fire_lua_install::kFilename).c_str(),identity);
+        if(identityStatus==fire_lua_install::Read::Invalid ||
+           (identityStatus==fire_lua_install::Read::Valid && appId!=identity.app)) {
+          aiWorkflowText_="metadata_error";aiProjectPickerActive_=true;redrawRequested_=true;return;
+        }
+        aiProjectId_=identityStatus==fire_lua_install::Read::Valid
+          ?(identity.project[0]?String(identity.project):appId)
+          :preferences.getString(compactPreferenceKey("pr_",appId).c_str(),appId);
         aiProjectName_ = luaAppNames_[selected];
       }
       if (backendClient_) {
@@ -5879,6 +6007,14 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   const int manifestMemory =
       jsonIntField(manifest, "max_memory", FireLuaRuntime::kMaxMemoryBytes);
   const int manifestRuntime = jsonIntField(manifest, "max_runtime_ms", -1);
+  fire_lua_install::Identity installIdentity;
+  const auto identityStatus=fire_lua_install::read(SD,(appFolder+"/"+fire_lua_install::kFilename).c_str(),installIdentity);
+  if(identityStatus==fire_lua_install::Read::Invalid ||
+     (identityStatus==fire_lua_install::Read::Valid &&
+      (manifestId!=installIdentity.app || !manifestHash.equalsIgnoreCase(installIdentity.source) ||
+       (launchPackageId.length() && launchPackageId!=installIdentity.package)))) {
+    luaAppError_="metadata_error";return false;
+  }
   const bool appSdk = manifestApi == FireLuaRuntime::appSdkVersion();
   const bool hardwareApi = appSdk || manifestApi == FireLuaRuntime::hardwareApiVersion();
   if (manifestId != sdBaseName(appFolder) ||
@@ -6014,6 +6150,7 @@ bool FireOS::startLuaApp(const String& path, const String& name,
       manifestRuntime < 0 ? FireLuaRuntime::kDefaultRuntimeMs
                           : static_cast<uint32_t>(manifestRuntime);
   String packageId = launchPackageId;
+  if(packageId.length()==0 && identityStatus==fire_lua_install::Read::Valid) packageId=installIdentity.package;
   if (packageId.length() == 0) {
     packageId = jsonStringField(manifest, "package_id");
   }
@@ -6100,10 +6237,6 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   luaSourceHash_ = sourceHash;
   luaPackageId_ = packageId;
   luaMaxRuntimeMs_ = maxRuntimeMs;
-  if (launchPackageId.length() > 0) {
-    preferences.putString(compactPreferenceKey("ap_", manifestId).c_str(),
-                          launchPackageId);
-  }
   luaAppError_ = "";
   luaRgbDirty_ = false;
   luaRgbLastFlushAt_ = millis();
@@ -7042,37 +7175,32 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
                            const String& message) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
+  if(ok) {
+    const String source=os->packageManager_?os->packageManager_->installedPath():String();
+    const String folder=source.substring(0,source.lastIndexOf('/'));
+    fire_lua_install::Identity identity;
+    ok=source.endsWith("/main.lua") && SD.exists(source) &&
+      fire_lua_install::read(SD,(folder+"/"+fire_lua_install::kFilename).c_str(),identity)==fire_lua_install::Read::Valid &&
+      packageId==identity.package && archiveHash==identity.archive && os->sdBaseName(folder)==identity.app;
+    if(!ok) {
+      os->invalidateLuaApps();
+      if(os->backendClient_) os->backendClient_->deviceInstallResult(installId,packageId,false,archiveHash,"metadata_error");
+      os->aiWorkflowText_="Installasjonskontroll feilet";os->aiWorkflowState_=0;return;
+    }
+  }
   const bool selected=os->aiReadyPackageId_.length()?packageId==os->aiReadyPackageId_:packageId==os->aiPackageId_;
   if(selected) {os->aiPackageId_=packageId;os->aiWorkflowText_=ok?"App installert":message;}
   if (os->screen_ == Screen::AppsSettings) {
     os->managerStatus_ = ok ? "Downloaded to FIRE" : message;
   }
   if (ok) {
-    const String installedPath = os->packageManager_
-                                     ? os->packageManager_->installedPath()
-                                     : String();
-    const int sourceSlash = installedPath.lastIndexOf('/');
-    const String appFolder = sourceSlash > 0
-                                 ? installedPath.substring(0, sourceSlash)
-                                 : String();
-    const String appId = appFolder.length() > 0 ? os->sdBaseName(appFolder)
-                                                : String();
-    preferences.putString(compactPreferenceKey("lp_", packageId).c_str(),
-                          installedPath);
-    preferences.putString(compactPreferenceKey("lh_", packageId).c_str(),
-                          archiveHash);
-    if (appId.length() > 0) {
-      // Apps opened locally do not have a run_id. Preserve the real backend
-      // package identity from installation so a later local crash can emit
-      // app_diagnostic without inventing a run or package ID.
-      preferences.putString(compactPreferenceKey("ap_", appId).c_str(),
-                            packageId);
-    }
+    // Identity was persisted/read back in the staging folder before activation;
+    // no per-package/per-app NVS entries are added, even when NVS is full.
     os->invalidateLuaApps();
     os->scanLuaApps();
     os->sendAppInventory();
-    // RUN resolves lp_/lh_ and loads the installed path directly, independent
-    // of the asynchronously refreshed menu/inventory snapshot.
+    // RUN can resolve the worker's verified sidecar immediately, independent
+    // of the asynchronously refreshed menu/inventory snapshot or NVS space.
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
         installId, packageId, true, archiveHash, "installed");
     if (os->luaRepairRunAfterInstall_ &&
@@ -7448,11 +7576,7 @@ void FireOS::handleBackendMessage(const String& message) {
     aiPackageId_ = jsonStringField(message, "package_id");
     aiReadyPackageId_=aiPackageId_;
     const String projectId = jsonStringField(message, "project_id");
-    if (projectId.length() > 0 && aiPackageId_.length() > 0) {
-      preferences.putString(compactPreferenceKey("pr_", aiPackageId_).c_str(),
-                            projectId);
-      saveSettings();
-    }
+    if(projectId.length()) aiProjectId_=projectId;
     aiWorkflowText_ = "PACKAGE READY";
     return;
   }
@@ -7487,14 +7611,9 @@ void FireOS::handleBackendMessage(const String& message) {
     }
     const bool accepted = packageManager_ && packageManager_->startDownload(
         backendHost_, backendPort_, backendToken_, url, packageId, installId,
-        hash, size);
+        hash, size,projectId);
     if (accepted) {
       aiPackageId_ = packageId;aiInstallId_ = installId;invalidateLuaApps();
-    }
-    if (accepted && projectId.length() > 0 && packageId.length() > 0) {
-      preferences.putString(compactPreferenceKey("pr_", packageId).c_str(),
-                            projectId);
-      saveSettings();
     }
     if (!accepted && backendClient_)
       backendClient_->deviceInstallResult(installId, packageId, false,
@@ -7510,8 +7629,7 @@ void FireOS::handleBackendMessage(const String& message) {
     const String commandSource = jsonStringField(message,"source_sha256");
     const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
     if (runId.length() == 0 || packageId.length() == 0 ||
-        (backendClient_ && commandBoot.length() > 0 &&
-         commandBoot != backendClient_->bootId())) {
+        !backendClient_ || commandBoot!=backendClient_->bootId()) {
       if (backendClient_)
         backendClient_->appFailed(runId, packageId, "invalid_command",
                                   "Invalid or stale run command");
@@ -7525,42 +7643,38 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowText_ = "RUN EXPIRED";
       return;
     }
-    const String consumedKey = compactPreferenceKey("rr_", runId);
-    const String previousRun = preferences.getString(consumedKey.c_str(), "");
-    if (previousRun.length() > 0) {
-      if (backendClient_ && (previousRun == "started" || previousRun == "healthy") &&
-          luaAppActive_ && luaRuntime_ && luaRuntime_->running() && luaRunId_==runId &&
-          luaPackageId_==packageId && (!commandSource.length() || luaSourceHash_==commandSource))
-        backendClient_->appStarted(runId, packageId);
-      else if (backendClient_)
-        backendClient_->appFailed(runId, packageId, "previous_failure",
-                                  "Run command was already consumed");
-      aiWorkflowText_ = previousRun == "failed" ? "RUN FAILED" : "RUN ALREADY CONSUMED";
+    fire_run_receipts::Entry* receipt=nullptr;
+    const auto admission=luaRunReceipts_.admit(runId.c_str(),packageId.c_str(),commandSource.c_str(),commandHash.c_str(),
+      expiresAt,backendCommandNow(),commandBoot==backendClient_->bootId(),receipt);
+    if(admission==fire_run_receipts::Admission::Busy || admission==fire_run_receipts::Admission::Invalid) {
+      backendClient_->appFailed(runId,packageId,
+        admission==fire_run_receipts::Admission::Busy?"command_busy":"invalid_command",
+        admission==fire_run_receipts::Admission::Busy?"Unexpired command receipts are full":"Invalid command identity");
       return;
     }
-    const String path = preferences.getString(
-        compactPreferenceKey("lp_", packageId).c_str(), "");
-    const String installedHash = preferences.getString(
-        compactPreferenceKey("lh_", packageId).c_str(), "");
-    aiPackageId_ = packageId;
-    if (commandHash.length() > 0 && installedHash.length() > 0 &&
-        !commandHash.equalsIgnoreCase(installedHash)) {
-      preferences.putString(consumedKey.c_str(), "failed");
-      saveSettings();
-      if (backendClient_)
-        backendClient_->appFailed(runId, packageId, "archive_mismatch",
-                                  "Installed package hash does not match command");
-      aiWorkflowText_ = "RUN REJECTED";
+    if(admission==fire_run_receipts::Admission::Duplicate) {
+      const bool started=receipt->state==fire_run_receipts::State::Started || receipt->state==fire_run_receipts::State::Healthy;
+      if(started && luaAppActive_ && luaRuntime_ && luaRuntime_->running() && luaRunId_==runId &&
+         luaPackageId_==packageId && luaSourceHash_==commandSource) backendClient_->appStarted(runId,packageId);
+      else backendClient_->appFailed(runId,packageId,"previous_failure","Run command was already consumed");
       return;
     }
-    preferences.putString(consumedKey.c_str(), "starting");
-    saveSettings();
+    String path;
+    if((packageManager_ && packageManager_->busy()) || !resolveLuaPackage(packageId,commandHash,commandSource,path)) {
+      receipt->state=fire_run_receipts::State::Failed;
+      const String code=packageManager_ && packageManager_->busy()?String("command_busy"):
+        luaAppError_=="metadata_error"?String("metadata_error"):
+        luaAppError_=="archive_mismatch"?String("archive_mismatch"):String("not_installed");
+      backendClient_->appFailed(runId,packageId,code,code=="not_installed"?"Package is not installed on FIRE":code);
+      aiWorkflowText_="Appstart avvist";return;
+    }
+    aiPackageId_=packageId;
     if(luaAppActive_ && luaRuntime_ && luaRuntime_->running() && luaPackageId_==packageId &&
        luaAppPath_==path && validSha256Hex(commandSource) && luaSourceHash_==commandSource) {
       // The real local VM is already executing these exact verified bytes.
       // Bind the normal authorized command without resetting measurements/UI.
       luaRunId_=runId;luaHealthySent_=false;luaAiBindPackageId_=String();luaAiBindSent_=false;
-      preferences.putString(consumedKey.c_str(),"started");saveSettings();
+      receipt->state=fire_run_receipts::State::Started;
       if(backendClient_) backendClient_->appStarted(runId,packageId,luaDiagnosticsJson("start"));
       redrawRequested_=true;return;
     }
@@ -7578,18 +7692,17 @@ void FireOS::handleBackendMessage(const String& message) {
         luaRepairPhase_ = "running";
         luaRepairMessage_ = "Fixed app running";
       }
-      preferences.putString(consumedKey.c_str(), "started");
-      saveSettings();
+      receipt->state=fire_run_receipts::State::Started;
       if (backendClient_)
         backendClient_->appStarted(runId, packageId,
                                    luaDiagnosticsJson("start"));
     } else {
-      preferences.putString(consumedKey.c_str(), "failed");
-      saveSettings();
+      receipt->state=fire_run_receipts::State::Failed;
       const String failure = path.length() > 0 && luaAppError_.length() > 0
                                  ? luaAppError_
                                  : String("Package is not installed on FIRE");
-      const String errorCode = path.length() > 0 && luaAppError_.startsWith("Lua init")
+      const String errorCode = luaAppError_=="metadata_error"?String("metadata_error"):
+                               path.length() > 0 && luaAppError_.startsWith("Lua init")
                                    ? "init_error"
                                    : path.length() > 0 && luaAppError_.startsWith("Lua syntax")
                                          ? "load_error"
@@ -7627,67 +7740,15 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "rollback_request") {
-    invalidateLuaApps();
-    const String rollbackId = jsonStringField(message, "rollback_id");
-    const String packageId = jsonStringField(message, "package_id");
-    const String commandBoot = jsonStringField(message, "boot_id");
-    const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
-    String path = preferences.getString(
-        compactPreferenceKey("lp_", packageId).c_str(), "");
-    const bool bootOk = backendCommandUnexpired(expiresAt) &&
-                        (!backendClient_ || commandBoot.length() == 0 ||
-                         commandBoot == backendClient_->bootId());
-    bool available = bootOk && path.length() > 0 && SD.exists(path);
-    bool restored = false;
-    if (available) {
-      const String targetHash = preferences.getString(
-          compactPreferenceKey("lh_", packageId).c_str(), "");
-      const String currentHash = sha256File(path);
-      if (!validSha256Hex(targetHash)) {
-        available = false;
-      } else if (!currentHash.equalsIgnoreCase(targetHash)) {
-        const int slash = path.lastIndexOf('/');
-        const String folder = slash > 0 ? path.substring(0, slash) : "";
-        const String appId = sdBaseName(folder);
-        const String previous = "/apps/.previous-" + appId;
-        const String previousMain = previous + "/main.lua";
-        if (SD.exists(previousMain) &&
-            sha256File(previousMain).equalsIgnoreCase(targetHash)) {
-          const String backup = "/apps/.rollback-" + appId;
-          const bool cleared = !SD.exists(backup) || removeSdTree(backup);
-          bool swapped = cleared && SD.rename(folder, backup) &&
-                         SD.rename(previous, folder);
-          if (!swapped) {
-            if (SD.exists(folder) && !SD.exists(previous)) SD.rename(folder, previous);
-            if (SD.exists(backup) && !SD.exists(folder)) SD.rename(backup, folder);
-          } else {
-            removeSdTree(backup);
-            path = folder + "/main.lua";
-            preferences.putString(compactPreferenceKey("lp_", packageId).c_str(), path);
-            preferences.putString(compactPreferenceKey("lh_", packageId).c_str(), targetHash);
-            saveSettings();
-            restored = true;
-            available = true;
-          }
-        } else {
-          available = false;
-        }
-      }
-    }
-    if (available) {
-      const String folder = path.substring(0, path.lastIndexOf('/'));
-      preferences.putString(compactPreferenceKey("ap_", sdBaseName(folder)).c_str(), packageId);
-    }
-    if (luaAppActive_) stopLuaApp("rollback");
-    if (backendClient_)
-      backendClient_->rollbackResult(
-          rollbackId, packageId, available,
-          available ? (restored ? "Previous package restored and hash verified"
-                                 : "Validated package already active")
-                    : "Validated package is not available on SD");
-    aiWorkflowState_ = available ? 5 : 0;
-    aiWorkflowText_ = available ? "ROLLBACK READY" : "ROLLBACK FAILED";
-    return;
+    const String rollbackId=jsonStringField(message,"rollback_id"),packageId=jsonStringField(message,"package_id");
+    const String commandBoot=jsonStringField(message,"boot_id");
+    const uint32_t expiresAt=static_cast<uint32_t>(jsonIntField(message,"expires_at"));
+    const bool bootOk=backendClient_ && commandBoot==backendClient_->bootId() && backendCommandUnexpired(expiresAt);
+    const bool available=bootOk && rollbackLuaPackage(packageId,jsonStringField(message,"archive_sha256"),jsonStringField(message,"source_sha256"));
+    if(available) {invalidateLuaApps();scanLuaApps();}
+    if(backendClient_) backendClient_->rollbackResult(rollbackId,packageId,available,
+      available?"Previous package identity/source verified; appdata preserved":"Validated package is not available or metadata_error");
+    aiWorkflowState_=available?5:0;aiWorkflowText_=available?"ROLLBACK READY":"ROLLBACK FAILED";return;
   }
   if (type == "app_started" || type == "app_healthy") {
     aiWorkflowState_ = 6;

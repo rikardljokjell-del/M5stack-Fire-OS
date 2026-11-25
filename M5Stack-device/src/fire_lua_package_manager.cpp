@@ -82,10 +82,11 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
                                           const String& packageId,
                                           const String& installId,
                                           const String& expectedHash,
-                                          uint32_t expectedSize) {
+                                          uint32_t expectedSize,const String& projectId) {
   if (busy() || !fireNetworkEndpointValid(host) || token.length() < 24 || !fireRelativePath(url) ||
       packageId.length() == 0 || packageId.length() > 96 || expectedHash.length() != 64 || expectedSize == 0 || expectedSize > 1048576)
     return false;
+  if(!fire_lua_install::id(projectId.c_str(),true)) return false;
   for (size_t i = 0; i < packageId.length(); ++i)
     if (!(isalnum(static_cast<unsigned char>(packageId[i])) || packageId[i] == '-' || packageId[i] == '_')) return false;
   for (size_t i = 0; i < expectedHash.length(); ++i) if (!isxdigit(static_cast<unsigned char>(expectedHash[i]))) return false;
@@ -97,6 +98,7 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
   url_ = url;
   packageId_ = packageId;
   installId_ = installId;
+  projectId_ = projectId;
   expectedHash_ = expectedHash;
   expectedSize_ = expectedSize;
   reverseGeneration_ = reverseTransport_ ? reverseTransport_->generation() : 0;
@@ -253,7 +255,7 @@ void FireLuaPackageManager::finishDownload() {
   bool ok = archiveHash.equalsIgnoreCase(expectedHash_);
   if (ok) {
     File archive = SD.open(path, FILE_READ);
-    ok = archive && installArchive(archive, const_cast<String&>(archiveHash), reason);
+    ok = archive && installArchive(archive, archiveHash, reason);
     if (archive) archive.close();
   } else {
     reason = "Archive SHA256 mismatch";
@@ -308,16 +310,15 @@ String FireLuaPackageManager::hexDigest(const uint8_t* digest, size_t length) {
   return result;
 }
 
-bool FireLuaPackageManager::installArchive(File& archive, String& archiveHash,
+bool FireLuaPackageManager::installArchive(File& archive, const String& archiveHash,
                                             String& reason) {
-  (void)archiveHash;
   String appId;
-  if (!extractStoredZip(archive, appId, reason)) return false;
+  if (!extractStoredZip(archive, appId,archiveHash,reason)) return false;
   return appId.length() > 0;
 }
 
 bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
-                                             String& reason) {
+                                             const String& archiveHash,String& reason) {
   const String staging = "/apps/.staging-" + packageId_;
   if (SD.exists(staging)) {
     if (!removeTree(staging)) {
@@ -366,6 +367,7 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
       return false;
     }
     const String id = name.substring(firstSlash + 1, secondSlash);
+    if(!fire_lua_install::id(id.c_str())) {reason="Invalid app ID";return false;}
     if (appId.length() == 0) appId = id;
     if (id != appId) {
       reason = "Multiple app IDs in package";
@@ -475,6 +477,17 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
   }
   const String finalPath = "/apps/" + appId;
   const String previousPath = "/apps/.previous-" + appId;
+  fire_lua_install::Identity identity;
+  strlcpy(identity.app,appId.c_str(),sizeof(identity.app));
+  strlcpy(identity.package,packageId_.c_str(),sizeof(identity.package));
+  strlcpy(identity.project,projectId_.c_str(),sizeof(identity.project));
+  const String sourceHash=hexDigest(payloadDigest,sizeof(payloadDigest));
+  strlcpy(identity.source,sourceHash.c_str(),sizeof(identity.source));
+  strlcpy(identity.archive,archiveHash.c_str(),sizeof(identity.archive));
+  // A failed write/readback leaves the current and previous app untouched.
+  if(!fire_lua_install::writeVerified(SD,(staging+"/"+fire_lua_install::kFilename).c_str(),identity)) {
+    reason="metadata_error";return false;
+  }
   bool oldVersionMoved = false;
   bool oldAppDataMoved = false;
   if (SD.exists(previousPath) && !removeTree(previousPath)) {

@@ -7,6 +7,7 @@
 #include "fire_reverse_transport.h"
 #include "fire_async_client.h"
 #include "fire_io_mailbox.h"
+#include "fire_lua_install_identity.h"
 
 class FireLuaPackageManager {
  public:
@@ -21,7 +22,7 @@ class FireLuaPackageManager {
   bool startDownload(const String& host, uint16_t port, const String& token,
                      const String& url, const String& packageId,
                      const String& installId, const String& expectedHash,
-                     uint32_t expectedSize);
+                     uint32_t expectedSize,const String& projectId=String());
   void service(bool wifiConnected);
   bool busy() const { return io_.busy(); }
   bool matchesInstall(const String& packageId, const String& installId,
@@ -51,6 +52,7 @@ class FireLuaPackageManager {
   String url_;
   String packageId_;
   String installId_;
+  String projectId_;
   String expectedHash_;
   uint32_t expectedSize_ = 0;
   uint32_t contentLength_ = 0;
@@ -68,8 +70,8 @@ class FireLuaPackageManager {
   void fail(const String& reason);
   void finishDownload();
   void emitStatus(const String& value);
-  bool installArchive(File& archive, String& archiveHash, String& reason);
-  bool extractStoredZip(File& archive, String& appId, String& reason);
+  bool installArchive(File& archive, const String& archiveHash, String& reason);
+  bool extractStoredZip(File& archive, String& appId,const String& archiveHash,String& reason);
   static uint16_t read16(File& file);
   static uint32_t read32(File& file);
   static bool validZipPath(const String& path);

@@ -6,6 +6,7 @@
 #include <esp_ota_ops.h>
 #include "fire_lua_runtime.h"
 #include "fire_app_frame.h"
+#include "fire_run_receipts.h"
 #include "fire_backend_client.h"
 #include "fire_firmware_storage.h"
 #include "fire_github_firmware.h"
@@ -575,6 +576,7 @@ class FireOS {
   String aiReadyPackageId_;
   String aiInstallId_;
   String luaRunId_;
+  fire_run_receipts::Ring luaRunReceipts_;
   bool luaHealthySent_ = false;
   String aiAssistantText_;
   String aiWorkflowText_;
@@ -946,6 +948,10 @@ class FireOS {
   void setWifi(bool enabled);
   bool allButtonsHeldAtBoot() const;
   bool backendCommandUnexpired(uint32_t expiresAt) const;
+  uint32_t backendCommandNow() const;
+  bool resolveLuaPackage(const String& packageId,const String& archiveHash,
+                         const String& sourceHash,String& path);
+  bool rollbackLuaPackage(const String& packageId,const String& archiveHash,const String& sourceHash);
 
   void draw();
   void drawScreen(Screen screen);
