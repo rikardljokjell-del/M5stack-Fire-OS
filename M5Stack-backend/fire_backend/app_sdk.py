@@ -30,6 +30,15 @@ def contract():
 SDK_CONTRACT = contract()['api_contract']
 
 
+def callback_budgets(api_version):
+    """Declared native phase limits, not timing measured by the PC simulator."""
+    budgets = contract()['registry']['budgets']
+    keys = ['callback_ms', 'init_callback_ms']
+    if api_version == SDK_VERSION:
+        keys.append('sdk_update_callback_ms')
+    return {key: budgets[key] for key in keys}
+
+
 def available(capabilities):
     extension = (capabilities or {}).get('app_sdk') or {}
     return (extension.get('version') == SDK_VERSION and extension.get('contract') == SDK_CONTRACT

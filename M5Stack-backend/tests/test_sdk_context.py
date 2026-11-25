@@ -51,13 +51,13 @@ def test_selected_input_example_is_valid_lua_with_actual_navigation_behavior():
     assert any(op[0]=='text_style' and op[3]=='2' for op in result['visual_frames'][0]['ops'])
 
 
-def test_v4_required_lifecycle_boilerplate_executes_with_real_sdk():
+def test_v5_required_lifecycle_boilerplate_executes_with_real_sdk():
     from fire_backend.lua_worker import simulate
     source='function init() fire.ui.set_theme("modern_dark") end\nfunction update(dt_ms) fire.ui.screen("APP") end'
     assert source in POLICY
     result=simulate(dict(main_lua=source,required_services=['display'],api_version=SDK_VERSION,
         api_contract=SDK_CONTRACT,max_memory=131072,max_runtime_ms=1000,profile='idle'))
-    assert result['ok'] and VERSION.endswith('v4')
+    assert result['ok'] and VERSION.endswith('v5')
 
 
 def raw_context():
@@ -125,6 +125,8 @@ async def test_real_generate_and_review_requests_preserve_sdk_without_late_legac
     for request in calls:
         developer=str(request['input'][0]['content'])
         assert SDK_VERSION in developer and SDK_CONTRACT in developer and VERSION in developer
+        assert 'SDK update 24ms' in developer and 'on_button 12ms, init 250ms' in developer
+        assert '12ms callback guard' not in developer and 'native phase-time violation' in developer
         for legacy in ('No app sprite','at most 128 total','120000','<=12 display'):
             assert legacy not in developer
         assert 'function init()' in developer and 'function update(dt_ms)' in developer
@@ -135,5 +137,7 @@ async def test_real_generate_and_review_requests_preserve_sdk_without_late_legac
         from fire_backend.app_sdk import contract
         detail=json.loads(context.split('Exact negotiated host contract (arguments, returns, dependencies, units and bounds):\n')[1])
         assert detail['display_semantics']=={k:v for k,v in contract()['registry']['display'].items() if k!='methods'}
+        assert detail['limits']['sdk_update_callback_ms']==24
+        assert detail['limits']['callback_ms']==12 and detail['limits']['init_callback_ms']==250
     payload=json.loads(calls[1]['input'][1]['content'])
     assert payload['pc_validation']['negotiated_contract']['api_contract']==SDK_CONTRACT

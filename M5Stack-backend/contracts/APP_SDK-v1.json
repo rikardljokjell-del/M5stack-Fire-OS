@@ -1,5 +1,5 @@
 {
-  "api_contract": "83310c217698dd968f3773842f7f3fa05bc73b487a7c7f1cffefa33acec40667",
+  "api_contract": "0e331b29dd23d94de670e4624fad44678158361e8c03b1401936a80de71089d9",
   "registry": {
     "api_version": "fire-app-sdk-1.0",
     "base_api": "fire-lua-0.2",
@@ -180,7 +180,7 @@
         "accounting": "set_background and every logical clear cost1 I/O call and1 logical I/O byte; unchanged wall/instruction/memory/text/grid limits",
         "prepare": "OS performs one complete SDK canvas prefill immediately before update, latches actual applied color, then privately acknowledges pristine ownership",
         "clear_elision": "Only the FIRST clear may skip pixel writes when an active prepared SDK frame is still pristine, full canvas/clip is supported and color equals actual applied prefill; preserve current drawing color and all I/O charges",
-        "later_clear": "Any clear consumes eligibility. After painting, repeated clear or different color retains real immediate erase semantics inside the unchanged callback guard",
+        "later_clear": "Any clear consumes eligibility. After painting, repeated clear or different color retains real immediate erase semantics inside the configured callback wall guard",
         "paint_invalidates": [
           "circle",
           "rect",
@@ -203,7 +203,7 @@
         "lifetime": "End eligibility after update/error/ownership transfer; reset preference to0 on begin/stop/new app and SDK-to-legacy transition; apps cannot acknowledge a prefill",
         "ui_theme": "ui.set_theme configures chosen theme.bg; call it in init for first UI frame or on_button before the next frame. Mutating theme.bg alone does not configure OS; use set_background(custom) explicitly",
         "legacy": "fire-lua-0.1/0.2 remain unchanged, including black preparation, clear semantics and hardware hash",
-        "guards": "No rendering queue, deferred app drawing, timer credit/exclusion or new framebuffer. Actual app drawing remains inside the12ms callback wall guard."
+        "guards": "No rendering queue, deferred app drawing, timer credit/exclusion or new framebuffer. Actual SDK update drawing remains inside the explicit24ms callback wall guard. Legacy updates and all on_button callbacks retain12ms; app init retains250ms. All other resource ceilings remain unchanged."
       }
     },
     "ui_methods": [
@@ -286,7 +286,9 @@
       "native_legacy_grid_max_cells_per_call": 384,
       "sdk_grid_cells_per_callback": 384,
       "sdk_grid_pixels_per_callback": 32768,
-      "background_configuration_charge_bytes": 1
+      "background_configuration_charge_bytes": 1,
+      "sdk_update_callback_ms": 24,
+      "init_callback_ms": 250
     },
     "environment": "same restricted Lua5.4 app-private environment, no Python callbacks/require/load/filesystem/OS/M5 handles",
     "render_lifecycle": "SDK OS prepares one configured offscreen background before update and presents only the finished frame; display.frame_preparation defines explicit state and clear reuse. Same existing canvas, no extra framebuffer. Legacy behavior unchanged."

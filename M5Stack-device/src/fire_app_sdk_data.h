@@ -8,7 +8,8 @@ struct Asset { const char* id; uint16_t width,height; const uint16_t* palette; u
 struct Glyph { uint32_t codepoint; uint8_t width,height,advance; int8_t xOffset,yOffset; const uint32_t* rows; };
 struct Font { const char* id; uint8_t lineHeight,ascent,descent; const Glyph* glyphs; uint16_t glyphCount; };
 inline constexpr char kVersion[] = "fire-app-sdk-1.0";
-inline constexpr char kContract[] = "83310c217698dd968f3773842f7f3fa05bc73b487a7c7f1cffefa33acec40667";
+inline constexpr char kContract[] = "0e331b29dd23d94de670e4624fad44678158361e8c03b1401936a80de71089d9";
+inline constexpr uint32_t kUpdateCallbackMs = 24;
 inline constexpr uint16_t assetPalette0[] = {0,65535};
 inline constexpr uint8_t assetRuns0[] = {32,0,2,1,21,0,4,1,20,0,4,1,20,0,4,1,20,0,4,1,19,0,6,1,18,0,2,1,2,0,2,1,18,0,2,1,2,0,2,1,17,0,3,1,2,0,2,1,17,0,3,1,2,0,3,1,12,0,6,1,4,0,2,1,5,0,5,1,2,0,5,1,5,0,2,1,4,0,6,1,12,0,3,1,2,0,3,1,16,0,3,1,2,0,2,1,18,0,2,1,2,0,2,1,18,0,2,1,2,0,2,1,18,0,6,1,19,0,4,1,20,0,4,1,20,0,4,1,20,0,4,1,21,0,2,1,32,0};
 inline constexpr uint16_t assetPalette1[] = {0,65535};

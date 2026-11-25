@@ -9,7 +9,7 @@
           "type": "string"
         },
         "contract": {
-          "const": "83310c217698dd968f3773842f7f3fa05bc73b487a7c7f1cffefa33acec40667",
+          "const": "0e331b29dd23d94de670e4624fad44678158361e8c03b1401936a80de71089d9",
           "pattern": "^[a-f0-9]{64}$",
           "title": "Contract",
           "type": "string"

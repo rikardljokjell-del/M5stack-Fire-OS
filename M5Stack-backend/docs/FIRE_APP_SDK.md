@@ -33,7 +33,12 @@ The first matching clear can reuse the OS-filled pixels only while the
 prepared SDK frame is still untouched. Calls still consume their full I/O
 quota. Later/different clears and clear after painting retain real immediate
 erase semantics and actual callback time. No app drawing is queued or charged
-outside its callback; the existing 12 ms wall guard remains in force.
+outside its callback. The calibrated SDK update wall guard is 24 ms, including
+all native drawing. On_button and legacy updates retain 12 ms; app init keeps
+its existing 250 ms limit. Memory,
+instruction, I/O, text and grid ceilings are unchanged. This explicit SDK-only
+timing choice follows the measured 15–17 ms gallery frames; physical OS response
+and guard cleanup must still pass acceptance before a release is approved.
 No require, arbitrary loading, filesystem or Python callbacks are exposed.
 Calling UI requires display permission. Module initialization and native calls
 use the existing memory, instruction, text, I/O and time budgets.

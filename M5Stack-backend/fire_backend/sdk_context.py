@@ -3,13 +3,14 @@ from importlib.resources import files
 import json
 import re
 
-from .app_sdk import SDK_VERSION, SDK_CONTRACT, available, classify
+from .app_sdk import SDK_VERSION, SDK_CONTRACT, available, classify, contract
 
-VERSION='fire-sdk-generation-v4'
+VERSION='fire-sdk-generation-v5'
 MARKER='\nFIRE SDK request contract:\n'
+_BUDGETS=contract()['registry']['budgets']
 
 POLICY='''
-FIRE App SDK development and acceptance policy, version4:
+FIRE App SDK development and acceptance policy, version5:
 Build exactly the confirmed app with sensible defaults. Preserve working code
 during correction; fix concrete defects rather than redesigning or adding scope.
 Use the real fire.ui kit, shared fonts and selected canonical assets for standard
@@ -39,7 +40,12 @@ canonical asset IDs. The shared text is transparent; never invent API arguments.
 Actual SDK callback quotas:64 TOTAL I/O calls (including measurements, buttons,
 time and sensors),2048 I/O bytes,256 cumulative UTF8 text bytes INCLUDING measure,
 384 cumulative grid cells and32768 grid pixels. Keep the announced app-memory
-quota including the UI module, native200000 instructions and12ms callback guard.
+quota including the UI module.
+''' + f'''Native callback guards: SDK update {_BUDGETS['sdk_update_callback_ms']}ms,
+on_button {_BUDGETS['callback_ms']}ms, init {_BUDGETS['init_callback_ms']}ms;
+{_BUDGETS['callback_instructions']} instructions. Only SDK update was calibrated;
+legacy update/button remain {_BUDGETS['callback_ms']}ms and init remains {_BUDGETS['init_callback_ms']}ms.
+''' + '''
 PC display-work is an ESTIMATE, never a measurement of native callback time.
 Only these SDK quotas apply; recommended draw-count targets are not release gates.
 Prefer compact cached geometry/text, bounded tables/loops, no waits or loaders.
@@ -76,7 +82,7 @@ Conversation audio grants no Lua hardware. Never invent missing services.
 Review only concrete defects against the literal request and chosen visible
 features. No new lap-history/chaining/gameplay features as release blockers.
 Put optional polish and unmeasured native timing in verification_notes. In-bounds
-SDK operations or PC-work alone do not prove a12ms violation. Cite an actual
+SDK operations or PC-work alone do not prove a native phase-time violation. Cite an actual
 source defect/violated negotiated bound or actual matching physical evidence.
 Keep real logic/unit/cleanup/clipping/control/readability defects as blockers.
 Normally one generation and one existing multimodal review, targeted correction

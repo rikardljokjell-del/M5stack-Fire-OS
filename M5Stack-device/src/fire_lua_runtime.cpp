@@ -765,7 +765,7 @@ bool FireLuaRuntime::callVoid(const char* function, int argumentCount) {
   // update() pushes its argument before calling this helper. Move the
   // function below those arguments so lua_pcall sees [function, args...].
   if (argumentCount > 0) lua_insert(lua_, -argumentCount - 1);
-  beginCallback(CallbackPhase::Update, kMaxCallbackMs);
+  beginCallback(CallbackPhase::Update, appSdk_ ? FireSdkData::kUpdateCallbackMs : kMaxCallbackMs);
   ++frames_;
   if (lua_pcall(lua_, argumentCount, 0, 0) != LUA_OK) {
     finishCallback();

@@ -33,7 +33,8 @@ def generate():
              "struct Glyph { uint32_t codepoint; uint8_t width,height,advance; int8_t xOffset,yOffset; const uint32_t* rows; };",
              "struct Font { const char* id; uint8_t lineHeight,ascent,descent; const Glyph* glyphs; uint16_t glyphCount; };",
              'inline constexpr char kVersion[] = ' + json.dumps(sdk["version"]) + ";",
-             'inline constexpr char kContract[] = ' + json.dumps(contract["api_contract"]) + ";"]
+             'inline constexpr char kContract[] = ' + json.dumps(contract["api_contract"]) + ";",
+             'inline constexpr uint32_t kUpdateCallbackMs = ' + str(contract["registry"]["budgets"]["sdk_update_callback_ms"]) + ";"]
     asset_rows = []
     seen = set()
     for i, item in enumerate(sorted(assets, key=lambda a: a["id"])):

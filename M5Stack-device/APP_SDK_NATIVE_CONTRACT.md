@@ -52,8 +52,11 @@ frames retain black preparation. No app drawing is queued outside its callback.
 - Existing grid output is preserved while adjacent identical colors are merged
   into longer fills. SDK-only cumulative limits are384 cells/32768 cell-pixels
   per callback; the old384-cell per-call behavior remains for legacy apps.
-- Existing64-call/2048-byte/256-text-byte,200000-instruction,12ms callback and
-  131072-byte VM ceilings are not raised. Text and measurement both charge text
+- Existing64-call/2048-byte/256-text-byte,200000-instruction and131072-byte VM
+  ceilings are not raised. SDK update has an explicit24ms wall guard after
+  measured15–17ms gallery callbacks; all on_button and legacy updates
+  retain12ms, and app init keeps its existing250ms. All native drawing counts toward actual wall time, with no
+  timer credit or deferred drawing. Text and measurement both charge text
   bytes, points charge4 bytes/point, assets charge ID bytes. Native elapsed time
   is included by the existing post-callback check. Integral float coordinates
   from safe math helpers work; numeric strings and nonintegral values are errors.

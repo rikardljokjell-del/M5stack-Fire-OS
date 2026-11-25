@@ -37,10 +37,14 @@ Koordinatoren har prøvd faktisk Studio-forhåndsvisning med virtuelle A/B/C,
 nullstilling og tidsfremdrift. Dette er PC-verifikasjon. De private
 SDK-prøvene på FIRE stoppet ved den uendrede 12 ms callbackgrensen; ren SDK-
 firmware er derfor ikke godkjent eller offentlig publisert. Enheten er
-ført tilbake til RC9 i A/app0, sekvens 29 VALID/CRC, med COM3 lukket.
+ført tilbake til RC9 i A/app0, sekvens 31 VALID/CRC, med COM3 lukket.
 Arbeidet er avgrenset til ferdigstilling av SDK-fundament, ytelse og fysisk
-kontroll; nye funksjoner og betalte appforsøk er stanset. Den første
-AI-kohorten ga ingen godkjente leveranser; dette skjules ikke av grønne
+kontroll; nye funksjoner og betalte appforsøk er stanset.
+Tegnerammen kalibreres nå uttrykkelig til 24 ms for SDK-update etter målte
+15–17 ms galleriframes. Eldre update/knappetrykk beholder 12 ms; oppstart
+beholder faktisk eksisterende 250 ms. De øvrige ressursgrensene endres ikke.
+Ny fysisk prøve av tegning, OS-respons og feilavbrudd kreves før publisering.
+Den første AI-kohorten ga ingen godkjente leveranser; dette skjules ikke av grønne
 adaptertester. Se [den løpende SDK-evalueringen](M5Stack-backend/docs/FIRE_APP_SDK_EVALUATION.md).
 
 ### Sist fysisk overlevert firmware

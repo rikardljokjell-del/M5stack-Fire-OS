@@ -23,7 +23,7 @@ layoutretning, fontmetrikker og maksimalt tolv ressursbeskrivelser. Hele katalog
 bitmapdataene og UI-modulen sendes ikke i prompten. Ved feil beholdes eksisterende
 avgrenset reparasjonsflyt og kildebundet feilhistorikk.
 
-`fire-sdk-generation-v4` erstatter de generelle legacyinstruksene i SDK-kall med
+`fire-sdk-generation-v5` erstatter de generelle legacyinstruksene i SDK-kall med
 én konsistent versjonsstyrt policy. Valgte komponenter får kanonisk hjelp og
 options, ekte temapalett og korte kjørbare Lua-eksempler. Norske sammensatte
 appnavn som «bilspill», «værapp» og «måleinstrument» samt engelske aliaser velges
@@ -83,13 +83,21 @@ gjøres tilgjengelig i appmiljøet.
 Den gamle konservative 0.2-policyen med 24 outputoperasjoner, 120000 estimerte
 work-enheter og 128 kumulative gridceller er bevart for gamle profiler. Den er
 ingen skjult SDK-grense. SDK rapporterer fortsatt estimert tegnearbeid, men PC-en
-måler ikke ESP32-callbacktid. Native 12 ms-beskyttelse må verifiseres på enheten.
-Ingen appminne-, native instruksjons-, I/O- eller tidskvote økes her.
+måler ikke ESP32-callbacktid. Den opprinnelige SDK-updategrensen var 12 ms;
+etter fysiske målinger kalibreres bare SDK-update til 24 ms. Knappetrykk beholder
+12 ms, init beholder sin eksisterende grense på 250 ms, også for legacy.
+Trusted UI-load (250 ms) og kildekompilering (1000 ms) er separate, uendrede
+oppstartsgrenser. Appminne-, instruksjons-, I/O-, byte- og gridkvoter er uendret.
+V5-policy, forhandlet kontrakt og worker-metadata avleder fasefakta fra samme
+kanoniske kontrakt. PC-workerens lokale guard er ingen ESP32-tidsmåling;
+`native_timing_measured=false`. Ny fysisk OS-, knapp- og nettverksmåling må
+bestås før denne SDK-kalibreringen kan godkjennes som fysisk leveranse.
 
 Hver fanget frame er fullstendig, maksimalt 64 tegneoperasjoner og 24000
 serialiserte tegn; ingen avkortet frame presenteres som et fullstendig bilde.
-PNG-er er maksimalt 240000 bytes. En ny svart framebuffer brukes per frame,
-tilsvarende OS-eid clear-before-update. Bitmapfontene og atlasdataene er felles;
+PNG-er er maksimalt 240000 bytes. Framebufferen starter med den fangede
+OS-bakgrunnsfargen; eldre frames uten feltet starter svart. Bitmapfontene og
+atlasdataene er felles;
 eksakt native rasterisering, numerisk paritet og fysisk ytelse er ikke bevist
 av en PC-simulering. Dette vises også i metadata og brukergrensesnittet.
 `font_data_exact` gjelder bitmapdataidentitet. `font_mode` skiller delte

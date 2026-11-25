@@ -452,6 +452,45 @@ M5GFX already uses a bounded internal source row for this PSRAM storage type.
 No new framebuffer/cache, layout, API, allocator or quota change is planned;
 the speedup remains unverified until the native tests and physical matrix run.
 
+Snapshot `7c201189b0743737064e8de39b7acf8b8836abec` then passed21 native/release
+tests and all three builds in CI45621781731/job139231535715. The coordinator
+verified artifact15025177384 (27,217,049 bytes, SHA256
+`bcb399a9ba61d2df54a73afde01c8c59ae55f90576fd428ac78eb2ebdb9d759d`)
+and all13 extracted files. Normal is2,654,624 bytes, SHA256
+`4f547aee436a394bae75f884265ae546c02e1d6742207176d0e06a33428a4c28`,
+with63,796 static RAM bytes and the same1,128-byte aligned IRAM margin.
+
+The signed private SDKQA6 image is2,678,288 bytes, SHA256
+`0db1846d2d81c9ed48e7fd46b7513a80ef48d0337bad4a69b917b7ed92df561d`.
+It again passed ten baseline phases, but gallery1 reached15,370us before the
+guard, with10,648us native work. This improved the previous17,115/12,324us
+sample but did not pass12ms. It stopped before capture. RC9 returned as
+A31 VALID/CRC, with45.086s return and20.144s ordinary reboot observations.
+COM closed; the coordinator independently checked both metadata CRCs and
+all three raw-log hashes. No clean SDK release is approved.
+
+## Explicit measured SDK timing calibration
+
+Further specialized raster changes are paused. The user's requirement is to
+avoid *uncritical* resource-limit increases, rather than an absolute12ms
+render ceiling. The selected controlled tradeoff is24ms for SDK update only,
+including all actual native drawing. Legacy updates and all button callbacks
+retain12ms; existing app init remains250ms (the coordinator's earlier12ms-init
+assumption was corrected against the actual code). Source compile/load guards
+and all memory/instruction/I/O/text/grid ceilings remain unchanged.
+
+This is an explicit wall limit, not timer credit, deferred drawing, a new
+buffer or an escalating budget. It follows measured15–17ms foreground frames
+after removing redundant background work. It still requires actual worst-case
+loop/input response, button+update, heavy scenes and negative guard/return-to-OS
+checks. A bigger callback ceiling alone does not establish stable responsiveness.
+The canonical registry/header and the single backend generation/review policy
+are updated together; old experimental hashes remain rejected by live delivery.
+The final draft contract is
+`0e331b29dd23d94de670e4624fad44678158361e8c03b1401936a80de71089d9`.
+Glyphs, assets, UI source and palette metadata are byte-identical to the
+preceding snapshot. Implementation tests and physical acceptance are pending.
+
 ## Compile-time footprint
 
 Exact production CI linker maps provide this compile-time comparison:

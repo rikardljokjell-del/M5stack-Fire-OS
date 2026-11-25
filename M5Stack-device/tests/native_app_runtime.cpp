@@ -27,7 +27,7 @@ static bool asset(void*,int,int,const char* id,int,int,bool,bool) {
   ++calls;return fire_app_bitmap::find(FireSdkData::kAssets,FireSdkData::kAssetCount,id)!=nullptr;
 }
 static void rounded(void*,int,int,int,int,int,int,bool) {++calls;}
-static void slow(void*,int) {fireTestClockUs+=13000;}
+static void slow(void*,int elapsedUs) {fireTestClockUs+=elapsedUs;}
 static FireLuaRuntime::Host host() {
   FireLuaRuntime::Host h;h.appSdkUiSource=FireSdkData::kUiSource;h.appSdkUiBytes=sizeof(FireSdkData::kUiSource)-1;
   h.displayClear=clear;h.displayPolyline=polyline;h.displayTextStyle=text;
@@ -251,6 +251,46 @@ static void instructionResetTest(bool oldSemantics) {
   runtime.stop();
 }
 
+static void callbackTimingTest(bool sdk,const char* phase,int elapsedUs,bool expected) {
+  FireLuaRuntime runtime;runtime.setHardwareApi(true);runtime.setAppSdk(sdk);
+  auto h=host();h.displayClear=slow;assert(runtime.begin(h));
+  std::string delay;
+  for(int remaining=elapsedUs;remaining>0;) {
+    const int part=remaining>65535?65535:remaining;
+    delay+="fire.display.clear("+std::to_string(part)+");";remaining-=part;
+  }
+  const std::string source="function init() "+std::string(!strcmp(phase,"init")?delay:"")+" end "
+    "function update(dt) "+std::string(!strcmp(phase,"update")?delay:"")+" end "
+    "function on_button(b,a) "+std::string(!strcmp(phase,"on_button")?delay:"")+" end";
+  const bool loaded=runtime.loadSource(reinterpret_cast<const uint8_t*>(source.data()),source.size());
+  bool result=loaded;
+  if(strcmp(phase,"init")) {
+    assert(loaded);result=!strcmp(phase,"update")?runtime.update(16):runtime.button("B","pressed");
+  }
+  assert(result==expected && runtime.lastCallbackUs()==uint32_t(elapsedUs));
+  if(!expected) assert(strstr(runtime.lastError().c_str(),"time budget") && !strcmp(runtime.lastPhase(),phase));
+  runtime.stop();assert(runtime.memoryUsed()==0);
+}
+
+static void callbackTimingTests() {
+  static_assert(FireLuaRuntime::kMaxCallbackMs==12 && FireSdkData::kUpdateCallbackMs==24,"coordinated timing contract");
+  callbackTimingTest(true,"update",18000,true);
+  callbackTimingTest(true,"update",24000,true);
+  callbackTimingTest(true,"update",24001,false);
+  callbackTimingTest(false,"update",12000,true);
+  callbackTimingTest(false,"update",12001,false);
+  callbackTimingTest(false,"update",18000,false);
+  for(bool sdk:{false,true}) {
+    callbackTimingTest(sdk,"on_button",12000,true);
+    callbackTimingTest(sdk,"on_button",12001,false);
+    callbackTimingTest(sdk,"init",250000,true);
+    callbackTimingTest(sdk,"init",250001,false);
+  }
+  std::string error;assert(!run("while true do end",true,&error));
+  assert(error.find("instruction budget")!=std::string::npos);
+  puts("PASS SDK update24ms legacy update/button12ms preserved init250ms exact native elapsed and runaway guard");
+}
+
 int main(int argc,char** argv) {
   if(argc==2 && !strcmp(argv[1],"--old-instruction-counter")) {instructionResetTest(true);return 0;}
   static_assert(sizeof(lua_Integer)==4 && sizeof(lua_Number)==4,"match ESP32 Lua numeric profile");
@@ -283,10 +323,7 @@ int main(int argc,char** argv) {
   assert(error.find("grid callback budget")!=std::string::npos);
   assert(run(board+"fire.display.grid(10,20,8,8,10,20,c,{0})",false));
   assert(!run("local c={} for i=1,200 do c[i]=0 end fire.display.grid(10,20,16,16,10,20,c,{0})",true,&error));
-  FireLuaRuntime timed;timed.setHardwareApi(true);timed.setAppSdk(true);auto h=host();h.displayClear=slow;
-  assert(timed.begin(h));const char* app="function init() end function update(dt) fire.display.clear(0) end";
-  assert(timed.loadSource(reinterpret_cast<const uint8_t*>(app),strlen(app)));
-  assert(!timed.update(16) && strstr(timed.lastError().c_str(),"time budget"));timed.stop();
+  callbackTimingTests();
   assert(argc==2);
   fixture(argv[1],"gallery.lua","CCCCCCAAAAAA");
   fixture(argv[1],"stopwatch.lua","BCBABC");

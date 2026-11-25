@@ -178,7 +178,9 @@ def test_gradient_endpoints_channel_rounding_and_single_dimension():
 def test_context_is_selected_from_canonical_signatures_and_not_whole_assets():
     caps=preview_capabilities();context=selected_context('Lag racing bilspill',caps)
     v=json.loads(context.split('\n')[-1]);canonical=json.loads((DATA/'sdk.json').read_text(encoding='utf-8'))
-    assert len(v['assets'])<=12 and len(context)<12000
+    # The canonical native display contract now explains phase-specific timing.
+    # Keep a compact-context bound without treating those facts as asset bloat.
+    assert len(v['assets'])<=12 and len(context)<12300
     assert all(a['id'] in assets() and 'runs_b64' not in a for a in v['assets'])
     assert all(signature==canonical['ui_signatures'][name] for name,signature in v['ui'].items())
     assert v['suggested_theme'] in canonical['themes'] and v['suggested_layout'] in canonical['layouts']

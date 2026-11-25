@@ -2,7 +2,7 @@
 import hashlib
 import json
 from importlib.resources import files
-from .app_sdk import SDK_VERSION,SDK_CONTRACT,available as sdk_available,contract as sdk_contract
+from .app_sdk import SDK_VERSION,SDK_CONTRACT,available as sdk_available,contract as sdk_contract,callback_budgets
 
 BASE_API="fire-lua-0.1"
 HARDWARE_API="fire-lua-0.2"
@@ -26,7 +26,9 @@ def generation_contract(api_version,services):
             "services":{name:methods[name] for name in sorted(services) if name in methods},
             "limits":REGISTRY["limits"],"semantics":REGISTRY["semantics"],
             "result_shapes":REGISTRY["result_shapes"],"environment":REGISTRY["environment"] if api_version!=BASE_API else {}}
-    if api_version==SDK_VERSION:result["display_semantics"]={k:v for k,v in sdk_contract()["registry"]["display"].items() if k!="methods"}
+    if api_version==SDK_VERSION:
+        result["limits"]={**result["limits"],**callback_budgets(api_version)}
+        result["display_semantics"]={k:v for k,v in sdk_contract()["registry"]["display"].items() if k!="methods"}
     return result
 
 

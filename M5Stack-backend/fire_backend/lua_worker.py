@@ -587,6 +587,9 @@ def simulate(request):
         return value
     trace=unpack(result['trace'])
     return {"ok": True, "syntax": "passed", "api_validation": "passed",
+            "native_callback_budgets":{key:SDK['budgets'][key] for key in
+                ('callback_ms','init_callback_ms','sdk_update_callback_ms') if key!='sdk_update_callback_ms' or api_version==SDK_VERSION},
+            "native_timing_measured":False,
             "frames": result["frames"], "elapsed_ms": result["elapsed_ms"],
             "api_operations": result["api_operations"], "trace": trace,
             "elided_clears":result["elided_clears"],"real_clears":result["real_clears"],"next_background":result["next_background"],
