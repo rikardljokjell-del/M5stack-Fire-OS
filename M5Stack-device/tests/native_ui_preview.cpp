@@ -32,7 +32,8 @@ int main(){using namespace FireUI;static Surface c;
  text(c,12,199,"Venter på ferske data",Amber,"ui12",296);footer(c,"Forrige","Åpne","Neste");c.save("home-stale.ppm");
  c.calls=0;homeHeader(c,"Home","INNSTILLINGER","Lokalt",Green);
  const char* row[]={"Profil","Forbindelse","Visning","Favoritter","Oppsett på mobil","Tilbake"};const char* val[]={"Home","Auto","Fire kort","Alle kort","Åpne",""};const char* ico[]={"icon.house","icon.wifi","icon.layout-grid","icon.star","icon.sliders-horizontal","icon.arrow-left"};
- for(int i=0;i<6;++i)menuRow(c,54+i*26,row[i],val[i],i==2,ico[i]);footer(c,"Forrige","Velg","Neste");c.save("home-settings.ppm");
+ for(int i=0;i<6;++i) { menuRow(c,54+i*26,row[i],val[i],i==2,ico[i]); }
+ footer(c,"Forrige","Velg","Neste");c.save("home-settings.ppm");
  c.calls=0;homeHeader(c,"Home","STYRING","Lokalt",Green);panel(c,10,56,300,96);icon(c,"icon.thermometer",263,71,Green,30);text(c,24,65,"Gulvvarme bad",Text,"ui16",230);text(c,24,93,"22.5 °C",Green,"title20",226);text(c,24,130,"Mål 23 / Auto",Muted,"ui12",272);panel(c,10,160,300,34,true,Amber);icon(c,"icon.circle-check",20,167,Amber,20);text(c,50,170,"Måltemperatur / 23 °C",Amber,"ui12b",229);text(c,12,199,"B bekrefter handlingen",Amber,"ui12",296);footer(c,"Tilbake","Bekreft","Avbryt");c.save("home-confirm.ppm");
  c.calls=0;homeHeader(c,"Home","OVERSIKT","Oppsett",Amber);panel(c,10,56,300,137);icon(c,"icon.house",24,72,Accent,36);text(c,76,76,"Koble til hjemmet",Text,"ui16",223);text(c,24,124,"Velg hva FIRE kan styre i Home Assistant.",Muted,"ui12",270);text(c,24,155,"B åpner innstillinger",Accent,"ui12b",270);footer(c,"Forrige","Oppsett","Neste");c.save("home-empty.ppm");
  return 0;
