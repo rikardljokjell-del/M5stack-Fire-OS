@@ -24,7 +24,6 @@ REQUIRED = {
     "rollback_result": ["rollback_id", "package_id", "status"], "listen_start": ["turn_id"], "listen_stop": ["turn_id"],
     "audio_playback_started": ["audio_id", "turn_id"], "audio_playback_finished": ["audio_id", "turn_id"],
     "app_select": ["app_mode"], "app_deleted": ["app_id"], "app_inventory": ["apps", "storage_ready", "complete"],
-    "mode_select": ["conversation_mode"],
     "app_diagnostic": ["app_id", "package_id", "error_code"],
     "audio_playback_failed": ["audio_id", "turn_id", "error_code"],
 }
@@ -44,6 +43,11 @@ def schemas():
 
     event["properties"]["event_id"] = nonnull("event_id")
     conditions = []
+    for name in ('runtime_ai_request','runtime_ai_cancel'):
+        fields=['request_id','app_id','package_id','source_sha256','run_id']
+        if name=='runtime_ai_request':fields+=['instructions','data_json','schema_json','timeout_ms']
+        conditions.append({'if':{'properties':{'event':{'const':name}}},'then':{'required':fields,'properties':{f:nonnull(f) for f in fields}}})
+    conditions.append({'if':{'properties':{'event':{'const':'mode_select'}}},'then':{'anyOf':[{'required':[f],'properties':{f:nonnull(f)}} for f in ('conversation_mode','runtime_ai_mode')]}})
     for name, required in REQUIRED.items():
         conditions.append({"if": {"properties": {"event": {"const": name}}},
                            "then": {"required": required, "properties": {field: nonnull(field) for field in required}}})
@@ -87,6 +91,12 @@ def schemas():
     sdk["properties"]["api_version"]={"const":SDK_VERSION,"type":"string"}
     sdk["properties"]["api_contract"]={"const":SDK_CONTRACT,"type":"string"}
     sdk["allOf"]=[{"properties":{"required_services":{"contains":{"const":"display"}},"permissions":{"contains":{"const":"fire.display"}}}}]
+    sdk['allOf'].append({'if':{'properties':{'required_services':{'contains':{'const':'ai'}}}},
+                         'then':{'required':['runtime_ai']},'else':{'properties':{'runtime_ai':{'type':'null'}}}})
+    for old in (legacy,manifest):
+        old['properties'].pop('runtime_ai',None);old.pop('$defs',None)
+    manifest['properties']['required_services']['items']['enum']=sorted(REGISTRY['services'])
+    manifest['properties']['permissions']['items']['enum']=['fire.'+name for name in sorted(REGISTRY['services'])]
     return {"manifest-fire-app-sdk-1.0.schema.json":sdk,"device-event-v0.2.schema.json": event, "manifest-fire-lua-0.1.schema.json": legacy,
             "manifest-fire-lua-0.2.schema.json":manifest,"HARDWARE_API-v0.2.json":{"api_contract":API_CONTRACT,"registry":REGISTRY}}
 

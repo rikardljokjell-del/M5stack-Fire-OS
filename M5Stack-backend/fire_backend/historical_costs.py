@@ -104,7 +104,8 @@ def totals(store, records, group='project_id'):
     # A subsequently imported real measurement replaces that build/operation's
     # historical approximation instead of being added to it.
     cutoff=store.get('usage','meta')['tracking_started_at']
-    measured = {(r.get('build_id'), r.get('operation')) for r in records if r.get('started_at',cutoff)<cutoff}
+    measured = {(r.get('build_id'), r.get('operation')) for r in records
+                if r.get('started_at',cutoff)<cutoff and r.get('usage_source') in {'provider','duration'}}
     grouped = {}
     for item in store.list('historical_costs'):
         parts = [p for p in item['parts'] if (item['build_id'], p['operation']) not in measured]

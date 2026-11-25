@@ -163,7 +163,7 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
                 "builds": builds[-20:], "apps": service.app_library(),
                 "repairs":[service.repairs.public(j) for j in sorted(service.store.list('repairs'),key=lambda j:j['updated_at'],reverse=True)[:16]],
                 "firmware":service.firmware.catalog(),
-                "physical_verified": False, "transport": service.reverse_tcp.status()}
+                "physical_verified": False, "transport": service.reverse_tcp.status(),"runtime_ai":service.runtime_ai.snapshot()}
 
     @app.get('/desktop/usage', dependencies=[Depends(desktop_auth)])
     async def desktop_usage(service: Backend = Depends(backend)):
@@ -172,6 +172,22 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
     @app.get('/desktop/jobs', dependencies=[Depends(desktop_auth)])
     async def desktop_jobs(service: Backend = Depends(backend)):
         return service.jobs.snapshot()
+
+    @app.get('/desktop/runtime-ai',dependencies=[Depends(desktop_auth)])
+    async def runtime_ai_status(service:Backend=Depends(backend)):
+        return service.runtime_ai.snapshot()
+
+    @app.patch('/desktop/runtime-ai',dependencies=[Depends(desktop_auth)])
+    async def runtime_ai_global(request:Request,service:Backend=Depends(backend)):
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)!={'enabled'}:raise HTTPException(422,'Expected enabled')
+        return await service.runtime_ai.set_global_enabled(body['enabled'],config_store)
+
+    @app.patch('/desktop/apps/{project_id}/runtime-ai',dependencies=[Depends(desktop_auth)])
+    async def runtime_ai_app(project_id:str,request:Request,service:Backend=Depends(backend)):
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)!={'enabled'}:raise HTTPException(422,'Expected enabled')
+        return await service.runtime_ai.set_app_enabled(project_id,body['enabled'])
 
     @app.post('/desktop/jobs/{build_id}/context', dependencies=[Depends(desktop_auth)])
     async def job_context(build_id: str,request: Request,service: Backend = Depends(backend)):
@@ -214,7 +230,7 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
     @app.post("/desktop/conversations", dependencies=[Depends(desktop_auth)])
     async def desktop_conversation(request: Request, service: Backend = Depends(backend)):
         data=await request.json()
-        if (not isinstance(data,dict) or "device_id" not in data or set(data)-{"device_id","project_id","base_package_id","hardware_preview"}
+        if (not isinstance(data,dict) or "device_id" not in data or set(data)-{"device_id","project_id","base_package_id","hardware_preview","runtime_ai_mode"}
                 or ("hardware_preview" in data and type(data["hardware_preview"]) is not bool)
                 or any(v is not None and (not isinstance(v,str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}",v)) for k,v in data.items() if k!="hardware_preview")):
             raise HTTPException(422,"Expected device_id and optional project/base version")
@@ -250,7 +266,7 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
     @app.post("/desktop/sessions/{session_id}/conversation", dependencies=[Depends(desktop_auth)])
     async def desktop_conversation(session_id: str, request: Request, service: Backend = Depends(backend)):
         data = await request.json()
-        if not isinstance(data, dict) or set(data) not in ({"conversation_mode"}, {"action"}):
+        if not isinstance(data, dict) or set(data) not in ({"conversation_mode"}, {"action"}, {'runtime_ai_mode'}):
             raise HTTPException(422, "Expected conversation_mode or action")
         if "action" in data and data["action"] != "cancel":
             raise HTTPException(422, "Expected cancel action")
@@ -258,7 +274,8 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
         event = DeviceEvent(device_id=session.device_id, protocol_version=session.protocol_version,
                             event="cancel_turn" if "action" in data else "mode_select", event_id=new_id("desktop"),
                             session_id=session.id, boot_id=session.boot_id,
-                            **({"conversation_mode": data["conversation_mode"]} if "conversation_mode" in data else {}))
+                            **({"conversation_mode": data["conversation_mode"]} if "conversation_mode" in data else {}),
+                            **({'runtime_ai_mode':data['runtime_ai_mode']} if 'runtime_ai_mode' in data else {}))
         return await dispatch(service, session, event)
 
     @app.post("/desktop/sessions/{session_id}/voice", dependencies=[Depends(desktop_auth)])

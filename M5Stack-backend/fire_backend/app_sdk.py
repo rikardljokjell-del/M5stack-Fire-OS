@@ -188,4 +188,12 @@ def selected_context(summary, capabilities, *, include_native=True):
                          'Use tested theme palette fields; UI helpers only draw and app owns EVERY action/state transition.',
                          'Choose defaults and preserve agreed scope; normally one generation and one review, targeted corrections only.']}
     if include_native:payload['native_display']=contract()['registry']['display']
+    if layout in {'instrument','sensor_monitor'}:
+        payload['math']={'available':['abs','floor','ceil','sqrt','sin','cos','min','max','pi'],
+            'unavailable':['atan','atan2','asin','acos','pcall'],
+            'angles':'Use finite normalized samples; reject near-zero norm, preserve vertical endpoints. Use bounded inverse-sin bisection with quadrant handling, not an inaccurate linear atan approximation.'}
+    if layout in {'puzzle','platformer','racing','arcade','adventure'}:
+        budgets=contract()['registry']['budgets']
+        payload['grid_plan']={'cells':budgets['sdk_grid_cells_per_callback'],'pixels':budgets['sdk_grid_pixels_per_callback'],
+            'calculation':'Sum(cols*rows)<=cells; sum(cols*rows*w*h)<=pixels per callback, including black cells. 10*20*8*8=200 cells/12800px.'}
     return '\nAuthoritative selected FIRE App SDK context (overrides legacy-only font/UI restrictions):\n' + json.dumps(payload, ensure_ascii=False, separators=(',', ':'))

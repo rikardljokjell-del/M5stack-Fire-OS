@@ -116,6 +116,17 @@
             }
           ],
           "default": null
+        },
+        "runtime_ai": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeAICapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -386,10 +397,48 @@
       },
       "title": "HardwareResources",
       "type": "object"
+    },
+    "RuntimeAICapability": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "fire-runtime-ai-1.0",
+          "title": "Version",
+          "type": "string"
+        },
+        "contract": {
+          "const": "bef762941dad713217d70bbc1a9fd6cfbe7de825263dba246b5c170331ba4693",
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Contract",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "contract"
+      ],
+      "title": "RuntimeAICapability",
+      "type": "object"
     }
   },
   "additionalProperties": false,
   "properties": {
+    "runtime_ai_mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Ai Mode"
+    },
     "type": {
       "const": "device_event",
       "default": "device_event",
@@ -442,10 +491,91 @@
         "build_jobs",
         "build_notice_ack",
         "build_resume",
-        "build_cancel"
+        "build_cancel",
+        "runtime_ai_request",
+        "runtime_ai_cancel"
       ],
       "title": "Event",
       "type": "string"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    },
+    "source_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Sha256"
+    },
+    "instructions": {
+      "anyOf": [
+        {
+          "maxLength": 512,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Instructions"
+    },
+    "data_json": {
+      "anyOf": [
+        {
+          "maxLength": 768,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Data Json"
+    },
+    "schema_json": {
+      "anyOf": [
+        {
+          "maxLength": 512,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Schema Json"
+    },
+    "timeout_ms": {
+      "anyOf": [
+        {
+          "maximum": 60000,
+          "minimum": 1000,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Timeout Ms"
     },
     "build_id": {
       "anyOf": [
@@ -993,6 +1123,148 @@
   "title": "DeviceEvent",
   "type": "object",
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "runtime_ai_request"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "package_id",
+          "source_sha256",
+          "run_id",
+          "instructions",
+          "data_json",
+          "schema_json",
+          "timeout_ms"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "instructions": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "data_json": {
+            "maxLength": 768,
+            "type": "string"
+          },
+          "schema_json": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "timeout_ms": {
+            "maximum": 60000,
+            "minimum": 1000,
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "runtime_ai_cancel"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "package_id",
+          "source_sha256",
+          "run_id"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "mode_select"
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "conversation_mode"
+            ],
+            "properties": {
+              "conversation_mode": {
+                "enum": [
+                  "chat",
+                  "develop"
+                ],
+                "type": "string"
+              }
+            }
+          },
+          {
+            "required": [
+              "runtime_ai_mode"
+            ],
+            "properties": {
+              "runtime_ai_mode": {
+                "enum": [
+                  "auto",
+                  "off"
+                ],
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
     {
       "if": {
         "properties": {
@@ -1662,29 +1934,6 @@
           },
           "complete": {
             "type": "boolean"
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "event": {
-            "const": "mode_select"
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "conversation_mode"
-        ],
-        "properties": {
-          "conversation_mode": {
-            "enum": [
-              "chat",
-              "develop"
-            ],
-            "type": "string"
           }
         }
       }

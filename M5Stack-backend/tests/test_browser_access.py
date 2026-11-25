@@ -84,12 +84,31 @@ def test_forged_jwt_and_device_token_cannot_sign_browser_in(web):
 
 @pytest.mark.parametrize("path,method", [("settings", "patch"), ("settings/apply", "post"),
     ("conversations/missing/build", "post"), ("conversations/missing/run", "post"),
-    ("apps/missing", "delete"), ("jobs/missing/cancel", "post")])
+    ("apps/missing", "delete"), ("jobs/missing/cancel", "post"),
+    ("runtime-ai", "patch"), ("apps/missing/runtime-ai", "patch")])
 def test_all_browser_mutations_require_csrf_and_exact_origin(web, path, method):
     client, _, _, _ = web
     call = getattr(client, method)
     assert call("/web/"+path, headers={"X-Fire-CSRF": ""}).status_code == 403
     assert call("/web/"+path, headers={"Origin": "https://evil.example.org"}).status_code == 403
+
+
+def test_runtime_switch_and_generation_mode_use_existing_authenticated_settings(web):
+    client,app,store,_=web
+    vault_before=dict(store.vault.data)
+    assert client.patch('/web/runtime-ai',json={'enabled':False}).status_code==200
+    assert not app.state.backend.settings.fire_runtime_ai_enabled and not store.config.runtime_ai_enabled
+    assert client.patch('/web/runtime-ai',json={'enabled':'false'}).status_code==400
+    project=app.state.backend.new_project('fire01','device')
+    assert client.patch('/web/apps/'+project['id']+'/runtime-ai',json={'enabled':False}).status_code==200
+    assert not app.state.backend.runtime_ai.app_enabled(project['id'])
+    start=client.post('/web/conversations',json={'device_id':'fire01','runtime_ai_mode':'off'})
+    assert start.status_code==200 and start.json()['runtime_ai_mode']=='off'
+    sid=start.json()['session_id']
+    assert client.post('/web/conversations/'+sid+'/mode',json={'runtime_ai_mode':'auto'}).status_code==200
+    assert app.state.backend.sessions[sid].runtime_ai_mode=='auto'
+    assert store.config.runtime_ai_developer_mode=='auto'  # Session choice is explicit, not a global rewrite.
+    assert store.vault.data==vault_before
 
 
 def test_local_bootstrap_is_short_lived_single_use_and_never_contains_admin(tmp_path):

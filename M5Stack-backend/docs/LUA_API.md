@@ -120,3 +120,25 @@ Never extract arbitrary names or overwrite live appdata. Store versioned code
 and retain current/previous/backup per app. A partial download/extraction must
 not change the active version, and recovery must tolerate power loss during SD
 updates. Do not use the firmware .bin loader or OTA API.
+
+## Optional Runtime AI
+
+The separate [Runtime AI contract](../contracts/RUNTIME_AI-v1.json) owns the
+version, hash, limits and signature of
+`fire.ai.request(instructions,data_json,schema_json,timeout_ms?)`.
+Only SDK apps with `ai`, `jobs`, permission `fire.ai` and the exact optional
+`runtime_ai` extension may call it. Old hardware/SDK hashes remain unchanged;
+old and non-AI manifests omit the extension.
+
+The call returns a job ID or `nil,error_code`. Load/init requests return
+`stale_run`; request from update/button after actual run binding. Use existing
+`fire.jobs.poll/result/cancel/close`, never wait. Ready result is
+`{ok=true,data=<bounded Lua object>}`; failure is `{ok=false,error_code=...}`.
+One pending AI job occupies one of the existing four job slots. Results are
+validated, never truncated. No general JSON/file/loader API is exposed.
+
+Aggregate relevant real observations locally. Call on a real button/event with
+fresh basis, cache the last result, and retain useful local/offline behavior.
+Use short app-specific labels, enums/numbers and button pages; never dump JSON,
+Markdown or unsupported symbols on the LCD. Mark AI assessment separately from
+measurements. See [Runtime AI usage](RUNTIME_AI.md).

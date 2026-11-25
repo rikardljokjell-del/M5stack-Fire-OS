@@ -5,9 +5,11 @@ responses, credentials and provider error bodies never belong in this ledger.
 Display reset is separate from immutable request history and budget accounting.
 """
 import math
+import json
 import re
 import threading
 import time
+from statistics import median
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,7 +17,7 @@ from .storage import new_id
 from .model_catalog import PRICING_DATE, RATES, MINUTE_RATES, EXPLICIT_CACHE_MODELS, LONG_CONTEXT_MODELS
 
 
-OPERATIONS = {'generate', 'review', 'dialog', 'transcribe', 'speech'}
+OPERATIONS = {'generate', 'review', 'dialog', 'transcribe', 'speech', 'runtime_ai'}
 
 
 class UsageBudgetError(ValueError):
@@ -140,7 +142,7 @@ class UsageLedger:
         return datetime.fromtimestamp(stamp, self.tz).date().isoformat()
 
     def begin(self, operation, model, input_tokens, max_output_tokens, *, build_id=None,
-              project_id=None, input_audio_tokens=0, max_output_audio_tokens=0, audio_seconds=None,session_id=None,turn_id=None):
+              project_id=None, input_audio_tokens=0, max_output_audio_tokens=0, audio_seconds=None,session_id=None,turn_id=None,runtime_request_id=None):
         if operation not in OPERATIONS:
             raise ValueError('Unknown usage operation')
         if any(type(v) is not int or v < 0 for v in (input_tokens, max_output_tokens, input_audio_tokens, max_output_audio_tokens)):
@@ -160,7 +162,7 @@ class UsageLedger:
             # Responses defaults to paid 30m cache writes on current models.
             # Reserve the write rate for the whole input bound before sending.
             tokens.update(cache_write_tokens=input_tokens, cache_write_30m_tokens=input_tokens)
-        elif operation in {'generate', 'review'} and model.startswith('gpt-6'):
+        elif operation in {'generate', 'review','runtime_ai'} and model.startswith('gpt-6'):
             # A custom supported model without an explicit request TTL may use
             # a different lifetime. Reserve its longer write rate conservatively.
             tokens.update(cache_write_tokens=input_tokens, cache_write_12h_tokens=input_tokens)
@@ -178,6 +180,13 @@ class UsageLedger:
             today = sum(r['estimated_usd'] for r in records if self._day(r['started_at']) == self._day(now))
             build = sum(r['estimated_usd'] for r in records if build_id and r.get('build_id') == build_id)
             enforce=getattr(self.settings,'fire_cost_limits_enabled',False)
+            if operation=='runtime_ai' and getattr(self.settings,'fire_runtime_ai_limits_enabled',False):
+                runtime=[r for r in records if r['operation']=='runtime_ai' and self._day(r['started_at'])==self._day(now)]
+                for limit,total in ((getattr(self.settings,'fire_runtime_ai_request_budget_usd',0),reserve),
+                                    (getattr(self.settings,'fire_runtime_ai_daily_budget_usd',0),sum(r['estimated_usd'] for r in runtime)+reserve)):
+                    if limit>0 and total>limit+1e-12:raise UsageBudgetError('Runtime AI-kostnadsgrensen er nådd.')
+                calls=getattr(self.settings,'fire_runtime_ai_daily_calls',0)
+                if calls>0 and len(runtime)>=calls:raise UsageBudgetError('Runtime AI-kallgrensen er nådd.')
             if enforce and self.settings.fire_request_budget_usd>0 and reserve > self.settings.fire_request_budget_usd + 1e-12:
                 raise UsageBudgetError('Kallet overstiger kostnadsgrensen.')
             if enforce and self.settings.fire_daily_budget_usd>0 and today + reserve > self.settings.fire_daily_budget_usd + 1e-12:
@@ -187,6 +196,7 @@ class UsageLedger:
             record = {'id': new_id('usage'), 'operation': operation, 'model': model,
                       'build_id': _safe_id(build_id), 'project_id': _safe_id(project_id),
                       'session_id':_safe_id(session_id),'turn_id':_safe_id(turn_id),
+                      'runtime_request_id':_safe_id(runtime_request_id),
                       'status': 'pending', 'started_at': now, 'finished_at': None,
                       **tokens, 'audio_seconds': seconds, 'reserved_usd': reserve,
                       'estimated_usd': reserve, 'usage_source': 'reservation',
@@ -247,7 +257,11 @@ class UsageLedger:
             builds={b['id']:b.get('project_id') for b in self.store.list('builds')}
             grouped={}
             records_all=self.records()
-            for record in records_all:
+            # Runtime inference is consumption of an installed app, not its
+            # accumulated development price. Keep it in its own counters.
+            development=self.cost_records(records_all)
+            for record in development:
+                if record['operation']=='runtime_ai':continue
                 project_id=record.get('project_id') or builds.get(record.get('build_id'))
                 if project_id:grouped.setdefault(project_id,[]).append(record)
             result={project_id:{**self._totals(records),
@@ -260,36 +274,116 @@ class UsageLedger:
                 row=result.setdefault(project_id,{**self._totals([]),'by_operation':[],
                     'currency':'USD','scope':'all_versions_lifetime','tracking_started_at':self.meta['tracking_started_at']})
                 row['historical_estimate']=history
-                row['recorded_usd']=row['estimated_usd']
+                row['recorded_usd']=row['provider_calculated_usd']
                 row['estimated_usd']+=history['estimated_usd']
+            self._mark_untracked_history(result,records_all,'project_id')
             return result
 
-    @staticmethod
-    def _totals(records):
+    def _mark_untracked_history(self,result,records,group):
+        """Absence of old artifacts is not evidence of a zero-price live job."""
+        tracked={r.get('build_id') for r in records}
+        history={r['build_id'] for r in self.store.list('historical_costs')}
+        for b in self.store.list('builds'):
+            if b['id'] in tracked or b['id'] in history:continue
+            path=self.store.path('builds',b['id'],'')/'request.json'
+            try:request=json.loads(path.read_text(encoding='utf-8'))
+            except (OSError,ValueError):continue
+            stamp=_finite(b.get('created_at'),path.stat().st_mtime)
+            if request.get('mode')!='openai' or stamp>=self.meta['tracking_started_at']:continue
+            key=b.get(group)
+            if not key:continue
+            row=result.setdefault(key,{**self._totals([]),'recorded_usd':0})
+            row['unestimated_requests']+=1
+            row['unknown_historical_jobs']=row.get('unknown_historical_jobs',0)+1
+
+    def cost_records(self, records):
+        """Public price views; never mistake an output ceiling for expenditure.
+
+        Missing terminal usage can use the median of at least three measured
+        requests of the same operation/model. No reservation enters that median.
+        Unknown/pending requests stay explicit when no empirical basis exists.
+        Immutable ledger amounts remain available for conservative admission.
+        """
+        samples={}
+        for r in records:
+            if r.get('usage_source') in {'provider','duration'} and r.get('status')=='completed' and r.get('cache_write_split_known') is not False:
+                samples.setdefault((r['operation'],r['model']),[]).append(r)
+        empirical_basis={}
+        for key,rows in samples.items():
+            peers=sorted(rows,key=lambda v:v['started_at'])[-20:]
+            empirical_basis[key]=(len(peers),median(v['estimated_usd'] for v in peers))
+        result=[]
+        for raw in records:
+            r=dict(raw);measured=r.get('usage_source') in {'provider','duration'}
+            known=measured and r.get('cache_write_split_known') is not False
+            count,typical=empirical_basis.get((r['operation'],r['model']),(0,0))
+            empirical=typical if not known and r['status']!='pending' and count>=3 else None
+            r.update(provider_calculated_usd=r['estimated_usd'] if known else 0,
+                     empirical_estimated_usd=empirical or 0,
+                     empirical_samples=count if empirical is not None else 0,
+                     price_kind=r['usage_source'] if known else 'empirical' if empirical is not None else 'pending' if r['status']=='pending' else 'unknown',
+                     budget_exposure_usd=raw['estimated_usd'],
+                     budget_reserved_usd=raw.get('reserved_usd',0) if not known else 0,
+                     estimated_usd=r['estimated_usd'] if known else empirical,
+                     tokens_measured=measured,
+                     latency_ms=max(0,round(((r.get('finished_at') or self.clock())-r['started_at'])*1000)))
+            if not measured:
+                for key in tuple(k for k in r if k.endswith('_tokens') and k!='max_output_tokens'):
+                    r[key]=0
+            result.append(r)
+        return result
+
+    def _totals(self, records):
+        if any('price_kind' not in r for r in records):records=self.cost_records(records)
         return {'requests': len(records),
                 **{k: sum(r.get(k, 0) for r in records) for k in (
-                    'input_tokens', 'output_tokens', 'cached_tokens', 'cache_write_tokens', 'audio_seconds', 'estimated_usd')},
+                    'input_tokens', 'output_tokens', 'cached_tokens', 'cache_write_tokens', 'audio_seconds')},
+                'estimated_usd':sum(_finite(r.get('estimated_usd')) for r in records),
+                'provider_calculated_usd':sum(r.get('provider_calculated_usd',0) for r in records),
+                'empirical_estimated_usd':sum(r.get('empirical_estimated_usd',0) for r in records),
+                'empirically_estimated_requests':sum(r.get('price_kind')=='empirical' for r in records),
+                'unestimated_requests':sum(r.get('price_kind') in {'unknown','pending'} for r in records),
+                'budget_exposure_usd':sum(r.get('budget_exposure_usd',0) for r in records),
+                'budget_reserved_usd':sum(r.get('budget_reserved_usd',0) for r in records),
+                'latency_ms':sum(r.get('latency_ms',0) for r in records),
                 'unknown_usage_requests': sum(r['usage_source'] == 'reservation' for r in records),
                 'pending_requests': sum(r['status'] == 'pending' for r in records)}
 
     def build_costs(self):
         """Job lifetime, including continuations and separately marked legacy estimates."""
         with self.lock:
-            records=self.records();grouped={}
+            records=self.cost_records(self.records());grouped={}
             for record in records:
-                if record.get('build_id'):grouped.setdefault(record['build_id'],[]).append(record)
-            result={key:{**self._totals(rows),'recorded_usd':self._totals(rows)['estimated_usd']}
+                if record.get('build_id') and record['operation']!='runtime_ai':grouped.setdefault(record['build_id'],[]).append(record)
+            result={key:{**self._totals(rows),'recorded_usd':self._totals(rows)['provider_calculated_usd']}
                 for key,rows in grouped.items()}
             from .historical_costs import totals
             for key,history in totals(self.store,records,'build_id').items():
                 row=result.setdefault(key,{**self._totals([]),'recorded_usd':0})
                 row['historical_estimate']=history
                 row['estimated_usd']+=history['estimated_usd']
+            self._mark_untracked_history(result,records,'id')
             return result
+
+    def conversation_costs(self):
+        """One conversation row spans its session, never the whole project."""
+        grouped={}
+        for r in self.cost_records(self.records()):
+            if r.get('session_id') and not r.get('build_id') and r['operation'] in {'dialog','transcribe','speech'}:
+                grouped.setdefault(r['session_id'],[]).append(r)
+        return {key:self._totals(rows) for key,rows in grouped.items()}
+
+    def runtime_costs(self):
+        """Lifetime installed-app inference, separate from app development."""
+        grouped={}
+        for r in self.cost_records(self.records()):
+            if r['operation']=='runtime_ai' and r.get('project_id'):
+                grouped.setdefault(r['project_id'],[]).append(r)
+        return {key:self._totals(rows) for key,rows in grouped.items()}
 
     def snapshot(self):
         with self.lock:
-            records = self.records()
+            records = self.cost_records(self.records())
             now = self.clock()
             visible = [r for r in records if (r.get('finished_at') or r['started_at']) >= self.meta['reset_at']]
             today = [r for r in records if self._day(r['started_at']) == self._day(now)]
@@ -308,12 +402,15 @@ class UsageLedger:
                                'daily_usd': self.settings.fire_daily_budget_usd,
                                'request_usd': self.settings.fire_request_budget_usd,
                                'build_usd': self.settings.fire_build_budget_usd,
-                               'daily_remaining_usd': max(0, self.settings.fire_daily_budget_usd - self._totals(today)['estimated_usd']) if getattr(self.settings,'fire_cost_limits_enabled',False) and self.settings.fire_daily_budget_usd>0 else None,
+                               'daily_remaining_usd': max(0, self.settings.fire_daily_budget_usd - self._totals(today)['budget_exposure_usd']) if getattr(self.settings,'fire_cost_limits_enabled',False) and self.settings.fire_daily_budget_usd>0 else None,
                                'budget_day': self._day(now), 'timezone': self.timezone},
                     'by_operation': grouped('operation'), 'by_model': grouped('model'), 'by_build': grouped('build_id')[:50],
+                    'development':self._totals([r for r in visible if r['operation']!='runtime_ai']),
+                    'runtime_ai':self._totals([r for r in visible if r['operation']=='runtime_ai']),
                     'recent': sorted(visible, key=lambda r: r.get('finished_at') or r['started_at'], reverse=True)[:100],
                     'note': 'Anslått USD fra registrert bruk og datert prisliste, ikke faktura. '
-                            'Manglende bruk beholder et konservativt reservert beløp. '
+                            'Ukjent bruk er ukjent; empirisk anslag krever minst tre målte kall av samme type/modell. '
+                            'Intern budsjettreserve er et maksimum, aldri kostnadsanslag. '
                             'Historiske byggeanslag vises separat under Apper, ikke i disse målingstellerne. '
                             'Nullstilling endrer bare visningstellerne.'}
 

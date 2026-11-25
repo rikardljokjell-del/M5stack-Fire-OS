@@ -17,7 +17,9 @@ from test_repair_target import session
 
 def request(source, **overrides):
     caps=preview_capabilities()
-    return dict(main_lua=source,required_services=caps['services'],api_version=HARDWARE_API,
+    # This helper deliberately tests the unchanged hardware0.2 profile, not
+    # optional SDK-only services advertised alongside it by PC preview.
+    return dict(main_lua=source,required_services=sorted(set(caps['services'])&set(REGISTRY['services'])),api_version=HARDWARE_API,
                 hardware=caps['hardware'],max_memory=131072,max_runtime_ms=1000,profile='idle',**overrides)
 
 

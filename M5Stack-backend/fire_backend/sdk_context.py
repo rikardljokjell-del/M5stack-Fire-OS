@@ -106,6 +106,8 @@ def detailed_services(summary,caps,base_manifest=None):
     from .hardware_requests import TERMS
     allowed=set(caps.get('services',[]))
     selected={'display','buttons','rgb','time'}
+    from .runtime_contract import explicitly_requested
+    if explicitly_requested(summary):selected.update({'ai','jobs'})
     selected.update(name for name,pattern in TERMS.items() if re.search(pattern,summary,re.I))
     if re.search(r'imu|sensor|dashboard|vater|instrument|kompass|compass',summary,re.I):selected.add('imu')
     if re.search(r'vær|vaer|weather|nett|internet|web',summary,re.I):selected.update({'wifi','jobs'})

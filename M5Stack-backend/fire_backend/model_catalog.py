@@ -11,7 +11,7 @@ SOURCE = "https://developers.openai.com/api/docs/models/"
 CODE_MODELS = ("gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6.2-astra")
 REALTIME_MODELS = ("gpt-realtime-2.1-mini", "gpt-realtime-2.1")
 ROLE_MODELS = {
-    "code_model": CODE_MODELS, "review_model": CODE_MODELS,
+    "code_model": CODE_MODELS, "review_model": CODE_MODELS, "runtime_model": CODE_MODELS,
     "dialog_model": REALTIME_MODELS, "speech_model": REALTIME_MODELS,
     "transcribe_model": ("gpt-transcribe",),
 }
@@ -81,4 +81,5 @@ def price_detail(role, model):
         return text + f" Cache skrevet (30 min): {dollars(price.text_in * 1.25)}."
     if role == "speech_model":
         return text + f" Lyd: inn {dollars(price.audio_in)}, ut {dollars(price.audio_out)}, cache {dollars(price.audio_cache)} / 1 mill. lydtokens."
+    if role=='runtime_model':return text+' Runtime AI analyserer appdata; koding, dialog og tale måles separat.'
     return text + " Dialogen bruker tekst; talesvar prises separat."

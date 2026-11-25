@@ -88,13 +88,14 @@ async def validate_release(app, store, build_id):
         for key,value in result.get("io_calls",{}).items():calls[key]=calls.get(key,0)+value
         for key,value in result.get("jobs_started",{}).items():jobs[key]=jobs.get(key,0)+value
     if app.get("require_io_coverage"):
-        asynchronous={"i2c","uart","spi","sd","mic","speaker","bluetooth"}
+        asynchronous={"i2c","uart","spi","sd","mic","speaker","bluetooth","ai"}
         synchronous={"gpio","pwm","adc","dac","rtc","wifi","power"}
         active={k.split('.')[0] for k in calls if k.split('.')[-1] not in {"close","stop","release"}}
         active.update(k.split('.')[0] for k in jobs)
         coverage=set(app.get('coverage_services',app['required_services']))
         missing=(coverage&synchronous)-active
         missing|=(coverage&asynchronous)-{k.split('.')[0] for k in jobs}
+        if 'ai' in missing:raise ValueError('I/O coverage missing for ai. Init cannot start Runtime AI; test a real update/button trigger after run binding with a responsive local fallback.')
         if missing and not app.get("defer_io_coverage"):raise ValueError("I/O coverage missing for "+", ".join(sorted(missing))+". Add/correct test_sequences that navigate menus and START these operations; keep the app features.")
     if {"display", "rgb"}.intersection(app["required_services"]) and not sum(p["api_operations"] for p in results):
         raise ValueError("Release suite: app declares display/RGB but produces no visible output in any input profile")
@@ -295,8 +296,16 @@ class Builder:
         learned_policy=Quality(self.store).policy()
         if learned_policy and learned_policy not in context:context+=learned_policy
         base_manifest=self.store.get('packages',project['latest_package'])['manifest'] if project.get('latest_package') else None
+        from .runtime_contract import GENERATION_MARKER,generation_mode,generation_context,explicitly_requested,available as runtime_available,EXTENSION as RUNTIME_EXTENSION
+        runtime_mode=generation_mode(context,self.settings)
+        if GENERATION_MARKER not in context:context+=generation_context(self.settings,capabilities,runtime_mode)
+        wants_runtime=explicitly_requested(build['summary'])
+        if runtime_mode=='off' and (wants_runtime or base_manifest and 'ai' in base_manifest['required_services']):
+            raise CapabilityError('runtime_ai_disabled','AI Developer er OFF. Runtime AI-kravet er bevart; velg AUTO før du bygger AI-funksjonen.')
+        if wants_runtime and (not runtime_available(capabilities) or not self.settings.fire_runtime_ai_enabled):
+            raise CapabilityError('runtime_ai_unavailable','Appen krever aktivert Runtime AI og firmware som annonserer tjenesten. Kravet er bevart.')
         context=sdk_context_normalize(context,capabilities=capabilities,summary=build['summary'],base_manifest=base_manifest)
-        standard=sdk_standard_contract(capabilities,build['summary']) if self.settings.fire_ai_mode=='openai' else None
+        standard=sdk_standard_contract(capabilities,build['summary'],base_manifest) if self.settings.fire_ai_mode=='openai' else None
         context=context_with_contract(context,standard)
         max_corrections=getattr(self.settings,'fire_max_corrections',0) or None
         offset=build.get('resume_from_attempt',0) if continuing else 0
@@ -346,7 +355,7 @@ class Builder:
                 last_error=dumps({'primary_error':last_error,'retained_source_sha256':build['repair_baseline_sha256'],
                     'historical_review_advice_not_current_evidence':retained[1].correction(),
                     'instruction':'Continue from this locally tested source. Inspect actual code; historical reviewer claims must be checked against current backend source identity and development policy.'})
-            if core:
+            if core and not retained:
                 previous=core
                 last_error=dumps({'primary_error':checkpoint.get('last_validation_error') or checkpoint.get('error'),
                     'retained_source_sha256':sha256(core.encode('utf-8')),
@@ -359,7 +368,7 @@ class Builder:
                 attempt=offset+cycle_attempt
                 summary,context_revision=apply_context(self.store,build,attempt+1)
                 if standard:
-                    standard=sdk_standard_contract(capabilities,summary)
+                    standard=sdk_standard_contract(capabilities,summary,base_manifest)
                     context=context_with_contract(context,standard)
                     self.store.write(folder/f'standard-contract-r{context_revision}.json',standard)
                     if standard['game_requested'] and not standard['audio_available'] and not standard['explicit_audio_opt_out']:
@@ -402,9 +411,11 @@ class Builder:
                 await progress("validating", 35, build_text('validating'))
                 await progress("compiling", 50, build_text('compiling'))
                 await progress("testing", 65, build_text('testing'))
-                local_passed=False;review=None
+                local_passed=False;standard_passed=False;review=None
                 try:
                     require_current_context(self.store,build,context_revision)
+                    if 'ai' in generated.required_services and runtime_mode=='off':raise CapabilityError('runtime_ai_disabled','AI Developer er OFF; ingen AI-app er levert.')
+                    if wants_runtime and 'ai' not in generated.required_services:raise ValueError('The confirmed request explicitly needs Runtime AI; keep the core and add bounded ai/jobs with a meaningful local fallback.')
                     generated=generated.model_copy(update={'required_services':service_closure(generated.required_services,api_version)})
                     Quality(self.store).reject_known_failure(project["id"], sha256(payload))
                     if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
@@ -417,6 +428,7 @@ class Builder:
                         if not re.search(r'\bfire\s*\.\s*sd\b',without_literals(generated.main_lua)):coverage.discard('sd')
                     result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
                         "api_contract":SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
+                        **({'runtime_ai':RUNTIME_EXTENSION} if 'ai' in generated.required_services else {}),
                         "coverage_services":sorted(coverage),
                         "hardware":(capabilities or {}).get("hardware") or {},
                         "require_io_coverage":self.settings.fire_ai_mode=="openai","defer_io_coverage":bool(standard),
@@ -434,6 +446,7 @@ class Builder:
                         result['standard_verification']=verify_sdk_standard(standard,generated.required_services,result,source_hash)
                         self.store.write(folder/f'standard-verification-{attempt+1}.json',result['standard_verification'])
                         require_sdk_standard(result['standard_verification'])
+                    standard_passed=True
                     candidate_meta['local_validated']=True
                     self.store.write(folder/f'candidate-{attempt+1}.json',candidate_meta)
                     await progress("testing",75,build_text('testing',progress=75))
@@ -484,7 +497,7 @@ class Builder:
                     candidate_meta['local_validated']=False
                     self.store.write(folder/f'candidate-{attempt+1}.json',candidate_meta)
                     failure=str(error) or "Lua worker timeout"
-                    feedback=baseline.failure(generated.main_lua,failure,local_passed=local_passed,review=review)
+                    feedback=baseline.failure(generated.main_lua,failure,local_passed=local_passed,standard_passed=standard_passed,review=review)
                     if 'I/O coverage missing' in failure:
                         feedback['test_sequences']=[s.model_dump() for s in generated.test_sequences]
                         feedback['instruction']='Preserve working previous_code. Correct the bounded test sequences to START and exercise the missing operations; do not remove app features.'
@@ -511,6 +524,7 @@ class Builder:
                 required_services=generated.required_services,
                 **budgets,
                 permissions=[f"fire.{s}" for s in generated.required_services], checksum=sha256(payload),
+                **({'runtime_ai':RUNTIME_EXTENSION} if 'ai' in generated.required_services else {}),
             ).model_dump()
             archive_path = work / "app.zip"
             write_archive(archive_path, manifest, payload)

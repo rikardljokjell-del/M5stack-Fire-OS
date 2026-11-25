@@ -23,24 +23,48 @@ BG, INK, MUTED, ORANGE, NAV = "#f2f4f8", "#182231", "#637083", "#e95725", "#1722
 
 def usage_task_name(operation):
     return {"generate":"Kodebygging", "review":"Kodekontroll", "dialog":"Samtale",
-            "transcribe":"Taletolkning", "speech":"Talesvar"}.get(operation,operation or "Ukjent")
+            "transcribe":"Taletolkning", "speech":"Talesvar", "runtime_ai":"Runtime AI"}.get(operation,operation or "Ukjent")
 
 
 def usage_status_name(record):
     status={"pending":"Pågår", "completed":"Fullført", "failed":"Feilet", "cancelled":"Avbrutt",
             "unknown":"Ukjent", "interrupted":"Avbrutt", "rejected":"Stoppet av grense"}.get(record.get('status'),record.get('status','–'))
-    return status+(' · anslag' if record.get('usage_source')!='provider' else '')
+    return status+(' · pris ukjent' if record.get('price_kind') in {'unknown','pending','empirical'} else ' · anslag' if record.get('usage_source')!='provider' else '')
+
+
+def amount_text(value):
+    amount=float(value or 0)
+    if 0<amount<.000001:return '<$0.000001'
+    return f"${amount:.6f}" if 0<amount<.001 else f"${amount:.4f}"
 
 
 def app_cost_text(app):
-    prefix='≈' if app.get('cost_detail',{}).get('historical_estimate') else ''
-    return f"{prefix}${app.get('cost',0):.4f}"
+    return usage_cost_text(app.get('cost_detail',{}),app.get('cost',0))
+
+
+def usage_cost_text(detail,value=None):
+    amount=detail.get('estimated_usd',0) if value is None else value
+    unknown=detail.get('unestimated_requests',0) or detail.get('price_kind') in {'unknown','pending'}
+    if unknown and not amount:return 'Ukjent'
+    empirical=detail.get('empirical_estimated_usd',0)
+    if empirical:
+        historical=(detail.get('historical_estimate') or {}).get('estimated_usd',0)
+        known=detail.get('provider_calculated_usd',0)+historical
+        return (('≈' if historical else '')+amount_text(known)+' + ukjent' if known else 'Ukjent')+' (≈'+amount_text(empirical)+')'
+    prefix='≈' if detail.get('historical_estimate') or detail.get('empirical_estimated_usd') or detail.get('price_kind')=='empirical' else ''
+    return prefix+amount_text(amount)+(' + ukjent' if unknown else '')
 
 
 def app_cost_detail(app):
     detail=app.get('cost_detail',{})
     history=detail.get('historical_estimate')
     text=f"Total Cost: {app_cost_text(app)} · alle versjoner og feilrettinger · {detail.get('requests',0)} registrerte API-kall\n"
+    text+=(f"Leverandørberegnet: {amount_text(detail.get('provider_calculated_usd',detail.get('recorded_usd',0)))}; "
+           f"empirisk anslag: {amount_text(detail.get('empirical_estimated_usd',0))}; "
+           f"{detail.get('unestimated_requests',0)} kall uten pris. Runtime AI vises separat.\n")
+    runtime=app.get('runtime_ai_cost',{})
+    if app.get('runtime_ai_permission') or runtime:
+        text+=f"Runtime AI: {runtime.get('requests',0)} kall · {runtime.get('input_tokens',0)}/{runtime.get('output_tokens',0)} tokens · {usage_cost_text(runtime)} · {runtime.get('latency_ms',0)} ms totalt.\n"
     if history:
         text+=(f"Registrert: ${detail.get('recorded_usd',0):.4f} · historisk anslag: ${history['estimated_usd']:.2f} "
             f"(scenario ${history['low_usd']:.2f}–${history['high_usd']:.2f})\n"
@@ -118,10 +142,15 @@ class DesktopUI:
         self.key_status = tk.StringVar(value="Nøkkel er lagret i Windows." if self.key_saved else "Ingen API-nøkkel er lagret ennå.")
         self.audio = tk.BooleanVar(value=c.audio_enabled)
         self.speech_enabled=tk.BooleanVar(value=c.speech_enabled)
+        self.runtime_enabled=tk.BooleanVar(value=c.runtime_ai_enabled)
+        self.runtime_developer_mode=tk.StringVar(value=c.runtime_ai_developer_mode)
+        self.runtime_limits_enabled=tk.BooleanVar(value=c.runtime_ai_limits_enabled)
+        self.runtime_limits={name:tk.StringVar(value=str(getattr(c,name))) for name in
+            ('runtime_ai_request_budget_usd','runtime_ai_daily_budget_usd','runtime_ai_daily_calls','runtime_ai_output_tokens')}
         self.cost_limits_enabled=tk.BooleanVar(value=c.cost_limits_enabled)
         self.output_limits_enabled=tk.BooleanVar(value=c.output_limits_enabled)
         self.models = {name: tk.StringVar(value=getattr(c, name)) for name in
-                       ("dialog_model", "code_model", "review_model", "transcribe_model", "speech_model", "speech_voice")}
+                       ("dialog_model", "code_model", "review_model", "transcribe_model", "speech_model", "speech_voice", "runtime_model")}
         self.cost_limits = {name: tk.StringVar(value=str(getattr(c, name))) for name in
                             ("daily_budget_usd", "build_budget_usd", "request_budget_usd", "max_corrections")}
         self.workspace = tk.StringVar(value=c.workspace)
@@ -313,6 +342,14 @@ class DesktopUI:
                    'Lydprisen i modellvalget gjelder per million lydtokens, ikke per svar.',
                    'Muted.TLabel',wraplength=780).pack(anchor='w',pady=(0,8))
         self.label(page, "Modeller", "Heading.TLabel").pack(anchor="w", pady=(5, 8))
+        runtime=ttk.LabelFrame(page,text='Runtime AI i apper',padding=10);runtime.pack(fill='x',pady=(4,10))
+        ttk.Checkbutton(runtime,text='Tillat Runtime AI globalt',variable=self.runtime_enabled).pack(anchor='w')
+        ttk.Button(runtime,text='Bruk bryteren nå',command=lambda:self.work(lambda:self.runtime.set_runtime_ai_global(self.runtime_enabled.get()),message='Oppdaterer Runtime AI')).pack(anchor='w',pady=4)
+        self.label(runtime,'AI Developer: AUTO velger AI ved merverdi eller eksplisitt ønske; OFF tillater ingen nye AI-funksjoner. Lokal fallback kreves.',wraplength=740).pack(anchor='w')
+        ttk.Combobox(runtime,textvariable=self.runtime_developer_mode,values=('auto','off'),state='readonly',width=12).pack(anchor='w')
+        ttk.Checkbutton(runtime,text='Bruk egne Runtime AI-grenser (av som standard)',variable=self.runtime_limits_enabled).pack(anchor='w')
+        grid_limits=ttk.Frame(runtime);grid_limits.pack(fill='x')
+        for i,(key,label) in enumerate((('runtime_ai_request_budget_usd','USD per kall (0 = ingen grense)'),('runtime_ai_daily_budget_usd','USD per dag (0 = ingen grense)'),('runtime_ai_daily_calls','Kall per dag (0 = ingen grense)'),('runtime_ai_output_tokens','Teknisk svarramme (16–4096 tokens)'))):self.field(grid_limits,i,label,self.runtime_limits[key])
         grid = ttk.Frame(page)
         grid.pack(fill="x")
         grid.columnconfigure(1, weight=1)
@@ -321,6 +358,7 @@ class DesktopUI:
         self.model_price_labels = {}
         for row, (name, title) in enumerate((("dialog_model", "Dialog"), ("code_model", "Kodegenerering"),
                                            ("review_model", "Kodekontroll"),
+                                           ("runtime_model", "Runtime AI"),
                                            ("transcribe_model", "Transkripsjon"), ("speech_model", "Talesvar"), ("speech_voice", "Stemme"))):
             if name == "speech_voice":
                 self.field(grid, row * 2, title, self.models[name])
@@ -400,7 +438,7 @@ class DesktopUI:
         for key, title in (("by_operation","Oppgaver"),("by_model","Modeller"),("by_build","Appjobber")):
             tab=ttk.Frame(notebook);notebook.add(tab,text=title)
             tree=ttk.Treeview(tab,columns=("name","calls","input","output","cost"),show="headings",height=4)
-            for name,label,width in (("name",title,280),("calls","Kall",55),("input","Inputtokens",100),("output","Outputtokens",100),("cost","Anslått USD",105)):
+            for name,label,width in (("name",title,280),("calls","Kall",55),("input","Inputtokens",100),("output","Outputtokens",100),("cost","Pris (USD)",220)):
                 tree.heading(name,text=label);tree.column(name,width=width,minwidth=45)
             bar=ttk.Scrollbar(tab,orient="vertical",command=tree.yview);tree.configure(yscrollcommand=bar.set)
             tree.pack(side="left",fill="both",expand=True);bar.pack(side="right",fill="y")
@@ -408,7 +446,7 @@ class DesktopUI:
         self.label(page,"Siste API-kall", "Heading.TLabel").pack(anchor="w",pady=(10,6))
         recent_frame=ttk.Frame(page);recent_frame.pack(fill="both",expand=True)
         self.usage_recent=ttk.Treeview(recent_frame,columns=("time","task","model","tokens","cost","status"),show="headings",height=5)
-        for name,label,width in (("time","Tid",62),("task","Oppgave",110),("model","Modell",195),("tokens","Inn / ut / cache",140),("cost","Anslått USD",90),("status","Måling / status",130)):
+        for name,label,width in (("time","Tid",62),("task","Oppgave",110),("model","Modell",195),("tokens","Inn / ut / cache",140),("cost","Pris (USD)",220),("status","Måling / status",130)):
             self.usage_recent.heading(name,text=label);self.usage_recent.column(name,width=width,minwidth=45)
         bar=ttk.Scrollbar(recent_frame,orient="vertical",command=self.usage_recent.yview);self.usage_recent.configure(yscrollcommand=bar.set)
         self.usage_recent.pack(side="left",fill="both",expand=True);bar.pack(side="right",fill="y")
@@ -430,7 +468,7 @@ class DesktopUI:
         data=self.usage_snapshot
         for key,label in self.usage_totals.items():
             total=data.get(key,{})
-            label.configure(text=f"${float(total.get('estimated_usd',0)):.4f} · {total.get('requests',0)} kall")
+            label.configure(text=usage_cost_text(total)+f" · {total.get('requests',0)} kall")
         limits=data.get('limits',{});period=data.get('since_reset',{})
         budget=(f"Dagsgrense ${float(limits.get('daily_usd',self.store.config.daily_budget_usd)):.2f}; "
                 f"ledig ${float(limits.get('daily_remaining_usd') or 0):.2f}. " if limits.get('enabled',False) and limits.get('daily_usd',0)>0 else
@@ -440,7 +478,7 @@ class DesktopUI:
               +budget+f"({limits.get('budget_day','–')}, {limits.get('timezone','lokal tid')}).\n"
               f"Cache lest/skrevet: {period.get('cached_tokens',0):,}/{period.get('cache_write_tokens',0):,} tokens · {period.get('audio_seconds',0):.1f} s lyd · "
               f"{period.get('unknown_usage_requests',0)} kall uten full tokenmåling. "
-              "Tokens inkluderer reserver når måling mangler. "
+              "Tokens viser bare målt bruk. Ukjent pris og empiriske anslag vises separat; budsjettreserve er ikke forbruk. "
               "Eldre forbruk inngår ikke. OpenAI-fakturaen er fasit.")
         if not data:text="Start backend for å vise lokal kostnadsoversikt. Ingen API-kall gjøres for å hente oversikten."
         self.usage_info.configure(text=text)
@@ -449,16 +487,16 @@ class DesktopUI:
             rows=[]
             for item in data.get(group,[]):
                 name=usage_task_name(item.get('operation','')) if group=='by_operation' else item.get('model','–') if group=='by_model' else self.usage_job_name(item)
-                rows.append((name,item.get('requests',0),f"{item.get('input_tokens',0):,}",f"{item.get('output_tokens',0):,}",f"${float(item.get('estimated_usd',0)):.4f}"))
+                rows.append((name,item.get('requests',0),f"{item.get('input_tokens',0):,}",f"{item.get('output_tokens',0):,}",usage_cost_text(item)))
             self.replace_rows(tree,rows)
         records=data.get('recent',[]);self.usage_records={str(item['id']):item for item in records}
         rows=[]
         for item in records:
             stamp=item.get('finished_at') or item.get('started_at')
             label=datetime.fromtimestamp(stamp).strftime('%H:%M:%S') if stamp else '–'
-            tokens=f"{item.get('input_tokens',0):,} / {item.get('output_tokens',0):,} / {item.get('cached_tokens',0):,}"
+            tokens=f"{item.get('input_tokens',0):,} / {item.get('output_tokens',0):,} / {item.get('cached_tokens',0):,}" if item.get('tokens_measured',True) else 'Ukjent'
             status=usage_status_name(item)
-            rows.append((str(item['id']),(label,usage_task_name(item.get('operation','')),item.get('model','–'),tokens,f"${float(item.get('estimated_usd',0)):.4f}",status)))
+            rows.append((str(item['id']),(label,usage_task_name(item.get('operation','')),item.get('model','–'),tokens,usage_cost_text(item),status)))
         if rows!=getattr(self,'usage_recent_rows',None):
             selected=self.usage_recent.selection();self.usage_recent_rows=rows
             self.usage_recent.delete(*self.usage_recent.get_children())
@@ -488,14 +526,15 @@ class DesktopUI:
             +('Ingen ekstra svartak fra backend. ' if 'max_output_tokens' in item and item['max_output_tokens'] is None else '')
             +(error_text('',item['failure_code'])+'. ' if item.get('failure_code') else '')
             +("Tokens rapportert av OpenAI; USD beregnet lokalt." if item.get('usage_source')=='provider' else
-              "Anslag fra lydlengde." if item.get('usage_source')=='duration' else "Ufullstendig måling: konservativ kostnadsreserve beholdes."))
+              "Beregnet fra lydlengde." if item.get('usage_source')=='duration' else
+              f"Empirisk median fra {item.get('empirical_samples',0)} sammenlignbare kall; ikke faktura." if item.get('price_kind')=='empirical' else "Ufullstendig måling: pris er ukjent, budsjettreserve er ikke forbruk."))
 
     def jobs_page(self,page):
         self.job_heading=self.label(page,"Henter jobber …","Heading.TLabel")
         self.job_heading.pack(anchor="w",pady=(0,7))
         table_frame=ttk.Frame(page);table_frame.pack(fill='x')
         self.job_table=ttk.Treeview(table_frame,columns=('name','status','phase','progress','cost'),show='headings',height=5,selectmode='browse')
-        for key,title,width in [('name','App / jobb',180),('status','Status',130),('phase','Arbeider med',230),('progress','Fremdrift',90),('cost','Cost (USD)',110)]:
+        for key,title,width in [('name','App / jobb',180),('status','Status',130),('phase','Arbeider med',230),('progress','Fremdrift',90),('cost','Cost (USD)',220)]:
             self.job_table.heading(key,text=title);self.job_table.column(key,width=width,minwidth=70)
         self.job_table.pack(side='left',fill='both',expand=True)
         table_scroll=ttk.Scrollbar(table_frame,command=self.job_table.yview)
@@ -569,7 +608,7 @@ class DesktopUI:
             pending='VENTER på neste generering' if r.get('context_pending') else 'Tatt med i generering'
             notes=r.get('context',{}).get('notes',[])
             attempts=f"{r.get('attempt',0)}/{r['max_attempts']} forsøk" if r.get('max_attempts') else f"Forsøk {r.get('attempt',0)} · automatisk retting"
-            lines=[r['name']+' · '+r['id'],r['message']+f" · {attempts} · anslått ${r.get('estimated_usd',0):.4f}"]
+            lines=[r['name']+' · '+r['id'],r['message']+f" · {attempts} · "+usage_cost_text(r.get('cost_detail',{}),r.get('estimated_usd',0))]
             history=r.get('cost_detail',{}).get('historical_estimate')
             if history:
                 lines.append(f"Historisk anslag: ${history['estimated_usd']:.2f} (scenario ${history['low_usd']:.2f}–${history['high_usd']:.2f}); "+', '.join(history['models']))
@@ -600,6 +639,8 @@ class DesktopUI:
         row.pack(fill="x", pady=(0, 7))
         ttk.Button(row, text="Kun samtale", command=lambda: self.set_conversation("chat")).pack(side="left")
         ttk.Button(row, text="Lag/endre app", command=lambda: self.set_conversation("develop")).pack(side="left", padx=8)
+        ttk.Button(row,text='AI: AUTO',command=lambda:self.set_runtime_generation('auto')).pack(side='left')
+        ttk.Button(row,text='AI: OFF',command=lambda:self.set_runtime_generation('off')).pack(side='left',padx=4)
         ttk.Button(row, text="Avbryt AI-svar", command=self.cancel_conversation).pack(side="left")
         self.replay_voice_button=ttk.Button(row,text="Spill svar igjen",command=lambda:self.replay_voice(False))
         self.replay_voice_button.pack(side="left",padx=8)
@@ -641,7 +682,7 @@ class DesktopUI:
         frame = ttk.Frame(page)
         frame.pack(fill="both", expand=True)
         self.apps_table = ttk.Treeview(frame, columns=("name", "version", "device", "cost", "status"), show="headings", height=7,selectmode="browse")
-        for name, title, width in (("name", "App", 165), ("version", "Versjoner", 75), ("device", "Enhet", 135), ('cost','Cost (USD)',100), ("status", "Nyeste versjon", 210)):
+        for name, title, width in (("name", "App", 165), ("version", "Versjoner", 75), ("device", "Enhet", 135), ('cost','Cost (USD)',220), ("status", "Nyeste versjon", 210)):
             self.apps_table.heading(name, text=title)
             self.apps_table.column(name, width=width, minwidth=60)
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.apps_table.yview)
@@ -664,6 +705,7 @@ class DesktopUI:
         self.edit_app_button.pack(side="left", padx=8)
         ttk.Button(actions, text="Reparer valgt app", command=self.repair_saved).pack(side="left", padx=(0,8))
         ttk.Button(actions,text="Feil og rettinger",command=self.show_app_quality).pack(side="left")
+        ttk.Button(page,text='Runtime AI på/av for valgt app',command=self.toggle_app_runtime_ai).pack(anchor='w',pady=(0,7))
         deletion=ttk.Frame(page);deletion.pack(anchor="w",pady=(0,8))
         self.delete_app_button=ttk.Button(deletion,text="Slett alle versjoner …",command=self.delete_saved)
         self.delete_app_button.pack(side="left")
@@ -788,6 +830,16 @@ class DesktopUI:
                               "FIRE har bekreftet at appen er borte. PC-slettingen kan ikke angres.", parent=self.root):
             self.work(lambda:self.runtime.delete_version(app["project_id"],app["package_id"]) if only_version else self.runtime.delete_app(app["project_id"]),message="Sletter fra PC …")
 
+    def set_runtime_generation(self,mode):
+        session=self.session()
+        if session:self.work(lambda:self.runtime.conversation(session['session_id'],runtime_ai_mode=mode),message='Oppdaterer AI-valget')
+
+    def toggle_app_runtime_ai(self):
+        app=self.selected_app()
+        if not app or not app.get('runtime_ai_permission'):
+            self.notice.set('Valgt appversjon har ingen Runtime AI-tillatelse.');return
+        self.work(lambda:self.runtime.set_runtime_ai_app(app['project_id'],not app.get('runtime_ai_app_enabled',True)),message='Oppdaterer appens AI-bryter')
+
     def repair_saved(self):
         app=self.selected_app()
         if app and app.get("device_id"):
@@ -877,6 +929,9 @@ class DesktopUI:
                       audio_enabled=self.audio.get(), max_workspace_mb=self.disk.get(),
                       cost_limits_enabled=self.cost_limits_enabled.get(),output_limits_enabled=self.output_limits_enabled.get(),
                       speech_enabled=self.speech_enabled.get(),
+                      runtime_ai_enabled=self.runtime_enabled.get(),runtime_ai_developer_mode=self.runtime_developer_mode.get(),
+                      runtime_ai_limits_enabled=self.runtime_limits_enabled.get(),
+                      **{name:var.get() for name,var in self.runtime_limits.items()},
                       cost_profile_version=COST_PROFILE_VERSION,
                       **{name:var.get().strip() for name,var in self.cost_limits.items()},
                       **{name: var.get().strip() for name, var in self.models.items()})
@@ -1258,7 +1313,7 @@ class DesktopUI:
                     audio_hint += f" / opptakstid {audio['recording_wall_seconds']:.1f} s"
                 if audio.get("capture_rate_suspected") or audio.get("capture_gap_suspected"):
                     audio_hint += " · Kontroller mikrofonens tidsforhold"
-            self.pipeline_detail.configure(text=choice + " · " + workflow + ("\n" + detail if detail else "")
+            self.pipeline_detail.configure(text=choice + " · AI "+session.get('runtime_ai_mode','auto').upper()+" · " + workflow + ("\n" + detail if detail else "")
                                            + ("\n" + audio_hint if audio_hint else "")
                                            + ("\nJeg hørte: " + audio["transcript"][:200] if audio.get("transcript") else ""))
             device = next((d for d in self.snapshot["devices"] if d["id"] == session["device_id"]), {})

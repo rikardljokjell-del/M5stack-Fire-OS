@@ -27,6 +27,7 @@ class StartConversation(BaseModel):
     project_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     base_package_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     conversation_mode: str = Field(default="develop", pattern=r"^(develop|chat)$")
+    runtime_ai_mode: Literal['auto','off'] | None = None
 
 
 class Text(BaseModel):
@@ -41,7 +42,7 @@ class PreviewInput(BaseModel):
 
 
 def busy(service):
-    return bool(service.device_builds or service.build_lock.locked() or service.repairs.tasks or service.active_downloads
+    return bool(service.device_builds or service.build_lock.locked() or service.repairs.tasks or service.active_downloads or service.runtime_ai.tasks
                 or getattr(service,'preview_service',None) and service.preview_service.lock.locked()
                 or any(s.lock.locked() or any(t and not t.done() for t in
                        (s.task, s.operation_task, s.input_task, s.speech_task)) for s in service.sessions.values()))
@@ -149,6 +150,7 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
                 "devices": service.store.list("devices"), "configured_devices": list(settings.device_tokens()),
                 "jobs": service.jobs.snapshot(), "apps": service.app_library(), "usage": service.usage.snapshot(),
                 "physical_verified": False, "restart_available": bool(restart_callback),
+                "runtime_ai":service.runtime_ai.snapshot(),
                 "restart_pending": app.state.restart_pending, "restart_message": app.state.restart_message}
 
     @app.get("/web/models", dependencies=[Depends(signed_in)])
@@ -156,6 +158,18 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
         from .model_catalog import ROLE_MODELS, choice_label, price_detail
         return {role: [{"id": name, "label": choice_label(role, name), "detail": price_detail(role, name)}
                        for name in names] for role, names in ROLE_MODELS.items()}
+
+    @app.patch('/web/runtime-ai',dependencies=[Depends(signed_in)])
+    async def runtime_global(request:Request,service=Depends(backend)):
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)!={'enabled'}:raise HTTPException(422,'Expected enabled')
+        return await service.runtime_ai.set_global_enabled(body['enabled'],config_store)
+
+    @app.patch('/web/apps/{project_id}/runtime-ai',dependencies=[Depends(signed_in)])
+    async def runtime_app(project_id:str,request:Request,service=Depends(backend)):
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)!={'enabled'}:raise HTTPException(422,'Expected enabled')
+        return await service.runtime_ai.set_app_enabled(project_id,body['enabled'])
 
     @app.get("/web/settings", dependencies=[Depends(signed_in)])
     async def get_settings():
@@ -223,10 +237,21 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
 
     @app.post("/web/conversations", dependencies=[Depends(signed_in)])
     async def conversation(body: StartConversation, service=Depends(backend)):
-        s = await service.desktop_conversation(body.device_id, body.project_id, body.base_package_id)
+        s = await service.desktop_conversation(body.device_id, body.project_id, body.base_package_id,runtime_ai_mode=body.runtime_ai_mode)
         s.conversation_mode = body.conversation_mode
         service.persist(s)
         return service.snapshot(s)
+
+    @app.post('/web/conversations/{session_id}/mode',dependencies=[Depends(signed_in)])
+    async def runtime_generation_mode(session_id:str,request:Request,service=Depends(backend)):
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)!={'runtime_ai_mode'}:raise HTTPException(422,'Expected runtime_ai_mode')
+        from .models import DeviceEvent
+        from .protocol import dispatch
+        from .storage import new_id
+        s=service.session(session_id)
+        return await dispatch(service,s,DeviceEvent(device_id=s.device_id,session_id=s.id,boot_id=s.boot_id,
+            protocol_version=s.protocol_version,event_id=new_id('mode'),event='mode_select',runtime_ai_mode=body['runtime_ai_mode']))
 
     @app.post("/web/conversations/{session_id}/resume", dependencies=[Depends(signed_in)])
     async def resume_conversation(session_id: str, service=Depends(backend)):

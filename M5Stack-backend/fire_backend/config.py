@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     openai_realtime_model: str = "gpt-realtime-2.1-mini"
     openai_code_model: str = "gpt-6-luna"
     openai_review_model: str = "gpt-6-luna"
+    openai_runtime_model: str = 'gpt-6-luna'
+    fire_runtime_ai_enabled: bool = True
+    fire_runtime_ai_developer_mode: Literal['auto','off'] = 'auto'
+    fire_runtime_ai_limits_enabled: bool = False
+    fire_runtime_ai_request_budget_usd: float = Field(default=0,ge=0,allow_inf_nan=False)
+    fire_runtime_ai_daily_budget_usd: float = Field(default=0,ge=0,allow_inf_nan=False)
+    fire_runtime_ai_daily_calls: int = Field(default=0,ge=0)
+    fire_runtime_ai_output_tokens: int = Field(default=1024,ge=16,le=4096)
     fire_cost_limits_enabled: bool = False
     fire_output_limits_enabled: bool = False
     fire_daily_budget_usd: float = Field(default=0,ge=0,allow_inf_nan=False)

@@ -16,11 +16,12 @@ TEXT = {
     'repair':'Retter appen',
     'validating':'Sjekker kode',
     'compiling':'Kontrollerer appen',
-    'testing':'Tester knapper og sensorer',
+    'testing':'Tester knapper',
     'review':'Sjekker funksjon og design',
     'packaging':'Pakker appen',
     'sending':'Sender appen til FIRE',
-    'ready':'Klar til kjøring',
+    'ready':'Klar til å kjøre',
+    'ready_install':'Klar til installering',
     'repair_ready':'Ny versjon klar',
     'prepared':'Klar til feilretting',
     'queued':'Venter på ledig bygger',
@@ -124,7 +125,7 @@ def build_text(phase,*,operation='new',attempt=1,total=4,progress=0,detail='',de
         label=f'{TEXT[key]} ({attempt}/{total})'
         return checked(label if len(label.encode('utf-8'))<=MAX_UTF8_BYTES else TEXT[key])
     if phase=='testing' and progress>=75:return TEXT['review']
-    if phase=='ready':return TEXT['sending' if delivery else 'ready']
+    if phase=='ready':return TEXT['ready_install' if delivery else 'ready']
     if phase=='failed':return error_text(detail)
     return TEXT.get(phase,TEXT['unknown'])
 
@@ -155,4 +156,11 @@ def display_event(event,*,operation='new',delivery=False):
         event['status_text_version']=VERSION
     elif kind=='session_snapshot' and event.get('progress'):
         event['progress']=display_event({**event['progress'],'type':'build_progress'},operation=operation,delivery=delivery)
+    if kind in {'error','audio_error','input_retry','build_progress'}:
+        event['display_text']=event['message']
+    elif kind=='assistant_message':
+        try:event['display_text']=checked(event.get('display_text') or '')
+        except ValueError:event['display_text']='AI-svaret er klart'
+    elif kind in {'app_ready','build_ready','install_request','run_request'}:
+        event['display_text']=TEXT['ready_install' if kind in {'app_ready','build_ready'} else 'sending' if kind=='install_request' else 'ready']
     return event

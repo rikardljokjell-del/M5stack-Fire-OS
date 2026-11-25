@@ -32,7 +32,8 @@ def test_catalog_all_build_modes_attempts_and_repair_states_are_complete_lines()
     assert build_text('generating',operation='repair',attempt=3)=='Retter appen (3/4)'
     assert build_text('generating',attempt=6,total=6)=='Lager appen (6/6)'
     assert build_text('generating',attempt=8,total=None)=='Lager appen (8)'
-    assert 'kjøring' in build_text('ready')
+    assert build_text('ready')=='Klar til å kjøre'
+    assert build_text('ready',delivery=True)=='Klar til installering'
 
 
 @pytest.mark.parametrize('bad',['Last ned og ...','Lang tekst '*9,'To\nlinjer','Sjekker\tappen','Klargj\u00f8r\u0061\u030a'])
@@ -54,7 +55,10 @@ def test_dialog_and_audio_content_are_not_status_text():
     spoken='Jeg lager et spill med tydelige figurer og tre knapper. Du kan endre både lyd og lys i menyen. Æ, ø og å beholdes.'
     for event in ({'type':'assistant_message','text':spoken},{'type':'transcript','text':spoken},
                   {'type':'audio_ready','text':spoken,'download_url':'/audio/example'}):
-        assert display_event(event)==event
+        result=display_event(event)
+        assert result['text']==event['text']
+        if event['type']=='assistant_message':assert_line(result['display_text'])
+        else:assert result==event
         assert json.loads(json.dumps(event,ensure_ascii=False))==event
     old={'type':'session_snapshot','progress':{'phase':'testing','progress':75,'message':'For lang historisk tekst '*9}}
     assert display_event(old)['progress']['message']==TEXT['review']

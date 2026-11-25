@@ -61,7 +61,12 @@ def test_no_estimates_for_new_mock_local_or_unknown_builds(tmp_path,kind):
         model='not-priced' if kind=='unknown' else 'gpt-6.2-astra',source=kind!='local')
     if kind=='damaged':(folder/'request.json').write_text('{bad',encoding='utf-8')
     backfill(m.store,100)
-    assert m.project_costs()=={}
+    if kind in {'local','unknown'}:
+        row=m.project_costs()['app-old']
+        assert row['unestimated_requests']==1 and 'historical_estimate' not in row
+        assert app_cost_text({'cost':row['estimated_usd'],'cost_detail':row})=='Ukjent'
+    else:assert m.project_costs()=={}
+    assert not m.store.list('historical_costs')  # No fabricated historical price.
 
 
 def test_legacy_missing_timestamp_uses_request_age_and_ui_marks_estimate(tmp_path):

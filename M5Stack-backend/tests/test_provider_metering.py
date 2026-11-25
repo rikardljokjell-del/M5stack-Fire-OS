@@ -86,7 +86,9 @@ async def test_real_sdk_failed_request_retains_reservation_and_no_error_body(tmp
     try:
         with pytest.raises(RateLimitError):await p.generate('Lag en sirkel','context')
         row=p.usage_ledger.snapshot()['recent'][0]
-        assert row['status']=='failed' and row['estimated_usd']>0 and row['usage_source']=='reservation'
+        assert row['status']=='failed' and row['estimated_usd'] is None and row['usage_source']=='reservation'
+        assert row['price_kind']=='unknown' and row['budget_reserved_usd']>0
+        assert p.usage_ledger.store.get('usage',row['id'])['estimated_usd']==row['budget_exposure_usd']>0
         assert 'private provider response' not in p.usage_ledger.store.path('usage',row['id']).read_text()
     finally:await p.close()
 
@@ -151,7 +153,8 @@ async def test_cancelling_speech_before_usage_keeps_unknown_cost(tmp_path):
     await clip.aclose()
     row=p.usage_ledger.snapshot()['recent'][0]
     assert row['operation']=='speech' and row['status']=='cancelled'
-    assert row['estimated_usd']>0 and row['usage_source']=='reservation'
+    assert row['estimated_usd'] is None and row['usage_source']=='reservation'
+    assert row['price_kind']=='unknown' and row['budget_reserved_usd']>0 and not row['tokens_measured']
 
 
 async def test_context_attribution_is_task_local_for_parallel_requests(tmp_path):

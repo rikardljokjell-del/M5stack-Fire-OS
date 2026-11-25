@@ -39,6 +39,7 @@ def bounded_history(history):
 
 @dataclass
 class Session:
+    # The effective generation choice is independent of runtime authorization.
     id: str
     device_id: str
     project_id: str
@@ -66,6 +67,7 @@ class Session:
     last_seen: float = field(default_factory=time.time)
     disconnected_at: float | None = None
     activity: str = "idle"
+    runtime_ai_mode: str | None = None
     turn_id: str | None = None
     audio_id: str | None = None
     input_task: asyncio.Task | None = None
@@ -102,6 +104,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         self.quality = Quality(self.store)
         self.builder = Builder(settings, self.store, self.provider, self.context)
         self.sessions = {}
+        from .runtime_ai import RuntimeAI
+        self.runtime_ai=RuntimeAI(self)
         self.connection_locks = {}
         self.connection_cleanup = set()
         self.detaching_sockets = set()
@@ -127,7 +131,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             raise KeyError("Session not found")
         return session
 
-    async def desktop_conversation(self, device_id, project_id=None, base_package_id=None,hardware_preview=False):
+    async def desktop_conversation(self, device_id, project_id=None, base_package_id=None,hardware_preview=False,runtime_ai_mode=None):
+        if runtime_ai_mode not in {None,'auto','off'}:raise ValueError('Expected Runtime AI AUTO/OFF')
         """PC authoring for a configured device, without impersonating a device session."""
         if device_id not in self.settings.device_tokens():
             raise ValueError("Velg en konfigurert FIRE-enhet.")
@@ -148,6 +153,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         for peer in peers:await self.stop(peer)
         project=project or self.new_project(device_id,"device")
         session=Session(new_id("session"),new_id("pc"),project["id"],state=State.idle,desktop_device_id=device_id)
+        session.runtime_ai_mode=runtime_ai_mode
         session.app_mode="update" if base else "new"
         session.base_package_id=base["id"] if base else None
         try:caps=self.store.get("devices",device_id).get("capabilities")
@@ -168,7 +174,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         installed = {(c["device_id"], c["package_id"]) for c in self.store.list("commands")
                      if c["kind"] == "install" and c["status"] == "completed"}
         apps = []
-        costs=self.usage.project_costs()
+        costs=self.usage.project_costs();runtime_costs=self.usage.runtime_costs()
         for package in self.store.list("packages"):
             project = projects.get(package["project_id"], {})
             device_id = project.get("owner_device_id")
@@ -185,6 +191,10 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                          "quality": package.get("quality", {}), "validation_suite": package.get("validation",{}).get("suite"),
                          "project_id": package["project_id"], "package_id": package["id"], "mode": package["mode"], "device_id": device_id,
                          "cost":costs.get(package['project_id'],{}).get('estimated_usd',0),
+                         "runtime_ai_permission":'ai' in manifest['required_services'],
+                         "runtime_ai_enabled":self.runtime_ai.enabled(package['project_id']),
+                         "runtime_ai_app_enabled":self.runtime_ai.app_enabled(package['project_id']),
+                         "runtime_ai_cost":runtime_costs.get(package['project_id'],{}),
                          "cost_detail":costs.get(package['project_id'],{'estimated_usd':0,'requests':0,'currency':'USD','scope':'all_versions_lifetime','by_operation':[]}),
                          "device_presence": presence.get("state", "unknown"), "can_delete_backend": can_delete,
                          "delete_block_reason": block_reason,
@@ -262,6 +272,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 "app_revision": session.app_revision, "install_permitted": session.install_permitted,
                 "audio_status": session.audio_status,
                 "conversation_mode": session.conversation_mode,
+                "runtime_ai_mode":session.runtime_ai_mode or self.settings.fire_runtime_ai_developer_mode,
                 "effective_capabilities": policy(self.settings, session.target, session.capabilities),
                 "physical_verified": False}
 
@@ -271,7 +282,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                        "summary": session.summary, "sequence": session.sequence, "stopped": session.stopped,
                        "last_seen": session.last_seen, "disconnected_at": session.disconnected_at,
                        "progress": session.progress, "repair_context": session.repair_context,
-                       "resume_project_aliases": session.resume_project_aliases}, critical=session.state in {State.failed, State.idle})
+                       "resume_project_aliases": session.resume_project_aliases,"runtime_ai_mode":session.runtime_ai_mode}, critical=session.state in {State.failed, State.idle})
 
     async def emit(self, session, event):
         event=display_event(event,operation='repair' if session.repair_context else 'update' if session.app_mode=='update' else 'new',delivery=session.target=='device')
@@ -322,6 +333,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
     def context_for(self, session, dialogue=False):
         from .prompt_context import compact_repair_evidence,dialogue_policy,dumps
         context = "conversation_mode=" + session.conversation_mode + "\n"
+        from .runtime_contract import generation_context
+        context+=generation_context(self.settings,session.capabilities,session.runtime_ai_mode)
         context += ("FIRE OS on M5Stack FIRE. Screen 320x240, A/B/C buttons, ten RGB LEDs, IMU. "
                     "Conversation audio is separate from generated Lua app permissions. "
                     "Lua lifetime follows the device policy: zero means until user exit; positive values are legacy limits. Hardware access follows the negotiated API and advertised services. "
@@ -340,7 +353,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         project = self.store.get("projects", session.project_id)
         selected_base = session.base_package_id or project.get("latest_package")
         base_build=self.store.get('builds',selected_base) if selected_base else {}
-        summary=base_build.get('effective_summary',base_build.get('summary',''))
+        from .prompt_context import normalized_repair_summary
+        summary=normalized_repair_summary(base_build.get('effective_summary',base_build.get('summary','')))
         context += "\nProject: " + json.dumps({"id": project["id"], "name": project["name"],
             "app_mode": session.app_mode, "base_package_id": selected_base, "last_confirmed_summary": summary})
         if selected_base:
@@ -428,6 +442,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             project = self.new_project(request.device_id, request.target)
         session = Session(new_id("session"), request.device_id, project["id"])
         session.conversation_mode = request.conversation_mode or "develop"
+        session.runtime_ai_mode=request.runtime_ai_mode
         session.app_mode = "update" if request.project_id else "new"
         session.base_package_id = request.base_package_id or project.get("latest_package")
         if request.project_id:
@@ -483,7 +498,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 raise Conflict("Session cannot be resumed")
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
-                         "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error",
+                         "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error", "runtime_ai_mode",
                          "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id"):
                 if name in saved:
                     setattr(session, name, saved[name])
@@ -506,6 +521,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         device = self.device_record(session) if session.target == "device" else None
         if device and device["boot_id"] != session.boot_id:
             raise Conflict("Resume from previous boot rejected")
+        await self.runtime_ai.cancel_session(session)
         # Publish ownership before closing the former peer; its finally/detach
         # must not mark this replacement offline or cancel its new turn.
         previous_sockets = tuple(session.sockets - {socket}) if socket else ()
@@ -525,6 +541,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             session.state, session.activity, session.turn_id = State.idle, "idle", None
             session.recording_started_at = None
             session.audio_status = {"phase": "interrupted", "reason": "reconnected"}
+        if request.runtime_ai_mode is not None:session.runtime_ai_mode=request.runtime_ai_mode
         if session.target == "device":
             device["online"] = True
             device["connection_epoch"] = device.get("connection_epoch", 0) + 1
@@ -564,6 +581,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         session.sockets.discard(socket)
         if session.sockets:
             return
+        await self.runtime_ai.cancel_session(session)
         if session.target=='device':self.detach_device_build(session)
         if session.protocol_version == "0.1":
             await self._stop(session)
@@ -633,6 +651,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             await self._stop(session)
 
     async def _stop(self, session):
+        await self.runtime_ai.cancel_session(session)
         if session.target=='device':self.detach_device_build(session)
         # Mark before cancellation so new confirmations cannot race shutdown.
         session.stopped = True
@@ -671,6 +690,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         self.sessions.pop(session.id, None)
 
     async def close(self):
+        await self.runtime_ai.close()
         await self.repairs.close()
         if self.maintenance_task:
             self.maintenance_task.cancel()
@@ -760,7 +780,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                             clarification_needed=False,build_summary="")
                     elif session.repair_context:
                         package = self.store.get("packages", session.repair_context["package_id"])
-                        original = self.store.get("builds", package["build_id"]).get("summary", "")
+                        from .prompt_context import normalized_repair_summary
+                        original = normalized_repair_summary(self.store.get("builds", package["build_id"]).get("summary", ""))
                         reply = DialogReply(message="Jeg har analysert «"+package["manifest"]["name"]+"». Jeg retter denne appen med kildekoden og feilhistorikken. Trykk A BUILD.",
                             clarification_needed=False, build_summary="Reparer eksisterende app. Behold funksjoner og kontroller, rett rotårsaken og test alle knapp-/tidsprofiler. Opprinnelige krav: " + original[:700])
                     elif repair_intent:
@@ -774,7 +795,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                     return
                 reply = type(reply).model_validate(self.redactor.value(reply.model_dump()))
                 session.history.append({"role": "assistant", "content": reply.message})
-                await self.emit(session, {"type": "assistant_message", "text": reply.message, "turn_id": session.turn_id})
+                await self.emit(session, {"type": "assistant_message", "text": reply.message, "display_text":reply.display_text,"turn_id": session.turn_id})
                 if session.conversation_mode == "chat":
                     await self.state(session, State.idle)
                 elif reply.clarification_needed:

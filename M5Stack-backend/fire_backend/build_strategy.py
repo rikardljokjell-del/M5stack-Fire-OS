@@ -132,16 +132,21 @@ class RepairBaseline:
         self.baseline_findings=({'stage':'existing_source','source_sha256':source_hash(source),
             'error':str(initial_error)[:1600]} if source and initial_error else None)
 
-    def failure(self,source,error,*,local_passed=False,review=None):
+    def failure(self,source,error,*,local_passed=False,standard_passed=None,review=None):
         error=str(error)
         malformed=any(x in error for x in ('LuaSyntaxError','syntax error','Unterminated Lua'))
         failed=[key for key,value in review.model_dump().items() if value is False] if review else []
-        rank=(2 if local_passed else 0,-len(failed)-len(review.issues) if review else 0)
+        # Passing a later pipeline stage is stronger evidence than fewer review
+        # complaints on an earlier, still failing core/standard candidate.
+        if standard_passed is None:standard_passed=review is not None
+        stage=0 if malformed else 3 if local_passed and standard_passed else 2 if local_passed else 1
+        rank=(stage,-len(failed)-len(review.issues) if review else 0)
         selected=False
         if not malformed and rank>=self.rank:
             self.source=source;self.rank=rank;selected=True
             if review:self.passed={key for key,value in review.model_dump().items() if value is True}
-        self.history.append({'stage':'review' if review else 'syntax' if malformed else 'local_test',
+        self.history.append({'stage':'review' if review else 'syntax' if malformed else 'standard' if local_passed and not standard_passed else 'local_test',
+            'pipeline_stage':stage,
             'source_sha256':source_hash(source),'failed_checks':failed,'error':error[:1600]})
         if selected:self.baseline_findings=self.history[-1]
         return {'primary_error':error[:6000],'repair_baseline_sha256':source_hash(self.source) if self.source else None,

@@ -40,7 +40,7 @@ def _intent(summary,feature):
     return {'positive':positive,'off':off}
 
 
-def contract(capabilities,summary):
+def contract(capabilities,summary,base_manifest=None):
     if not available(capabilities):return None
     caps=capabilities or {};experience=experience_contract(caps)
     category=classify(summary)
@@ -50,6 +50,9 @@ def contract(capabilities,summary):
     rgb_intent,audio_intent=_intent(summary,'rgb'),_intent(summary,'audio')
     explicit_audio=audio_intent['positive']
     rgb_off,audio_off=rgb_intent['off'],audio_intent['off']
+    deferred=bool(re.search(r'(?:om|hvis|if)\b[^.!?\n]{0,60}(?:lyd|audio|sound)[^.!?\n]{0,60}(?:senere|later)|(?:lyd|audio|sound)[^.!?\n]{0,40}(?:utsettes|utsatt|deferred|senere|later)',summary,re.I))
+    existing_audio=bool({'speaker','jobs'}<=set((base_manifest or {}).get('required_services',[])))
+    if deferred and not existing_audio:audio_off=True;explicit_audio=False
     return {'version':VERSION,'authority':'actual capabilities and confirmed request; candidate declarations do not reduce defaults',
         'capabilities_sha256':hashlib.sha256(canonical(caps)).hexdigest(),
         'request_sha256':hashlib.sha256(summary.encode('utf-8')).hexdigest(),
@@ -57,7 +60,8 @@ def contract(capabilities,summary):
         'game_requested':game,'rgb_available':experience['rgb_available'],
         'audio_available':experience['game_audio_available'],
         'rgb_required':experience['rgb_available'] and not rgb_off,
-        'audio_required':experience['game_audio_available'] and (game or explicit_audio) and not audio_off,
+        'audio_required':experience['game_audio_available'] and (game or explicit_audio or existing_audio) and not audio_off,
+        'audio_deferred_for_scope':deferred and not existing_audio,'existing_audio_preserved':existing_audio,
         'explicit_rgb_opt_out':rgb_off,'explicit_audio_opt_out':audio_off,'physical_verified':False}
 
 

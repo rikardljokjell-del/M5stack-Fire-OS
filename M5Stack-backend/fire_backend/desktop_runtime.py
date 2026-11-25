@@ -156,6 +156,12 @@ class DesktopRuntime:
     def jobs(self):
         return self.request("GET","/desktop/jobs")
 
+    def set_runtime_ai_global(self,enabled):
+        return self.request('PATCH','/desktop/runtime-ai',json={'enabled':enabled})
+
+    def set_runtime_ai_app(self,project_id,enabled):
+        return self.request('PATCH',f'/desktop/apps/{project_id}/runtime-ai',json={'enabled':enabled})
+
     def add_job_context(self,build_id,text):
         return self.request("POST",f"/desktop/jobs/{build_id}/context",json={"text":text})
 

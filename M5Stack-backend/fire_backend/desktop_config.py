@@ -41,6 +41,14 @@ class DesktopConfig(BaseModel):
     device_ids: list[str] = Field(default_factory=lambda: ["m5stack-fire-01"], min_length=1, max_length=16)
     audio_enabled: bool = True
     speech_enabled: bool = True
+    runtime_ai_enabled: bool = True
+    runtime_ai_developer_mode: Literal['auto','off'] = 'auto'
+    runtime_model: str = 'gpt-6-luna'
+    runtime_ai_limits_enabled: bool = False
+    runtime_ai_request_budget_usd: float = Field(default=0,ge=0,allow_inf_nan=False)
+    runtime_ai_daily_budget_usd: float = Field(default=0,ge=0,allow_inf_nan=False)
+    runtime_ai_daily_calls: int = Field(default=0,ge=0)
+    runtime_ai_output_tokens: int = Field(default=1024,ge=16,le=4096)
     cost_profile_version: int = Field(default=COST_PROFILE_VERSION, ge=0)
     cost_limits_enabled: bool = False
     output_limits_enabled: bool = False
@@ -82,7 +90,7 @@ class DesktopConfig(BaseModel):
             raise ValueError("Bruk unik enhets-ID med små bokstaver, tall og bindestrek.")
         return values
 
-    @field_validator("dialog_model", "code_model", "review_model", "transcribe_model", "speech_model", "speech_voice")
+    @field_validator("dialog_model", "code_model", "review_model", "transcribe_model", "speech_model", "speech_voice", "runtime_model")
     @classmethod
     def valid_model(cls, value):
         if not value.strip() or len(value) > 120 or any(c.isspace() for c in value):
@@ -217,6 +225,12 @@ class DesktopStore:
                         fire_backend_host="0.0.0.0" if config.allow_lan else "127.0.0.1", fire_backend_port=config.port,
                         fire_workspace=Path(config.workspace), fire_ai_mode=config.mode, fire_audio_enabled=config.audio_enabled,
                         fire_speech_enabled=config.speech_enabled,
+                        openai_runtime_model=config.runtime_model,fire_runtime_ai_enabled=config.runtime_ai_enabled,
+                        fire_runtime_ai_developer_mode=config.runtime_ai_developer_mode,
+                        fire_runtime_ai_limits_enabled=config.runtime_ai_limits_enabled,
+                        fire_runtime_ai_request_budget_usd=config.runtime_ai_request_budget_usd,
+                        fire_runtime_ai_daily_budget_usd=config.runtime_ai_daily_budget_usd,
+                        fire_runtime_ai_daily_calls=config.runtime_ai_daily_calls,fire_runtime_ai_output_tokens=config.runtime_ai_output_tokens,
                         fire_desktop_enabled=True,
                         fire_public_enabled=config.public_enabled, fire_web_origin=config.web_origin,
                         fire_device_host=config.device_host, fire_access_issuer=config.access_issuer,

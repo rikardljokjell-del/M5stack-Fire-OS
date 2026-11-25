@@ -469,3 +469,30 @@ app_repair_status with status/phase=cancelled. Repeated cancellation is safe.
 A publication which won the race returns ready; cancelling never deletes a
 completed tested package. Firmware must negotiate repair_cancel_v1 before
 using the new event. See the exported device-event schema and device handover.
+
+## Optional Runtime AI transport
+
+See [canonical Runtime AI](../contracts/RUNTIME_AI-v1.json). Events
+`runtime_ai_request` and `runtime_ai_cancel` use the existing authenticated
+device envelope/dedup. OS supplies `request_id,app_id,package_id,source_sha256,
+run_id,boot_id`. Request adds `instructions,data_json,schema_json,timeout_ms`.
+`runtime_ai_result` echoes identity plus `state=completed|failed|cancelled`,
+`result_json,error_code`. Only the actual current run/package/source and owner
+may request or receive results. Stop, reboot and disconnect cancel; reconnect
+never automatically replays a charged request. OFF cancels and returns an error
+only to the same valid run, never stale result data.
+
+Apps-list opening uses explicit `run_confirm(package_id)`. Existing SD AI apps
+require complete fresh current-boot/current-epoch inventory with exact package,
+version and checksum, plus verified backend archive. `run_request` includes
+`source_sha256`; actual native `app_started` must confirm it. Identical already
+running native source may bind without resetting local app state.
+
+AI Developer sends `mode_select` with `runtime_ai_mode=auto|off` independently of
+`conversation_mode`; SessionStart also accepts it. `ui_event/runtime_ai_policy`
+acknowledges mode/available/enabled. OFF binds generation; global/per-app runtime
+authorization remains separate. Old events omit the optional fields.
+
+Assistant/progress/ready/error events include `display_text`: one complete LCD
+line, at most28 UTF-8 bytes. Full assistant `text` remains the spoken reply.
+The same model call supplies both; fixed phases/fallback never need another call.

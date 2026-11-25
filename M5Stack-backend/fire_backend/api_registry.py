@@ -3,20 +3,23 @@ import hashlib
 import json
 from importlib.resources import files
 from .app_sdk import SDK_VERSION,SDK_CONTRACT,available as sdk_available,contract as sdk_contract,callback_budgets
+from .runtime_contract import REGISTRY as AI_REGISTRY,EXTENSION as AI_EXTENSION,available as ai_available
 
 BASE_API="fire-lua-0.1"
 HARDWARE_API="fire-lua-0.2"
 REGISTRY=json.loads(files("fire_backend").joinpath("data/HARDWARE_API-v0.2.json").read_text(encoding="utf-8"))
 API_CONTRACT=hashlib.sha256(json.dumps(REGISTRY,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
 BASE_SERVICES={name for name,spec in REGISTRY["services"].items() if any(m["since"]==BASE_API for m in spec["methods"].values())}
-ALL_SERVICES=set(REGISTRY["services"])
+ALL_SERVICES=set(REGISTRY["services"])|{'ai'}
 
 
 def methods_for(api_version):
     if api_version not in {BASE_API,HARDWARE_API,SDK_VERSION}:raise ValueError("Unsupported Lua API version")
     result={service:{name:method for name,method in spec["methods"].items() if api_version!=BASE_API or method["since"]==BASE_API}
             for service,spec in REGISTRY["services"].items() if api_version!=BASE_API or service in BASE_SERVICES}
-    if api_version==SDK_VERSION:result['display'].update(sdk_contract()['registry']['display']['methods'])
+    if api_version==SDK_VERSION:
+        result['display'].update(sdk_contract()['registry']['display']['methods'])
+        result['ai']=AI_REGISTRY['methods']
     return result
 
 
@@ -29,12 +32,14 @@ def generation_contract(api_version,services):
     if api_version==SDK_VERSION:
         result["limits"]={**result["limits"],**callback_budgets(api_version)}
         result["display_semantics"]={k:v for k,v in sdk_contract()["registry"]["display"].items() if k!="methods"}
+        if 'ai' in services:result['runtime_ai']={'extension':AI_EXTENSION,'limits':AI_REGISTRY['limits'],'semantics':AI_REGISTRY['semantics']}
     return result
 
 
 def preview_capabilities():
     return {"api_version":HARDWARE_API,"api_contract":API_CONTRACT,"services":sorted(ALL_SERVICES),
             "app_sdk":{"version":SDK_VERSION,"contract":SDK_CONTRACT},
+            "runtime_ai":dict(AI_EXTENSION),
             "max_memory":131072,"max_runtime_ms":0,"audio_input":False,"audio_output":False,
             "firmware_version":"PC hardware simulation ONLY","hardware":{
                 "gpio_read":[26,36],"gpio_write":[26],"adc":[36],"dac":[26],"pwm":[26],
@@ -53,6 +58,8 @@ def service_closure(services,api_version=HARDWARE_API):
 
 def package_compatibility(package,capabilities):
     manifest=package["manifest"]
+    if 'ai' in manifest['required_services'] and (not ai_available(capabilities) or manifest.get('runtime_ai')!=AI_EXTENSION):
+        return 'Appen krever annonsert Runtime AI med samme kontrakt i firmware.'
     if not set(manifest['required_services'])<=set(capabilities.get('services',[])):
         return 'Appen krever tjenester som denne enheten ikke annonserer.'
     if manifest.get('api_version')==SDK_VERSION:

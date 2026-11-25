@@ -225,13 +225,31 @@ class OpenAIProvider:
         if self.client:
             await self.client.close()
 
+    async def runtime_ai(self,instructions,data,schema):
+        """One bounded asynchronous inference on the existing OpenAI client."""
+        from .runtime_contract import RuntimeAIError
+        model=self.settings.openai_runtime_model
+        payload={'instructions':instructions,'data':data}
+        request={'model':model,'store':False,'input':[
+            {'role':'developer','content':'Analyze the app-supplied instructions and observations. Return only the required JSON object. No tools, files, URLs or executable code. Keep strings concise; the entire JSON result must fit512 UTF-8 bytes. Distinguish observations from assessment.'},
+            {'role':'user','content':json.dumps(payload,ensure_ascii=False)}],
+            'text':{'format':{'type':'json_schema','name':'fire_runtime_result','strict':True,'schema':schema}}}
+        if model.startswith(('gpt-6','gpt-5')):request['reasoning']={'effort':'none' if model=='gpt-6-luna' else 'low'}
+        limit=self.settings.fire_runtime_ai_output_tokens
+        request['max_output_tokens']=limit
+        with self.metered('runtime_ai',model,{'input':request['input'],'schema':schema},limit) as meter:
+            response=await self.api().responses.create(**request)
+            self.measured(meter,response)
+            if getattr(response,'status',None)!='completed' or not getattr(response,'output_text',None):raise RuntimeAIError('invalid_result')
+            return response.output_text
+
     async def connect_dialog(self, context):
         manager = self.api().realtime.connect(model=self.settings.openai_realtime_model)
         connection = await manager.__aenter__()
         try:
             await connection.session.update(session={
                 "type": "realtime", "output_modalities": ["text"],
-                "instructions": dialog_instructions(context),
+                "instructions": dialog_instructions(context)+" Return display_text as one complete short Norwegian status line, at most28 UTF-8 bytes, no ellipsis; message remains the fuller spoken reply.",
                 "tools": [{"type": "function", "name": "dialog_reply", "description": "Return a concise Norwegian answer; add a proposed app plan only in app development mode when requested.",
                            "parameters": DialogReply.model_json_schema()}],
                 "tool_choice": {"type": "function", "name": "dialog_reply"},
@@ -248,7 +266,7 @@ class OpenAIProvider:
         with self.metered('dialog',self.settings.openai_realtime_model,{'context':dialog_instructions(context),'history':history[-32:],'schema':DialogReply.model_json_schema()},800 if capped else 32000) as meter:
             await connection.response.create(response={
                 "conversation": "none", "output_modalities": ["text"],
-                "instructions": dialog_instructions(context),
+                "instructions": dialog_instructions(context)+" Return display_text as one complete short Norwegian status line, at most28 UTF-8 bytes, no ellipsis; message remains the fuller spoken reply.",
                 "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": json.dumps(history[-32:], ensure_ascii=False)}]}],
                 "max_output_tokens": 800 if capped else "inf",
             })
@@ -438,6 +456,11 @@ class MockProvider:
 
     async def close(self):
         pass
+
+    async def runtime_ai(self,instructions,data,schema):
+        from .runtime_contract import RuntimeAIError
+        # An offline fixture must never impersonate live runtime analysis.
+        raise RuntimeAIError('provider_error')
 
     async def review(self, summary, context, generated, validation):
         # Explicit offline fixture. Package metadata identifies it as mock.

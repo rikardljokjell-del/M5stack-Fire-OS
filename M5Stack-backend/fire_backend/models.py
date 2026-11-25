@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
 from .api_registry import ALL_SERVICES,BASE_SERVICES,BASE_API,HARDWARE_API,API_CONTRACT,service_closure
 from .app_sdk import SDK_VERSION,SDK_CONTRACT
+from .runtime_contract import VERSION as AI_VERSION,CONTRACT as AI_CONTRACT,LIMITS as AI_LIMITS
 
 Identifier = str
 ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
@@ -37,6 +38,15 @@ class DialogReply(StrictModel):
     message: str = Field(min_length=1, max_length=1000)
     clarification_needed: bool
     build_summary: str = Field(max_length=1000)
+    display_text: str = Field(default='',max_length=28)
+
+    @field_validator('display_text')
+    @classmethod
+    def short_display(cls,value):
+        if not value:return value
+        from .status_text import checked
+        try:return checked(value)
+        except ValueError:return 'AI-svaret er klart'
 
 
 class AppTestSequence(StrictModel):
@@ -80,6 +90,17 @@ class GeneratedApp(StrictModel):
         return value
 
 
+class RuntimeAICapability(StrictModel):
+    version: Literal['fire-runtime-ai-1.0']
+    contract: str = Field(pattern=r'^[a-f0-9]{64}$',json_schema_extra={'const':AI_CONTRACT})
+
+    @field_validator('contract')
+    @classmethod
+    def exact_contract(cls,value):
+        if value!=AI_CONTRACT:raise ValueError('Runtime AI contract mismatch')
+        return value
+
+
 class Manifest(StrictModel):
     id: str = Field(pattern=ID_PATTERN)
     name: str = Field(min_length=1, max_length=64)
@@ -92,9 +113,12 @@ class Manifest(StrictModel):
     max_runtime_ms: int = Field(default=10000, ge=0, le=10000)
     permissions: list[str]
     checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
+    runtime_ai: RuntimeAICapability | None = None
 
     @model_validator(mode="after")
     def permissions_match(self):
+        if ('ai' in self.required_services)!=(self.runtime_ai is not None):raise ValueError('Runtime AI extension must exactly match ai permission')
+        if self.runtime_ai and self.api_version!=SDK_VERSION:raise ValueError('Runtime AI requires SDK')
         GeneratedApp.valid_services(self.required_services)
         if self.api_version==BASE_API and not set(self.required_services)<=BASE_SERVICES:
             raise ValueError("Extended hardware services require fire-lua-0.2")
@@ -114,10 +138,12 @@ class Manifest(StrictModel):
     def serialize_contract(self,handler):
         result=handler(self)
         if self.api_version==BASE_API:result.pop("api_contract",None)
+        if self.runtime_ai is None:result.pop('runtime_ai',None)
         return result
 
 
 class SessionStart(StrictModel):
+    runtime_ai_mode: Literal['auto','off'] | None = None
     device_id: str = Field(default="pc-mock-01", pattern=ID_PATTERN)
     project_id: str | None = Field(default=None, pattern=ID_PATTERN)
     protocol_version: Literal["0.1", "0.2"] = "0.1"
@@ -195,6 +221,7 @@ class Capabilities(StrictModel):
     firmware_storage: bool = Field(default=False,strict=True)
     firmware_max_bytes: int = Field(default=4194304,ge=1024,le=4194304,strict=True)
     app_sdk: AppSdkCapability | None = None
+    runtime_ai: RuntimeAICapability | None = None
 
     @field_validator("services")
     @classmethod
@@ -205,6 +232,8 @@ class Capabilities(StrictModel):
 
     @model_validator(mode="after")
     def negotiated_api(self):
+        if ('ai' in self.services)!=(self.runtime_ai is not None) or self.runtime_ai and (not self.app_sdk or 'jobs' not in self.services):
+            raise ValueError('Runtime AI capability requires SDK and ai/jobs services')
         if self.api_version==BASE_API and not set(self.services)<=BASE_SERVICES:
             raise ValueError("Hardware services require fire-lua-0.2")
         if self.app_sdk and (self.api_version!=HARDWARE_API or 'display' not in self.services):
@@ -212,7 +241,7 @@ class Capabilities(StrictModel):
         if self.api_version==HARDWARE_API:
             if self.api_contract!=API_CONTRACT:raise ValueError("Hardware API contract mismatch")
             from .api_registry import methods_for
-            dependencies={dep for service in self.services for method in methods_for(HARDWARE_API)[service].values() for dep in method.get("requires",[])}
+            dependencies={dep for service in self.services for method in methods_for(SDK_VERSION if self.app_sdk else HARDWARE_API)[service].values() for dep in method.get("requires",[])}
             if not dependencies<=set(self.services):raise ValueError("Hardware service dependencies must be announced")
             if set(self.services)&{"gpio","adc","dac","pwm","i2c","uart","spi"} and self.hardware is None:
                 raise ValueError("Hardware profile must announce its resources")
@@ -222,6 +251,7 @@ class Capabilities(StrictModel):
     def serialize_extensions(self,handler):
         result=handler(self)
         if self.app_sdk is None:result.pop('app_sdk',None)
+        if self.runtime_ai is None:result.pop('runtime_ai',None)
         return result
 
 
@@ -251,8 +281,8 @@ class DeviceApp(StrictModel):
 APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
                       "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None,
-                      "repair_id":None,"app_version":None,"build_id":None,"notification_action":None}
-CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None}
+                      "repair_id":None,"app_version":None,"build_id":None,"notification_action":None,"request_id":None,"source_sha256":None,"instructions":None,"data_json":None,"schema_json":None,"timeout_ms":None,'runtime_ai_mode':None}
+CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None,'runtime_ai':None}
 
 
 class DeviceDiagnostics(StrictModel):
@@ -267,9 +297,16 @@ class DeviceDiagnostics(StrictModel):
 
 
 class DeviceEvent(StrictModel):
+    runtime_ai_mode: Literal['auto','off'] | None = None
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "runtime_ai_request", "runtime_ai_cancel"]
+    request_id: str | None = Field(default=None,pattern=ID_PATTERN)
+    source_sha256: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
+    instructions: str | None = Field(default=None,max_length=AI_LIMITS['instructions_bytes'])
+    data_json: str | None = Field(default=None,max_length=AI_LIMITS['data_bytes'])
+    schema_json: str | None = Field(default=None,max_length=AI_LIMITS['schema_bytes'])
+    timeout_ms: int | None = Field(default=None,ge=AI_LIMITS['timeout_min_ms'],le=AI_LIMITS['timeout_max_ms'],strict=True)
     build_id: str | None = Field(default=None,pattern=ID_PATTERN)
     notification_action: Literal['open','dismiss'] | None = None
     repair_id: str | None = Field(default=None,pattern=ID_PATTERN)
@@ -315,14 +352,16 @@ class DeviceEvent(StrictModel):
 
     @model_validator(mode="after")
     def versioned_envelope(self):
-        if self.event == "mode_select" and not self.conversation_mode:
-            raise ValueError("conversation_mode is required")
+        if self.event == "mode_select" and not (self.conversation_mode or self.runtime_ai_mode):
+            raise ValueError("conversation_mode or runtime_ai_mode is required")
         if self.protocol_version == "0.2":
             if not self.event_id:
                 raise ValueError("Protocol 0.2 requires event_id")
             if self.event != "session_start" and not self.session_id:
                 raise ValueError("session_id required after session_start")
             required = {
+                "runtime_ai_request": ("request_id","app_id","package_id","source_sha256","run_id","instructions","data_json","schema_json","timeout_ms"),
+                "runtime_ai_cancel": ("request_id","app_id","package_id","source_sha256","run_id"),
                 "text": ("text",), "button": ("button", "action"), "build_confirm": ("proposal_id",),
                 "run_confirm": ("package_id",), "device_install_result": ("install_id", "package_id", "status"),
                 "install_retry": ("package_id",),

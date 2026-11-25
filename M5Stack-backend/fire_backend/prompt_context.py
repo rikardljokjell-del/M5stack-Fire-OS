@@ -5,6 +5,8 @@ deterministic views remove duplicated history and repeated simulation output.
 """
 import copy
 import json
+import re
+import unicodedata
 
 from .api_registry import ALL_SERVICES
 from .capabilities import policy
@@ -12,6 +14,15 @@ from .capabilities import policy
 
 def dumps(value):
     return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+
+
+def normalized_repair_summary(value):
+    """Unwrap generated repair boilerplate in the view, never rewrite history."""
+    text=str(value or '')
+    while re.match(r'\s*(?:Reparer|Repair)',text,re.I) and re.search(r'Opprinnelige krav\s*:',text,re.I):
+        text=re.split(r'Opprinnelige krav\s*:',text,maxsplit=1,flags=re.I)[1]
+    for char in 'æøåÆØÅé':text=text.replace(char.encode('utf-8').decode('latin1'),char)
+    return unicodedata.normalize('NFC',text).strip()
 
 
 def dialogue_policy(settings,session):

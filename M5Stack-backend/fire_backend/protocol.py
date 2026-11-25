@@ -127,6 +127,8 @@ async def dispatch(service, session, event):
 
 async def handle(service, session, event):
     name = event.event
+    if name=='runtime_ai_request':return await service.runtime_ai.request(session,event)
+    if name=='runtime_ai_cancel':return await service.runtime_ai.cancel_event(session,event)
     if name in {'build_background','build_jobs','build_notice_ack','build_resume','build_cancel'}:
         return await service.build_event(session,event)
     if name=='app_repair_prepare':return await service.repairs.prepare(session,event)
@@ -183,6 +185,13 @@ async def handle(service, session, event):
         await cancel_turn(service, session)
         return {"status": "cancelled"}
     if name == "mode_select":
+        if event.runtime_ai_mode:
+            if session.state in {State.building,State.testing}:raise ValueError('La byggingen bli ferdig før du endrer AI-valg.')
+            session.runtime_ai_mode=event.runtime_ai_mode;service.persist(session)
+            from .runtime_contract import available
+            await service.emit(session,{'type':'ui_event','event':'runtime_ai_policy','mode':session.runtime_ai_mode,
+                'available':available(session.capabilities),'enabled':service.settings.fire_runtime_ai_enabled})
+            if not event.conversation_mode:return {'runtime_ai_mode':session.runtime_ai_mode}
         await service.release_foreground(session)
         if session.state in {State.building, State.testing, State.running, State.starting, State.stopping, State.rollback_pending, State.awaiting_install}:
             raise ValueError("Fullfør eller stopp app-handlingen før du bytter samtalemodus.")
@@ -199,7 +208,9 @@ async def handle(service, session, event):
         package = service.verify_package(session, event.package_id)
         return {"install_id": (await service.offer_install(session, package))["id"]}
     if name in {"device_install_result", "app_started", "app_healthy", "app_failed", "app_stopped", "rollback_result"}:
-        return await service.device_receipt(session, event)
+        result=await service.device_receipt(session, event)
+        if name in {'app_stopped','app_failed'}:await service.runtime_ai.cancel_run(session,event.run_id)
+        return result
     if name in {"audio_playback_started", "audio_playback_finished", "audio_playback_failed"}:
         if event.turn_id in session.retired_turns:
             return {"status": "ignored", "reason": "retired_turn"}

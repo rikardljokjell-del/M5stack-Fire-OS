@@ -21,6 +21,10 @@ SDK_WRAPPER=json.loads((SDK_DATA/'contract.json').read_text(encoding='utf-8'))
 SDK=SDK_WRAPPER['registry'];SDK_VERSION=SDK['api_version']
 SDK_HASH=hashlib.sha256(json.dumps(SDK,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 if SDK_HASH!=SDK_WRAPPER['api_contract']:raise ValueError('SDK contract checksum mismatch')
+AI_WRAPPER=json.loads((Path(__file__).parent/'data/RUNTIME_AI-v1.json').read_text(encoding='utf-8'))
+AI=AI_WRAPPER['registry'];AI_HASH=AI_WRAPPER['api_contract']
+if hashlib.sha256(json.dumps(AI,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=AI_HASH:raise ValueError('Runtime AI contract checksum mismatch')
+AI_EXTENSION={'version':AI['api_version'],'contract':AI_HASH}
 FORBIDDEN = {
     "python", "require", "package", "load", "loadfile", "dofile", "io", "os", "debug",
     "ffi", "collectgarbage", "getmetatable", "setmetatable", "rawget", "rawset",
@@ -53,6 +57,7 @@ def validate_api(source, services, api_version="fire-lua-0.1"):
     if api_version==SDK_VERSION:
         methods['display']|=set(SDK['display']['methods'])
         methods['ui']=set(SDK['ui_methods'])
+        methods['ai']=set(AI['methods'])
     clean = without_literals(source)
     banned = FORBIDDEN.intersection(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", clean))
     if banned:
@@ -65,7 +70,8 @@ def validate_api(source, services, api_version="fire-lua-0.1"):
             continue
         if service not in services or method not in methods.get(service, set()):
             raise ValueError(f"Unknown or undeclared API fire.{service}.{method}")
-        if not set(REGISTRY["services"][service]["methods"].get(method,{}).get("requires",[]))<=set(services):
+        specs=AI if service=='ai' else REGISTRY['services'][service]
+        if not set(specs['methods'].get(method,{}).get('requires',[]))<=set(services):
             raise ValueError("Undeclared dependent hardware service")
     for service in re.findall(r"\bfire\s*\.\s*(\w+)", clean):
         if service=='ui' and api_version==SDK_VERSION and 'display' in services:continue
@@ -74,7 +80,7 @@ def validate_api(source, services, api_version="fire-lua-0.1"):
 
 
 HARNESS = r'''
-local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms, native_guard, capture_times, sdk_factory, sdk_fonts, sdk_assets, sdk_ui = ...
+local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms, native_guard, capture_times, sdk_factory, sdk_fonts, sdk_assets, sdk_ui, ai_limits = ...
 local sdk_enabled=sdk_factory~=nil
 local sequence_index, next_input_ms = 1,16
 local compile, hook = load, debug.sethook
@@ -316,7 +322,7 @@ if api_version~="fire-lua-0.1" then
   hardware=hardware_factory(available,specs,resources,profile,function()return elapsed end,function(name,bytes)
     total=total+1;if total>operation_limit then error("API operation budget exceeded") end
     if trace_count<240 then trace_count=trace_count+1;local before=diagnostic_begin();trace[trace_count]={name,bytes};diagnostic_end(before) end
-  end,service_set)
+  end,service_set,ai_limits,function()return callback_phase end)
 end
 if sdk_enabled then
   -- Existing simulated base queries predate the extended I/O meter. Native
@@ -538,7 +544,8 @@ def simulate(request):
     if api_version not in {"fire-lua-0.1","fire-lua-0.2",SDK_VERSION}:raise ValueError("Unsupported Lua API version")
     if api_version==SDK_VERSION and request.get('api_contract')!=SDK_HASH:raise ValueError('SDK contract mismatch')
     if api_version==SDK_VERSION and 'display' not in services:raise ValueError('SDK requires display permission')
-    if not set(services) <= (METHODS.keys() if api_version=="fire-lua-0.1" else REGISTRY["services"].keys()):
+    if 'ai' in services and (api_version!=SDK_VERSION or request.get('runtime_ai')!=AI_EXTENSION):raise ValueError('Runtime AI requires exact SDK extension')
+    if not set(services) <= (METHODS.keys() if api_version=="fire-lua-0.1" else set(REGISTRY['services'])|({'ai'} if api_version==SDK_VERSION else set())):
         raise ValueError("Unsupported service")
     validate_api(source, services,api_version)
     app_memory=min(request.get("max_memory",262144),262144)
@@ -562,8 +569,10 @@ def simulate(request):
                 or request.get('profile')!='idle'):
             raise ValueError('Invalid bounded preview duration')
         max_ms=min(max_ms,preview_ms)
-    specs={s:REGISTRY["services"][s]["methods"] for s in services} if api_version!="fire-lua-0.1" else {}
-    factory=lua.execute((Path(__file__).parent/"data/hardware_sim.lua").read_text(encoding="utf-8")) if api_version!="fire-lua-0.1" else None
+    specs={s:(AI['methods'] if s=='ai' else REGISTRY['services'][s]['methods']) for s in services} if api_version!="fire-lua-0.1" else {}
+    if 'ai' in services:specs['ai']={'request':{**AI['methods']['request'],'returns':'job'}}
+    helper=(Path(__file__).parent/'data/runtime_ai_sim.lua').read_text(encoding='utf-8') if 'ai' in services else ''
+    factory=lua.execute(helper+(Path(__file__).parent/"data/hardware_sim.lua").read_text(encoding="utf-8")) if api_version!="fire-lua-0.1" else None
     sdk_factory=None;sdk_fonts={};sdk_assets={};sdk_ui=''
     if api_version==SDK_VERSION:
         sdk_factory=lua.execute((Path(__file__).parent/'data/sdk_sim.lua').read_text(encoding='utf-8'))
@@ -576,7 +585,7 @@ def simulate(request):
                          (max_ms+15)//16 if request.get("profile") else min(180, max_ms // 16), request.get("profile"),
                          max(20000, ((max_ms+15)//16)*128 if api_version==SDK_VERSION else max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory,lua.table_from(sequence),interval,
                          request.get("native_host_policy")=="fire-native-host-v1",lua.table_from(capture_times),sdk_factory,
-                         lua.table_from(sdk_fonts,recursive=True),lua.table_from(sdk_assets),sdk_ui)
+                         lua.table_from(sdk_fonts,recursive=True),lua.table_from(sdk_assets),sdk_ui,lua.table_from(AI['limits']))
     hardware_metrics=result["hardware_metrics"]
     resources_used={kind:[values[i] for i in range(1,len(values)+1)] for kind,values in hardware_metrics["resources_used"].items()} if hardware_metrics else {}
     def unpack(value):
@@ -590,6 +599,7 @@ def simulate(request):
             "native_callback_budgets":{key:SDK['budgets'][key] for key in
                 ('callback_ms','init_callback_ms','sdk_update_callback_ms') if key!='sdk_update_callback_ms' or api_version==SDK_VERSION},
             "native_timing_measured":False,
+            "runtime_ai_simulated":'ai' in services,
             "frames": result["frames"], "elapsed_ms": result["elapsed_ms"],
             "api_operations": result["api_operations"], "trace": trace,
             "elided_clears":result["elided_clears"],"real_clears":result["real_clears"],"next_background":result["next_background"],

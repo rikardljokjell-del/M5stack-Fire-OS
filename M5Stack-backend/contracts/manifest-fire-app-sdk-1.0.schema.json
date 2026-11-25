@@ -1,4 +1,28 @@
 {
+  "$defs": {
+    "RuntimeAICapability": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "fire-runtime-ai-1.0",
+          "title": "Version",
+          "type": "string"
+        },
+        "contract": {
+          "const": "bef762941dad713217d70bbc1a9fd6cfbe7de825263dba246b5c170331ba4693",
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Contract",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "contract"
+      ],
+      "title": "RuntimeAICapability",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "id": {
@@ -35,6 +59,7 @@
       "items": {
         "enum": [
           "adc",
+          "ai",
           "bluetooth",
           "buttons",
           "dac",
@@ -78,6 +103,7 @@
       "items": {
         "enum": [
           "fire.adc",
+          "fire.ai",
           "fire.bluetooth",
           "fire.buttons",
           "fire.dac",
@@ -107,6 +133,17 @@
       "pattern": "^[a-f0-9]{64}$",
       "title": "Checksum",
       "type": "string"
+    },
+    "runtime_ai": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RuntimeAICapability"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [
@@ -132,6 +169,29 @@
         "permissions": {
           "contains": {
             "const": "fire.display"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "required_services": {
+            "contains": {
+              "const": "ai"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "runtime_ai"
+        ]
+      },
+      "else": {
+        "properties": {
+          "runtime_ai": {
+            "type": "null"
           }
         }
       }

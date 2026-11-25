@@ -1,5 +1,5 @@
 -- Trusted PC host. No sockets, hardware, files or Python callbacks are exposed.
-return function(available, specs, resources, profile, now, trace, services)
+return function(available, specs, resources, profile, now, trace, services, ai_limits, phase)
   local jobs, used, pins, pwm, uart, spi, files, handles, gpio_modes, gpio_values = {},{},{},{},{},{},{},{},{},{}
   local next_job, next_handle, io_calls, io_bytes, peak_io, peak_bytes = 0,0,0,0,0,0
   local active_jobs, peak_jobs = 0,0
@@ -41,8 +41,12 @@ return function(available, specs, resources, profile, now, trace, services)
     end
   end
   local function args_ok(args,spec)
-    if args.n~=#spec.args then error("Wrong hardware argument count") end
-    for i,s in ipairs(spec.args) do check(args[i],s) end
+    if args.n>#spec.args then error("Wrong hardware argument count") end
+    for i,s in ipairs(spec.args) do
+      if i>args.n or args[i]==nil and s.optional then if not s.optional then error("Wrong hardware argument count") end;args[i]=s.default end
+      check(args[i],s)
+    end
+    args.n=#spec.args
     for _,name in ipairs(spec.requires or {}) do if not services[name] then error("Undeclared dependent service: "..name) end end
     if spec.resource then resource(spec.resource.kind,args[spec.resource.arg]) end
   end
@@ -53,6 +57,10 @@ return function(available, specs, resources, profile, now, trace, services)
   local function release(owner) for pin,v in pairs(pins) do if v==owner then pins[pin]=nil end end end
   local function payload(job)
     local a,k=job.args,job.kind
+    if k=='ai.request' then
+      if job.fixture_bytes>ai_limits.result_bytes then return {ok=false,error_code='result_too_large'} end
+      return {ok=true,data=job.fixture}
+    end
     if k=="i2c.scan" then return {ok=true,addresses={64,104,117}} end
     if k=="wifi.scan" then return {ok=true,networks={{ssid="PC-SIMULATED",rssi=-55,secure=true}}} end
     if k=="wifi.connect" then return {ok=true,connected=true,ssid="PC-SIMULATED",ip="192.0.2.1",rssi=-55} end
@@ -86,7 +94,7 @@ return function(available, specs, resources, profile, now, trace, services)
     if not job then return {state="failed",done=true,error_code="invalid_handle"} end
     local delay=job.kind=="mic.record" and job.args[2] or job.kind=="speaker.tone" and job.args[2] or 32
     if job.state=="pending" and now()-job.at>=delay then
-      if profile=="io_timeout" and now()-job.at<3000 then return {state="pending",done=false,error_code=""} end
+      if profile=="io_timeout" and now()-job.at<(job.kind=='ai.request' and job.args[4] or 3000) then return {state="pending",done=false,error_code=""} end
       local fault=profile=="io_error" and "io_error" or profile=="io_disconnect" and "disconnected" or profile=="io_timeout" and "timeout" or nil
       if fault then job.state="failed";job.data={ok=false,error_code=fault}
       else job.data=payload(job);job.state=job.data.ok and "ready" or "failed" end
@@ -100,6 +108,14 @@ return function(available, specs, resources, profile, now, trace, services)
     if k=="power.brightness" then error("OS backlight setting is authoritative; apps must not override brightness") end
     local bytes=0;for i=1,a.n do if type(a[i])=="string" or type(a[i])=="table" then bytes=bytes+#a[i] end end
     note(k,bytes)
+    local ai_fixture,ai_size
+    if k=='ai.request' then
+      if phase()~='update' and phase()~='on_button' then return nil,'stale_run' end
+      if bytes>ai_limits.request_bytes then return nil,'payload_too_large' end
+      local err;ai_fixture,err,ai_size=runtime_ai_parser(a[2],a[3],ai_limits)
+      if not ai_fixture then return nil,err end
+      for _,job in pairs(jobs) do if job.kind==k and job.state=='pending' then return nil,'busy' end end
+    end
     if service=="jobs" then
       local job=jobs[a[1]]
       if name=="poll" then return poll(job) end
@@ -161,7 +177,7 @@ return function(available, specs, resources, profile, now, trace, services)
     if spec.returns=="job" then
       if active_jobs>=4 then return nil,"busy" end
       next_job=next_job+1;if next_job>65535 then error("Job ID budget exceeded") end
-      jobs[next_job]={state="pending",at=now(),kind=k,args=a,result=spec.result}
+      jobs[next_job]={state="pending",at=now(),kind=k,args=a,result=spec.result,fixture=ai_fixture,fixture_bytes=ai_size}
       jobs_started[k]=(jobs_started[k] or 0)+1
       active_jobs=active_jobs+1;peak_jobs=math.max(peak_jobs,active_jobs);return next_job
     end

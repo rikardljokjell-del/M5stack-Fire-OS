@@ -69,7 +69,7 @@ class Jobs:
 
     def snapshot(self):
         rows=[];projects={p['id']:p for p in self.store.list('projects')};usage=self.service.usage.records()
-        costs=self.service.usage.build_costs()
+        costs=self.service.usage.build_costs();conversation_costs=self.service.usage.conversation_costs()
         for b in self.store.list('builds'):
             p=projects.get(b['project_id'],{});record=context_record(self.store,b['id'])
             active=b['status'] in ACTIVE;error=b.get('error','') if not active else ''
@@ -100,13 +100,16 @@ class Jobs:
         for session in self.service.sessions.values():
             if session.stopped or session.build_id or session.state not in {'failed','processing','listening','awaiting_build_confirmation'}:continue
             error=session.last_error if session.state=='failed' else ''
+            price=conversation_costs.get(session.id,{'estimated_usd':None,'price_kind':'unknown','usage_record_missing':True})
             rows.append({'id':session.id,'project_id':session.project_id,'name':projects.get(session.project_id,{}).get('name','Samtale'),
                 'operation':'dialog','status':getattr(session.state,'value',session.state),'phase':session.audio_status.get('phase',session.activity),
                 'message':error_text(error) if error else 'Venter på byggebekreftelse' if session.proposal_id else 'Behandler samtalen',
                 'error':error,'error_status':error_text(error) if error else '', 'summary':session.summary,
-                'progress':0,'created_at':session.last_seen,'can_add_context':False,'context':{},'context_pending':False})
+                'progress':0,'created_at':session.last_seen,'can_add_context':False,'context':{},'context_pending':False,
+                'estimated_usd':price['estimated_usd'],'cost_detail':price})
         for row in rows:
             if row.get('error_status'):row['message']=row['error_status']
         display_active=ACTIVE|{'processing','listening'}
         rows.sort(key=lambda r:(r['status'] in display_active,r['created_at']),reverse=True)
-        return {'jobs':rows[:100],'active_count':sum(r['status'] in display_active for r in rows)}
+        pending=len(self.service.runtime_ai.tasks)
+        return {'jobs':rows[:100],'active_count':sum(r['status'] in display_active for r in rows)+pending,'runtime_ai_pending':pending}

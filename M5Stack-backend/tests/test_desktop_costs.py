@@ -76,19 +76,21 @@ def test_usage_screen_renders_reported_and_uncertain_requests_without_paid_calls
     root=ui_root
     try:
         ui=DesktopUI(root,DesktopStore(tmp_path,MemoryVault()))
-        ui.usage_snapshot={'pricing_date':'2026-11-23','since_reset':{'requests':2,'estimated_usd':.08,'audio_seconds':3,'cached_tokens':200,'unknown_usage_requests':1},
+        ui.usage_snapshot={'pricing_date':'2026-11-23','since_reset':{'requests':2,'estimated_usd':.02,'provider_calculated_usd':.02,'audio_seconds':3,'cached_tokens':200,'unknown_usage_requests':1,'unestimated_requests':1},
             'today':{'requests':2,'estimated_usd':.08},'lifetime':{'requests':4,'estimated_usd':.1},
             'limits':{'daily_usd':2,'daily_remaining_usd':1.92},
             'by_operation':[{'operation':'generate','requests':1,'input_tokens':300,'output_tokens':200,'estimated_usd':.02}],
             'recent':[{'id':'usage-one','model':'gpt-6.2-sol','operation':'generate','status':'failed','usage_source':'provider','input_tokens':300,'output_tokens':200,'cached_tokens':100,'estimated_usd':.02,'started_at':1795420000,
                       'reasoning_tokens':200,'max_output_tokens':24000,'reasoning_effort':'low','failure_code':'ai_output_limit'},
-                      {'id':'usage-two','model':'gpt-realtime-2.1-mini','operation':'speech','status':'cancelled','usage_source':'reservation','input_tokens':200,'output_tokens':0,'estimated_usd':.06,'started_at':1795420001}]}
+                      {'id':'usage-two','model':'gpt-realtime-2.1-mini','operation':'speech','status':'cancelled','usage_source':'reservation','price_kind':'unknown','tokens_measured':False,'input_tokens':0,'output_tokens':0,'estimated_usd':None,'budget_reserved_usd':.06,'started_at':1795420001}]}
         ui.render_usage()
-        assert '$0.0800' in ui.usage_totals['since_reset'].cget('text')
+        assert '$0.0200 + ukjent' in ui.usage_totals['since_reset'].cget('text')
         assert len(ui.usage_recent.get_children())==2
         assert 'Kodebygging' in str(ui.usage_groups['by_operation'].item(ui.usage_groups['by_operation'].get_children()[0])['values'])
         ui.usage_recent.selection_set('usage-two');ui.render_usage_detail()
-        assert 'reserve beholdes' in ui.usage_detail.cget('text')
+        assert 'pris er ukjent' in ui.usage_detail.cget('text')
+        assert 'Ukjent' in str(ui.usage_recent.item('usage-two')['values'])
+        assert ui.usage_recent.column('cost','width')>=200
         ui.usage_recent.selection_set('usage-one');ui.render_usage_detail()
         assert 'Intern resonnering: 200 av 200' in ui.usage_detail.cget('text')
         assert 'AI-svaret ble avkuttet' in ui.usage_detail.cget('text')

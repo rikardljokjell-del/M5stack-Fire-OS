@@ -142,3 +142,34 @@ Senere kohorter registrerer egen policyversjon og SDK-datahash. Samlet testbudsj
 inkluderer tidligere kohorters registrerte kostnad. Tre første SDK-sentineller
 prøver verktøy, sensordashboard og spill; ved minst to feil stoppes videre betalte
 cases for analyse. Første negative kohort beholdes uendret som måleresultat.
+
+## Kostnadsgrunnlag og Runtime AI
+
+Jobbpris omfatter kun egen build-ID, inkludert fortsettelse av samme jobb.
+Samtalejobber viser bare dialog, transkripsjon og talesvar fra egen session-ID;
+manglende prisgrunnlag vises som ukjent.
+Apppris summerer utvikling på stabilt prosjekt gjennom alle versjoner og
+feilrettinger, inkludert tilordnet dialog, transkripsjon og talesvar. Runtime AI
+har egne kall/tokens/pris/latens og inngår ikke som kodingskostnad.
+
+Målt pris, ukjent bruk, historiske anslag og empiriske anslag skilles.
+Empirisk anslag krever minst tre målte kall med samme operasjon/modell og bruker
+medianen av de siste 20. Det vises som `Ukjent (≈$...)`; blandede summer viser en
+målt og en ukjent/anslått del. Uten grunnlag står `Ukjent`. Konservativ reserve
+inngår kun i intern budsjettadgang, aldri i vist pris eller målte tokens.
+Visningsnullstilling og nye anslag endrer ikke gammel ledgerhistorikk.
+
+Runtime AI gjenbruker OpenAI-klient, transport og credentials. Global bryter,
+AI Developer AUTO/OFF, per-app autorisasjon og egen modell finnes i Windows og
+Studio. Standard gpt-6-luna er kontrollert mot
+[OpenAIs modellside](https://developers.openai.com/api/docs/models/gpt-6-luna):
+USD 0.10 inn / 0.01 cache / 0.50 ut per million teksttokens. Luna bruker reasoning
+none, andre støttede GPT-modeller low. Teknisk outputramme er 1024 tokens
+(konfigurerbar 16..4096); monetære grenser er valgfrie og av som standard.
+Ingen blind API-retry, ekstra server eller ekstra AI-oppsummering brukes.
+
+Feilretting beholder kandidaten som har bestått flest faktiske trinn: syntaks,
+lokal kjøring, standardkrav, deretter review. Færre review-feil kan ikke velge
+en eldre kandidat som fortsatt feiler standardkrav. Resume gjenbruker kilde,
+aldri gammel reviewgodkjenning. Reparasjonstekst normaliseres kun i
+modellvisningen; gamle logger og forespørsler beholdes.
