@@ -36,6 +36,24 @@ Du kan lukke nettleseren mens en jobb går. Åpne samme jobb igjen etterpå.
 Velg **Fortsett samme jobb** for å fortsette; en ny byggejobb er en ny handling.
 Innstillinger og bibliotek er felles med Windows-programmet.
 
+### FIRE App SDK og forhåndsvisning
+
+SDK-et følger med den nye SDK-firmwaren og gir nye apper ferdige fonter,
+temaer, menyer, ikoner og spillgrafikk. Ressursene ligger lokalt på FIRE.
+**SDK-leveransen er fortsatt under testing; se [status](STATUS.md).**
+Når oppdatert firmware har rapportert SDK-støtte, velger appbyggeren dette
+automatisk. Du kan bestille for eksempel «Lag en stoppeklokke» uten egne
+designinstrukser. Eksisterende apper beholdes.
+
+1. Åpne **Appbibliotek → Forhåndsvisning** for appversjonen du vil se.
+2. Bruk de virtuelle **A/B/C**-knappene for å prøve korte knappetrykk.
+3. Bruk **Ny start** for å begynne på nytt, eller **Videre 1 s** for mer tid.
+4. Lukk forhåndsvisningen når du er ferdig. Installering og kjøring på FIRE
+   er egne handlinger med sine vanlige kontroller.
+
+Forhåndsvisningen bruker PC-simulatoren. En app som ser riktig ut der, må
+fortsatt prøves på FIRE for fysisk respons, sensorer og lyd.
+
 ## 2. Bruk AI og Studio fra andre nett
 
 Dette oppsettet gjøres én gang. Du trenger en Cloudflare-konto, et domene under

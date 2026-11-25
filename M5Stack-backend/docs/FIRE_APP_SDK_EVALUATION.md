@@ -62,11 +62,77 @@ måleinstrument and værapp incorrectly fell back to a generic dashboard.
 The revised selector has explicit coverage for all eleven literal requests
 and English equivalents, including relevant assets and layouts.
 
-The second cohort is running with `fire-sdk-generation-v2`, the same models
-and literal requests, and a new SDK-data fingerprint. It starts with stopwatch,
-sensor dashboard and racing sentinels and stops for analysis if at least two
-of those three SDK builds fail. The original cohort remains unchanged.
-No improved success rate has yet been established.
+The second cohort used `fire-sdk-generation-v2`, the same models and literal
+requests, and a new SDK-data fingerprint. It stopped at the negative sentinel
+gate: five builds (three SDK and two legacy), zero ready, 11 requests,
+136,431 input tokens (49,171 cached), 17,454 output tokens, 158.216 seconds
+and USD0.018663935 estimated cost.
+
+That cohort exposed a genuine context regression: the consolidated policy
+had omitted the explicit requirement to define both `init()` and
+`update(dt_ms)`. The first stopwatch and dashboard repair opportunities were
+spent on that omission; later candidates then failed on invented `ui.asset`
+and `ui16b` names. Native `fire.display.asset` and the seven real font IDs
+were present in the request. Racing failed actual speaker-test coverage.
+Version3 restores executable lifecycle boilerplate and gives precise unknown
+font errors; the original failed results remain unchanged.
+
+## Version3 pilot
+
+| Literal request | Generation / review models | Generations / reviews | Seconds | Estimated USD | Pipeline result |
+| --- | --- | ---: | ---: | ---: | --- |
+| Stopwatch | Luna / Luna | 1 / 1 | 24.262 | 0.002874225 | Ready, standard-RGB gap below |
+| Stopwatch | Sol / Terra | 2 / 2 | 49.469 | 0.0730548 | Ready |
+| Sensor dashboard | Sol / Terra | 2 / 2 | 92.091 | 0.0964116 | Ready |
+| Racing | Sol / Terra | 1 / 1 | 46.011 | 0.0512823 | Ready |
+
+Model IDs are `gpt-6-luna`, `gpt-6.2-sol` and `gpt-6.1-terra`. The stronger
+pilot used a temporary 8,000-token generation cap and the existing 6,000-token
+review cap; the Luna control retained its uncapped configuration. Saved
+Windows settings and models were unchanged. Twelve actual requests used
+168,532 input tokens (16,108 cached) and 7,760 output tokens. Summed duration
+was 211.833 seconds and estimated cost USD0.223622925. No physical command
+was created. These small, differently configured samples cannot establish a
+general model ranking or isolate model effects from the version3 correction.
+
+All four passed local runtime tests and independent review. Manual follow-up
+found that the Luna stopwatch omitted RGB entirely even though the actual
+profile advertised it and the existing platform standard required feedback.
+Its working stopwatch/UI core and pipeline-ready result are preserved, but
+this is a real review/default-enforcement gap. It must not be counted as
+fully satisfying every platform standard until corrected and retested.
+The other three declared and exercised RGB. No result here proves physical
+timing or integration.
+
+## Remaining version3 Luna cases
+
+The frozen follow-up measured the other ten literal SDK requests with the
+same Luna/Luna version3 setup. Calculator and sensor dashboard became
+pipeline-ready after two generations each; eight cases failed and none was
+ready on its first generation. The run made 20 generation and nine review
+requests, using 345,250 input tokens (55,812 cached) and 46,922 output tokens.
+Summed build time was 644.509 seconds and estimated cost USD0.052962920;
+all 29 requests had provider-reported usage and created zero device commands.
+
+Together with the earlier Luna stopwatch, this gives 3/11 pipeline-ready
+and 1/11 first-generation-ready for the version3 Luna requests. All three
+ready candidates omitted the required RGB feedback. They therefore remain
+unverified against the platform standards despite their historical ready
+status. This is not an acceptable final generation-quality result.
+
+Remaining defects included invented font/UI names, incorrect rounding,
+missing speaker test coverage, controls or graphics left visible in the
+wrong game state, lives lost independently of collisions, and audio jobs
+not stopped on pause/mute/menu transitions. Original sources, reviews and
+screenshots are retained. None of the final failures in this cohort was
+the separately identified SDK edge-clipping simulator mismatch.
+
+A deterministic SDK-only standards gate is being implemented after this
+frozen measurement. It binds requirements to actual capabilities and the
+confirmed request, verifies both RGB sides and required started audio jobs,
+and preserves the working candidate for targeted repair. Existing legacy,
+build-confirmation and run-confirmation gates remain in force. Historical
+results above will not be rewritten to incorporate later repairs.
 
 One simulator accounting defect was reproduced with the same gallery source
 and duration: retaining more diagnostic frames increased the reported app
@@ -116,6 +182,31 @@ Loading took 66,662 microseconds. These are measurements of that exact private
 fixture/image, not of arbitrary generated apps or the later color revision.
 The retained RC9 image remains the fallback; native rendering optimization
 and a new guarded physical check are required. No runtime quota is raised.
+
+## Second physical SDK probe
+
+The next private image used the exact `4c89ce5` source with coalesced filled
+panel rows and indexed glyph lookup. CI run 45594710399 passed 19 tests and
+three builds. The private source was separately checked for UTF-8 preservation
+against that snapshot; it retained the existing production strings.
+
+The first gallery update still exceeded the unchanged 12 ms guard. Its
+unfinished callback took 162,039 microseconds: 16,416 in instrumented native
+display calls, including 15,975 in their Host implementations. Clear alone
+took 10,846 microseconds. The remaining 145,623 microseconds includes VM,
+helpers, scheduling and unprofiled work; it is not a measurement of pure Lua
+CPU time. Nested text/asset measurements must not be added to the enclosing
+native/Host times. No complete scene, later phase or device canvas was
+obtained. These results do not approve either the private or clean SDK image.
+
+API registration used 5,807 VM bytes; UI/gallery loading used 60,409 bytes,
+with a 60,484-byte loading peak and 67,612-microsecond source load. No panic
+or watchdog was observed. The retained RC9 was restored through ordinary
+health approval and read back as A/app0, sequence 23, VALID with valid CRC.
+The 45.038-second return observation recorded an 86,010-microsecond loop gap;
+a subsequent ordinary restart was observed and COM3 closed. The consumed
+private image remains in inactive B until a separately verified replacement;
+this is an intermediate test state, not the final firmware handoff.
 
 ## Compile-time footprint
 

@@ -8,6 +8,12 @@ from it. Legacy fire-lua-0.2 apps and their hardware hash remain supported.
 SDK apps require the explicit fire-app-sdk-1.0 profile and matching advertised
 `app_sdk.version` and `app_sdk.contract`.
 
+Treat catalog version1 as a fixed set of runtime IDs. Adding or renaming
+assets/fonts, changing UI signatures or introducing incompatible semantics
+requires a coordinated catalog/registry revision and a new contract hash in
+both hosts. Cosmetic palette and help-text changes can preserve the API
+contract; their data fingerprint still invalidates stale preview evidence.
+
 ## Screen and sandbox
 
 Render the complete 320×240 scene on every update. The OS owns the existing
