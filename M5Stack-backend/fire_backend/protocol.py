@@ -129,6 +129,9 @@ async def handle(service, session, event):
     name = event.event
     if name=='runtime_ai_request':return await service.runtime_ai.request(session,event)
     if name=='runtime_ai_cancel':return await service.runtime_ai.cancel_event(session,event)
+    if name in {'data_request','app_develop_request'}:return await service.data_engine.request(session,event)
+    if name=='data_cancel':return await service.data_engine.cancel_event(session,event)
+    if name=='app_observation_confirm':return await service.data_engine.confirm_observation(session,event)
     if name in {'build_background','build_jobs','build_notice_ack','build_resume','build_cancel'}:
         return await service.build_event(session,event)
     if name=='app_repair_prepare':return await service.repairs.prepare(session,event)
@@ -209,7 +212,9 @@ async def handle(service, session, event):
         return {"install_id": (await service.offer_install(session, package))["id"]}
     if name in {"device_install_result", "app_started", "app_healthy", "app_failed", "app_stopped", "rollback_result"}:
         result=await service.device_receipt(session, event)
-        if name in {'app_stopped','app_failed'}:await service.runtime_ai.cancel_run(session,event.run_id)
+        if name in {'app_stopped','app_failed'}:
+            await service.runtime_ai.cancel_run(session,event.run_id)
+            await service.data_engine.cancel_run(session,event.run_id)
         return result
     if name in {"audio_playback_started", "audio_playback_finished", "audio_playback_failed"}:
         if event.turn_id in session.retired_turns:

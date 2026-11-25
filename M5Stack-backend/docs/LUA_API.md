@@ -14,6 +14,41 @@ and the negotiated version take precedence over their historical service lists.
 
 The baseline below documents fire-lua-0.1. For the new fire-lua-0.2 contract, all exact method arguments/result shapes, OS resource ownership and firmware work, see [HARDWARE_API_HANDOFF.md](HARDWARE_API_HANDOFF.md) and [the exported registry](../contracts/HARDWARE_API-v0.2.json). Never infer physical hardware support from the PC simulator. Current inspected firmware dae75bf / 74ac26a exposes display/buttons/rgb/imu/time/jobs/gpio/pwm/i2c/uart, with the limited resource profile in the device handoff. Other registered services remain unavailable. Conversation audio is independent of Lua mic/speaker permissions. Release-v4 adds a cumulative 256-text-byte callback limit and three I/O failure profiles for hardware apps.
 
+## Optional Data Engine
+
+The exact optional API and bounds are in [DATA_ENGINE-v1.json](../contracts/DATA_ENGINE-v1.json).
+SDK apps require `data`, `sd`, `jobs`, `fire.data` permission and the exact
+`data_engine` version/hash advertised by firmware. This does not change the
+hardware, SDK or Runtime AI contracts. Missing extensions grant no data access.
+
+`fire.data.create/append/mark/seal/info/read/record/process` use existing jobs.
+Read returns at most112 raw bytes as an array. Append accepts at most512 bytes;
+metadata and options are bounded JSON strings, not a general Lua JSON/loader API.
+Use actual `capture_sources` and `capture_limits`; requested rate is not measured
+rate. `process` provides deterministic stats, filtering, spectrum and comparison.
+Unknown timing produces cycles/sample rather than unsupported physical Hz.
+Raw data, OS index and markers remain separate SHA-bound immutable components.
+
+A Runtime AI request may include `dataset_refs`; the OS first synchronizes any
+missing components. Backend resolves authorized refs to selected real content or
+finite multi-axis statistics within the existing768-byte data and1536-byte total
+AI bounds. Raw logs/packet bytes/labels are untrusted data. No model call is made
+for sync or deterministic processing. Results remain AI assessments, not facts.
+
+`fire.data.develop('update'|'fork'|'feedback', instruction)` is a user-button
+intent. OS prepares a frozen app/package/source/run/data context and opens the
+existing AI Developer. It does not buy generation or bypass the current proposal
+`build_confirm` or tested-package `run_confirm`. Fork grants only frozen readonly
+parent references. Existing apps without this API can still use OS Improve
+without gaining upload permission. User confirmation/rejection is a separate
+OS-controlled observation, never an app-provided physical-proof flag.
+
+PC Data Engine jobs use bounded synthetic fixtures, not actual recording/SD/BLE.
+Record fixture metadata uses bounded synthetic duration/rate sample counts and
+the matching csv/audio/text kind; these counts are not physical acquisition.
+A read outside retained fixture content fails rather than inventing raw bytes.
+No PC output establishes physical capture, radio delivery or native timing.
+
 # fire-lua-0.1 runtime contract
 
 The authoritative signatures/restrictions are also in the injected

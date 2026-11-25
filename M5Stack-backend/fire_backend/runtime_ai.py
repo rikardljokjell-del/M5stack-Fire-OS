@@ -8,6 +8,7 @@ from .runtime_contract import EXTENSION,LIMITS,RuntimeAIError,available,compact,
 from .metering import usage_scope,usage_session
 from .models import Manifest
 from .usage import UsageBudgetError
+from .data_engine import DataError
 
 IDENTITY=('request_id','app_id','package_id','source_sha256','run_id','boot_id')
 
@@ -90,16 +91,28 @@ class RuntimeAI:
         session_scope=usage_session.set(None)
         try:
             self.authorize(session,record)
-            answer=await asyncio.wait_for(self.service.provider.runtime_ai(instructions,data,schema),record['timeout_ms']/1000)
+            deadline=asyncio.get_running_loop().time()+record['timeout_ms']/1000
+            resolved, refs = await asyncio.wait_for(
+                self.service.data_engine.resolve_ai_refs(session, record, instructions, data, schema),
+                record['timeout_ms']/1000)
             self.authorize(session,record)
+            if self.service.redactor.value(resolved)!=resolved:raise RuntimeAIError('permission_denied')
+            record['dataset_refs'] = refs
+            remaining=deadline-asyncio.get_running_loop().time()
+            if remaining<=0:raise asyncio.TimeoutError
+            answer=await asyncio.wait_for(self.service.provider.runtime_ai(instructions,resolved,schema),remaining)
+            self.authorize(session,record)
+            if refs:self.service.data_engine.check_ai_refs(session, record, refs)
             result=result_data(answer,schema)
             # Do not send an actual credential back even if a model echoes one.
             if self.service.redactor.text(result)!=result:raise RuntimeAIError('invalid_result')
+            if refs:record['assessment_ref']=self.service.data_engine.save_ai_assessment(session,record,refs,result)
             state='completed';code=''
         except asyncio.TimeoutError:code='timeout'
         except asyncio.CancelledError:state='cancelled';code=record.get('cancel_reason','cancelled')
         except UsageBudgetError:code='budget_exceeded'
         except RuntimeAIError as error:code=error.code
+        except DataError as error:code=error.code
         except (Exception,):code='provider_error'
         finally:
             usage_session.reset(session_scope);usage_scope.reset(scope)

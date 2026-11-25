@@ -1,5 +1,6 @@
 """Local Windows control panel. Tk widgets and callbacks stay on the UI thread."""
 import ctypes
+import json
 from datetime import datetime
 import os
 from pathlib import Path
@@ -173,7 +174,7 @@ class DesktopUI:
         tk.Label(nav, text="FIRE", bg=NAV, fg="#ff8456", font=("Segoe UI Black", 28)).pack(anchor="w", padx=25, pady=(27, 0))
         tk.Label(nav, text="BACKEND", bg=NAV, fg="white", font=("Segoe UI", 12)).pack(anchor="w", padx=27, pady=(0, 32))
         self.nav_buttons = {}
-        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Bruk og kostnad", "Jobber", "Aktivitet", "Apper", "Firmware", "Innstillinger"):
+        for name in ("Oversikt", "M5Stack", "Tilkobling", "OpenAI", "Bruk og kostnad", "Jobber", "Aktivitet", "Apper", "Data", "Firmware", "Innstillinger"):
             button = tk.Button(nav, text=name, command=lambda n=name: self.show(n), anchor="w", relief="flat",
                                bg=NAV, fg="#c1ccd9", activebackground="#293b51", activeforeground="white",
                                font=("Segoe UI", 12), padx=25, pady=10, bd=0, cursor="hand2")
@@ -207,6 +208,7 @@ class DesktopUI:
         self.jobs_page(self.scroll_content(self.pages["Jobber"]))
         self.activity_page(self.pages["Aktivitet"])
         self.apps_page(self.pages["Apper"])
+        self.data_page(self.pages["Data"])
         self.firmware_page(self.pages["Firmware"])
         self.settings_page(self.scroll_content(self.pages["Innstillinger"]))
         self.label(content, textvariable=self.notice, foreground=MUTED, wraplength=830).pack(anchor="w", pady=(14, 0))
@@ -772,6 +774,55 @@ class DesktopUI:
         self.work(lambda:self.runtime.desktop_conversation(self.device_id.get(),hardware_preview=hardware_preview),done=self.choose_pc_session,
                   message="Starter maskinvareutkast med simulerte målinger …" if hardware_preview else "Starter AI-dialog på PC …")
 
+    def data_page(self, page):
+        self.label(page,'Data, analyser og videreutvikling','Title.TLabel').pack(anchor='w')
+        self.label(page,'Rådata bevares. AI-vurderinger og brukerobservasjoner er ikke fysisk verifiserte fakta.',
+                   'Muted.TLabel',wraplength=800).pack(anchor='w',pady=8)
+        self.data_table=ttk.Treeview(page,columns=('type','name','status'),show='headings',height=10)
+        for column,label,width in [('type','Type',140),('name','App / datasett',280),('status','Status',240)]:
+            self.data_table.heading(column,text=label);self.data_table.column(column,width=width)
+        self.data_table.pack(fill='both',expand=True)
+        self.data_table.bind('<<TreeviewSelect>>',lambda _:self.render_data_detail())
+        self.data_open=ttk.Button(page,text='Åpne grunnlag i AI Developer',command=self.open_data_context)
+        self.data_open.pack(anchor='w',pady=8)
+        self.data_detail=scrolledtext.ScrolledText(page,height=10,wrap='word',font=('Segoe UI',10))
+        self.data_detail.pack(fill='both',expand=True);self.data_detail.configure(state='disabled')
+        self.data_rows={}
+
+    def render_data(self):
+        data=self.snapshot.get('data_engine',{})
+        signature=json.dumps(data,sort_keys=True,ensure_ascii=False)
+        if signature==getattr(self,'data_signature',None):return
+        self.data_signature=signature
+        selected=self.data_table.selection()
+        self.data_rows={}
+        self.data_table.delete(*self.data_table.get_children())
+        for group,label in [('contexts','Videreutvikling'),('datasets','Datasett'),('results','Analyse')]:
+            for row in data.get(group,[]):
+                key=group+':'+row['id'];self.data_rows[key]=(group,row)
+                status=row.get('user_confirmation',row.get('state',row.get('evidence','')))
+                status={'confirm':'Observasjon bekreftet','reject':'Observasjon avvist','unconfirmed':'Ikke bekreftet',
+                        'sealed':'Synkronisert','uploading':'Laster opp','ai_assessment':'AI-vurdering',
+                        'deterministic_computation':'Beregnet resultat'}.get(status,status)
+                self.data_table.insert('','end',iid=key,values=(label,row.get('label',row.get('app_id',row.get('id'))),status))
+        if selected and selected[0] in self.data_rows:self.data_table.selection_set(selected[0])
+        self.render_data_detail()
+
+    def render_data_detail(self):
+        selected=self.data_table.selection()
+        group,row=self.data_rows.get(selected[0],(None,{})) if selected else (None,{})
+        self.data_open.configure(state='normal' if group=='contexts' and not self.busy else 'disabled')
+        self.data_detail.configure(state='normal');self.data_detail.delete('1.0','end')
+        self.data_detail.insert('1.0',json.dumps(row,ensure_ascii=False,indent=2) if row else 'Velg et datasett, en analyse eller et utviklingsgrunnlag.')
+        self.data_detail.configure(state='disabled')
+
+    def open_data_context(self):
+        selected=self.data_table.selection()
+        group,row=self.data_rows.get(selected[0],(None,{})) if selected else (None,{})
+        if group=='contexts':
+            self.work(lambda:self.runtime.desktop_conversation(row['device_id'],development_context_id=row['id']),
+                      done=self.choose_pc_session,message='Åpner frosset datagrunnlag …')
+
     def choose_pc_session(self,result):
         prior=self.session()
         if prior:self.activity_drafts[prior['session_id']]=self.prompt.get('1.0','end').strip()
@@ -1217,6 +1268,7 @@ class DesktopUI:
         self.summary_labels["api"].configure(text=mode + ("\nNøkkel lagret" if self.key_saved else "\nNøkkel mangler"))
         self.render_usage()
         self.render_jobs()
+        self.render_data()
         sessions = [s for s in self.snapshot["sessions"] if s["target"] == "device" and s.get("online") and ready]
         self.summary_labels["device"].configure(text=f"{len(sessions)} tilkoblet" if sessions else "Venter på FIRE")
         choices = [self.session_name(s) for s in self.snapshot["sessions"] if ready and (s.get("desktop_device_id") or s["target"]=="device" and s.get("online"))]

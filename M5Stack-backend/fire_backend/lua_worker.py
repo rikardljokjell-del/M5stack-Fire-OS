@@ -8,6 +8,7 @@ import json
 import hashlib
 import re
 import sys
+import copy
 from pathlib import Path
 
 from lupa.lua54 import LuaRuntime
@@ -25,6 +26,10 @@ AI_WRAPPER=json.loads((Path(__file__).parent/'data/RUNTIME_AI-v1.json').read_tex
 AI=AI_WRAPPER['registry'];AI_HASH=AI_WRAPPER['api_contract']
 if hashlib.sha256(json.dumps(AI,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=AI_HASH:raise ValueError('Runtime AI contract checksum mismatch')
 AI_EXTENSION={'version':AI['api_version'],'contract':AI_HASH}
+DATA_WRAPPER=json.loads((Path(__file__).parent/'data/DATA_ENGINE-v1.json').read_text(encoding='utf-8'))
+DATA=DATA_WRAPPER['registry'];DATA_HASH=DATA_WRAPPER['api_contract']
+if hashlib.sha256(json.dumps(DATA,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=DATA_HASH:raise ValueError('Data Engine contract checksum mismatch')
+DATA_EXTENSION={'version':DATA['api_version'],'contract':DATA_HASH}
 FORBIDDEN = {
     "python", "require", "package", "load", "loadfile", "dofile", "io", "os", "debug",
     "ffi", "collectgarbage", "getmetatable", "setmetatable", "rawget", "rawset",
@@ -52,12 +57,17 @@ def without_literals(source):
     return "".join(parts)
 
 
-def validate_api(source, services, api_version="fire-lua-0.1"):
+def validate_api(source, services, api_version="fire-lua-0.1",service_methods=None):
     methods=METHODS if api_version=="fire-lua-0.1" else {s:set(spec["methods"]) for s,spec in REGISTRY["services"].items()}
     if api_version==SDK_VERSION:
         methods['display']|=set(SDK['display']['methods'])
         methods['ui']=set(SDK['ui_methods'])
         methods['ai']=set(AI['methods'])
+        methods['data']=set(DATA['methods'])
+        if 'data' in services:
+            for service,extra in DATA.get('hardware_methods',{}).items():methods[service]|=set(extra)
+    for service,names in (service_methods or {}).items():
+        if service in methods:methods[service]&=set(names)
     clean = without_literals(source)
     banned = FORBIDDEN.intersection(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", clean))
     if banned:
@@ -70,8 +80,8 @@ def validate_api(source, services, api_version="fire-lua-0.1"):
             continue
         if service not in services or method not in methods.get(service, set()):
             raise ValueError(f"Unknown or undeclared API fire.{service}.{method}")
-        specs=AI if service=='ai' else REGISTRY['services'][service]
-        if not set(specs['methods'].get(method,{}).get('requires',[]))<=set(services):
+        spec=AI['methods'].get(method,{}) if service=='ai' else DATA['methods'].get(method,{}) if service=='data' else DATA.get('hardware_methods',{}).get(service,{}).get(method,REGISTRY['services'][service]['methods'].get(method,{}))
+        if not set(spec.get('requires',[]))<=set(services):
             raise ValueError("Undeclared dependent hardware service")
     for service in re.findall(r"\bfire\s*\.\s*(\w+)", clean):
         if service=='ui' and api_version==SDK_VERSION and 'display' in services:continue
@@ -80,7 +90,7 @@ def validate_api(source, services, api_version="fire-lua-0.1"):
 
 
 HARNESS = r'''
-local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms, native_guard, capture_times, sdk_factory, sdk_fonts, sdk_assets, sdk_ui, ai_limits = ...
+local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms, native_guard, capture_times, sdk_factory, sdk_fonts, sdk_assets, sdk_ui, ai_limits, data_limits, data_capture = ...
 local sdk_enabled=sdk_factory~=nil
 local sequence_index, next_input_ms = 1,16
 local compile, hook = load, debug.sethook
@@ -322,7 +332,7 @@ if api_version~="fire-lua-0.1" then
   hardware=hardware_factory(available,specs,resources,profile,function()return elapsed end,function(name,bytes)
     total=total+1;if total>operation_limit then error("API operation budget exceeded") end
     if trace_count<240 then trace_count=trace_count+1;local before=diagnostic_begin();trace[trace_count]={name,bytes};diagnostic_end(before) end
-  end,service_set,ai_limits,function()return callback_phase end)
+  end,service_set,ai_limits,function()return callback_phase end,data_limits,data_capture)
 end
 if sdk_enabled then
   -- Existing simulated base queries predate the extended I/O meter. Native
@@ -545,9 +555,10 @@ def simulate(request):
     if api_version==SDK_VERSION and request.get('api_contract')!=SDK_HASH:raise ValueError('SDK contract mismatch')
     if api_version==SDK_VERSION and 'display' not in services:raise ValueError('SDK requires display permission')
     if 'ai' in services and (api_version!=SDK_VERSION or request.get('runtime_ai')!=AI_EXTENSION):raise ValueError('Runtime AI requires exact SDK extension')
-    if not set(services) <= (METHODS.keys() if api_version=="fire-lua-0.1" else set(REGISTRY['services'])|({'ai'} if api_version==SDK_VERSION else set())):
+    if 'data' in services and (api_version!=SDK_VERSION or request.get('data_engine')!=DATA_EXTENSION or not {'jobs','sd'}<=set(services)):raise ValueError('Data Engine requires exact SDK extension and dependencies')
+    if not set(services) <= (METHODS.keys() if api_version=="fire-lua-0.1" else set(REGISTRY['services'])|({'ai','data'} if api_version==SDK_VERSION else set())):
         raise ValueError("Unsupported service")
-    validate_api(source, services,api_version)
+    validate_api(source, services,api_version,request.get('service_methods'))
     app_memory=min(request.get("max_memory",262144),262144)
     lua = LuaRuntime(
         register_eval=False, register_builtins=False,
@@ -569,9 +580,22 @@ def simulate(request):
                 or request.get('profile')!='idle'):
             raise ValueError('Invalid bounded preview duration')
         max_ms=min(max_ms,preview_ms)
-    specs={s:(AI['methods'] if s=='ai' else REGISTRY['services'][s]['methods']) for s in services} if api_version!="fire-lua-0.1" else {}
+    specs={s:dict(AI['methods'] if s=='ai' else DATA['methods'] if s=='data' else REGISTRY['services'][s]['methods']) for s in services} if api_version!="fire-lua-0.1" else {}
     if 'ai' in services:specs['ai']={'request':{**AI['methods']['request'],'returns':'job'}}
-    helper=(Path(__file__).parent/'data/runtime_ai_sim.lua').read_text(encoding='utf-8') if 'ai' in services else ''
+    if 'data' in services:
+        specs['data']={k:{**v,'returns':'boolean' if k=='develop' else 'job'} for k,v in DATA['methods'].items()}
+        for service,extra in DATA.get('hardware_methods',{}).items():
+            if service in services:specs[service].update({k:{**v,'returns':'job'} for k,v in extra.items()})
+    specs=copy.deepcopy(specs)
+    for service,names in (request.get('service_methods') or {}).items():
+        if service in specs:specs[service]={k:v for k,v in specs[service].items() if k in names}
+    for key,values in (request.get('service_modes') or {}).items():
+        service,method=key.split('.',1);spec=specs.get(service,{}).get(method)
+        if spec:
+            for arg in spec.get('args',[]):
+                if arg.get('type')=='enum':arg['values']=[v for v in arg['values'] if v in values];break
+    helper=(Path(__file__).parent/'data/runtime_ai_sim.lua').read_text(encoding='utf-8') if {'ai','data'}&set(services) else ''
+    if 'data' in services:helper+='\n'+(Path(__file__).parent/'data/data_engine_sim.lua').read_text(encoding='utf-8')
     factory=lua.execute(helper+(Path(__file__).parent/"data/hardware_sim.lua").read_text(encoding="utf-8")) if api_version!="fire-lua-0.1" else None
     sdk_factory=None;sdk_fonts={};sdk_assets={};sdk_ui=''
     if api_version==SDK_VERSION:
@@ -585,7 +609,8 @@ def simulate(request):
                          (max_ms+15)//16 if request.get("profile") else min(180, max_ms // 16), request.get("profile"),
                          max(20000, ((max_ms+15)//16)*128 if api_version==SDK_VERSION else max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory,lua.table_from(sequence),interval,
                          request.get("native_host_policy")=="fire-native-host-v1",lua.table_from(capture_times),sdk_factory,
-                         lua.table_from(sdk_fonts,recursive=True),lua.table_from(sdk_assets),sdk_ui,lua.table_from(AI['limits']))
+                          lua.table_from(sdk_fonts,recursive=True),lua.table_from(sdk_assets),sdk_ui,lua.table_from(AI['limits']),
+                          lua.table_from(DATA['limits']),lua.table_from(request.get('data_capture') or {},recursive=True))
     hardware_metrics=result["hardware_metrics"]
     resources_used={kind:[values[i] for i in range(1,len(values)+1)] for kind,values in hardware_metrics["resources_used"].items()} if hardware_metrics else {}
     def unpack(value):
@@ -600,6 +625,8 @@ def simulate(request):
                 ('callback_ms','init_callback_ms','sdk_update_callback_ms') if key!='sdk_update_callback_ms' or api_version==SDK_VERSION},
             "native_timing_measured":False,
             "runtime_ai_simulated":'ai' in services,
+            "data_engine_simulated":'data' in services,
+            "service_modes_used":{k:[v for v in values.values()] for k,values in hardware_metrics['service_modes_used'].items()} if hardware_metrics else {},
             "frames": result["frames"], "elapsed_ms": result["elapsed_ms"],
             "api_operations": result["api_operations"], "trace": trace,
             "elided_clears":result["elided_clears"],"real_clears":result["real_clears"],"next_background":result["next_background"],

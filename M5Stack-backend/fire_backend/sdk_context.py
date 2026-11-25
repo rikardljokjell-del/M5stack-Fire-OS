@@ -5,12 +5,12 @@ import re
 
 from .app_sdk import SDK_VERSION, SDK_CONTRACT, available, classify, contract
 
-VERSION='fire-sdk-generation-v5'
+VERSION='fire-sdk-generation-v6'
 MARKER='\nFIRE SDK request contract:\n'
 _BUDGETS=contract()['registry']['budgets']
 
 POLICY='''
-FIRE App SDK development and acceptance policy, version5:
+FIRE App SDK development and acceptance policy, version6:
 Build exactly the confirmed app with sensible defaults. Preserve working code
 during correction; fix concrete defects rather than redesigning or adding scope.
 Use the real fire.ui kit, shared fonts and selected canonical assets for standard
@@ -111,6 +111,9 @@ def detailed_services(summary,caps,base_manifest=None):
     selected.update(name for name,pattern in TERMS.items() if re.search(pattern,summary,re.I))
     if re.search(r'imu|sensor|dashboard|vater|instrument|kompass|compass',summary,re.I):selected.add('imu')
     if re.search(r'vær|vaer|weather|nett|internet|web',summary,re.I):selected.update({'wifi','jobs'})
+    from .data_contract import available as data_available
+    if data_available(caps) and re.search(r'måling|maaling|measure|logg?|record|registrer|capture|signal|vibr|sammenlign|compare|analy[sz]|diagnos|rådata|raw.data|datasett?|dataset|datagrunnlag',summary,re.I):
+        selected.update({'data','sd','jobs'})
     if classify(summary) in {'racing','space','platformer','adventure','puzzle'}:selected.update({'speaker','jobs','sd'})
     selected.update((base_manifest or {}).get('required_services',[]))
     return sorted(set(service_closure(selected&allowed,SDK_VERSION))&allowed)
@@ -145,7 +148,8 @@ def normalize(context,*,capabilities=None,summary='',base_manifest=None):
             try:
                 _,end=json.JSONDecoder().raw_decode(after);context=before+after[end:]
             except ValueError:pass
-        detail=generation_contract(SDK_VERSION,detailed_services(summary,capabilities,base_manifest))
+        selection=summary+(' data recording' if 'Frozen development context.' in context else '')
+        detail=generation_contract(SDK_VERSION,detailed_services(selection,capabilities,base_manifest),capabilities)
         context+='\nExact negotiated host contract (arguments, returns, dependencies, units and bounds):\n'+json.dumps(detail,ensure_ascii=False,separators=(',',':'))
     anchor={'api_version':SDK_VERSION,'api_contract':SDK_CONTRACT,'policy_version':VERSION}
     return POLICY+MARKER+json.dumps(anchor,separators=(',',':'))+'\n'+context.strip()

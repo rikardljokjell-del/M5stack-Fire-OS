@@ -60,7 +60,10 @@ def test_sdk_cannot_bypass_display_permission_or_old_api_negotiation():
     manifest=Manifest(id='sdk-test',name='SDK',version='0.1.1',api_version=SDK_VERSION,
         api_contract=SDK_CONTRACT,required_services=['display'],permissions=['fire.display'],checksum='a'*64)
     assert not package_compatibility({'manifest':manifest.model_dump()},caps)
-    old=copy.deepcopy(caps);old.pop('app_sdk');old.pop('runtime_ai');old['services'].remove('ai')
+    old=copy.deepcopy(caps)
+    for field,service in [('app_sdk',None),('runtime_ai','ai'),('data_engine','data')]:
+        old.pop(field)
+        if service:old['services'].remove(service)
     assert package_compatibility({'manifest':manifest.model_dump()},old)
     with pytest.raises(ValueError):Capabilities.model_validate({**caps,'app_sdk':{'version':SDK_VERSION,'contract':'0'*64}})
     assert 'app_sdk' not in Capabilities.model_validate(old).model_dump()

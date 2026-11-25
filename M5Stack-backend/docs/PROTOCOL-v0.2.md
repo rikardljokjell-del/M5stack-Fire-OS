@@ -498,3 +498,55 @@ authorization remains separate. Old events omit the optional fields.
 Assistant/progress/ready/error events include `display_text`: one complete LCD
 line, at most28 UTF-8 bytes. Full assistant `text` remains the spoken reply.
 The same model call supplies both; fixed phases/fallback never need another call.
+
+## Optional Data Engine and iterative development
+
+[DATA_ENGINE-v1.json](../contracts/DATA_ENGINE-v1.json) is the canonical optional
+extension. `capabilities.data_engine` includes the exact version/hash and actual
+capture sources/limits; manifest contains only version/hash. Optional
+`service_methods` and `service_modes` narrow real adapters/modes without changing
+the old hardware hash. Absent fields preserve old profiles; unsupported declared
+methods/modes fail generation validation and delivery compatibility checks.
+
+`data_request` operations are `process`, `develop`, or internal `sync`.
+`data_cancel` and `data_result` share existing authenticated socket identity:
+request_id/app_id/package_id/source_sha256/run_id/boot_id. The current verified
+app run must match before admission and after asynchronous work. Immutable sealed
+captures from an older version of that same app retain their original source.
+
+Each descriptor binds `components={data,index,events}` with size/SHA per part;
+top size/SHA equals data. POST `/sessions/{session_id}/data/{request_id}/{dataset_id}`
+uses the existing device credential, octet-stream, X-Data-Part, X-Data-Offset and
+X-Data-SHA256 (CHUNK hash). Chunks are at most8192 bytes. Empty sidecars use an
+empty POST and SHA256(empty). Response has exact Content-Length and
+`{offset,complete,next_upload}`; complete refers to that part. upload_required
+contains only one next instruction. Completion requires all three whole-file
+hashes. Active authorized duplicate chunks are idempotent; cancel drains raw-file
+work before releasing its lock. Missing transfers resume at a verified offset.
+No AI call occurs during sync. Runtime AI refs automatically use this same sync.
+
+`app_develop_request` carries mode update/fork/feedback, instruction and optional
+dataset descriptors. `app_develop_ready` returns context_id. A normal subsequent
+SessionStart may provide development_context_id; server resolves the frozen base
+and ownership rather than trusting client-selected parent source. A desktop/web
+conversation can open the same context. No generation starts before the current
+proposal is confirmed. Legacy OS Improve without datasets remains supported.
+`app_observation_confirm` carries context_id and confirm/reject. Server preserves
+the original snapshot and stores a separate source/run/boot/hash-bound user
+observation. AI hypotheses and user observations never become protocol proof.
+
+Backend Data/Studio Data and improvement show datasets, processing, assessments,
+confirmation state and frozen development contexts. Raw downloads use existing
+authenticated UI routes and attachment responses. Updates/rollback/version deletion retain raw app data. Explicit deletion of all app history removes its
+own data components/results/jobs/contexts; active work blocks that deletion.
+A parent fork grant becomes unavailable if its explicitly deleted source history
+is removed. There is no automatic purge or cross-owner data grant.
+
+Implementation and offline integration tests are not physical Data Engine
+verification. Actual capture/radio/AI/Improve end-to-end status is recorded
+separately with firmware and user-triggered measurements.
+
+BLE `ble-ad-jsonl-v1` keeps the full payload_hex; optional integer adv_length
+marks the advertising/scan-response boundary within those same bytes. Legacy
+records without that field remain accepted. A received combined62-byte payload
+is not automatically a valid31-byte advertising replay.

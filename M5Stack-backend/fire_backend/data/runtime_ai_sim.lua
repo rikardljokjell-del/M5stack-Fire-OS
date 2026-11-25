@@ -1,4 +1,5 @@
 -- Trusted private parser/fixture. Never exported as a general app JSON API.
+local runtime_data_decode
 local runtime_ai_parser=(function()
  local null={}
  local function decode(s,maxdepth,limits)
@@ -99,6 +100,11 @@ local runtime_ai_parser=(function()
   if s.type=='boolean' then return v==true,v==true and 4 or 5 end
   v=v or math.max(s.minimum or 0,math.min(0,s.maximum or 0));if s.type=='integer' then v=math.ceil(v) end
   if s.maximum and v>s.maximum then error('invalid_schema') end;return v,#tostring(v)
+ end
+ runtime_data_decode=function(data,limits)
+  local ok,value,kinds=pcall(decode,data,limits.json_depth,limits)
+  if not ok or kinds[value]~='object' then return nil,'invalid_json' end
+  return value
  end
  return function(data,spec,limits)
   local ok,d,dk=pcall(decode,data,limits.json_depth,limits);if not ok or dk[d]~='object' then return nil,'invalid_json' end

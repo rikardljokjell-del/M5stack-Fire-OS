@@ -1,5 +1,27 @@
 {
   "$defs": {
+    "DataEngineExtension": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "fire-data-engine-1.0",
+          "title": "Version",
+          "type": "string"
+        },
+        "contract": {
+          "const": "15a9ff7e5c68fc4d6dad8df9b4ab52b451f5e5a5dd2e20874881006c8e0eae8e",
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Contract",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "contract"
+      ],
+      "title": "DataEngineExtension",
+      "type": "object"
+    },
     "RuntimeAICapability": {
       "additionalProperties": false,
       "properties": {
@@ -63,6 +85,7 @@
           "bluetooth",
           "buttons",
           "dac",
+          "data",
           "display",
           "gpio",
           "i2c",
@@ -107,6 +130,7 @@
           "fire.bluetooth",
           "fire.buttons",
           "fire.dac",
+          "fire.data",
           "fire.display",
           "fire.gpio",
           "fire.i2c",
@@ -138,6 +162,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/RuntimeAICapability"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "data_engine": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DataEngineExtension"
         },
         {
           "type": "null"
@@ -191,6 +226,29 @@
       "else": {
         "properties": {
           "runtime_ai": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "required_services": {
+            "contains": {
+              "const": "data"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "data_engine"
+        ]
+      },
+      "else": {
+        "properties": {
+          "data_engine": {
             "type": "null"
           }
         }

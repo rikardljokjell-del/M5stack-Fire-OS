@@ -7,6 +7,13 @@ Se [oppsett for PC, mobil og HTTPS/WSS](docs/WEB_STUDIO_SETUP.md) og
 Home går direkte til MQTT ved HA; se [Home-oppsettet](home_assistant/README.md).
 Firmwareoversikten er nå kun lesbar GitHub-metadata; FIRE håndterer oppdatering.
 
+**Data og videreutvikling:** Den valgfrie [Data Engine](contracts/DATA_ENGINE-v1.json)
+knytter målinger, rålogger, analyser og observasjoner til appversjon og kjøring.
+Velg Forbedre / ny app fra datagrunnlag på FIRE, eller åpne et frosset grunnlag i
+backendens Data-visning. Vanlige bygg- og kjørebekreftelser gjelder fortsatt.
+Rådata bevares ved oppdatering og tilbakeføring. AI-vurderinger og brukerbekreftede
+observasjoner vises adskilt fra fysisk verifiserte fakta. Se [protokollen](docs/PROTOCOL-v0.2.md).
+
 [Jobber](docs/JOB_MONITOR.md) viser aktive bygg/feilrettinger, fremdrift,
 stopprosaker og manuell kontekst for neste generering. Oversikten hentes lokalt
 og bruker ingen betalte AI-kall.

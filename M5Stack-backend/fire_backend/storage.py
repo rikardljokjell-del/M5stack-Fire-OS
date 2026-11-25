@@ -69,6 +69,15 @@ class Store:
 
     def delete_project(self, project_id):
         self.get("projects", project_id)
+        data_targets = []
+        for group in ('datasets','data_results','data_jobs','development_contexts'):
+            for record in self.list(group):
+                if record.get('project_id',record.get('parent_project_id')) == project_id:
+                    suffixes = ('.json','.data','.index','.events','.data.partial','.index.partial','.events.partial') if group=='datasets' else ('.json','.csv','.csv.partial') if group=='data_results' else ('.json',)
+                    for suffix in suffixes:
+                        target = self.path(group,record['id'],suffix)
+                        target.resolve().relative_to((self.root/group).resolve())
+                        data_targets.append(target)
         # Check every recursive target before deleting any metadata. Generated
         # paths must remain in this workspace, including after symlink resolution.
         for build in self.list("builds"):
@@ -90,6 +99,8 @@ class Store:
             if package["project_id"] == project_id:
                 self.path("packages", package["id"]).unlink(missing_ok=True)
                 self.path("packages", package["id"], ".zip").unlink(missing_ok=True)
+        for target in data_targets:
+            target.unlink(missing_ok=True)
         self.path("projects", project_id).unlink()
         for case in self.list("quality"):
             if case.get("project_id") == project_id:

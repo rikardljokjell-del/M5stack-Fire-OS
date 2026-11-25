@@ -43,10 +43,14 @@ def schemas():
 
     event["properties"]["event_id"] = nonnull("event_id")
     conditions = []
-    for name in ('runtime_ai_request','runtime_ai_cancel'):
+    for name in ('runtime_ai_request','runtime_ai_cancel','data_request','data_cancel','app_develop_request'):
         fields=['request_id','app_id','package_id','source_sha256','run_id']
         if name=='runtime_ai_request':fields+=['instructions','data_json','schema_json','timeout_ms']
+        if name=='data_request':fields+=['operation']
+        if name=='app_develop_request':fields+=['mode']
         conditions.append({'if':{'properties':{'event':{'const':name}}},'then':{'required':fields,'properties':{f:nonnull(f) for f in fields}}})
+    conditions.append({'if':{'properties':{'event':{'const':'app_observation_confirm'}}},
+        'then':{'required':['context_id','observation_action'],'properties':{f:nonnull(f) for f in ('context_id','observation_action')}}})
     conditions.append({'if':{'properties':{'event':{'const':'mode_select'}}},'then':{'anyOf':[{'required':[f],'properties':{f:nonnull(f)}} for f in ('conversation_mode','runtime_ai_mode')]}})
     for name, required in REQUIRED.items():
         conditions.append({"if": {"properties": {"event": {"const": name}}},
@@ -93,8 +97,10 @@ def schemas():
     sdk["allOf"]=[{"properties":{"required_services":{"contains":{"const":"display"}},"permissions":{"contains":{"const":"fire.display"}}}}]
     sdk['allOf'].append({'if':{'properties':{'required_services':{'contains':{'const':'ai'}}}},
                          'then':{'required':['runtime_ai']},'else':{'properties':{'runtime_ai':{'type':'null'}}}})
+    sdk['allOf'].append({'if':{'properties':{'required_services':{'contains':{'const':'data'}}}},
+                         'then':{'required':['data_engine']},'else':{'properties':{'data_engine':{'type':'null'}}}})
     for old in (legacy,manifest):
-        old['properties'].pop('runtime_ai',None);old.pop('$defs',None)
+        old['properties'].pop('runtime_ai',None);old['properties'].pop('data_engine',None);old.pop('$defs',None)
     manifest['properties']['required_services']['items']['enum']=sorted(REGISTRY['services'])
     manifest['properties']['permissions']['items']['enum']=['fire.'+name for name in sorted(REGISTRY['services'])]
     return {"manifest-fire-app-sdk-1.0.schema.json":sdk,"device-event-v0.2.schema.json": event, "manifest-fire-lua-0.1.schema.json": legacy,

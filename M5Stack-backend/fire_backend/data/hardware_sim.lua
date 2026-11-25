@@ -1,9 +1,11 @@
 -- Trusted PC host. No sockets, hardware, files or Python callbacks are exposed.
-return function(available, specs, resources, profile, now, trace, services, ai_limits, phase)
+return function(available, specs, resources, profile, now, trace, services, ai_limits, phase, data_limits, data_capture)
+  local data_host=services.data and data_engine_factory(services,now,phase,data_limits,data_capture) or nil
   local jobs, used, pins, pwm, uart, spi, files, handles, gpio_modes, gpio_values = {},{},{},{},{},{},{},{},{},{}
   local next_job, next_handle, io_calls, io_bytes, peak_io, peak_bytes = 0,0,0,0,0,0
   local active_jobs, peak_jobs = 0,0
   local calls, jobs_started = {},{}
+  local modes_used={}
   local function contains(t,v) for _,n in ipairs(t or {}) do if n==v then return true end end return false end
   local function resource(kind,value)
     if not contains(resources[kind],value) then error("Unannounced hardware resource: "..kind) end
@@ -17,7 +19,12 @@ return function(available, specs, resources, profile, now, trace, services, ai_l
   end
   local function check(v,s)
     local t=s.type
-    if t=="integer" then
+    if t=='data_payload' then
+      if type(v)=='string' then if #v>s.max_bytes then error('Data payload exceeds limit') end;return end
+      return check(v,{type='bytes',max_items=s.max_bytes})
+    elseif t=='identifier' then
+      if type(v)~='string' or #v>s.max_bytes or not string.match(v,'^[a-z0-9][a-z0-9_-]*$') then error('Invalid dataset identifier') end
+    elseif t=="integer" then
       if type(v)~="number" or v~=v or v%1~=0 or v<s.min or v>s.max then error("Hardware integer outside bounds") end
     elseif t=="boolean" then if type(v)~="boolean" then error("Hardware boolean required") end
     elseif t=="enum" then if not contains(s.values,v) then error("Invalid hardware enum") end
@@ -57,6 +64,7 @@ return function(available, specs, resources, profile, now, trace, services, ai_l
   local function release(owner) for pin,v in pairs(pins) do if v==owner then pins[pin]=nil end end end
   local function payload(job)
     local a,k=job.args,job.kind
+    if string.sub(k,1,5)=='data.' then return data_host.result(job) end
     if k=='ai.request' then
       if job.fixture_bytes>ai_limits.result_bytes then return {ok=false,error_code='result_too_large'} end
       return {ok=true,data=job.fixture}
@@ -66,6 +74,7 @@ return function(available, specs, resources, profile, now, trace, services, ai_l
     if k=="wifi.connect" then return {ok=true,connected=true,ssid="PC-SIMULATED",ip="192.0.2.1",rssi=-55} end
     if k=="wifi.request" then return {ok=true,status=200,body="simulated response"} end
     if k=="bluetooth.scan" then return {ok=true,devices={{name="PC-SIMULATED",address="00:00:00:00:00:01",rssi=-55}}} end
+    if k=='bluetooth.advertise_raw' then return {ok=true,written=#a[1]} end
     if k=="bluetooth.connect" or k=="bluetooth.advertise" then
       local count=0;for _ in pairs(handles) do count=count+1 end
       if count>=4 then return {ok=false,error_code="busy"} end
@@ -104,10 +113,26 @@ return function(available, specs, resources, profile, now, trace, services, ai_l
   local function invoke(service,name,spec,...)
     local a=table.pack(...);args_ok(a,spec)
     local k=service.."."..name
+    if service=='bluetooth' and name=='scan' then
+      modes_used[k]=modes_used[k] or {};modes_used[k][a[1]]=a[1]
+    end
     calls[k]=(calls[k] or 0)+1
     if k=="power.brightness" then error("OS backlight setting is authoritative; apps must not override brightness") end
     local bytes=0;for i=1,a.n do if type(a[i])=="string" or type(a[i])=="table" then bytes=bytes+#a[i] end end
     note(k,bytes)
+    if service=='data' then
+      local allowed,err=data_host.admit(name,a)
+      if not allowed then return name=='develop' and false or nil,err end
+      if name=='develop' then return true end
+    elseif k=='bluetooth.advertise_raw' then
+      local i=1
+      while i<=#a[1] do
+        local n=a[1][i]
+        if n==0 then for j=i,#a[1] do if a[1][j]~=0 then error('Invalid BLE AD padding') end end;break end
+        if i+n>#a[1] then error('Invalid BLE AD TLV length') end
+        i=i+n+1
+      end
+    end
     local ai_fixture,ai_size
     if k=='ai.request' then
       if phase()~='update' and phase()~='on_button' then return nil,'stale_run' end
@@ -218,6 +243,6 @@ return function(available, specs, resources, profile, now, trace, services, ai_l
     charge_base=function(name,bytes)calls[name]=(calls[name] or 0)+1;note(name,bytes,true)end,
     metrics=function()
       local resources_used={};for kind,values in pairs(used) do local list={};for v in pairs(values) do list[#list+1]=v end;table.sort(list);resources_used[kind]=list end
-      return {resources_used=resources_used,max_io_calls=peak_io,max_io_bytes=peak_bytes,max_jobs=peak_jobs,calls=calls,jobs_started=jobs_started}
+       return {resources_used=resources_used,max_io_calls=peak_io,max_io_bytes=peak_bytes,max_jobs=peak_jobs,calls=calls,jobs_started=jobs_started,service_modes_used=modes_used}
     end}
 end

@@ -88,5 +88,5 @@ def generation_policy(settings, session):
         "Never claim GPS is built in; an external GNSS module may use an announced UART. Jobs must be polled without waiting, closed after success/failure, and timeouts/busy/errors must leave the app responsive. "
         "Source presence and advertised budgets are not proof of physical testing or firmware enforcement."
         + "\nExact negotiated host contract (arguments, returns, dependencies, units and bounds):\n"
-        +json.dumps(generation_contract(effective["api_version"],effective["lua_services"]),ensure_ascii=False)
+        +json.dumps(generation_contract(effective["api_version"],effective["lua_services"],session.capabilities),ensure_ascii=False)
     )

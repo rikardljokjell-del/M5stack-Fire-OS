@@ -28,6 +28,7 @@ class StartConversation(BaseModel):
     base_package_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     conversation_mode: str = Field(default="develop", pattern=r"^(develop|chat)$")
     runtime_ai_mode: Literal['auto','off'] | None = None
+    development_context_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class Text(BaseModel):
@@ -42,7 +43,7 @@ class PreviewInput(BaseModel):
 
 
 def busy(service):
-    return bool(service.device_builds or service.build_lock.locked() or service.repairs.tasks or service.active_downloads or service.runtime_ai.tasks
+    return bool(service.device_builds or service.build_lock.locked() or service.repairs.tasks or service.active_downloads or service.runtime_ai.tasks or service.data_engine.tasks
                 or getattr(service,'preview_service',None) and service.preview_service.lock.locked()
                 or any(s.lock.locked() or any(t and not t.done() for t in
                        (s.task, s.operation_task, s.input_task, s.speech_task)) for s in service.sessions.values()))
@@ -151,6 +152,7 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
                 "jobs": service.jobs.snapshot(), "apps": service.app_library(), "usage": service.usage.snapshot(),
                 "physical_verified": False, "restart_available": bool(restart_callback),
                 "runtime_ai":service.runtime_ai.snapshot(),
+                "data_engine":service.data_engine.snapshot(),
                 "restart_pending": app.state.restart_pending, "restart_message": app.state.restart_message}
 
     @app.get("/web/models", dependencies=[Depends(signed_in)])
@@ -158,6 +160,11 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
         from .model_catalog import ROLE_MODELS, choice_label, price_detail
         return {role: [{"id": name, "label": choice_label(role, name), "detail": price_detail(role, name)}
                        for name in names] for role, names in ROLE_MODELS.items()}
+
+    @app.get('/web/data/{dataset_key}/{part}',dependencies=[Depends(signed_in)])
+    async def data_download(dataset_key:str,part:str,service=Depends(backend)):
+        path=await service.data_engine.download(dataset_key,part)
+        return FileResponse(path,media_type='application/octet-stream',filename=dataset_key+'.'+part)
 
     @app.patch('/web/runtime-ai',dependencies=[Depends(signed_in)])
     async def runtime_global(request:Request,service=Depends(backend)):
@@ -237,7 +244,8 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
 
     @app.post("/web/conversations", dependencies=[Depends(signed_in)])
     async def conversation(body: StartConversation, service=Depends(backend)):
-        s = await service.desktop_conversation(body.device_id, body.project_id, body.base_package_id,runtime_ai_mode=body.runtime_ai_mode)
+        s = await service.desktop_conversation(body.device_id, body.project_id, body.base_package_id,
+            runtime_ai_mode=body.runtime_ai_mode,development_context_id=body.development_context_id)
         s.conversation_mode = body.conversation_mode
         service.persist(s)
         return service.snapshot(s)

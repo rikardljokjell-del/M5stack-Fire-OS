@@ -31,6 +31,7 @@ from .app_quality import APP_QUALITY_POLICY,AppReview,FireAppReview,UX_POLICY_VE
 from .capabilities import CapabilityError
 from .usage import UsageBudgetError
 from .jobs import apply_context,mark_context_applied,require_current_context,ContextChanged
+from .data_contract import EXTENSION as DATA_EXTENSION
 from .generation_errors import GenerationResponseError
 from .build_strategy import POLICY as DEVELOPMENT_POLICY,VERSION as DEVELOPMENT_VERSION,RepairBaseline,evidence_for,review_conflicts,retained_baseline,retained_standard_core
 
@@ -82,13 +83,14 @@ async def validate_release(app, store, build_id):
                 raise ValueError(f"Scenario {scenario.name}/{fault}: {str(error) or 'worker timeout'}") from error
             visual_candidates.extend({'profile':fault,'scenario':scenario.name,**frame} for frame in result.pop('visual_frames',[]))
             results.append({"profile":fault,"scenario":scenario.name,**{k:v for k,v in result.items() if k!="trace"}})
-    calls,jobs={},{}
+    calls,jobs,modes={},{},{}
     missing=set()
     for result in results:
         for key,value in result.get("io_calls",{}).items():calls[key]=calls.get(key,0)+value
         for key,value in result.get("jobs_started",{}).items():jobs[key]=jobs.get(key,0)+value
+        for key,values in result.get('service_modes_used',{}).items():modes[key]=sorted(set(modes.get(key,[]))|set(values))
     if app.get("require_io_coverage"):
-        asynchronous={"i2c","uart","spi","sd","mic","speaker","bluetooth","ai"}
+        asynchronous={"i2c","uart","spi","sd","mic","speaker","bluetooth","ai","data"}
         synchronous={"gpio","pwm","adc","dac","rtc","wifi","power"}
         active={k.split('.')[0] for k in calls if k.split('.')[-1] not in {"close","stop","release"}}
         active.update(k.split('.')[0] for k in jobs)
@@ -104,7 +106,7 @@ async def validate_release(app, store, build_id):
         for kind,values in result.get("resources_used",{}).items():resources[kind]=sorted(set(resources.get(kind,[]))|set(values))
     from .visual_preview import save_screenshots
     visual=await asyncio.to_thread(save_screenshots,visual_candidates,store,build_id,sha256(app['main_lua'].encode('utf-8')))
-    return {**results[0], "profiles": results, "resources_used":resources,"io_calls":calls,"jobs_started":jobs,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
+    return {**results[0], "profiles": results, "resources_used":resources,"io_calls":calls,"jobs_started":jobs,'service_modes_used':modes,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
             'visual_evidence':visual,'io_coverage_missing':sorted(missing),
             'negotiated_contract':{'api_version':app.get('api_version',BASE_API),'api_contract':app.get('api_contract'),
                 'sdk_policy_version':SDK_POLICY_VERSION if app.get('api_version')==SDK_VERSION else None,
@@ -296,6 +298,13 @@ class Builder:
         learned_policy=Quality(self.store).policy()
         if learned_policy and learned_policy not in context:context+=learned_policy
         base_manifest=self.store.get('packages',project['latest_package'])['manifest'] if project.get('latest_package') else None
+        fork_previous = None
+        fork_context_id = build.get('resume_context',{}).get('development_context_id')
+        if not project.get('latest_package') and project.get('parent_context_grant'):
+            if not fork_context_id or not hasattr(self,'fork_source'):
+                raise PermissionError('Fork requires an explicit frozen parent context')
+            fork_base, fork_previous = self.fork_source(project['id'],project.get('owner_device_id'),fork_context_id)
+            base_manifest = fork_base['manifest']
         from .runtime_contract import GENERATION_MARKER,generation_mode,generation_context,explicitly_requested,available as runtime_available,EXTENSION as RUNTIME_EXTENSION
         runtime_mode=generation_mode(context,self.settings)
         if GENERATION_MARKER not in context:context+=generation_context(self.settings,capabilities,runtime_mode)
@@ -334,7 +343,9 @@ class Builder:
             else:
                 try:last_error=dumps(compact_repair_evidence(json.loads(last_error)))
                 except (ValueError,TypeError):last_error=str(last_error)[:2400]
-        if project.get("latest_package"):
+        if fork_previous is not None:
+            previous = fork_previous
+        elif project.get("latest_package"):
             base = self.store.get("packages", project["latest_package"])
             archive_path = self.store.path("packages", base["id"], ".zip")
             verify_archive(archive_path, base["manifest"], base["archive_sha256"])
@@ -423,12 +434,16 @@ class Builder:
                     budgets = {"max_memory": capabilities["max_memory"], "max_runtime_ms": capabilities["max_runtime_ms"]} if capabilities else {}
                     api_version=package_api(capabilities)
                     coverage=set(generated.required_services)
-                    if 'speaker' in coverage:
+                    if 'speaker' in coverage or 'data' in coverage:
                         from .lua_worker import without_literals
                         if not re.search(r'\bfire\s*\.\s*sd\b',without_literals(generated.main_lua)):coverage.discard('sd')
                     result = await validate_release({**generated.model_dump(), **budgets,"api_version":api_version,
+                        'data_capture':(capabilities or {}).get('data_engine') or {},
+                        'service_methods':(capabilities or {}).get('service_methods'),
+                        'service_modes':(capabilities or {}).get('service_modes'),
                         "api_contract":SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
                         **({'runtime_ai':RUNTIME_EXTENSION} if 'ai' in generated.required_services else {}),
+                        **({'data_engine':DATA_EXTENSION} if 'data' in generated.required_services else {}),
                         "coverage_services":sorted(coverage),
                         "hardware":(capabilities or {}).get("hardware") or {},
                         "require_io_coverage":self.settings.fire_ai_mode=="openai","defer_io_coverage":bool(standard),
@@ -525,6 +540,7 @@ class Builder:
                 **budgets,
                 permissions=[f"fire.{s}" for s in generated.required_services], checksum=sha256(payload),
                 **({'runtime_ai':RUNTIME_EXTENSION} if 'ai' in generated.required_services else {}),
+                **({'data_engine':DATA_EXTENSION} if 'data' in generated.required_services else {}),
             ).model_dump()
             archive_path = work / "app.zip"
             write_archive(archive_path, manifest, payload)

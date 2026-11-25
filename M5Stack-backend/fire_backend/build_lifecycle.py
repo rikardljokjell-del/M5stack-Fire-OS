@@ -148,6 +148,7 @@ class BuildLifecycle:
             self.store.put('builds',build['id'],entry['build'])
             if worker.progress:session.progress=dict(worker.progress);await self.emit(session,session.progress)
         session.history=copy.deepcopy(snapshot.get('history',[]))
+        session.development_context_id=snapshot.get('development_context_id')
         session.summary=snapshot.get('summary',build.get('summary',''))
         self.persist(session)
         result={'type':'build_resumed','build_id':build['id'],'project_id':session.project_id,
@@ -183,6 +184,7 @@ class BuildLifecycle:
         summary,_=apply_context(self.store,build,1)
         session.project_id=project['id'];session.summary=summary
         session.history=copy.deepcopy(snapshot.get('history',[]))
+        session.development_context_id=snapshot.get('development_context_id')
         session.app_mode='update' if base else 'new';session.base_package_id=base
         session.package_id=None;session.build_id=build['id'];session.task=None
         session.conversation_mode='develop';session.install_permitted=True

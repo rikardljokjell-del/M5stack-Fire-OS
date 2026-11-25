@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .api_registry import ALL_SERVICES,BASE_SERVICES,BASE_API,HARDWARE_API,API_CONTRACT,service_closure
 from .app_sdk import SDK_VERSION,SDK_CONTRACT
 from .runtime_contract import VERSION as AI_VERSION,CONTRACT as AI_CONTRACT,LIMITS as AI_LIMITS
+from .data_contract import VERSION as DATA_VERSION,CONTRACT as DATA_CONTRACT,LIMITS as DATA_LIMITS
 
 Identifier = str
 ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
@@ -101,6 +102,84 @@ class RuntimeAICapability(StrictModel):
         return value
 
 
+class DataEngineExtension(StrictModel):
+    version: Literal['fire-data-engine-1.0']
+    contract: str = Field(pattern=r'^[a-f0-9]{64}$', json_schema_extra={'const': DATA_CONTRACT})
+
+    @field_validator('contract')
+    @classmethod
+    def exact_contract(cls, value):
+        if value != DATA_CONTRACT:
+            raise ValueError('Data Engine contract mismatch')
+        return value
+
+
+class DataCaptureLimit(StrictModel):
+    duration_ms_max: int = Field(ge=1, le=2147483647, strict=True)
+    sample_rate_hz_min: int | None = Field(default=None, ge=1, le=1000000, strict=True)
+    sample_rate_hz_max: int | None = Field(default=None, ge=1, le=1000000, strict=True)
+    sample_rates_hz: list[int] | None = Field(default=None, max_length=16)
+    max_records: int | None = Field(default=None, ge=1, le=DATA_LIMITS['dataset_bytes'], strict=True)
+
+    @model_validator(mode='after')
+    def rates(self):
+        if self.sample_rate_hz_min and self.sample_rate_hz_max and self.sample_rate_hz_min > self.sample_rate_hz_max:
+            raise ValueError('Invalid capture sample rate bounds')
+        if self.sample_rates_hz is not None and (not self.sample_rates_hz or
+                len(set(self.sample_rates_hz)) != len(self.sample_rates_hz) or
+                any(type(v) is not int or not 1 <= v <= 1000000 for v in self.sample_rates_hz)):
+            raise ValueError('Invalid capture sample rates')
+        return self
+
+
+class DataEngineCapability(DataEngineExtension):
+    capture_sources: list[str] = Field(default_factory=list, max_length=8)
+    capture_limits: dict[str, DataCaptureLimit] = Field(default_factory=dict, max_length=8)
+
+    @field_validator('capture_sources')
+    @classmethod
+    def bounded_sources(cls, values):
+        if len(values) != len(set(values)) or any(not v or len(v.encode('utf-8')) > 32 for v in values):
+            raise ValueError('Invalid Data Engine capture sources')
+        return values
+
+    @model_validator(mode='after')
+    def limits_match(self):
+        if set(self.capture_limits) != set(self.capture_sources):
+            raise ValueError('Capture limits must exactly match announced sources')
+        return self
+
+
+class DataComponent(StrictModel):
+    size: int = Field(ge=0, le=DATA_LIMITS['dataset_bytes'], strict=True)
+    sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class DataDescriptor(StrictModel):
+    dataset_id: str = Field(pattern=ID_PATTERN, max_length=DATA_LIMITS['identifier_bytes'])
+    kind: Literal['csv', 'text', 'binary', 'audio']
+    label: str = Field(max_length=DATA_LIMITS['label_bytes'])
+    size: int = Field(ge=0, le=DATA_LIMITS['dataset_bytes'], strict=True)
+    sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    metadata_json: str = Field(default='{}', max_length=DATA_LIMITS['metadata_bytes'])
+    origin_package_id: str = Field(pattern=ID_PATTERN)
+    origin_source_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    origin_run_id: str = Field(pattern=ID_PATTERN)
+    created_ms: int = Field(ge=0, le=2**53-1, strict=True)
+    components: dict[Literal['data','index','events'], DataComponent]
+    acquisition: Literal['app_recorded','native_imu_fifo','native_imu_poll','native_mic','native_ble','native_uart','native_adc'] = 'app_recorded'
+
+    @model_validator(mode='after')
+    def utf8_bounds(self):
+        if len(self.label.encode('utf-8')) > DATA_LIMITS['label_bytes'] or len(self.metadata_json.encode('utf-8')) > DATA_LIMITS['metadata_bytes']:
+            raise ValueError('Data descriptor exceeds UTF8 limit')
+        if set(self.components) != {'data','index','events'} or sum(c.size for c in self.components.values()) > DATA_LIMITS['dataset_bytes']:
+            raise ValueError('Invalid dataset components')
+        if self.components['data'].size != self.size or self.components['data'].sha256 != self.sha256:
+            raise ValueError('Data component mismatch')
+        return self
+
+
 class Manifest(StrictModel):
     id: str = Field(pattern=ID_PATTERN)
     name: str = Field(min_length=1, max_length=64)
@@ -114,9 +193,14 @@ class Manifest(StrictModel):
     permissions: list[str]
     checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
     runtime_ai: RuntimeAICapability | None = None
+    data_engine: DataEngineExtension | None = None
 
     @model_validator(mode="after")
     def permissions_match(self):
+        if ('data' in self.required_services) != (self.data_engine is not None):
+            raise ValueError('Data Engine extension must exactly match data permission')
+        if self.data_engine and self.api_version != SDK_VERSION:
+            raise ValueError('Data Engine requires SDK')
         if ('ai' in self.required_services)!=(self.runtime_ai is not None):raise ValueError('Runtime AI extension must exactly match ai permission')
         if self.runtime_ai and self.api_version!=SDK_VERSION:raise ValueError('Runtime AI requires SDK')
         GeneratedApp.valid_services(self.required_services)
@@ -139,10 +223,12 @@ class Manifest(StrictModel):
         result=handler(self)
         if self.api_version==BASE_API:result.pop("api_contract",None)
         if self.runtime_ai is None:result.pop('runtime_ai',None)
+        if self.data_engine is None:result.pop('data_engine',None)
         return result
 
 
 class SessionStart(StrictModel):
+    development_context_id: str | None = Field(default=None, pattern=ID_PATTERN)
     runtime_ai_mode: Literal['auto','off'] | None = None
     device_id: str = Field(default="pc-mock-01", pattern=ID_PATTERN)
     project_id: str | None = Field(default=None, pattern=ID_PATTERN)
@@ -209,6 +295,8 @@ class AppSdkCapability(StrictModel):
 
 
 class Capabilities(StrictModel):
+    service_methods: dict[str,list[str]] | None = Field(default=None,max_length=32)
+    service_modes: dict[str,list[str]] | None = Field(default=None,max_length=32)
     api_version: Literal["fire-lua-0.1","fire-lua-0.2"] = "fire-lua-0.1"
     services: list[str] = Field(max_length=24)
     api_contract: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
@@ -222,6 +310,7 @@ class Capabilities(StrictModel):
     firmware_max_bytes: int = Field(default=4194304,ge=1024,le=4194304,strict=True)
     app_sdk: AppSdkCapability | None = None
     runtime_ai: RuntimeAICapability | None = None
+    data_engine: DataEngineCapability | None = None
 
     @field_validator("services")
     @classmethod
@@ -232,6 +321,23 @@ class Capabilities(StrictModel):
 
     @model_validator(mode="after")
     def negotiated_api(self):
+        from .api_registry import methods_for
+        known=methods_for(SDK_VERSION if self.app_sdk else self.api_version,self.services)
+        for service,names in (self.service_methods or {}).items():
+            if (service not in self.services or len(names)>64 or len(names)!=len(set(names)) or not set(names)<=set(known.get(service,{}))):
+                raise ValueError('Unknown announced service methods')
+        for key,values in (self.service_modes or {}).items():
+            if key.count('.')!=1 or not values or len(values)>16 or len(values)!=len(set(values)):
+                raise ValueError('Invalid service modes')
+            service,method=key.split('.')
+            spec=known.get(service,{}).get(method)
+            if not spec or (self.service_methods or {}).get(service) is not None and method not in self.service_methods[service]:
+                raise ValueError('Mode requires an announced method')
+            options=next((a['values'] for a in spec.get('args',[]) if a.get('type')=='enum'),[])
+            if not set(values)<=set(options):raise ValueError('Unsupported service mode')
+        if (('data' in self.services) != (self.data_engine is not None) or
+                self.data_engine and (not self.app_sdk or not {'jobs','sd'} <= set(self.services))):
+            raise ValueError('Data Engine capability requires SDK and data/jobs/sd services')
         if ('ai' in self.services)!=(self.runtime_ai is not None) or self.runtime_ai and (not self.app_sdk or 'jobs' not in self.services):
             raise ValueError('Runtime AI capability requires SDK and ai/jobs services')
         if self.api_version==BASE_API and not set(self.services)<=BASE_SERVICES:
@@ -241,7 +347,7 @@ class Capabilities(StrictModel):
         if self.api_version==HARDWARE_API:
             if self.api_contract!=API_CONTRACT:raise ValueError("Hardware API contract mismatch")
             from .api_registry import methods_for
-            dependencies={dep for service in self.services for method in methods_for(SDK_VERSION if self.app_sdk else HARDWARE_API)[service].values() for dep in method.get("requires",[])}
+            dependencies={dep for service in self.services for method in methods_for(SDK_VERSION if self.app_sdk else HARDWARE_API,self.services)[service].values() for dep in method.get("requires",[])}
             if not dependencies<=set(self.services):raise ValueError("Hardware service dependencies must be announced")
             if set(self.services)&{"gpio","adc","dac","pwm","i2c","uart","spi"} and self.hardware is None:
                 raise ValueError("Hardware profile must announce its resources")
@@ -252,6 +358,9 @@ class Capabilities(StrictModel):
         result=handler(self)
         if self.app_sdk is None:result.pop('app_sdk',None)
         if self.runtime_ai is None:result.pop('runtime_ai',None)
+        if self.data_engine is None:result.pop('data_engine',None)
+        if self.service_methods is None:result.pop('service_methods',None)
+        if self.service_modes is None:result.pop('service_modes',None)
         return result
 
 
@@ -281,8 +390,8 @@ class DeviceApp(StrictModel):
 APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
                       "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None,
-                      "repair_id":None,"app_version":None,"build_id":None,"notification_action":None,"request_id":None,"source_sha256":None,"instructions":None,"data_json":None,"schema_json":None,"timeout_ms":None,'runtime_ai_mode':None}
-CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None,'runtime_ai':None}
+                      "repair_id":None,"app_version":None,"build_id":None,"notification_action":None,"request_id":None,"source_sha256":None,"instructions":None,"data_json":None,"schema_json":None,"timeout_ms":None,'runtime_ai_mode':None,"operation":None,"dataset_id":None,"options_json":None,"datasets":[],"mode":None,"instruction":None,"dataset_ids":[],"context_id":None,"development_context_id":None,"observation_action":None}
+CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None,'runtime_ai':None,'data_engine':None,'service_methods':None,'service_modes':None}
 
 
 class DeviceDiagnostics(StrictModel):
@@ -297,10 +406,20 @@ class DeviceDiagnostics(StrictModel):
 
 
 class DeviceEvent(StrictModel):
+    observation_action: Literal['confirm','reject'] | None = None
+    operation: Literal['process','develop','sync'] | None = None
+    dataset_id: str | None = Field(default=None, pattern=ID_PATTERN, max_length=DATA_LIMITS['identifier_bytes'])
+    options_json: str | None = Field(default=None, max_length=DATA_LIMITS['options_bytes'])
+    datasets: list[DataDescriptor] = Field(default_factory=list, max_length=DATA_LIMITS['context_dataset_refs'])
+    mode: Literal['update','fork','feedback'] | None = None
+    instruction: str | None = Field(default=None, max_length=DATA_LIMITS['instruction_bytes'])
+    dataset_ids: list[str] = Field(default_factory=list, max_length=DATA_LIMITS['context_dataset_refs'])
+    context_id: str | None = Field(default=None, pattern=ID_PATTERN)
+    development_context_id: str | None = Field(default=None, pattern=ID_PATTERN)
     runtime_ai_mode: Literal['auto','off'] | None = None
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "runtime_ai_request", "runtime_ai_cancel"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "runtime_ai_request", "runtime_ai_cancel", "data_request", "data_cancel", "app_develop_request", "app_observation_confirm"]
     request_id: str | None = Field(default=None,pattern=ID_PATTERN)
     source_sha256: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
     instructions: str | None = Field(default=None,max_length=AI_LIMITS['instructions_bytes'])
@@ -362,6 +481,10 @@ class DeviceEvent(StrictModel):
             required = {
                 "runtime_ai_request": ("request_id","app_id","package_id","source_sha256","run_id","instructions","data_json","schema_json","timeout_ms"),
                 "runtime_ai_cancel": ("request_id","app_id","package_id","source_sha256","run_id"),
+                "data_request": ("request_id","app_id","package_id","source_sha256","run_id","operation"),
+                "data_cancel": ("request_id","app_id","package_id","source_sha256","run_id"),
+                "app_develop_request": ("request_id","app_id","package_id","source_sha256","run_id","mode"),
+                "app_observation_confirm": ("context_id","observation_action"),
                 "text": ("text",), "button": ("button", "action"), "build_confirm": ("proposal_id",),
                 "run_confirm": ("package_id",), "device_install_result": ("install_id", "package_id", "status"),
                 "install_retry": ("package_id",),

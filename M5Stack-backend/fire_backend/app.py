@@ -163,11 +163,17 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
                 "builds": builds[-20:], "apps": service.app_library(),
                 "repairs":[service.repairs.public(j) for j in sorted(service.store.list('repairs'),key=lambda j:j['updated_at'],reverse=True)[:16]],
                 "firmware":service.firmware.catalog(),
-                "physical_verified": False, "transport": service.reverse_tcp.status(),"runtime_ai":service.runtime_ai.snapshot()}
+                "physical_verified": False, "transport": service.reverse_tcp.status(),"runtime_ai":service.runtime_ai.snapshot(),
+                "data_engine":service.data_engine.snapshot()}
 
     @app.get('/desktop/usage', dependencies=[Depends(desktop_auth)])
     async def desktop_usage(service: Backend = Depends(backend)):
         return service.usage.snapshot()
+
+    @app.get('/desktop/data/{dataset_key}/{part}',dependencies=[Depends(desktop_auth)])
+    async def desktop_data_download(dataset_key:str,part:str,service:Backend=Depends(backend)):
+        path=await service.data_engine.download(dataset_key,part)
+        return FileResponse(path,media_type='application/octet-stream',filename=dataset_key+'.'+part)
 
     @app.get('/desktop/jobs', dependencies=[Depends(desktop_auth)])
     async def desktop_jobs(service: Backend = Depends(backend)):
@@ -230,7 +236,7 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
     @app.post("/desktop/conversations", dependencies=[Depends(desktop_auth)])
     async def desktop_conversation(request: Request, service: Backend = Depends(backend)):
         data=await request.json()
-        if (not isinstance(data,dict) or "device_id" not in data or set(data)-{"device_id","project_id","base_package_id","hardware_preview","runtime_ai_mode"}
+        if (not isinstance(data,dict) or "device_id" not in data or set(data)-{"device_id","project_id","base_package_id","hardware_preview","runtime_ai_mode","development_context_id"}
                 or ("hardware_preview" in data and type(data["hardware_preview"]) is not bool)
                 or any(v is not None and (not isinstance(v,str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}",v)) for k,v in data.items() if k!="hardware_preview")):
             raise HTTPException(422,"Expected device_id and optional project/base version")
@@ -309,6 +315,34 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
     async def stop(body: SessionAction, identity=Depends(auth), service: Backend = Depends(backend)):
         await service.stop(authorize_session(service, body.session_id, identity))
         return {"status": "stopped"}
+
+    @app.post('/sessions/{session_id}/data/{request_id}/{dataset_id}')
+    async def data_upload(session_id: str, request_id: str, dataset_id: str, request: Request,
+                          identity=Depends(auth), service: Backend = Depends(backend)):
+        from .data_engine import DataError
+        session = authorize_session(service, session_id, identity)
+        limit = service.data_engine.limits['http_chunk_bytes']
+        if request.headers.get('content-type','').split(';',1)[0].strip().lower() != 'application/octet-stream':
+            raise HTTPException(415, 'invalid_format')
+        try:
+            offset = int(request.headers.get('x-data-offset', '-1'))
+        except ValueError:
+            raise HTTPException(400, 'offset_mismatch') from None
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > limit:
+                raise HTTPException(413, 'quota_exceeded')
+            chunks.append(chunk)
+        try:
+            result = await service.data_engine.upload(session, request_id, dataset_id, offset,
+                b''.join(chunks), request.headers.get('x-data-sha256', ''), request.headers.get('x-data-part', 'data'))
+            response = JSONResponse(result)
+            response.raw_headers = [(b'Content-Length' if name.lower()==b'content-length' else name, value)
+                                    for name,value in response.raw_headers]
+            return response
+        except DataError as error:
+            raise HTTPException(400, error.code) from None
 
     async def confirmed(body, name, identity, service):
         session = authorize_session(service, body.session_id, identity)

@@ -68,6 +68,10 @@ class AppLifecycle(AppManager):
         return next((p for candidate in candidates for p in versions if p["id"] == candidate), versions[0])
 
     def backend_delete_check(self, project, *, ignore_session_id=None):
+        if any(r['project_id']==project['id'] for r in self.data_engine.tasks.values()):
+            return False,'Databehandling pågår. Vent eller avbryt først.'
+        if any(r['project_id']==project['id'] for r in self.runtime_ai.tasks.values()):
+            return False,'AI-analyse pågår. Vent eller avbryt først.'
         if any(item['build']['project_id']==project['id'] and not item['task'].done() for item in self.device_builds.values()):
             return False,'Appen bygges i bakgrunnen.'
         if self.repairs.active_project(project['id']):
@@ -226,6 +230,7 @@ class AppLifecycle(AppManager):
             session.conversation_mode = "develop"
             session.resume_project_aliases = []
             session.resumed_from_build_id = None
+            session.development_context_id = None
             session.app_revision = device.get("app_change_counter", 0)
             session.package_id = session.build_id = session.proposal_id = session.turn_id = None
             session.summary, session.last_error, session.progress, session.history = "", "", {}, []

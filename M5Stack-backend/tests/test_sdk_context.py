@@ -51,13 +51,13 @@ def test_selected_input_example_is_valid_lua_with_actual_navigation_behavior():
     assert any(op[0]=='text_style' and op[3]=='2' for op in result['visual_frames'][0]['ops'])
 
 
-def test_v5_required_lifecycle_boilerplate_executes_with_real_sdk():
+def test_v6_required_lifecycle_boilerplate_executes_with_real_sdk():
     from fire_backend.lua_worker import simulate
     source='function init() fire.ui.set_theme("modern_dark") end\nfunction update(dt_ms) fire.ui.screen("APP") end'
     assert source in POLICY
     result=simulate(dict(main_lua=source,required_services=['display'],api_version=SDK_VERSION,
         api_contract=SDK_CONTRACT,max_memory=131072,max_runtime_ms=1000,profile='idle'))
-    assert result['ok'] and VERSION.endswith('v5')
+    assert result['ok'] and VERSION.endswith('v6')
 
 
 def raw_context():

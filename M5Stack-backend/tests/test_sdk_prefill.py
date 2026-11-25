@@ -176,8 +176,8 @@ def test_new_canonical_method_hash_capability_and_manifest_are_explicit():
 
 
 @pytest.mark.parametrize('version',[3,4])
-def test_retained_context_is_replaced_by_one_v5_policy(version):
+def test_retained_context_is_replaced_by_one_v6_policy(version):
     old=f'\nFIRE App SDK development and acceptance policy, version{version}:\nobsolete old policy\n'+MARKER+json.dumps({'api_version':SDK_VERSION,'api_contract':SDK_CONTRACT})+'\nProject: preserved'
     result=normalize(old,capabilities=preview_capabilities(),summary='Lag klokke')
     assert result.count(POLICY)==1 and 'obsolete old policy' not in result and 'Project: preserved' in result
-    assert VERSION.endswith('v5') and 'function init() fire.ui.set_theme("modern_dark") end' in result
+    assert VERSION.endswith('v6') and 'function init() fire.ui.set_theme("modern_dark") end' in result

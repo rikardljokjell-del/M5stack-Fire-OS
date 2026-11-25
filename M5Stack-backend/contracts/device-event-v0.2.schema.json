@@ -25,6 +25,44 @@
     "Capabilities": {
       "additionalProperties": false,
       "properties": {
+        "service_methods": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "maxProperties": 32,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Methods"
+        },
+        "service_modes": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "maxProperties": 32,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Modes"
+        },
         "api_version": {
           "default": "fire-lua-0.1",
           "enum": [
@@ -127,6 +165,17 @@
             }
           ],
           "default": null
+        },
+        "data_engine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataEngineCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -135,6 +184,246 @@
         "max_runtime_ms"
       ],
       "title": "Capabilities",
+      "type": "object"
+    },
+    "DataCaptureLimit": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_ms_max": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Duration Ms Max",
+          "type": "integer"
+        },
+        "sample_rate_hz_min": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Rate Hz Min"
+        },
+        "sample_rate_hz_max": {
+          "anyOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Rate Hz Max"
+        },
+        "sample_rates_hz": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Rates Hz"
+        },
+        "max_records": {
+          "anyOf": [
+            {
+              "maximum": 16777216,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Records"
+        }
+      },
+      "required": [
+        "duration_ms_max"
+      ],
+      "title": "DataCaptureLimit",
+      "type": "object"
+    },
+    "DataComponent": {
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "maximum": 16777216,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "size",
+        "sha256"
+      ],
+      "title": "DataComponent",
+      "type": "object"
+    },
+    "DataDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {
+          "maxLength": 40,
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "csv",
+            "text",
+            "binary",
+            "audio"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 48,
+          "title": "Label",
+          "type": "string"
+        },
+        "size": {
+          "maximum": 16777216,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "metadata_json": {
+          "default": "{}",
+          "maxLength": 512,
+          "title": "Metadata Json",
+          "type": "string"
+        },
+        "origin_package_id": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "title": "Origin Package Id",
+          "type": "string"
+        },
+        "origin_source_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Origin Source Sha256",
+          "type": "string"
+        },
+        "origin_run_id": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "title": "Origin Run Id",
+          "type": "string"
+        },
+        "created_ms": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Created Ms",
+          "type": "integer"
+        },
+        "components": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DataComponent"
+          },
+          "propertyNames": {
+            "enum": [
+              "data",
+              "index",
+              "events"
+            ]
+          },
+          "title": "Components",
+          "type": "object"
+        },
+        "acquisition": {
+          "default": "app_recorded",
+          "enum": [
+            "app_recorded",
+            "native_imu_fifo",
+            "native_imu_poll",
+            "native_mic",
+            "native_ble",
+            "native_uart",
+            "native_adc"
+          ],
+          "title": "Acquisition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "kind",
+        "label",
+        "size",
+        "sha256",
+        "origin_package_id",
+        "origin_source_sha256",
+        "origin_run_id",
+        "created_ms",
+        "components"
+      ],
+      "title": "DataDescriptor",
+      "type": "object"
+    },
+    "DataEngineCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "fire-data-engine-1.0",
+          "title": "Version",
+          "type": "string"
+        },
+        "contract": {
+          "const": "15a9ff7e5c68fc4d6dad8df9b4ab52b451f5e5a5dd2e20874881006c8e0eae8e",
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Contract",
+          "type": "string"
+        },
+        "capture_sources": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Capture Sources",
+          "type": "array"
+        },
+        "capture_limits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DataCaptureLimit"
+          },
+          "maxProperties": 8,
+          "title": "Capture Limits",
+          "type": "object"
+        }
+      },
+      "required": [
+        "version",
+        "contract"
+      ],
+      "title": "DataEngineCapability",
       "type": "object"
     },
     "DeviceApp": {
@@ -423,6 +712,138 @@
   },
   "additionalProperties": false,
   "properties": {
+    "observation_action": {
+      "anyOf": [
+        {
+          "enum": [
+            "confirm",
+            "reject"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Observation Action"
+    },
+    "operation": {
+      "anyOf": [
+        {
+          "enum": [
+            "process",
+            "develop",
+            "sync"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Operation"
+    },
+    "dataset_id": {
+      "anyOf": [
+        {
+          "maxLength": 40,
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dataset Id"
+    },
+    "options_json": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Options Json"
+    },
+    "datasets": {
+      "items": {
+        "$ref": "#/$defs/DataDescriptor"
+      },
+      "maxItems": 4,
+      "title": "Datasets",
+      "type": "array"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "update",
+            "fork",
+            "feedback"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mode"
+    },
+    "instruction": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Instruction"
+    },
+    "dataset_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4,
+      "title": "Dataset Ids",
+      "type": "array"
+    },
+    "context_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Context Id"
+    },
+    "development_context_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Development Context Id"
+    },
     "runtime_ai_mode": {
       "anyOf": [
         {
@@ -493,7 +914,11 @@
         "build_resume",
         "build_cancel",
         "runtime_ai_request",
-        "runtime_ai_cancel"
+        "runtime_ai_cancel",
+        "data_request",
+        "data_cancel",
+        "app_develop_request",
+        "app_observation_confirm"
       ],
       "title": "Event",
       "type": "string"
@@ -1219,6 +1644,172 @@
           },
           "run_id": {
             "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "data_request"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "package_id",
+          "source_sha256",
+          "run_id",
+          "operation"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "process",
+              "develop",
+              "sync"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "data_cancel"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "package_id",
+          "source_sha256",
+          "run_id"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_develop_request"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "package_id",
+          "source_sha256",
+          "run_id",
+          "mode"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "run_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "update",
+              "fork",
+              "feedback"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "app_observation_confirm"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "context_id",
+          "observation_action"
+        ],
+        "properties": {
+          "context_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "observation_action": {
+            "enum": [
+              "confirm",
+              "reject"
+            ],
             "type": "string"
           }
         }
