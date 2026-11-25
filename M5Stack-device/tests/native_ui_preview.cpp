@@ -19,7 +19,7 @@ struct Surface {
 int main(){using namespace FireUI;static Surface c;
  c.fillRect(0,0,320,240,Bg);text(c,12,8,"FIRE OS",Text,"ui16",148);pill(c,231,9,79,"19:45",Muted);text(c,12,36,"APPENE DINE",Muted,"pixel8",250);
  const char* labels[]={"AI Developer","Apps","Home","Settings"};const char* icons[]={"icon.bot","icon.layout-grid","icon.house","icon.settings"};uint16_t colors[]={Purple,Blue,Green,Muted};
- for(int i=0;i<4;++i)tile(c,10+(i%2)*155,56+(i/2)*76,145,70,labels[i],icons[i],colors[i],i==2);
+ for(int i=0;i<4;++i)tile(c,12+(i%2)*152,56+(i/2)*77,144,70,labels[i],icons[i],colors[i],i==2);
  text(c,12,204,"1 / 3",Muted,"pixel8",296,1);footer(c,"Forrige","Åpne","Neste");c.save("main.ppm");
  c.calls=0;homeHeader(c,"Home","OVERSIKT","Lokalt",Green);
  homeCard(c,0,false,"Lys i stuen","På","Lys","icon.lightbulb",Amber,true,true);

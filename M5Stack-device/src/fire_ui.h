@@ -111,28 +111,25 @@ void footer(Surface& c, const char* left, const char* middle, const char* right)
   c.fillRect(0, 216, 320, 24, Bg);
   c.fillRect(10, 216, 300, 1, Border);
   if (left && *left) {
-    text(c, 10, 220, "A", Accent, "ui12b", 12);
-    text(c, 25, 220, left, Muted, "ui12", 76);
+    text(c, 10, 220, left, Muted, "ui12", 90, 1);
   }
   if (middle && *middle) {
     roundRect(c, 105, 219, 110, 20, 7, Selected, true);
-    text(c, 113, 221, "B", Accent, "ui12b", 12);
-    text(c, 127, 221, middle, Text, "ui12b", 80, 1);
+    text(c, 110, 221, middle, Text, "ui12b", 100, 1);
   }
   if (right && *right) {
-    text(c, 222, 220, right, Muted, "ui12", 72, 2);
-    text(c, 302, 220, "C", Accent, "ui12b", 12);
+    text(c, 220, 220, right, Muted, "ui12", 90, 1);
   }
 }
 template<class Surface>
 void tile(Surface& c, int x, int y, int w, int h, const char* label,
           const char* iconId, uint16_t color, bool selected) {
   panel(c, x, y, w, h, selected, color);
-  roundRect(c, x + 10, y + 8, 34, 32, 8, Raised, true);
-  icon(c, iconId, x + 15, y + 12, color, 24);
+  roundRect(c, x + (w - 34) / 2, y + 8, 34, 32, 8, Raised, true);
+  icon(c, iconId, x + (w - 24) / 2, y + 12, color, 24);
   if (selected) icon(c, "icon.circle-check", x + w - 25, y + 10, color, 15);
   const char* labelFont = width(label, "ui16") <= w - 24 ? "ui16" : "ui12b";
-  text(c, x + 12, y + h - 26, label, Text, labelFont, w - 24);
+  text(c, x + 12, y + h - 26, label, Text, labelFont, w - 24, 1);
 }
 template<class Surface>
 void menuRow(Surface& c, int y, const char* label, const char* value,
