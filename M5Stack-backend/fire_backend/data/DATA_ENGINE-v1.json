@@ -1,5 +1,5 @@
 {
-  "api_contract": "8facfcce30ea5fd14ffab408944937f73fdba91e2fc97269d35f429d5167fa13",
+  "api_contract": "15a9ff7e5c68fc4d6dad8df9b4ab52b451f5e5a5dd2e20874881006c8e0eae8e",
   "registry": {
     "api_version": "fire-data-engine-1.0",
     "service": "data",
@@ -275,7 +275,7 @@
       "identity": "OS supplies current app/package/source/run/boot identity. create/append/mark/seal are creator-instance bound; sealed datasets are immutable and readable by later versions of the SAME app/project. Current server request is run/source bound while capture provenance may legitimately belong to an older version.",
       "time": "Record actual monotonic timing, sample counters/drops and UTC only when synchronized, with clock origin/quality. Wall time is optional; no fake UTC or guaranteed fixed sample rate.",
       "analysis": "stats/filter/spectrum/compare are deterministic and versioned. Stream large input, bounded FFT window<=4096, validated finite numeric rows, explicit rates/units/invalid/dropped counts. Preserve raw input and distinguish derived measurements from AI assessments. Network-required processing reports not_connected rather than fake local AI.",
-      "ai_refs": "Existing ai.request data_json may contain dataset_refs only for this exact extension and declared data permission. Backend authorizes immutable refs, derives a relevant finite summary, validates final data_json<=768 and combined request<=1536 before provider, rechecks ownership/revisions before result. Never auto-send entire logs/raw bytes or add a summarization model call.",
+      "ai_refs": "Existing ai.request data_json may contain dataset_refs only for this exact extension and declared data permission. OS first synchronizes referenced sealed local datasets through the same bounded data transport and existing jobs, then sends the unchanged runtime_ai_request; missing or failed sync never sends a paid request. Backend authorizes immutable refs, derives a relevant finite summary, validates final data_json<=768 and combined request<=1536 before provider, rechecks ownership/revisions before result. Never auto-send entire logs/raw bytes or add a summarization model call.",
       "develop": "Only an actual OS menu selection or on_button pressed callback may queue develop. Do not stop the current run until needed metadata/raw sync and a frozen development context are ready. Show progress/cancel, then reuse AI Developer/current proposal/build_confirm/tested package/run_confirm. This API never silently builds, installs, changes pins or incurs paid AI. App-supplied instructions/observations are untrusted context; only explicit user confirmation establishes user/factual test evidence.",
       "history": "Freeze code/version/initial request/development history/data refs/analysis refs/user observations/feedback/hardware config. update preserves app ID and data. fork creates a new project with an explicit immutable readonly provenance grant, not global cross-app access. Resume keeps exact snapshot unless the user requests new data/revision.",
       "knowledge": "Manufacturer documentation, synthetic checks, measured raw samples, user observations, model assessments and physically verified solutions are separate evidence classes. AI assessments cannot promote themselves to verified facts. acquisition identifies the OS write path, not proof of an external phenomenon; missing provenance defaults conservatively to app_recorded.",
@@ -302,6 +302,7 @@
         "datasets"
       ],
       "operations": [
+        "sync",
         "process",
         "develop"
       ],
@@ -350,6 +351,7 @@
       ],
       "development_binding": "OS-authored intent from actual verified app/run; data sync uses same transfer path while run remains current. Ready context_id is server generated, source/data/owner-bound and read-only. SessionStart may carry development_context_id for normal update/fork/feedback/resume.",
       "process_options": "data_request.operation=\"process\"; options_json contains {\"operation\":\"stats|filter|spectrum|compare\",...validated parameters}. Top-level dataset_id is the selected input. compare other_dataset_id must also have an authorized immutable descriptor.",
+      "sync_options": "OS-internal data_request.operation=\"sync\" carries the referenced sealed dataset descriptors with options_json={}. It performs only existing authorization/component synchronization and returns {ok:true} after all component hashes/bytes verify; no processing, model call or new Lua method. Runtime AI with refs waits for this result, checks the same current run and then sends its original request. Cancellation/app stop closes both existing jobs and never replays paid AI.",
       "development_descriptor_field": "app_develop_request may carry datasets descriptors and dataset_ids; transfer shares the same data upload path and admission identity.",
       "dataset_components": {
         "required": [

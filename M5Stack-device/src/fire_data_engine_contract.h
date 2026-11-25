@@ -3,7 +3,7 @@
 #include <cstdint>
 namespace FireDataEngineContract {
 inline constexpr char kVersion[] = "fire-data-engine-1.0";
-inline constexpr char kContract[] = "8facfcce30ea5fd14ffab408944937f73fdba91e2fc97269d35f429d5167fa13";
+inline constexpr char kContract[] = "15a9ff7e5c68fc4d6dad8df9b4ab52b451f5e5a5dd2e20874881006c8e0eae8e";
 inline constexpr uint32_t kLabelBytes = 48;
 inline constexpr uint32_t kIdentifierBytes = 40;
 inline constexpr uint32_t kMetadataBytes = 512;
