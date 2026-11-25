@@ -1,41 +1,39 @@
-# Device delivery status — 2026-11-24
+# Device delivery status — 2026-11-25
 
-## Current candidate: fire-os-1.2.0-rc7
+## Current candidate: fire-os-1.2.0-rc9
 
-Source `7eb40b7e0effca647d101031c777832aa672a010`; CI 45496282327 passed
-15 tests and all three builds. Exact production image: 2,422,464 B,
-SHA256 `55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372`.
+Source `b77c579bec4b4986680f9f3be82a4afbe76f59e8`; CI 45575157747 passed 16 tests and all three builds.
+Exact normal: 2,427,328 B, SHA256 `17edd52caa166558118c30ddead2d49ccc1d24360f68b326e2297eceab4fd6bd`.
 
-Actual GitHub catalog/download, direct inactive-slot OTA, accepted cancellation
-with unchanged 8 KiB boot metadata, explicit retry, production app1 boot,
-flash readback/CI identity, SDK seq10 VALID2/CRC and ordinary restart passed.
-The private driver's premature failure marker is retained and explained in
-the [canonical physical report](PHYSICAL_USB_2026-11-24.md); no repeat OTA was
-used to hide it. Passive production capture 125.015s measured
-loop/gap 79895/85014us; full reset capture
-45.043s measured 80312/86013us.
-No extra reset, known panic/watchdog or RGB timeout in these captures.
-Backend confirmed a newer complete inventory tied to the final RC7 boot/epoch:
-7/7 IDs, versions, checksums and normalized package IDs matched RC2. Storage
-was ready, health UI HTTP200, four Reverse TCP channels ready without error.
-The inventory was191s old at inspection, from this final boot, not the earlier
-RC7 snapshot. This does not establish AI/RUN acceptance.
-Update-time gap reached176143us and internal heap minimum2516B in the private
-fixture; the update itself is not claimed below100ms.
+Physical proof: two real signed RC8 downloads/saves with replacement/backups
+using the frozen memory candidate; then one exact CI-RC9 GitHub download,
+PSRAM/hash/TLS-stop barrier, SD binary and both signed catalogs readback,
+unchanged complete OTA slots/8KiB metadata from save, retained older RC8 binary
+and sidecar, separate native UI SD installation, actual Aseq19 VALID2/CRC and
+CI flash readback, and ordinary reboot. Both slots are clean production RC9;
+B is a USB/readback copy with unchanged seq18 metadata, not separately booted.
+COM3 closed; no paid AI/RUN, new app installation or user-data reset.
+Backend confirmed final-boot complete/storage-ready inventory: all7 IDs,
+versions, checksums and normalized package IDs equal the durable complete
+pre-production-RC9/SD-install reference. This was not the original RC2 baseline.
+Report age176s; health/UI HTTP200, eight-version catalog, four ready transport
+channels without errors. No AI/RUN acceptance is implied.
 
-Both slots now hold exact CI RC7 production; app1 is selected, and app0 is a
-USB/readback-verified fallback copy, not separately booted in this final pass.
-All private automatic test images were removed from device. COM3 released.
-Bootloader/table/factory remain the physically verified RC2 components from
-7efbae9 / CI45431615060, with separate component provenance. Root owns git
-and publication. Signed bundle: `../M5Stack-backend/workspace/migration/fire-os-1.2.0-rc7/`.
+Pure production boot loop/gap 87625/92998us;
+ordinary45s restart 80460/85996us.
+Private fixture maxima and low-memory measurements are separately retained;
+full-slot hashing/private overhead is not attributed to normal UI without proof.
+See [canonical SD evidence](PHYSICAL_SD_2026-11-25.md). The earlier private
+TLS failures and combined memory measures do not establish isolated causes or
+prove unmodified RC8 production defective. Old EIO/FatFS cause remains unresolved.
 
-GitHub SD saving is removed/rejected: physical EIO and a later FatFS null-pointer
-panic remain unresolved. Direct OTA uses no SD staging. Offline signed-SD
-installation, removed-card operation, GPIO39/button-hold recovery, visual
-acceptance, Home/HA, public backend WSS, audio/AI/Lua RUN remain unverified.
-No user data was erased and no paid AI/RUN or new app installation was done.
-Historical RC5 and intermediate RC2/3/4 measurements remain in the physical report.
+Direct OTA remains the default, with historical RC7 physical proof; RC9 direct
+OTA was not repeated. Root preserves all older published binaries/catalogs and
+owns git/releases. Bundle `../M5Stack-backend/workspace/migration/fire-os-1.2.0-rc9/`
+retains exact physically verified RC2 bootloader/table/recovery, separately sourced
+from7efbae9/CI45431615060; normal comes from the above RC9 CI.
+Home/HA, public backend WSS, visual/buttons, recovery hold, audio/AI acceptance
+remain outside this physical SD gate. Historical reports remain unchanged.
 
 ## Historical RC2 candidate and first physical finding
 
@@ -50,7 +48,7 @@ boot, controlled SDK rollback (ABORTED=4), 125 s normal boot, stored VALID=2
 and a further 45 s normal restart passed the observed crash/reset checks.
 See [physical USB evidence](PHYSICAL_USB_2026-11-24.md).
 At that RC2 stage responsiveness did not pass: a repeatable early 1.38–1.39 s
-UI-loop pause was found. The later bounded RC5 result is recorded above.
+UI-loop pause was found. The later bounded RC5 result is in the historical USB report.
 This was not physical completion of Home/AI/audio/OTA.
 
 RC2 removes the periodic teardown of healthy remote Home Auto connections.
@@ -60,7 +58,8 @@ See DELIVERY_REPORT.md for exact RC2 artifacts and remaining physical tests.
 At RC2 publication the root catalog was signed with RC2 first and historical
 RC1 second. The later RC5 catalog contained RC5, historical RC2 and RC1;
 its RC2 note recommended RC5 because of the measured inventory UI pause.
-The published catalog now starts with RC7, RC6, RC5, RC2 and RC1.
+The RC7-era catalog later included RC7, RC6, RC5, RC2 and RC1.
+The current signed feed starts with RC9, followed by RC8 and retained older releases.
 Both versioned bins and all RC1 immutable files/RC2 USB inputs were verified
 unchanged during catalog generation. Master handles publication; no more code
 changes were pending at publication. The later physical response finding

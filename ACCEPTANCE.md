@@ -34,6 +34,23 @@ ekstern Home-adresse og gjenstående fysiske nett/lyd/knapp/strømtester.
 Rikards førstegangs USB-migrering er allerede gjennomført og dokumentert under.
 Disse punktene stanser ikke uavhengig implementering og lokal kontroll.
 
+## Registrerte resultater 25. november 2026
+
+| Kontrollmiljø | Resultat | Avgrensning |
+| --- | --- | --- |
+| RC9 på frosset kilde b77c579 | CI 45575157747: 16 tester og alle tre bygg bestått | Normal RC9; USB beholder fysisk kontrollert RC2-bootloader/tabell/recovery med separat proveniens |
+| Offentlig RC9 og signert pakke | Åtte filer HTTP 200 og byteidentiske; to katalogsignaturer samt opprinnelig og nyutpakket USB-pakke kontrollert | Offentlig fil-/pakkekontroll; fysisk installering er egen kontroll |
+| Privat RC8-basert første forsøk | TLS RSA/MPI-allokering feilet trygt før filbyte/SD; ingen panic eller watchdog | Privat ekstra katalogkopi; uendret RC8-produksjon alene ble ikke isolert |
+| Frosset RC9-kode i privat kontroll, signert RC8-mål | To faktiske GitHub→PSRAM→SD-lagringer; binær/begge kataloger og tidligere backups kontrollert; begge fulle OS-slotter og alle 8192 metadata-byte uendret etter hver | 342,596 s uten panic/WDT; maks gap 273,995 ms og min intern heap 5064 B gjelder privat kontroll/last, ikke ren normaldrift. Ingen installering eller omstart fra lagring |
+| Tidligere publiserte firmwareversjoner | Opprinnelige 26 filer uendret; RC8-binær/USB/hash bevart; RC7-/RC8-kataloger arkivert med opprinnelig signatur | RC8-bevis får bare faktiske historikktillegg; gamle binærer og katalogbytes erstattes ikke |
+| Eksakt publisert RC9, faktisk Firmware-UI | GitHub→PSRAM→SD med korrekt binær/begge kataloger; gamle RC8-fil/katalog intakte; begge fulle OS-slotter og alle metadata uendret ved save | Én RC9-lagring; erstatnings-/backupflyt prøvd to ganger med samme frosne kode og RC8-mål |
+| Separat RC9-installasjon fra SD | Ren A/app0, sekvens 19 VALID og gyldig CRC; faktisk image matcher CI. Root parsede lagrede 8192 metadata-byte uavhengig | Direkte RC9-GitHub-OTA ikke gjentatt; RC7-direkteløpet står som historisk bevis |
+| Ren RC9-sluttstatus | Begge OS-plasser CI-RC9; harness fjernet, A/metadata urørt ved B-opprydding; minst 125 s normaldrift  + 45,044 s vanlig omstart uten panic/WDT; gap 92,998/85,996 ms | B-kopien er bytekontrollert, ikke separat startet; ingen Lua-/AI-/Home-last påstått |
+| Faktisk siste RC9-inventar | Ny boot og nyere complete/SDready; 7/7 current-scope ID/version/checksum/normalisert pakke-ID matcher varig alternativ referanse; health/UI200, korrekt 8-versjonskatalog uten feil | Referanse er siste komplette før produksjons-RC9/SD-installasjon, mulig privat kontrollboot, ikke RC2-original. Lagret rapportalder176 s |
+
+Eksakt RC9 SD-lagring, separat SD-installasjon og ren produksjonsboot står i
+[SD-rapporten](M5Stack-device/PHYSICAL_SD_2026-11-25.md).
+
 ## Registrerte resultater 24. november 2026
 
 | Kontrollmiljø | Resultat | Avgrensning |

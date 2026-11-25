@@ -2,27 +2,32 @@
 
 Et modulært Arduino/PlatformIO-startprosjekt for M5Stack FIRE med M5Unified/M5GFX.
 
-## Aktuell testkandidat: 1.2.0-rc7
+## Aktuell testkandidat: 1.2.0-rc9
 
-Oppdater fra **Settings → Firmware → GitHub → Installer**. Enheten henter
-signert firmware direkte til den inaktive OS-plassen, kontrollerer størrelse,
-nettstrøm og tilbakeavlest flash, og starter om etter vellykket kontroll.
-SD-nedlasting er tatt ut etter fysisk påvist SD-feil; oppdatering trenger
-ingen SD-mellomlagring. Ferdige signerte SD-filer har fortsatt eget installvalg.
+I **Settings → Firmware → GitHub** velger du «Installer direkte» eller
+«Last ned til SD». SD-valget lagrer og kontrollerer filen uten installasjon
+eller omstart. Velger du allerede kjørende versjon, sier installasjonsvalget
+«Reinstaller». Ferdige signerte SD-filer har eget «Installer fra SD»-valg.
 
-Direkte GitHub-installasjon, avbrudd uten endret oppstartsvalg, nytt forsøk,
-faktisk VALID og vanlig omstart er fysisk kontrollert med RC7. Rikards enhet
-kjører RC7 i **B/app1**; A/app0 inneholder samme rene CI-produksjonsfil som
-tilbakevei. Ingen privat testkode er igjen. Recoverygrunnlaget er uendret RC2.
-Backend bekreftet alle sju appers identiteter, versjoner og hasher fra den
-endelige RC7-oppstarten, med klar lagring og fire feilfrie transportkanaler.
-Se [fysiske bevis og avgrensninger](PHYSICAL_USB_2026-11-24.md).
+SD-nedlasting skjer først til begrenset PSRAM. Hele signerte filen kontrolleres,
+nett/TLS avsluttes, og så skrives SD med close/reopen/readback. Binæren får
+egen signert katalogkopi; global katalog beholdes for eksisterende recovery.
+Gamle kopier bevares som backups ved erstatning. For lite arbeidsminne avvises
+trygt. Direkte OTA er fortsatt standard og bruker ingen SD-mellomlagring.
 
-RC7 beholder trinnvis appoversikt, avgrenset nettlesing og Home-forbindelser.
-Home/HA, lyd/AI, fysisk knapphold og øvrig sluttkontroll gjenstår. Første
-installasjon bruker den signerte USB-engangspakken med full backup; vanlig
-PlatformIO Upload er sperret. Se [recovery/README.md](recovery/README.md) og
-[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+To faktiske lagringer/erstatning med kandidatens kode og ett eksakt CI-RC9-løp
+fra GitHub via SD til separat SD-installasjon er fysisk kontrollert. Begge
+slotter har ren RC9; A/app0 er valgt, og B er en tilbakelest fallback-kopi.
+Testkode er fjernet, tidligere RC8-fil/katalog er bevart, og COM3 er lukket.
+Backendens sluttkontroll bekreftet alle sju appers uendrede identiteter,
+versjoner og hasher mot den varige komplette referansen fra før RC9-installasjonen.
+Se [dagens fysiske SD-bevis og grenser](PHYSICAL_SD_2026-11-25.md) og
+[historisk RC7-/migreringsbevis](PHYSICAL_USB_2026-11-24.md).
+
+Tidligere GitHub-versjonsfiler beholdes. Home/HA, lyd/AI, visuell knappkontroll
+og fysisk recoveryhold gjenstår. Første installasjon bruker signert USB-pakke
+med full backup; vanlig PlatformIO Upload er sperret. Se
+[recovery/README.md](recovery/README.md) og [byggstatus](IMPLEMENTATION_STATUS.md).
 
 ## Første OS-milepæl
 

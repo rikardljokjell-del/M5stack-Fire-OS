@@ -6,10 +6,12 @@ De øvrige punktene er ikke dermed bestått. Bruk den
 ferdige leveransepakken og gjør ett punkt om gangen. Noter firmwareversjonen
 som vises under **Settings → Firmware**.
 
-Rikards FIRE er allerede migrert og kjører RC7 i **B / app1**. Gå videre med
+Rikards FIRE er allerede migrert og kjører RC9 i **A / app0**, med lagret
+helsegodkjenning. Gå videre med
 meny-/knappetestene og funksjonene under; første USB-migrering er utført.
-Hvis du prøver redning på denne enheten, velger du **B / app1** for å komme
-tilbake til valgt RC7. A inneholder også ren RC7; testutgaven er fjernet. Steg 1 nedenfor
+Hvis du prøver redning på denne enheten, velger du **A / app0** for å komme
+tilbake til valgt RC9. Sluttstatus for begge OS-plassene står i
+[SD-rapporten](../M5Stack-device/PHYSICAL_SD_2026-11-25.md). Steg 1 nedenfor
 beskriver førstegangsoppsett på en ny enhet, der pakken skriver normal til A.
 
 A og C flytter valget. B åpner eller bekrefter. Følg også knappeteksten nederst
@@ -101,9 +103,25 @@ aktiveres; la strømmen være tilkoblet under hele testen.
    tidsavbrudd og fortsatt kunne bruke gjeldende OS.
 3. Koble til igjen, velg samme utgave på nytt og bekreft installering. La FIRE
    fullføre kontrollene og starte automatisk om. Kontroller versjon og menyer.
-4. Kontroller at GitHub-utgaven bare har **Installer direkte fra GitHub** og
-   **Tilbake**. SD-nedlasting er fjernet. Gjenta eventuelt uten SD-kort og med
-   Windows-backenden stoppet for å kontrollere uavhengigheten fysisk.
+4. Ved samme versjon skal valget og bekreftelsen si **Reinstaller**.
+   Versjonsnummeret endres ikke ved en vellykket reinstallasjon. Gjenta
+   eventuelt direkte installering uten SD-kort og med Windows-backenden
+   stoppet for å kontrollere uavhengigheten fysisk.
+
+### Valgfri lagring til SD
+
+Dette er den nye SD-flyten med resultater i
+[SD-rapporten](../M5Stack-device/PHYSICAL_SD_2026-11-25.md). Den historiske
+RC7-testen over omfatter direkte installering, uten dette valget.
+
+1. Velg en utgave under **Settings → Firmware → Oppdater fra GitHub** og
+   deretter **Last ned til SD**. Bekreft med **B / Last ned**.
+2. Vent på **SD kontrollert. Ikke installert**. FIRE skal bli i gjeldende OS
+   uten omstart. Ved feil skal eksisterende firmware og tidligere SD-kopi
+   være tilgjengelige.
+3. Vil du installere den lagrede filen senere, velger du **Installer fra SD**
+   og bekrefter separat. Behold signerte katalogfiler sammen med firmwarefilen.
+   Lagring til SD alene oppdaterer ikke enheten.
 
 ## 7. Åpne redning uten Windows eller SD-kort
 

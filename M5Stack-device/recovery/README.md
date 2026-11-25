@@ -1,16 +1,20 @@
-# FIRE 1.2.0-rc7: bygg, migrering og redning
+# FIRE 1.2.0-rc9: bygg, migrering og redning
 
-RC7 er fysisk installert direkte fra GitHub til inaktiv OS-slot, verifisert
-mot CI, bekreftet VALID og startet normalt igjen. Avbrudd og eksplisitt nytt
-forsøk er testet. GitHub-menyen bruker ingen SD-mellomlagring; SD-nedlasting
-er fjernet etter fysisk SD-feil. Offline SD-installasjon er et eget, ennå ikke
-sluttverifisert løp. Se [kanoniske fysiske bevis](../PHYSICAL_USB_2026-11-24.md).
+RC9 har fysisk kontrollert GitHub → PSRAM → SD-lagring og separat signert
+SD-installasjon, CI-readback, faktisk VALID og vanlig omstart. Lagring alene
+endret ingen OTA-slot eller bootmetadata. Ny lagring/backup og bevart eldre
+RC8-fil/katalog er kontrollert. Se [SD-bevis og grenser](../PHYSICAL_SD_2026-11-25.md).
 
-Dette er fortsatt en testkandidat. Knapphold, Home/AI/lyd og øvrig fysisk
-sluttkontroll gjenstår. Sluttpakken bruker eksakt RC7-normal fra CI og
-byteidentiske fysisk verifiserte RC2-komponenter for bootloader, tabell og
-factory recovery. Deres kilde-/CI-proveniens oppgis separat. Ingen private
-testharness er igjen i enhetens to produksjonsslotter.
+Hver lagret fil har egen signert katalogkopi. Normal OS foretrekker denne;
+eldre mapper kan bruke global `/firmware/catalog-v2.json`. Samme globale
+katalog lagres og verifiseres også for den uendrede RC2-factoryrecoveryen.
+Installer direkte fra GitHub er fortsatt standard. Første USB-migrering og
+rollbackgrunnlag er dokumentert i [historisk rapport](../PHYSICAL_USB_2026-11-24.md).
+
+Dette er fortsatt en testkandidat. Knapphold, visuell/Home/AI/lyd-kontroll
+gjenstår. Pakken bruker eksakt RC9-normal fra CI og byteidentiske fysisk
+verifiserte RC2-komponenter, med separat kilde-/CI-proveniens. Ingen private
+automatiske testbilder er igjen i enhetens to produksjonsslotter.
 
 ## Første installasjon
 

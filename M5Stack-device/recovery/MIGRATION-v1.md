@@ -7,7 +7,11 @@ RC2 migration and controlled rollback have now been physically observed; see
 unchanged. USB alone does not establish button-hold recovery or network OTA.
 A separate physical RC7 run now establishes direct GitHub OTA, cancellation,
 retry, exact CI readback, VALID and normal reboot; see the same canonical report.
-Physical button-hold recovery and offline SD installation remain unverified.
+The later RC9 physical SD run now establishes saved-image/hash/catalog checks,
+no OTA/metadata changes from saving, retained older SD image, separate signed
+SD installation, VALID and normal restart; see [SD evidence](../PHYSICAL_SD_2026-11-25.md).
+Physical button-hold recovery remains unverified. The migration contract itself
+is unchanged; global catalog remains compatible with the retained factory.
 
 Directory `migration/` contains `migration.json`, `migration.sig`, `bootloader.bin`,
 `partitions.bin`, `recovery.bin`, `normal.bin`, `catalog-v2.json`,

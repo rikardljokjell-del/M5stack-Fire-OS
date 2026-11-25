@@ -2,7 +2,7 @@
   "schema": 1,
   "candidate": true,
   "physical_verified": false,
-  "physical_sd_subset_verified": false,
+  "physical_sd_subset_verified": true,
   "physical_ota_subset_verified": false,
   "production_verified": false,
   "repository": "rikardljokjell-del/M5stack-Fire-OS",
@@ -154,12 +154,96 @@
       "minimum_internal_heap_bytes": 5064,
       "private_control_and_production_scope_separate": true,
       "report": "../M5Stack-device/PHYSICAL_SD_2026-11-25.md"
+    },
+    {
+      "stage": "Exact published RC9 physical SD-save, separate SD installation and final clean normal reboot passed",
+      "physical_sd_subset_verified": true,
+      "actual_active_image_equal_ci": true,
+      "stored_VALID_and_CRC_independently_parsed": true,
+      "both_os_slots_clean_production": true,
+      "backend_final_current_scope_7_of_7_matches_persisted_alternative_reference": true,
+      "report": "../M5Stack-device/PHYSICAL_SD_2026-11-25.md"
     }
   ],
   "not_verified": [
-    "Exact RC9 GitHub-to-SD and separate SD installation followed by health/VALID/normal production reboot pending",
-    "Fresh RC9 production installed-app inventory pending",
+    "Direct GitHub-to-OTA on exact RC9 not repeated; historical RC7 direct OTA cancel/retry/install proof retained separately",
     "Root cause of historical RC6 FatFS write crash not established",
     "User Home Assistant, public Cloudflare/WSS, audio/AI/Lua RUN and human button/power/recovery acceptance"
-  ]
+  ],
+  "physical_sd_install_subset_verified": true,
+  "physical_sd": {
+    "report": "../M5Stack-device/PHYSICAL_SD_2026-11-25.md",
+    "exact_published_RC9_sd_save": true,
+    "binary_and_per_binary_and_global_catalogs_verified_after_reopen": true,
+    "prior_RC8_binary_and_signed_sidecar_intact": true,
+    "both_complete_6553600_byte_ota_slots_and_all_8192_metadata_bytes_unchanged_by_save": true,
+    "save_installs_or_reboots": false,
+    "separate_sd_install": true,
+    "selected_slot": "A/app0",
+    "selected_sequence": 19,
+    "selected_sdk_state": "VALID",
+    "actual_metadata_crc_valid": true,
+    "actual_active_image_equal_ci": true,
+    "both_slots_exact_ci_after_inactive_B_cleanup": true,
+    "active_A_and_boot_metadata_unchanged_during_cleanup": true,
+    "fallback_B_copy_not_separately_booted": true,
+    "private_harness_removed": true,
+    "com_closed": true,
+    "root_independent_stored_otadata_sha256": "437c90c61f36b1c6c5471bcefe69b2379fea5f5bb5e8e2ea7f9ec04438039997",
+    "root_independent_parse": [
+      {
+        "sequence": 19,
+        "state": 2,
+        "crc_valid": true,
+        "app": 0
+      },
+      {
+        "sequence": 18,
+        "state": 2,
+        "crc_valid": true,
+        "app": 1
+      }
+    ],
+    "normal_boot_observed_at_least_seconds": 125,
+    "normal_boot_max_gap_us": 92998,
+    "normal_reboot_seconds": 45.044,
+    "normal_reboot_max_gap_us": 85996,
+    "normal_reboot_min_measured_internal_heap_bytes": 99060,
+    "normal_reboot_historical_min_internal_heap_bytes": 78200,
+    "panic_or_watchdog_observed": false,
+    "complete_app_scans_after_final_reboot": 2,
+    "apps_per_scan": 7,
+    "scope": "Automated actual firmware UI/manager flow followed by exact CI production boot. Human button/visual and other whole-system acceptance not implied."
+  },
+  "backend_final": {
+    "read_at_unix": 1795596069,
+    "new_boot_since_first_production_RC9": true,
+    "inventory_complete": true,
+    "storage_ready": true,
+    "current_boot_and_connection_epoch_apps": 7,
+    "id_version_checksum_normalized_package_id_match": true,
+    "reference": "Last complete persisted map before production RC9/SD installation, possibly private control boot; original in-memory RC2 reference lost and not claimed",
+    "reference_and_current_map_sha256": "5f4f0532e9e2d8ed66dc2d31f0414a2de958c9b8a7a7c6a1abea2428484be09c",
+    "stored_inventory_age_seconds_at_read": 176,
+    "health_http": 200,
+    "ui_http": 200,
+    "catalog_versions": [
+      "RC9",
+      "RC8",
+      "RC7",
+      "RC6",
+      "RC5",
+      "RC2",
+      "RC1",
+      "1.1"
+    ],
+    "catalog_read_only": true,
+    "catalog_error": false,
+    "reverse_transport": "ready",
+    "authenticated_channels": 4,
+    "active_channels": 0,
+    "transport_error": false,
+    "physical_session_idle_offline_no_last_error": true,
+    "pc_simulation_excluded": true
+  }
 }

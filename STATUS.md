@@ -1,10 +1,72 @@
-# Leveransestatus – 24. november 2026
+# Leveransestatus – 25. november 2026
 
 Samlet arbeid følger [godkjent plan](DELIVERY_PLAN.md). Bruk
 [oppsettsveiledningen](SETUP.md) som inngang. Dette dokumentet skiller kildekode,
 lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
+
+**RC9** viderefører et separat **Last ned til SD** uten installering eller
+omstart. Filen hentes til avgrenset PSRAM, lengde/hash kontrolleres og alle
+socket-/TLS-objekter avsluttes før SD åpnes. SD-filen leses tilbake, og både
+versjonens egen signerte katalog og global recovery-katalog kontrolleres før
+publisering. Tidligere kopier beholdes ved feil. Direkte installasjon er
+fortsatt standard; samme versjon merkes **Reinstaller**. Overflødige
+HTTP-/katalogbuffere frigjøres før TLS, og nødvendige katalogbytes beholdes
+i workerens PSRAM-allokering.
+
+Den private RC9-kandidaten har fysisk lagret signert RC8 fra GitHub til SD
+to ganger. Binærhash, begge signerte katalogkopier og tidligere backupfiler
+stemte. Begge fulle OS-plassene og alle 8 KiB oppstartsmetadata var uendret
+etter hver lagring; ingen installering eller omstart ble startet. Dette er
+et avgrenset kandidatbevis. Deretter hentet FIRE den eksakte publiserte RC9-
+filen fra GitHub til SD. Tilbakelesing av binær og begge kataloger bestod,
+tidligere RC8-fil/katalog var intakt, og lagringen endret ingen OS-områder
+eller oppstartsmetadata. Separat **Installer fra SD** startet ren RC9 i
+**A/app0, sekvens 19 VALID**, med gyldig CRC og eksakt CI-byteidentitet.
+
+Testbildet er fjernet; begge OS-plassene inneholder CI-RC9. Bare inaktiv B
+ble skrevet under opprydding, med A/oppstartsmetadata urørt. Den rene B-kopien
+er ikke separat startet. Ren A-produksjon ble observert minst 125 s og ved
+én vanlig sluttomstart på 45,044 s, uten panic/watchdog. Maks løkkegap var
+**92,998 / 85,996 ms**. COM3 er lukket. Private kontrollbilder hadde egne
+høyere gap-/minnetall; se [SD-rapporten](M5Stack-device/PHYSICAL_SD_2026-11-25.md).
+
+Siste backendkontroll bekreftet ny sluttboot, nyere komplett inventar og SD
+klar. **7/7** app-ID-er, versjoner, checksums og normaliserte pakke-ID-er
+matcher den varige siste komplette referansen før produksjons-RC9/SD-
+installasjonen. Dette er en alternativ referanse, ikke den tapte flyktige
+RC2-mappen. Rapporten var 176 s gammel ved lesing. Health og nettsiden svarte
+HTTP 200; transport var klar uten feil. Firmwarelisten viste
+**RC9 → RC8 → RC7 → RC6 → RC5 → RC2 → RC1 → 1.1**, kun lesing og uten katalogfeil.
+
+Kilden er fryst på `b77c579bec4b4986680f9f3be82a4afbe76f59e8`.
+[CI 45575157747](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45575157747)
+bestod **16 tester og tre bygg**. Signert utgave er publisert på main
+`21c0b81e3da71ca39108c5a06de74811c0cb91f8`; åtte offentlige filer er
+bytekontrollert og begge katalogsignaturer verifisert. USB-pakken og ny
+utpakking bestod faktisk signatur-/hash-/image-/layoutkontroll.
+
+Alle **26 opprinnelige versjonsfiler** er beholdt uendret. Også RC8-filene
+beholdes. RC7s og RC8s opprinnelige signerte kataloger er arkivert før
+hovedlisten flyttes videre. Ingen gammel firmwareversjon slettes; se
+bevaringsreglene i [firmwareoversikten](firmware/README.md#versjonene-beholdes).
+
+## Historisk RC8-kandidat
+
+Alle **16 tester og tre bygg** er bestått på kilde
+`02b3905beb48841df9915fe93b6c2037636faa7b`,
+[CI 45569401808](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45569401808).
+Signert kandidat er publisert på main `aa13421a69187b1a54b71b3c24a7b661d1edf451`;
+seks offentlige filer er hentet og sammenlignet byte for byte, og begge
+katalogsignaturer er kontrollert. Ny USB-utpakking bestod faktisk pakkekontroll.
+Første private RC8-baserte SD-forsøk stoppet trygt ved en TLS-allokeringsfeil,
+før noen filbyte eller SD-skriving. Privat kontroll brukte ekstra intern
+katalogkapasitet; testen isolerer ikke uendret produksjonskode alene.
+Korrigert privat kontroll og produksjonens minnetiltak ble prøvd samlet i RC9.
+Den eldre EIO-/FatFS-feilens rotårsak er fortsatt ikke fastslått.
+
+## Historisk RC7-kontroll
 
 Signert testkandidat **fire-os-1.2.0-rc7** er publisert på main
 `093d7751a507b92b5d1d332f76a7961f20032050`. Alle **15 tester og tre bygg**

@@ -115,9 +115,11 @@ offentlig eller skru av sertifikatkontroll for å hoppe over dette steget.
 
 ## 5. Firmware og førstegangsoppgradering
 
-Din FIRE er allerede migrert og oppdatert til **RC7 direkte fra GitHub**.
-Den står i **OS-slot B / app1** med lagret helsegodkjenning. Begge OS-plassene
-inneholder ren RC7, testutgaven er fjernet, og separat redning er beholdt.
+Din FIRE er allerede migrert og oppdatert til **RC9 fra en kontrollert SD-kopi**.
+Den kjører i **OS-slot A / app0** med lagret helsegodkjenning. Begge OS-plassene
+har ren RC9, testkoden er fjernet og separat redning er beholdt.
+Den nye SD-flyten og separat installering
+er dokumentert i [SD-rapporten](M5Stack-device/PHYSICAL_SD_2026-11-25.md).
 Du skal ikke gjenta førstegangs USB-migrering på din enhet.
 
 På en annen FIRE krever den nye oppstartsløsningen en førstegangs USB-migrering.
@@ -137,21 +139,36 @@ OS-plassen skrives; gjeldende OS og separat redning beholdes under
 nedlastingen. A kan avbryte før den siste aktiveringen. Ved nettfeil velger
 du samme utgave på nytt når nettet er tilbake.
 
-GitHub-menyen har **Installer direkte fra GitHub** og **Tilbake**. Firmware
-lastes ikke ned til SD. **Installer fra SD** beholdes for ferdige offlinefiler
-med signert katalog og brukes ikke i den vanlige GitHub-oppdateringen.
+I RC9 har GitHub-menyen også et separat **Last ned til SD**:
 
-Den signerte testpakken **fire-os-1.2.0-rc7** er klar på denne PC-en i
-`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc7/`. Følg
+1. Velg ønsket firmwareversjon fra GitHub-listen.
+2. Velg **Last ned til SD**, og bekreft med **B / Last ned**.
+3. Vent mens FIRE henter filen til arbeidsminnet, skriver til SD og leser den
+   tilbake for kontroll.
+4. Meldingen **SD kontrollert. Ikke installert** betyr at kopien er lagret.
+   FIRE starter ikke om, og installert OS endres ikke.
+5. Vil du installere kopien senere, åpner du **Installer fra SD**, velger filen
+   og bekrefter installering separat med B.
+
+La katalog-/signaturfilene som følger nedlastingen ligge sammen med firmwaren.
+En eksisterende kopi erstattes først etter kontroll og beholdes som backup.
+Ved for lite arbeidsminne avvises SD-nedlasting trygt; direkte installasjon er
+fortsatt tilgjengelig. Velger du samme kjørende versjon fra GitHub, heter
+installasjonsvalget **Reinstaller direkte fra GitHub**.
+
+Den signerte testpakken **fire-os-1.2.0-rc9** er klar på denne PC-en i
+`M5Stack-backend/workspace/migration/fire-os-1.2.0-rc9/`. Følg
 [USB-veiledningen](M5Stack-backend/docs/USB_MIGRATION.md) fra steg 1 ved migrering
 av en annen FIRE; din enhet er allerede ferdig med dette.
 Pakken er også tilgjengelig som
-[USB-arkiv](firmware/fire-os-1.2.0-rc7-usb.zip) med
-[kontrollsummer](firmware/fire-os-1.2.0-rc7-SHA256SUMS.txt).
+[USB-arkiv](firmware/fire-os-1.2.0-rc9-usb.zip) med
+[kontrollsummer](firmware/fire-os-1.2.0-rc9-SHA256SUMS.txt).
 
-Versjonen er fortsatt en testkandidat for den samlede leveransen. Fysisk
-GitHub-installasjon, avbrudd ved én prosent, nytt forsøk, flashkontroll,
-lagret helsegodkjenning og vanlig omstart er bestått. Visuelle knappetester,
+Versjonen er fortsatt en testkandidat for den samlede leveransen. RC9 har
+lastet ned og kontrollert firmware på SD, startet etter separat installering
+fra SD og bestått helsegodkjenning, flashkontroll og vanlig omstart. Historisk
+RC7 bestod direkte GitHub-installasjon, avbrudd ved én
+prosent, nytt forsøk og vanlig omstart. Visuelle knappetester,
 lyd, Home, AI/appflyt, fysisk strømbrudd og redningsknapp står på sluttestlisten.
 
 ## Samlet sluttkontroll hos deg

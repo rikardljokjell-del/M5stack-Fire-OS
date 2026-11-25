@@ -21,7 +21,15 @@ på kilde [b77c579](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit
 bestod **16 tester og tre bygg**. Signert pakke og ny USB-utpakking er kontrollert.
 Privat kandidat har bestått to faktiske GitHub→SD-lagringer av signert
 RC8, inkludert readback, backupkopier og uendret innhold i begge fulle OS-slotter
-og alle oppstartsmetadata. Endelig RC9-produksjonstest avventes.
+og alle oppstartsmetadata.
+Den eksakte publiserte RC9-filen er deretter lagret og tilbakekontrollert på SD;
+tidligere RC8-fil/katalog er intakt. Separat SD-installasjon startet ren RC9
+i **A/app0, sekvens 19 VALID/CRC**. Begge OS-plassene er nå CI-RC9 og privat
+testkode er fjernet. Minst 125 s vanlig drift og én 45,044 s normal omstart
+ga ingen panic/watchdog; maks gap 92,998/85,996 ms. Den rene B-kopien er ikke
+separat startet. Backend bekreftet fersk boot og komplett 7/7-appinventar mot
+varig siste komplette referanse før produksjons-RC9, ikke RC2-original.
+Direkte RC9-OTA ble ikke gjentatt; RC7-beviset nedenfor beholdes.
 Se [fysisk SD-rapport](../M5Stack-device/PHYSICAL_SD_2026-11-25.md).
 
 | Gjeldende RC9-fil | Bruk |

@@ -7,21 +7,21 @@ av device-agenten; se den kanoniske
 Pakkekontrollen nedenfor er separat og åpner ingen serieport. Kildekode og
 grønne PC-tester alene er ikke fysisk verifikasjon.
 
-**Rikards FIRE er allerede USB-migrert og har bekreftet ren produksjons-RC7-oppstart.** RC6 er
-en publisert kandidat, men SD-lagring krasjet i en privat fysisk UI-test;
-årsaken er ikke tilskrevet SD-maskinvaren. RC7 er bygget og publisert med
-kontrollert signert pakke. Device-agenten har bekreftet GitHub-installasjon,
-lagret helsegodkjenning og vanlig omstart; se den kanoniske rapporten. Stegene
+**Rikards FIRE er allerede USB-migrert og kjører ren, helsegodkjent RC9.**
+Device-agenten har bekreftet signert nedlasting til SD uten installering eller
+omstart, etterfulgt av separat SD-installering og vanlig ren RC9-omstart.
+Se den kanoniske rapporten for det avgrensede fysiske prøveomfanget. Eldre
+RC6/RC8-testfeil beholdes som historikk og tilskrives ikke SD-maskinvaren. Stegene
 nedenfor er en generell veiledning for en annen FIRE som trenger førstegangs-
 migrering; de er ikke en ny migreringsoppgave for den ferdig oppdaterte enheten.
 
-## Vanlig oppdatering fra GitHub: ny RC7-flyt
+## Historisk RC7-flyt: direkte oppdatering fra GitHub
 
 Følgende menyflyt er implementert i bygget og publisert RC7. Produksjonsfilen er
 hentet og installert fysisk av enheten; prøveomfanget fremgår av device-rapporten.
 Flyten erstatter ikke førstegangsmigreringen nedenfor. Historisk
-RC5-verifikasjon er bevart nederst; USB-eksemplene viser den kontrollerte,
-signerte RC7-pakken.
+RC5- og RC7-verifikasjon er bevart nederst. Aktuelle USB-eksempler bruker den
+kontrollerte, signerte RC9-pakken; menyen fra RC8 har i tillegg valgfri SD-nedlasting.
 
 1. Åpne **Settings → Firmware → Oppdater fra GitHub**.
 2. Velg **RC7**, deretter **Installer**. Det andre valget er **Tilbake**.
@@ -36,6 +36,69 @@ frakoblet SD-fil beholdes som en separat funksjon; det er ikke et nødvendig
 mellomsteg for GitHub-installering. Fysisk SD-installering er ikke godkjent
 av denne backendkontrollen. At den nye flyten unngår SD-skriving, beviser ikke
 at SD-skrivefeilen er rettet.
+
+## Menyflyt fra RC8, beholdt i RC9: valgfri nedlasting til SD
+
+Instruksjonene i dette avsnittet gjelder den nye RC8-flyten. Kilden er fryst
+som `02b3905beb48841df9915fe93b6c2037636faa7b`; RC8 er bygget og publisert,
+og den signerte USB-pakken har bestått uavhengig kontroll uten serieport.
+RC8s første private fysiske prøve stoppet før SD på en TLS-allokeringsfeil.
+Den nye RC9-kandidatens separate prøve og aktuelle pakkebevis beskrives nedenfor.
+RC7s tidligere fysiske resultater beholdes som historiske bevis.
+
+1. Åpne **Settings → Firmware → Oppdater fra GitHub** og velg ønsket versjon.
+2. Velg **Last ned til SD**.
+3. Les bekreftelsen: filen lagres uten installering eller omstart, og gammel
+   kopi beholdes som backup. Trykk **B – Last ned** for å bekrefte.
+
+Dette er et valgfritt alternativ. Direkte installering fra GitHub er fortsatt
+standard og krever ikke SD-kort. En lagret fil aktiverer ingen OTA-plass og
+starter ikke enheten på nytt. Den får en egen tilhørende signert
+`.catalog-v2.json`; den eksisterende `/firmware/catalog-v2.json` beholdes også
+for recovery. Faktisk lagring og verifikasjon er ikke godkjent bare ved at
+menyvalget og instruksjonene finnes.
+
+Når valgt utgave er den som allerede kjører, heter installasjonsvalget
+**Reinstaller direkte fra GitHub**, med **B – Reinstaller** i bekreftelsen.
+Dette er en egen installasjonshandling, forskjellig fra å laste ned til SD.
+
+## RC9: eksakt SD-prøve og ren sluttoppstart bekreftet
+
+RC9-kilden er fryst som `b77c579bec4b4986680f9f3be82a4afbe76f59e8`.
+Den beholder RC8-menyflyten, men frigjør overflødige tekstbuffere og beholder
+nødvendig katalog i worker-eid PSRAM. Endelig RC9-bygg og signert pakke er
+publisert, og den nyutpakkede pakken har bestått uavhengig kontroll uten
+serieport. Eksemplene nedenfor bruker RC9. Device-agenten har nå bekreftet
+lagring og tilbakeavlesning av eksakt publisert RC9 på SD. Tidligere RC8-binær
+og tilhørende katalog var intakte; begge komplette OS-plasser og alle metadata
+var uendret ved lagring, uten installering eller omstart. En separat
+SD-installasjon startet deretter produksjons-RC9 i app0. Device-agenten har
+bekreftet app0 som eksakt CI-RC9, sekvens 19 VALID med gyldig CRC. Bare inaktiv
+app1 ble deretter erstattet med ren CI-RC9; app0 og metadata ble beholdt.
+Begge OS-plasser er produksjonsutgaver, testharnessen er fjernet, og vanlig
+sluttomstart i app0 viste maksimalt gap 85,996 ms uten panic eller watchdog.
+
+Device-agentens private fysiske RC9-kandidat har lastet ned den signerte
+RC8-filen til SD to ganger. Hash, begge katalogene og bevarte gamle backupkopier
+er kontrollert. Begge komplette OS-plasser og alle OTA-metadata var uendret
+etter hver lagring; det skjedde ingen installering eller omstart. Dette er
+bevis for den private kandidaten med RC8 som nedlastingsmål, ikke for ferdig
+produksjons-RC9 eller for at den tidligere RC8-testutgaven bestod. Se den
+kanoniske device-rapporten for testomfanget.
+
+Backendens første avlesning etter RC9-installasjonen bekreftet RC9-identitet;
+lagrede startkvitteringer viste ny boot sammenlignet med RC7. Health og webUI
+svarte 200. Firmwarekatalogen viste RC9 → RC8 → RC7 → RC6 → RC5 → RC2 → RC1
+→ 1.1 som lesbar metadata uten feil, og fire Reverse TCP-kanaler var
+autentisert uten rapportert transportfeil. Første inventar stod som `requested`;
+eldre rapporter ble ikke tilskrevet den nye booten. Den siste kontrollen etter
+ren RC9-omstart bekreftet derimot ny boot siden første RC9-observasjon, nyere
+komplett inventar og tilgjengelig SD. Alle sju current-boot/current-epoch-apper
+matcher på ID, versjon, checksum og normalisert package-ID mot den private,
+varige referansen fra siste komplette oversikt før produksjons-RC9/SD-installasjon.
+Referansen kan være fra en privat kontrollboot; den er ikke opprinnelig RC2.
+Rapporten var 176 sekunder gammel ved avlesning. PC-simulering er holdt utenfor,
+og inaktiv AI-sesjon i Auto/mainmenu er ikke tolket som transportfeil.
 
 ## Før du begynner
 
@@ -61,21 +124,21 @@ du skal slå av for å tvinge fram migrering.
 ## 1. Kontroller pakken uten enhet
 
 Åpne PowerShell i `M5Stack-backend`. Den ferdige pakken ligger for eksempel i
-`workspace\migration\fire-os-1.2.0-rc7` og inneholder:
+`workspace\migration\fire-os-1.2.0-rc9` og inneholder:
 
 - `migration.json` og `migration.sig` (signert plan for alle fire bildene).
 - `bootloader.bin`, `partitions.bin`, `normal.bin`, `recovery.bin`.
 - `catalog-v2.json` og `release-public.pem`.
 
-USB-pakkens utgivelsessti er `firmware/fire-os-1.2.0-rc7-usb.zip` i repoet.
+USB-pakkens utgivelsessti er `firmware/fire-os-1.2.0-rc9-usb.zip` i repoet.
 Pakk ut alle åtte filene til mappen over før kontroll. En separat publisert
-`fire-os-1.2.0-rc7.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
+`fire-os-1.2.0-rc9.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
 en valgfri ekstrakopi i den lokale arbeidsmappen; den finnes ikke i USB-ZIP-en
 og kreves ikke av migreringsverktøyet. Lokal `component-provenance.json` er også
 en ekstra revisjonsfil, ikke en av de åtte nødvendige filene i USB-ZIP-en.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.2.0-rc7
+.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.2.0-rc9
 ```
 
 Standardkommandoen åpner **ingen serieport** og skriver ingenting til FIRE.
@@ -99,7 +162,7 @@ tilhører FIRE, for eksempel COM3; verktøyet gjetter aldri en port.
 ## 3. Kun forhåndskontroll av tilkoblet FIRE
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc7 --port COM3
+.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc9 --port COM3
 ```
 
 Enheten går midlertidig til ROM-nedlastingsmodus for kontroll, og startes tilbake
@@ -113,7 +176,7 @@ brukes enhetens dokumenterte USB-bootprosedyre; ingen sikkerhetsdialog omgås.
 Kjør først når riktig signert pakke og riktig serieport er kontrollert:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc7 --port COM3 --confirm MIGRATE-FIRE
+.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc9 --port COM3 --confirm MIGRATE-FIRE
 ```
 
 Før skriving gjør verktøyet dette i rekkefølge:
@@ -193,22 +256,22 @@ De omfatter ugyldige signaturer/nøkkelbytte/hash/layout, chip/eFuse-avvisning,
 full backup før skriving, bevart NVS/app1/config/coredump, stopp ved ulik
 avlesning eller feil etter skriving, gjenoppretting av skadet partisjonstabell,
 annen enhet og fast baud før avlesning. Ingen serieport er åpnet i disse testene.
-Den faktiske signerte RC7-pakken er kontrollert av rotkoordinatoren, og backend-
+Den faktiske signerte RC9-pakken er kontrollert av rotkoordinatoren, og backend-
 agenten har uavhengig kjørt samme `check` mot den nyutpakkede USB-pakken i
-`workspace\release-verify\fire-os-1.2.0-rc7`: signaturer, hashes, ESP32-bilder
+`workspace\release-verify\fire-os-1.2.0-rc9`: signaturer, hashes, ESP32-bilder
 og eksakt layout består (exit 0), uten serieport.
-Normalbildets kilde er `7eb40b7e0effca647d101031c777832aa672a010`, med
-[CI-bevis 45496282327, jobb 138807536199](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45496282327/job/138807536199):
-alle 15 tester og tre bygg bestått. Normalbildet er 2422464 byte med SHA256
-`55228972417300566da9c96a7c888b685cb7ec6d17a3b176b33cbc2d1df0c372`.
-USB-ZIP-en er 2646099 byte med SHA256
-`eec3e649611e972e40afe9d34a900e4edebd05f0e4200989896983cb52541c77`.
+Normalbildets kilde er `b77c579bec4b4986680f9f3be82a4afbe76f59e8`, med
+[CI-bevis 45575157747, jobb 139071160462](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45575157747/job/139071160462):
+alle 16 tester og tre bygg bestått. Normalbildet er 2427328 byte med SHA256
+`17edd52caa166558118c30ddead2d49ccc1d24360f68b326e2297eceab4fd6bd`.
+USB-ZIP-en er 2653766 byte med SHA256
+`c6e493690669406794c7cf663080f3d0b925fa61c7f83b98c2a9742c143c7bf7`.
 Den inneholder eksakt åtte nødvendige filer; lokal komponentproveniens ligger
 utenfor ZIP-en. Pakke-/CI-kontrollen er ikke fysisk OTA-/SD-verifikasjon.
 Bootloader, partisjonstabell og recovery er uendret fra det fysisk testede
 RC2-grunnlaget, kilde `7efbae95fa0a54aeb3e1d6a615390810b69279b4`.
-Dette er RC7-normal med RC2-grunnlag, ikke et nytt RC7-bygg av alle komponentene.
-Tidligere RC1/RC2/RC5/RC6-pakkekontroller beholdes som historiske bevis; RC2 ble også
+Dette er RC9-normal med RC2-grunnlag, ikke et nytt RC9-bygg av alle komponentene.
+Tidligere RC1/RC2/RC5/RC6/RC7/RC8-pakkekontroller beholdes som historiske bevis; RC2 ble også
 kontrollert etter nyutpakking av nøyaktig åtte USB-filer.
 
 Fysisk migrering med full backup og bilde-readback, recovery og kontrollert

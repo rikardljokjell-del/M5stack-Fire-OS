@@ -1,6 +1,33 @@
 # FIRE OS — leveransebevis
 
-## RC7: fysisk direkte GitHub-oppdatering
+## RC9: fysisk SD-nedlasting, bevaring og separat installasjon
+
+Kilde `b77c579bec4b4986680f9f3be82a4afbe76f59e8`, CI 45575157747: 16 tester og tre bygg bestod.
+Eksakt normal: 2 427 328 B, SHA256 `17edd52caa166558118c30ddead2d49ccc1d24360f68b326e2297eceab4fd6bd`.
+To kandidatlagringer med erstatning/backup og én eksakt CI-RC9-nedlasting fra
+GitHub til PSRAM/SD er fysisk kontrollert. Binær og begge kataloger er lest
+tilbake, begge hele OTA-slotter/metadata er uendret fra lagring, og tidligere
+RC8-binær/katalog er intakte. Separat SD-installasjon ga faktisk A19 VALID/CRC,
+CI-byteidentitet og normal omstart. Begge slotter er ren RC9, COM3 lukket.
+Backend bekreftet en komplett oversikt fra sluttoppstarten: 7/7 app-ID-er,
+versjoner, checksums og normaliserte pakke-ID-er var identiske med den varige
+komplette referansen fra før RC9/SD-installasjonen. Dette var ikke RC2-baseline.
+Lagring var klar, health/UI svarte 200, og fire transportkanaler var feilfrie.
+Se [kanonisk fysisk rapport, minnefunn og avgrensninger](PHYSICAL_SD_2026-11-25.md).
+
+Offentlig USB-ZIP: 2 653 766 B, SHA256
+`c6e493690669406794c7cf663080f3d0b925fa61c7f83b98c2a9742c143c7bf7`.
+Root har faktisk kontrollert signaturer, image, layout og ny utpakking med
+migrerings-CLI; gamle versjonsfiler er bevart. Distribuert oppstartsgrunnlag er
+de byteidentiske fysisk verifiserte RC2-komponentene med separat proveniens.
+Normal er eksakt RC9 CI. Ingen påstand om homogent RC9-komponentbygg.
+
+Ren produksjon målte løkkegap 92 998 µs; vanlig omstart
+85 996 µs. Private fixture-tall er dokumentert separat og
+holdes utenfor generelle produksjonspåstander. Home/AI/lyd, visuelle knapper og
+fysisk recoveryhold gjenstår. Den historiske SD-rotårsaken er ikke erklært løst.
+
+## Historisk RC7: fysisk direkte GitHub-oppdatering
 
 Kilde `7eb40b7e0effca647d101031c777832aa672a010`, CI 45496282327:
 15 tester og tre bygg bestod. Faktisk GitHub-nedlasting/OTA, UI-avbrudd ved 1 %,
