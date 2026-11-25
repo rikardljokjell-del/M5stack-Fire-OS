@@ -1,6 +1,6 @@
 # FIRE OS firmware
 
-Aktuell **testkandidat: fire-os-1.2.0-rc8**. Etter versjonsvalg under
+Aktuell **testkandidat: fire-os-1.2.0-rc9**. Etter versjonsvalg under
 **Settings → Firmware → Oppdater fra GitHub** kan du velge:
 
 - **Installer direkte fra GitHub**: oppdaterer inaktiv OS-slot og starter om.
@@ -10,23 +10,42 @@ Aktuell **testkandidat: fire-os-1.2.0-rc8**. Etter versjonsvalg under
 Samme kjørende versjon vises som **Reinstaller** ved direkte installasjon.
 SD-valget henter hele den signerte filen til PSRAM, kontrollerer lengde/hash
 og avslutter socket/TLS helt før SD åpnes. SD-filen leses tilbake; både egen
-signert katalog ved filen og global katalog for eksisterende recovery bevares.
-For lite sammenhengende arbeidsminne gir en trygg avvisning før SD-skriving.
-Ingen OTA-slot eller oppstartsmetadata endres av bare nedlasting til SD.
+signert katalog ved filen og global katalog for eksisterende recovery kontrolleres.
+Tidligere kopier beholdes som backups. Ingen OTA-slot eller oppstartsmetadata
+endres av bare nedlasting til SD. For lite arbeidsminne gir en trygg avvisning.
+RC9 frigjør overflødig bufferkapasitet før TLS og holder nødvendige katalogbytes
+i samme worker-eide PSRAM-allokering som firmwarefilen.
 
-[CI 45569401808](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45569401808)
-på kilde [02b3905](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/02b3905beb48841df9915fe93b6c2037636faa7b)
-bestod **16 tester og tre bygg**. Signert pakke er kontrollert; fysisk SD-test pågår.
+[CI 45575157747](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45575157747)
+på kilde [b77c579](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/b77c579bec4b4986680f9f3be82a4afbe76f59e8)
+bestod **16 tester og tre bygg**. Signert pakke og ny USB-utpakking er kontrollert.
+Privat kandidat har bestått to faktiske GitHub→SD-lagringer av signert
+RC8, inkludert readback, backupkopier og uendret innhold i begge fulle OS-slotter
+og alle oppstartsmetadata. Endelig RC9-produksjonstest avventes.
+Se [fysisk SD-rapport](../M5Stack-device/PHYSICAL_SD_2026-11-25.md).
 
-| Gjeldende RC8-fil | Bruk |
+| Gjeldende RC9-fil | Bruk |
 | --- | --- |
-| [Normal firmware](fire-os-1.2.0-rc8.bin) | Direkte oppdatering eller SD-kopi fra enheten |
-| [USB-arkiv](fire-os-1.2.0-rc8-usb.zip) | Førstegangsmigrering på en annen enhet |
-| [Kontrollsummer](fire-os-1.2.0-rc8-SHA256SUMS.txt) | Eksakte filhashes |
-| [Utgivelsesbevis](fire-os-1.2.0-rc8-evidence.json) | CI, komponentkilder og faktisk teststatus |
+| [Normal firmware](fire-os-1.2.0-rc9.bin) | Direkte oppdatering eller SD-kopi fra enheten |
+| [USB-arkiv](fire-os-1.2.0-rc9-usb.zip) | Førstegangsmigrering på en annen enhet |
+| [Kontrollsummer](fire-os-1.2.0-rc9-SHA256SUMS.txt) | Eksakte filhashes |
+| [Utgivelsesbevis](fire-os-1.2.0-rc9-evidence.json) | CI, komponentkilder og faktisk teststatus |
 
-Normal RC8 er ny; fysisk testet RC2-bootloader, partisjonstabell og recovery
+Normal RC9 er ny; fysisk testet RC2-bootloader, partisjonstabell og recovery
 beholdes uendret med separat kildeopphav. Alle eldre utgivelsesfiler beholdes.
+
+## Historisk RC8
+
+RC8 beholdes med [original signert katalog](fire-os-1.2.0-rc8-catalog.json),
+[binær](fire-os-1.2.0-rc8.bin), [USB-arkiv](fire-os-1.2.0-rc8-usb.zip),
+[kontrollsummer](fire-os-1.2.0-rc8-SHA256SUMS.txt) og
+[utgivelsesbevis](fire-os-1.2.0-rc8-evidence.json).
+[CI 45569401808](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45569401808)
+på `02b3905beb48841df9915fe93b6c2037636faa7b` bestod 16 tester og tre bygg.
+Første private RC8-baserte test stoppet ved TLS-allokering før SD-skriving.
+Ekstra privat katalogkopi og produksjonens beholdte bufferkapasitet ble
+håndtert samlet i RC9-kandidaten; testen isolerte ikke hver årsak. Bruk
+nyeste anbefalte utgave øverst. Den eldre FatFS-feilens rotårsak er ikke fastslått.
 
 ## Historisk RC7
 
@@ -90,7 +109,7 @@ RC2-bildene for bootloader, partisjonstabell og recovery med separat opphav.
 
 RC5 beholdes uendret med [original katalog](fire-os-1.2.0-rc5-catalog.json).
 SD-skrivefeilen er gjenskapt på fysisk FIRE, og installasjonsbekreftelsen hadde
-en separat feil. Bruk RC6. Følgende er de tidligere USB-målingene:
+en separat feil. Bruk nyeste anbefalte utgave øverst. Følgende er de tidligere USB-målingene:
 
 RC5 ble fysisk installert på
 Rikards FIRE og helsegodkjent. Målt maksimal løkkeavstand ved oppstart og

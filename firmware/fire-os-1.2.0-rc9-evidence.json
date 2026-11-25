@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "candidate": true,
+  "physical_verified": false,
+  "physical_sd_subset_verified": false,
+  "physical_ota_subset_verified": false,
+  "production_verified": false,
+  "repository": "rikardljokjell-del/M5stack-Fire-OS",
+  "ota": {
+    "algorithm": "ecdsa-p256-sha256",
+    "key_id": "fire-release-2026",
+    "layout": "fire-ab-recovery-v1",
+    "rollback_enabled": true,
+    "factory_reset_gpio": 39,
+    "factory_reset_hold_seconds": 3,
+    "data_factory_reset": []
+  },
+  "version": "fire-os-1.2.0-rc9",
+  "source_commit": "b77c579bec4b4986680f9f3be82a4afbe76f59e8",
+  "ci": {
+    "firmware_run_id": 45575157747,
+    "firmware_job_id": 139071160462,
+    "artifact_id": 15004446815,
+    "artifact_zip_sha256": "04f1607fba0f4f0f02efb9384ca0bbcd98d068a9dd1bbcd85824fd50edf718d7",
+    "tests": 16,
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "distribution_note": "Normal from this CI. Physically verified RC2 bootloader/table/recovery retained with separate component provenance."
+  },
+  "firmware": {
+    "name": "fire-os-1.2.0-rc9.bin",
+    "size": 2427328,
+    "sha256": "17edd52caa166558118c30ddead2d49ccc1d24360f68b326e2297eceab4fd6bd"
+  },
+  "migration": {
+    "name": "fire-os-1.2.0-rc9-usb.zip",
+    "size": 2653766,
+    "sha256": "c6e493690669406794c7cf663080f3d0b925fa61c7f83b98c2a9742c143c7bf7",
+    "manifest_sha256": "bef8b1e5933ff6f1844d6e6165448b7da5a507fed866d109d40dc86fd052d94f",
+    "catalog_sha256": "71160577e100c470e6efe9a9d4f2ee4ec931671655eb994c619c5e9b3e87dd52",
+    "files": [
+      "migration.json",
+      "migration.sig",
+      "bootloader.bin",
+      "partitions.bin",
+      "normal.bin",
+      "recovery.bin",
+      "catalog-v2.json",
+      "release-public.pem"
+    ]
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "17edd52caa166558118c30ddead2d49ccc1d24360f68b326e2297eceab4fd6bd",
+      "size": 2427328
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "component_provenance": {
+    "bootloader": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 27760,
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "retained_rc2_component": true
+    },
+    "partitions": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 3072,
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "retained_rc2_component": true
+    },
+    "normal": {
+      "source_commit": "b77c579bec4b4986680f9f3be82a4afbe76f59e8",
+      "ci_run": 45575157747,
+      "size": 2427328,
+      "sha256": "17edd52caa166558118c30ddead2d49ccc1d24360f68b326e2297eceab4fd6bd",
+      "retained_rc2_component": false
+    },
+    "recovery": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 1578112,
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "retained_rc2_component": true
+    }
+  },
+  "changes": [
+    "Separate Download to SD option does not install, reboot or write any OTA partition",
+    "Complete signed firmware buffered within actual PSRAM largest-block and reserve bounds",
+    "Exact network size and hash verified; all socket/TLS objects destroyed before opening SD",
+    "SD file readback and signed per-binary plus legacy recovery catalogs verified before preserving-backup publication",
+    "Same-version installation clearly labelled Reinstall; direct GitHub update remains default",
+    "Release redundant Arduino String buffer capacity before TLS and retain immutable signed download catalog in worker-owned PSRAM"
+  ],
+  "firmware_history": {
+    "original_26_version_files_byte_unchanged": true,
+    "published_binary_zip_checksum_and_original_catalog_bytes_unchanged": true,
+    "prior_RC8_evidence_factual_append_retains_original_history": true,
+    "previous_catalog_archived": "fire-os-1.2.0-rc8-catalog.json",
+    "previous_catalog_sha256": "7f968bfd4fcaa85521e491d7f1217c4a3f07d16a5576e9c9c7ddef8a0856bb36",
+    "signed_catalog_entries": 7,
+    "legacy_1_1_preserved": true
+  },
+  "verification_history": [
+    {
+      "stage": "CI and exact signed package checks passed",
+      "tests": 16,
+      "builds": 3,
+      "fresh_unzip_check_pass": true,
+      "physical_RC9_production_status": "pending"
+    },
+    {
+      "stage": "Frozen RC9 code in private derivative downloading unchanged published RC8 artifact",
+      "successful_sd_saves": 2,
+      "binary_and_both_catalogs_and_backups_verified": true,
+      "both_complete_ota_slots_and_8192_metadata_bytes_unchanged_after_each_save": true,
+      "installation_or_reboot_started_by_save": false,
+      "duration_seconds": 342.596,
+      "panic_count": 0,
+      "watchdog_count": 0,
+      "max_loop_gap_us": 273995,
+      "minimum_internal_heap_bytes": 5064,
+      "private_control_and_production_scope_separate": true,
+      "report": "../M5Stack-device/PHYSICAL_SD_2026-11-25.md"
+    }
+  ],
+  "not_verified": [
+    "Exact RC9 GitHub-to-SD and separate SD installation followed by health/VALID/normal production reboot pending",
+    "Fresh RC9 production installed-app inventory pending",
+    "Root cause of historical RC6 FatFS write crash not established",
+    "User Home Assistant, public Cloudflare/WSS, audio/AI/Lua RUN and human button/power/recovery acceptance"
+  ]
+}

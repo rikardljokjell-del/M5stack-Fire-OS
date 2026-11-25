@@ -135,11 +135,29 @@
     {
       "stage": "CI and signed package checks passed",
       "physical_status": "pending"
+    },
+    {
+      "stage": "Private physical RC8-based attempt",
+      "outcome": "TLS RSA/MPI allocation failed before first payload byte and before SD open; no panic or watchdog",
+      "private_harness_extra_internal_catalog_copy": true,
+      "unmodified_RC8_production_cause_isolated": false,
+      "report": "../M5Stack-device/PHYSICAL_SD_2026-11-25.md"
+    },
+    {
+      "stage": "Private RC9 memory candidate downloading this unchanged RC8 artifact",
+      "source_commit": "b77c579bec4b4986680f9f3be82a4afbe76f59e8",
+      "successful_sd_saves": 2,
+      "binary_readback_hash_matches": true,
+      "per_binary_and_global_signed_catalogs_verified": true,
+      "previous_binary_and_catalog_backups_verified": true,
+      "both_complete_ota_slots_and_8192_metadata_bytes_unchanged_after_each_save": true,
+      "installation_or_reboot_started_by_save": false,
+      "scope": "Verifies RC8 bytes as a download target of private RC9 code; does not verify unmodified RC8 production SD operation",
+      "report": "../M5Stack-device/PHYSICAL_SD_2026-11-25.md"
     }
   ],
   "not_verified": [
-    "RC8 physical GitHub-to-PSRAM-to-SD download/readback and unchanged boot/partition checks pending",
-    "RC8 normal production boot and fresh installed-app inventory pending",
+    "Unmodified RC8 production SD flow and production boot were not established by private derivative testing",
     "Root cause of historical RC6 FatFS write crash not established",
     "User Home Assistant, public Cloudflare/WSS, audio/AI/Lua RUN and human button/power/recovery acceptance"
   ]
