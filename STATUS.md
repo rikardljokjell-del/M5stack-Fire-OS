@@ -15,6 +15,27 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
+### Runtime AI, kostnader og appflyt – sluttintegrasjon
+
+Runtime AI er implementert som en valgfri, asynkron SDK-tjeneste over samme
+backend og transport, med global/per-app-aktivering, eget modellvalg og
+forbruk. Ingen nye API-nøkler på enheten. Jobbpris, appens samlede
+utviklingspris og Runtime AI-forbruk er skilt. Ukjent bruk vises som ukjent,
+eventuelt med empirisk anslag; maksimumsreserve vises ikke som forbruk.
+
+Byggeflyten beholder den beste validerte rettingskandidaten. Ferdigdialog,
+installasjonskvittering, nedlastingsprogresjon og korte statuslinjer er rettet
+i firmwarekilden. RC3 fra `7e157e8` har bestått 21 native tester, tre CI-bygg
+og signert pakkekontroll. Backend: 1013 PASS / fire gamle kostasserts;
+rettede forventninger og berørte kost-/jobbtester består. Ingen ekstra
+fullkjøring hevdes. Windows-backenden er aktivert med bevarte innstillinger/nøkler. Eksakt RC3
+er fysisk installert og helsegodkjent i B38; RC9A37 er reserve. Faktiske
+appstart-/Runtime AI-resultater og opplevd respons gjenstår i sluttprøven.
+
+Se [Runtime AI og teststeg](M5Stack-backend/docs/RUNTIME_AI.md). Tidligere
+appspesifikke 24 ms-feil er ikke friskmeldt. SD-skrivefeilen over er utsatt.
+
+
 ### FIRE App SDK – under implementering
 
 SDK-arbeidet er godkjent og pågår i eksisterende firmware/backend. Felles

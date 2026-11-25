@@ -559,3 +559,33 @@ are local candidates until the remaining acceptance gates pass.
 
 The user's reported firmware download-to-SD write failure remains open and
 is outside this SDK task. Earlier isolated SD tests do not close that issue.
+
+## Runtime AI / RC3 – 25 November 2026
+
+Normal firmware from `7e157e884d20c30cc376126ce643513f60a03cf2` passed
+21 native tests and all three builds in CI45650130638; strict GCC checks
+passed in run45650371498. The exact 2,673,328-byte image has SHA256
+`8adf0838e5dfaa4d3f97d98fb5e03b38b0476c8dc4638d92f6016381ce322128`.
+
+The device agent performed the authorized single USB update: full B-slot
+readback matched that image and FF padding, B38 is VALID/CRC, and retained
+RC9 A37 is VALID/CRC. Health capture45.112s and ordinary reboot20.136s
+contained no panic, abort or watchdog. COM3 was closed. Local final-result
+evidence SHA256 is
+`b8e04458250127e7470d23ef816ff9e1ecc646974251a45e5eb1b56245dcfd82`.
+This boot/readback proof does not establish Lua UI timing or Runtime AI.
+
+Backend full regression:1013 passed, four outdated public-cost assertions
+failed. Those expectations were corrected while retaining internal budget
+reservation checks; affected47 checks and final7 cost-confidence tests pass.
+One coordinated backend restart preserved raw settings and credential hashes.
+Actual Windows Jobs and Apps views show job-only costs and lifetime app totals,
+with unknown empirical estimates separated from recorded and historical costs.
+
+Two distinct handwritten test apps passed the normal offline Builder gates
+and were registered with manual/mock provenance. They are not AI generation
+quality evidence. Native installation/start receipts and actual user B-triggered
+Runtime AI calls are separate final checks, not implied by this paragraph.
+No runtime quotas or existing SDK/hardware hashes were increased. The reported
+firmware SD-write issue remains deferred. Earlier Prikkjakt/Vater callback
+timeouts are not declared fixed by these results.

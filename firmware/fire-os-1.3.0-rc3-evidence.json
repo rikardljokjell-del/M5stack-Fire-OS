@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "candidate": true,
+  "production_verified": false,
+  "physical_runtime_ai_verified": false,
+  "version": "fire-os-1.3.0-rc3",
+  "source_commit": "7e157e884d20c30cc376126ce643513f60a03cf2",
+  "backend_source_commit": "43b933e",
+  "ci": {
+    "run": 45650130638,
+    "job": 139332067925,
+    "artifact": 15039188758,
+    "tests": 21,
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "strict_native_run": 45650371498
+  },
+  "firmware": {
+    "name": "fire-os-1.3.0-rc3.bin",
+    "size": 2673328,
+    "sha256": "8adf0838e5dfaa4d3f97d98fb5e03b38b0476c8dc4638d92f6016381ce322128"
+  },
+  "migration": {
+    "name": "fire-os-1.3.0-rc3-usb.zip",
+    "size": 2742588,
+    "sha256": "09432e3cd2a161f5a515996b821f2de9ceb20558f7542f45688362f07add6f56",
+    "manifest_sha256": "934c188c3a649ee7bd10581f5c984efd10d961076c02a87814b292c692d02c05",
+    "files": [
+      "APP_SDK_NOTICES.txt",
+      "app-sdk-licenses/1-bit-pack.txt",
+      "app-sdk-licenses/atkinson-OFL.txt",
+      "app-sdk-licenses/legacy-font.txt",
+      "app-sdk-licenses/lucide.txt",
+      "app-sdk-licenses/pixel-OFL.txt",
+      "app-sdk-licenses/pixel-platformer.txt",
+      "app-sdk-licenses/tiny-dungeon.txt",
+      "app-sdk-licenses/tiny-town.txt",
+      "bootloader.bin",
+      "catalog-v2.json",
+      "migration.json",
+      "migration.sig",
+      "normal.bin",
+      "partitions.bin",
+      "recovery.bin",
+      "release-public.pem"
+    ],
+    "required_signed_core_files": 8,
+    "license_notice_files": 9
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "8adf0838e5dfaa4d3f97d98fb5e03b38b0476c8dc4638d92f6016381ce322128",
+      "size": 2673328
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "foundation": "Physically verified RC2 bootloader/table/recovery retained byte-identically from published RC9 evidence; no foundation update",
+  "physical_usb": {
+    "active": "B/app1 sequence38 VALID/CRC",
+    "fallback": "RC9 A/app0 sequence37 VALID/CRC",
+    "full_slot_ci_prefix_and_ff_readback": true,
+    "health_seconds": 45.112,
+    "ordinary_reboot_seconds": 20.136,
+    "panic": 0,
+    "watchdog": 0,
+    "com_closed": true,
+    "local_evidence_sha256": "b8e04458250127e7470d23ef816ff9e1ecc646974251a45e5eb1b56245dcfd82"
+  },
+  "backend_tests": {
+    "full_passed": 1013,
+    "full_failed": 4,
+    "diagnosis": "Four old public cost assertions corrected; internal conservative reservations retained. Affected47 checks and final7 cost-confidence checks pass. No duplicate full suite claimed."
+  },
+  "limits": {
+    "sdk_contract_unchanged": true,
+    "hardware_contract_unchanged": true,
+    "no_runtime_budget_increase": true,
+    "known_open": [
+      "User-reported firmware SD write failure is deferred, not fixed.",
+      "Old app-specific24ms callback errors are not declared fixed.",
+      "Actual user-triggered Runtime AI results and perceived responsiveness still require final practical checks."
+    ]
+  },
+  "reports": [
+    "M5Stack-backend/docs/RUNTIME_AI.md",
+    "M5Stack-backend/docs/FIRE_APP_SDK_EVALUATION.md"
+  ]
+}

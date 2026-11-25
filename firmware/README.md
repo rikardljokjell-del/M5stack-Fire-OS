@@ -1,6 +1,39 @@
 # FIRE OS firmware
 
-Aktuell **testkandidat: fire-os-1.2.0-rc9**. Etter versjonsvalg under
+## Aktuell testkandidat: fire-os-1.3.0-rc3
+
+RC3 legger til FIRE App SDK, asynkron Runtime AI, rettet ferdigdialog og
+installasjonskvittering, samt tydeligere appstatus og nedlastingsprogresjon.
+Eksakt CI-fil er installert på Rikards FIRE i B, sekvens38 VALID/CRC.
+RC9 er beholdt i A, sekvens37 VALID/CRC. Hele B er tilbakekontrollert;
+45,1s helsekontroll og 20,1s vanlig omstart ga ingen panic/watchdog.
+Dette er en testkandidat, ikke generell produksjonsgodkjenning av alle apper.
+
+- [Normal firmware](fire-os-1.3.0-rc3.bin)
+- [Signert USB-arkiv](fire-os-1.3.0-rc3-usb.zip) – åtte signerte kjernefiler
+  pluss ni SDK-lisens-/varselfiler, signatur/hash/bilde/layout kontrollert
+- [Kontrollsummer](fire-os-1.3.0-rc3-SHA256SUMS.txt),
+  [bevis](fire-os-1.3.0-rc3-evidence.json),
+  [font- og bildekreditering](fire-os-1.3.0-rc3-NOTICES.txt)
+- [Runtime AI og praktiske teststeg](../M5Stack-backend/docs/RUNTIME_AI.md)
+
+Normalbildet kommer fra `7e157e8`, CI45650130638: 21 tester og tre bygg.
+USB-pakken beholder de uendrede, fysisk testede RC2-grunnlagsbildene.
+Runtime AI bruker samme backend og nøkkel; AI-modellen får ingen enhetsnøkkel.
+Faktiske knappestyrte AI-resultater og opplevd respons gjenstår i sluttprøven.
+
+**Åpen feil:** Brukeren rapporterte SD-skrivefeil etter firmware-nedlasting.
+Feilen er etter ønske kun notert og er ikke rettet i RC3. Eldre appspesifikke
+24ms-feil er heller ikke friskmeldt. Direkte OTA og recovery er ikke fysisk
+gjentestet med RC3. Alle tidligere publiserte versjonsfiler er bytebevart.
+
+Katalogen har nå åtte signerte oppføringer, i tillegg til legacy1.1 i
+backendoversikten. Før en niende signert utgivelse kreves bounded
+arkivoppdagelse; eldre artefakter skal ikke slettes for å få plass.
+
+## Historisk RC9
+
+Historisk **testkandidat: fire-os-1.2.0-rc9**. Etter versjonsvalg under
 **Settings → Firmware → Oppdater fra GitHub** kan du velge:
 
 - **Installer direkte fra GitHub**: oppdaterer inaktiv OS-slot og starter om.
