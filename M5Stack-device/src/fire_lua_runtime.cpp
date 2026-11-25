@@ -83,6 +83,10 @@ int sdkInt(lua_State* state,int index,int minimum,int maximum) {
   luaL_checktype(state,index,LUA_TNUMBER);
   return strictInt(state,index,minimum,maximum);
 }
+int sdkGenerationalGc(lua_State* state) {
+  if(lua_gc(state,LUA_GCGEN,20,100)<0) return luaL_error(state,"SDK GC mode unavailable");
+  return 0;
+}
 }  // namespace
 
 const char* FireLuaRuntime::hardwareApiContract() {
@@ -728,6 +732,14 @@ bool FireLuaRuntime::loadSource(const uint8_t* source, size_t length) {
   if (lua_pcall(lua_, 0, 0, 0) != LUA_OK) {
     finishCallback();
     return fail(String("Lua init: ") + lua_tostring(lua_, -1));
+  }
+  if(appSdk_) {
+    // Long-lived UI data becomes old; short-lived frame options use minors.
+    // Mode transition may collect: protect it and retain the SAME init timer.
+    lua_pushcfunction(lua_,sdkGenerationalGc);
+    if(lua_pcall(lua_,0,0,0)!=LUA_OK) {
+      finishCallback();return fail(String("Lua init GC: ")+lua_tostring(lua_,-1));
+    }
   }
   if (!finishCallback()) return false;
   lua_getglobal(lua_, "update");

@@ -404,6 +404,43 @@ end)AI";
   puts("PASS actual Lua Runtime AI permission gating async request/jobs bounded decoded result and unchanged24ms wall guard");
 }
 
+static void generationalGuiTests(const char* directory) {
+  // Actual unchanged failing scene, normal UI allocation and no B/AI request.
+  const std::string path=std::string(directory)+"/../../../examples/runtime_ai_quest.lua";
+  std::ifstream file(path,std::ios::binary);assert(file.good());
+  const std::string source((std::istreambuf_iterator<char>(file)),std::istreambuf_iterator<char>());
+  FireLuaRuntime runtime;runtime.setHardwareApi(true);runtime.setAppSdk(true);runtime.setServiceMask(3u|32u|(1u<<20));
+  auto h=renderHost();h.aiRequest=aiHost;assert(runtime.begin(h));
+  const unsigned requestsBefore=aiRequests;
+  fixtureCheck(runtime.loadSource(reinterpret_cast<const uint8_t*>(source.data()),source.size()),"runtime_ai_quest.lua",runtime);
+  size_t previous=runtime.memoryUsed(),low=previous,high=previous;unsigned collections=0;
+  for(unsigned frame=0;frame<600;++frame) {
+    prepareFrame(runtime);fixtureCheck(runtime.update(75),"runtime_ai_quest.lua",runtime);renderedFrame.invalidate();
+    const size_t used=runtime.memoryUsed();if(used<previous) ++collections;
+    low=min(low,used);high=max(high,used);previous=used;
+    assert(used<=FireLuaRuntime::kMaxMemoryBytes);
+  }
+  assert(collections>2 && runtime.peakMemoryUsed()<=FireLuaRuntime::kMaxMemoryBytes && aiRequests==requestsBefore);
+  printf("HOST SDK quest600 frames collections_observed=%u bytes_min=%zu bytes_max=%zu peak=%zu (fake clock; not ESP32 timing)\n",
+    collections,low,high,runtime.peakMemoryUsed());
+  runtime.stop();assert(runtime.memoryUsed()==0);
+  // Preserve old reachable state while repeatedly creating/discarding young
+  // objects. Run both profiles; the legacy mode-setting path is untouched.
+  const char* churn="local keep={} function init() for i=1,16 do keep[i]={v=i} end end "
+    "function update(dt) local t={} for i=1,5 do t[i]={i} end keep[1]={v=keep[1].v+1} "
+    "if keep[16].v~=16 then fire.display.clear(-1) end end";
+  for(bool sdk:{false,true}) {
+    FireLuaRuntime vm;vm.setHardwareApi(true);vm.setAppSdk(sdk);vm.setServiceMask(3);assert(vm.begin(host()));
+    assert(vm.loadSource(reinterpret_cast<const uint8_t*>(churn),strlen(churn)));
+    for(unsigned i=0;i<400;++i) assert(vm.update(16));
+    assert(vm.peakMemoryUsed()<=FireLuaRuntime::kMaxMemoryBytes);vm.stop();assert(vm.memoryUsed()==0);
+  }
+  std::string error;
+  assert(!run("local held={} for i=1,20000 do held[i]={i,i,i,i} end",true,&error));
+  assert(error.find("memory")!=std::string::npos);
+  puts("PASS SDK generational GUI allocation cycles, retained state,128KiB hard limit and legacy allocation regression");
+}
+
 static void installCompletionTest() {
   FireIoMailbox mailbox;mailbox.running=true;
   mailbox.result(false,true,"package-a","hash-a","installed","install-a");
@@ -456,6 +493,7 @@ int main(int argc,char** argv) {
   assert(!run("local c={} for i=1,200 do c[i]=0 end fire.display.grid(10,20,16,16,10,20,c,{0})",true,&error));
   callbackTimingTests();
   assert(argc==2);
+  generationalGuiTests(argv[1]);
   fixture(argv[1],"gallery.lua","CCCCCCAAAAAA");
   fixture(argv[1],"stopwatch.lua","BCBABC");
   fixture(argv[1],"racing.lua","BBCBBCACACBCAB");
