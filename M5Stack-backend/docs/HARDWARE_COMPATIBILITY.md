@@ -59,8 +59,16 @@ Dokumentasjon gir aldri ekstra pinne-, fil- eller nettverkstillatelse.
 
 Nye sensorer kan bruke de samme generelle bussene uten produktspesifikk
 firmware når protokollen passer de faktiske grensene. En datasheet-lenke er
-ikke bevis for en ferdig driver. Verifiserte profiler og erfaringer fra egne
-problemløsninger lagres separat med måle-/testgrunnlag og opphav.
+ikke bevis for en ferdig driver.
+
+Relevant erfaring gjenbrukes direkte fra eksisterende utviklingskontekst og
+brukerbekreftelser. Et nytt bygg kan få inntil tre relevante observasjoner
+fra andre prosjekter med samme eier. Utvalget binder den opprinnelige appen,
+kildehashen og den bekreftede konteksten; avviste, endrede eller slettede
+grunnlag utelates. Resume beholder det frosne utvalget. Dette krever verken
+en ekstra database eller modellrunde. Referanser gir ikke tilgang til andre
+appers rådata eller kode. En brukerbekreftet observasjon er fortsatt en
+observasjon, ikke automatisk en fysisk verifisert protokoll eller løsning.
 
 ## Praktisk prøve med ekstern modul
 
