@@ -109,5 +109,9 @@ async def test_real_generate_and_review_requests_preserve_sdk_without_late_legac
             assert legacy not in developer
         assert 'function init()' in developer and 'function update(dt_ms)' in developer
         assert 'text_style(10,85' in developer and 'PHYSICAL left/middle/right' in developer
+        assert developer.count('display_semantics')==1
+        from fire_backend.app_sdk import contract
+        detail=json.loads(context.split('Exact negotiated host contract (arguments, returns, dependencies, units and bounds):\n')[1])
+        assert detail['display_semantics']=={k:v for k,v in contract()['registry']['display'].items() if k!='methods'}
     payload=json.loads(calls[1]['input'][1]['content'])
     assert payload['pc_validation']['negotiated_contract']['api_contract']==SDK_CONTRACT

@@ -23,8 +23,9 @@ async def test_benchmark_exercises_real_confirm_build_and_screenshot_review_with
     class OfflineProvider(benchmark.BenchmarkProvider):
         async def generate(self,*args):
             assert self.settings.fire_cost_limits_enabled and self.settings.fire_build_budget_usd==.25
-            return GeneratedApp(name='Stoppeklokke',required_services=['display','buttons'],
-                                main_lua=(DATA/'stopwatch.lua').read_text(encoding='utf-8'))
+            source=(DATA/'stopwatch.lua').read_text(encoding='utf-8')
+            source+='\nlocal original_update=update; local led=0\nfunction update(dt) original_update(dt) if led<10 then fire.rgb.set(led,0,40,100);led=led+1 end end'
+            return GeneratedApp(name='Stoppeklokke',required_services=['display','buttons','rgb'],main_lua=source)
         async def review(self,summary,context,generated,validation):
             assert SDK_VERSION in context and validation['_visual_review_images']
             seen.extend(validation['_visual_review_images'])
@@ -91,3 +92,19 @@ async def test_pilot_caps_actual_request_and_vetoes_output_expansion_before_requ
     with pytest.raises(benchmark.GenerationResponseError,match='8000-token'):
         with provider.metered('generate',settings.openai_code_model,{},16000):pass
     assert len(requests)==1
+
+
+async def test_remaining_luna_mode_uses_exact_ten_requests_without_legacy_or_repeated_clock(tmp_path,monkeypatch):
+    calls=[]
+    async def fake(root,config,key,label,request,variant):
+        assert config.code_model==config.review_model=='gpt-6-luna'
+        assert not config.evaluation_output_cap and variant=='sdk' and label!='stopwatch'
+        calls.append((label,request))
+        return dict(case=label,profile=variant,status='failed',generation_attempts=2,calls=2,
+                    elapsed_seconds=1,estimated_usd=.001,error='Concrete app error')
+    monkeypatch.setattr(benchmark,'run_case',fake)
+    config=SimpleNamespace(code_model='gpt-6.2-sol',review_model='gpt-6.1-terra')
+    result=await benchmark.execute(tmp_path/'evaluation',config,'fake-key-only',prior_estimated_usd=.33,remaining=True)
+    assert calls==[(label,text) for label,text in benchmark.CASES if label!='stopwatch']
+    assert len(result['results'])==10 and 'evaluation_stopped' not in result
+    assert result['plan']['builds']==10

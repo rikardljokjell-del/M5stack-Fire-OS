@@ -134,6 +134,41 @@ and preserves the working candidate for targeted repair. Existing legacy,
 build-confirmation and run-confirmation gates remain in force. Historical
 results above will not be rewritten to incorporate later repairs.
 
+Offline revalidation of the six historical ready sources preserved all six
+working cores. The three Sol/Terra candidates passed the new deterministic
+RGB/audio gate; the three Luna candidates failed its RGB requirement. The
+combined audit contains six unique source-bound records; one duplicate local
+calculator recheck is recorded separately. No AI request or device command
+was used. A deterministic gate pass is not an exhaustive semantic approval:
+manual source review also found no RGB on/off control in the Sol stopwatch,
+despite the existing experience policy and its earlier approved settings
+review. This remaining review gap is retained explicitly.
+
+The following version3 Luna measurements cover all eleven requests. Source
+bytes describe the final candidate in that build, including rejected code;
+they are not a count of delivered or physically installed code. Memory is
+reported only where the full ready validation supplied a peak, and includes
+the actual UI prelude under the PC VM's existing 128 KiB quota.
+
+| Request | Historical pipeline result | Generations | Source bytes | PC app peak bytes | Seconds | Estimated USD |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Stopwatch | Ready; RGB gap | 1 | 872 | 68,823 | 24.262 | 0.002874225 |
+| Weather | Failed | 2 | 5,525 | Not established | 53.180 | 0.004536160 |
+| Calculator | Ready; RGB gap | 2 | 2,794 | 74,486 | 107.469 | 0.007472940 |
+| Sensor dashboard | Ready; RGB gap | 2 | 1,775 | 72,047 | 59.651 | 0.005532540 |
+| Technical instrument | Failed | 2 | 2,852 | Not established | 46.849 | 0.004349960 |
+| Snake | Failed | 2 | 5,261 | Not established | 88.514 | 0.006560160 |
+| Tetris | Failed | 2 | 5,465 | Not established | 67.366 | 0.003989580 |
+| Racing | Failed | 2 | 4,980 | Not established | 34.447 | 0.003549280 |
+| Space shooter | Failed | 2 | 5,441 | Not established | 63.338 | 0.006412160 |
+| Platform game | Failed | 2 | 5,965 | Not established | 64.219 | 0.006596560 |
+| Adventure | Failed | 2 | 5,974 | Not established | 59.476 | 0.003963580 |
+
+For the original matched legacy/SDK controls, final source sizes were
+3,646/2,577 bytes for stopwatch, 4,088/3,327 for calculator and 5,375/6,140
+for racing. All six builds failed. Those observations alone establish
+neither a successful before/after delivery nor general code-size savings.
+
 One simulator accounting defect was reproduced with the same gallery source
 and duration: retaining more diagnostic frames increased the reported app
 memory, and eight captures could falsely exhaust the 128 KiB quota. The
@@ -152,7 +187,14 @@ foreground/background combinations, not visual quality of every composition.
 
 The original integration passed 719 backend tests. The revised backend passed
 835 tests in 292.45 seconds, plus focused tests for the final font-metadata
-label refinement. The native CI
+label refinement. After the standards gate, one complete run passed 881 tests
+and exposed one old dependency-fixture assumption: its fixed melody omitted
+RGB while its preview profile now advertised SDK and RGB. Only the fixture's
+scope was corrected to cover legacy and a legitimate SDK profile without
+advertised RGB. All 48 affected dependency/standards/Resume tests then passed,
+as did 65 context/standards checks and the earlier 103 integration checks.
+No production gate was relaxed. This is not described as a second full run.
+The native CI
 snapshot `8547e46ea26b3c4c9db9a71b0b6d1a4757d9047d` passed 19 tests and three
 firmware builds. These results do not establish physical callback time,
 display output, memory headroom, package installation or recovery behavior.

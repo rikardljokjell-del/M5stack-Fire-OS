@@ -175,7 +175,8 @@ class RasterRenderer:
             self.draw.line(tuple(integer(v) for v in a[:4]), fill=rgb565(a[4]))
         elif name in {'rect', 'fill_rect'}:
             x, y = integer(a[0]), integer(a[1])
-            w, h = integer(a[2], 1, WIDTH), integer(a[3], 1, HEIGHT)
+            w, h = integer(a[2], 0 if name=="rect" else 1, WIDTH), integer(a[3], 0 if name=="rect" else 1, HEIGHT)
+            if not w or not h:return
             self.draw.rectangle((x, y, x + w - 1, y + h - 1),
                                 **{'fill' if name == 'fill_rect' else 'outline': rgb565(a[4])})
         elif name in {'circle', 'fill_circle'}:

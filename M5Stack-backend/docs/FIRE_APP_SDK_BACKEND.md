@@ -33,6 +33,15 @@ avhengigheter og eksisterende apps manifest. Dette gir ingen nye tillatelser.
 Kodekontrollen får eksplisitt aktuell kandidatkontrakt og skal skille konkrete
 feil fra valgfri ekstra funksjonalitet og umålt fysisk ytelse.
 
+Nye SDK-livebygg har en deterministisk standardport før AI-review. Faktisk
+annonserte tjenester og bekreftet bestilling bestemmer RGB-/lydkravene; en
+kandidat kan ikke unngå dem ved å utelate `rgb` eller `speaker`. Lokale tester må
+vise ikke-null aktivitet på begge LED-sider og faktiske speaker-jobber når lyd
+er avtalt og tilgjengelig. Start med lyd av og permanent brukerunntak behandles
+forskjellig. Mangler rettes med den kjernetestede koden som grunnlag. Levering
+krever kilde-/kontraktbundet standardbevis i tillegg til lokale tester og review.
+Se [SDK_STANDARD_GATE_PLAN.md](SDK_STANDARD_GATE_PLAN.md) for kontroll og avgrensning.
+
 Release-testene kjører ekte Lua i den eksisterende isolerte worker-prosessen.
 Utvalgte komplette frames fanges uavhengig av den korte diagnostikktracen.
 Oppstart, navigasjon, aktiv bruk, lengre kjøring og relevante feilstier kan gi

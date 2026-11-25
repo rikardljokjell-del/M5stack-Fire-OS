@@ -105,6 +105,19 @@ local trace, trace_count = {}, 0
 local button = ""
 local imu_reads=0
 local scenes, led_state, scene = {},{},nil
+local rgb_written,rgb_nonzero={},{}
+for i=1,10 do rgb_written[i],rgb_nonzero[i]=false,false end
+local rgb_writes=0
+local function rgb_summary()
+ local written,active,final={}, {}, {}
+ local left,right=false,false
+ for i=0,9 do
+  if rgb_written[i+1] then written[#written+1]=i end
+  if rgb_nonzero[i+1] then active[#active+1]=i;if i<5 then left=true else right=true end end
+  final[i+1]=led_state[i] or 0
+ end
+ return {writes=rgb_writes,written_indices=written,nonzero_indices=active,left_nonzero=left,right_nonzero=right,final_rgb=final}
+end
 local checkpoints={400,1400,3400,5400,7400}
 local next_checkpoint=1
 local visual_frames, visual_current, visual_index = {},nil,1
@@ -156,7 +169,9 @@ local function whole(v, lo, hi)
 end
 local function record(name, ...)
   if name~="rgb" and name~="grid" then capture(name,...) end
-  if sdk_enabled and hardware then hardware.charge_sdk(name,name=="text" and #select(3,...) or 1) end
+  if sdk_enabled and hardware then
+    if name=="rgb" then hardware.charge_base("rgb.set",1) else hardware.charge_sdk(name,name=="text" and #select(3,...) or 1) end
+  end
   total = total + 1
   callback_ops=callback_ops+1
   local a,b,c,d=...
@@ -179,7 +194,8 @@ local function record(name, ...)
     visible_ops=0
   elseif name~="rgb" then
     local ink = name=="grid" and select(7,...) or name=="pixel" and c or (name=="text" or name=="circle" or name=="fill_circle") and d or select(5,...)
-    if ink~=background and (name~="text" or #c>0) then visible_ops=visible_ops+1 end
+    local empty=name=="rect" and (c==0 or d==0)
+    if not empty and ink~=background and (name~="text" or #c>0) then visible_ops=visible_ops+1 end
   end
   local work=0
   if name=="clear" then work=76800
@@ -216,19 +232,19 @@ local display = {
   clear = function(c) color(c); record("clear",c) end,
   circle = function(x,y,r,c)
     xy(x,y); whole(r,0,160); color(c)
-    if profile and (x-r<0 or x+r>319 or y-r<0 or y+r>239) then error("Visual frame: circle clipped by screen bounds") end
+    if profile and not sdk_enabled and (x-r<0 or x+r>319 or y-r<0 or y+r>239) then error("Visual frame: circle clipped by screen bounds") end
     record("circle",x,y,r,c)
   end,
   rect = function(x,y,w,h,c)
     xy(x,y); whole(w,0,320); whole(h,0,240); color(c)
-    if profile and (x+w>320 or y+h>240 or w==0 or h==0) then error("Visual frame: rectangle clipped or empty") end
+    if profile and not sdk_enabled and (x+w>320 or y+h>240 or w==0 or h==0) then error("Visual frame: rectangle clipped or empty") end
     record("rect",x,y,w,h,c)
   end,
   line = function(x,y,a,b,c) xy(x,y); xy(a,b); color(c); record("line",math.floor(x),math.floor(y),math.floor(a),math.floor(b),c) end,
   text = function(x,y,s,c)
     xy(x,y); color(c)
     if type(s) ~= "string" or #s > 80 then error("Text exceeds 80 bytes") end
-    if profile and (x+#s*6>320 or y+8>240 or string.find(s,"[\r\n\t]")) then
+    if profile and ((not sdk_enabled and (x+#s*6>320 or y+8>240)) or string.find(s,"[\r\n\t]")) then
       error("Visual frame: text clipped or multiline; use short labels with a conservative 6x8 font footprint")
     end
     record("text",math.floor(x),math.floor(y),s,c)
@@ -237,18 +253,18 @@ local display = {
 if api_version~="fire-lua-0.1" then
   display.fill_rect=function(x,y,w,h,c)
     xy(x,y);whole(w,1,320);whole(h,1,240);color(c)
-    if x+w>320 or y+h>240 then error("Visual frame: filled rectangle clipped") end
+    if not sdk_enabled and (x+w>320 or y+h>240) then error("Visual frame: filled rectangle clipped") end
     record("fill_rect",x,y,w,h,c)
   end
   display.fill_circle=function(x,y,r,c)
     xy(x,y);whole(r,0,160);color(c)
-    if x-r<0 or x+r>319 or y-r<0 or y+r>239 then error("Visual frame: filled circle clipped") end
+    if not sdk_enabled and (x-r<0 or x+r>319 or y-r<0 or y+r>239) then error("Visual frame: filled circle clipped") end
     record("fill_circle",x,y,r,c)
   end
   display.pixel=function(x,y,c)xy(x,y);color(c);record("pixel",x,y,c)end
   display.grid=function(x,y,w,h,cols,rows,cells,palette)
     xy(x,y);whole(w,1,32);whole(h,1,32);whole(cols,1,32);whole(rows,1,32)
-    if cols*rows>384 or x+w*cols>320 or y+h*rows>240 then error("Visual frame: grid clipped or too large") end
+    if cols*rows>384 or not sdk_enabled and (x+w*cols>320 or y+h*rows>240) then error("Visual frame: grid clipped or too large") end
     if type(cells)~="table" or #cells~=cols*rows or type(palette)~="table" or #palette<1 or #palette>16 then error("Invalid grid data") end
     local ink=0;local count=0
     for k,c in pairs(palette) do whole(k,1,#palette);color(c);count=count+1 end
@@ -274,6 +290,8 @@ local available = {
     whole(i,0,9); whole(r,0,255); whole(g,0,255); whole(b,0,255)
     record("rgb",i,r,g,b)
     led_state[i]=r*65536+g*256+b
+    rgb_written[i+1]=true;rgb_writes=rgb_writes+1
+    if r+g+b>0 then rgb_nonzero[i+1]=true end
   end},
   imu = {accel=function() imu_reads=imu_reads+1;return imu_value() end},
   buttons = {pressed=function(b)
@@ -476,7 +494,7 @@ for frame=1,frames do
 end
 return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,max_callback_operations=peak_ops,max_callback_display_work=peak_work,
         min_update_draws=min_update_draws or 0,update_count=update_count,max_callback_clears=peak_clears,max_callback_text_bytes=peak_text_bytes,
-        hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,diagnostic_memory_bytes=math.ceil(diagnostic_bytes),
+        rgb_feedback=rgb_summary(),hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,diagnostic_memory_bytes=math.ceil(diagnostic_bytes),
         os_reserved_callbacks_suppressed=os_suppressed,os_updates_suspended=os_suspended,os_exited=os_exited,os_navigation=os_navigation,
         max_callback_grid_pixels=peak_grid_pixels,max_callback_grid_cells=peak_grid_cells,max_callback_rgb_calls=peak_rgb_calls,
         imu_reads=imu_reads,imu_scenes=scenes,visual_frames=visual_frames}
@@ -558,7 +576,7 @@ def simulate(request):
             "max_callback_grid_pixels":result["max_callback_grid_pixels"],
             "max_callback_grid_cells":result["max_callback_grid_cells"],"max_callback_rgb_calls":result["max_callback_rgb_calls"],
             "imu_reads":result["imu_reads"],"imu_scenes":unpack(result["imu_scenes"]),
-            "visual_frames":unpack(result["visual_frames"]),
+            "visual_frames":unpack(result["visual_frames"]),"rgb_feedback":unpack(result["rgb_feedback"]),
             "hardware_simulated":api_version!="fire-lua-0.1","app_memory_peak":result["app_memory_peak"],"diagnostic_memory_bytes":result["diagnostic_memory_bytes"],"max_io_calls":hardware_metrics["max_io_calls"] if hardware_metrics else 0,
             "max_io_bytes":hardware_metrics["max_io_bytes"] if hardware_metrics else 0,"max_jobs":hardware_metrics["max_jobs"] if hardware_metrics else 0,
             "io_calls":dict(hardware_metrics["calls"].items()) if hardware_metrics else {},

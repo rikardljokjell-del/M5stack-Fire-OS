@@ -336,12 +336,23 @@ def require_deliverable(package):
     if package.get("validation",{}).get("suite") != "release-v4":
         raise ValueError("Denne eldre pakken mangler utvidet kjøretidstest. Velg appen og be om reparasjon/ny bygging før levering.")
     validation=package.get("validation",{})
+    from .app_sdk import SDK_VERSION
+    sdk=package.get('manifest',{}).get('api_version')==SDK_VERSION
+    if sdk and package.get('mode')=='openai':
+        from .sdk_standards import VERSION as STANDARD_VERSION
+        from .storage import canonical
+        proof=validation.get('standard_verification') or {}
+        expected=validation.get('standard_contract') or {}
+        if (proof.get('passed') is not True or proof.get('version')!=STANDARD_VERSION or
+            proof.get('source_sha256')!=package['manifest']['checksum'] or
+            proof.get('contract_sha256')!=hashlib.sha256(canonical(expected)).hexdigest()):
+            raise ValueError('SDK-appen mangler verifiserte standardkrav fra faktisk enhetsprofil. Behold kilden og be om målrettet retting.')
     if validation.get("native_host_policy"):
         from .rendering import NATIVE_HOST_POLICY
         profiles=validation.get("profiles") or []
         if (validation["native_host_policy"]!=NATIVE_HOST_POLICY or not profiles or
                 any(type(p.get("max_callback_rgb_calls")) is not int or not 0<=p["max_callback_rgb_calls"]<=1 or
-                    type(p.get("max_callback_grid_cells")) is not int or not 0<=p["max_callback_grid_cells"]<=128 for p in profiles)):
+                    type(p.get("max_callback_grid_cells")) is not int or not 0<=p["max_callback_grid_cells"]<=(384 if sdk else 128) for p in profiles)):
             raise ValueError("Appversjonen mangler bestått kontroll av native RGB-/grid-belastning.")
     if validation.get("pre_delivery_review_required"):
         review=validation.get("pre_delivery_review") or {}

@@ -22,10 +22,12 @@ def methods_for(api_version):
 
 def generation_contract(api_version,services):
     methods=methods_for(api_version)
-    return {"api_version":api_version,"api_contract":SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
+    result={"api_version":api_version,"api_contract":SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
             "services":{name:methods[name] for name in sorted(services) if name in methods},
             "limits":REGISTRY["limits"],"semantics":REGISTRY["semantics"],
             "result_shapes":REGISTRY["result_shapes"],"environment":REGISTRY["environment"] if api_version!=BASE_API else {}}
+    if api_version==SDK_VERSION:result["display_semantics"]={k:v for k,v in sdk_contract()["registry"]["display"].items() if k!="methods"}
+    return result
 
 
 def preview_capabilities():

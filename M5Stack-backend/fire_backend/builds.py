@@ -16,6 +16,7 @@ from importlib import metadata
 from pathlib import Path
 from openai import APIStatusError,APIConnectionError
 
+from .sdk_standards import contract as sdk_standard_contract,verify as verify_sdk_standard,require_passed as require_sdk_standard,context_with_contract
 from .sdk_context import normalize as sdk_context_normalize,VERSION as SDK_POLICY_VERSION
 from .app_sdk import SDK_VERSION,SDK_CONTRACT,package_api,selected_context
 from .models import Manifest,AppTestSequence,GeneratedApp
@@ -31,7 +32,7 @@ from .capabilities import CapabilityError
 from .usage import UsageBudgetError
 from .jobs import apply_context,mark_context_applied,require_current_context,ContextChanged
 from .generation_errors import GenerationResponseError
-from .build_strategy import POLICY as DEVELOPMENT_POLICY,VERSION as DEVELOPMENT_VERSION,RepairBaseline,evidence_for,review_conflicts,retained_baseline
+from .build_strategy import POLICY as DEVELOPMENT_POLICY,VERSION as DEVELOPMENT_VERSION,RepairBaseline,evidence_for,review_conflicts,retained_baseline,retained_standard_core
 
 
 def sha256(data):
@@ -82,6 +83,7 @@ async def validate_release(app, store, build_id):
             visual_candidates.extend({'profile':fault,'scenario':scenario.name,**frame} for frame in result.pop('visual_frames',[]))
             results.append({"profile":fault,"scenario":scenario.name,**{k:v for k,v in result.items() if k!="trace"}})
     calls,jobs={},{}
+    missing=set()
     for result in results:
         for key,value in result.get("io_calls",{}).items():calls[key]=calls.get(key,0)+value
         for key,value in result.get("jobs_started",{}).items():jobs[key]=jobs.get(key,0)+value
@@ -93,7 +95,7 @@ async def validate_release(app, store, build_id):
         coverage=set(app.get('coverage_services',app['required_services']))
         missing=(coverage&synchronous)-active
         missing|=(coverage&asynchronous)-{k.split('.')[0] for k in jobs}
-        if missing:raise ValueError("I/O coverage missing for "+", ".join(sorted(missing))+". Add/correct test_sequences that navigate menus and START these operations; keep the app features.")
+        if missing and not app.get("defer_io_coverage"):raise ValueError("I/O coverage missing for "+", ".join(sorted(missing))+". Add/correct test_sequences that navigate menus and START these operations; keep the app features.")
     if {"display", "rgb"}.intersection(app["required_services"]) and not sum(p["api_operations"] for p in results):
         raise ValueError("Release suite: app declares display/RGB but produces no visible output in any input profile")
     resources={}
@@ -102,7 +104,7 @@ async def validate_release(app, store, build_id):
     from .visual_preview import save_screenshots
     visual=await asyncio.to_thread(save_screenshots,visual_candidates,store,build_id,sha256(app['main_lua'].encode('utf-8')))
     return {**results[0], "profiles": results, "resources_used":resources,"io_calls":calls,"jobs_started":jobs,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
-            'visual_evidence':visual,
+            'visual_evidence':visual,'io_coverage_missing':sorted(missing),
             'negotiated_contract':{'api_version':app.get('api_version',BASE_API),'api_contract':app.get('api_contract'),
                 'sdk_policy_version':SDK_POLICY_VERSION if app.get('api_version')==SDK_VERSION else None,
                 'limits':experience_contract({'services':app['required_services'],'max_memory':app.get('max_memory',131072),
@@ -294,6 +296,8 @@ class Builder:
         if learned_policy and learned_policy not in context:context+=learned_policy
         base_manifest=self.store.get('packages',project['latest_package'])['manifest'] if project.get('latest_package') else None
         context=sdk_context_normalize(context,capabilities=capabilities,summary=build['summary'],base_manifest=base_manifest)
+        standard=sdk_standard_contract(capabilities,build['summary']) if self.settings.fire_ai_mode=='openai' else None
+        context=context_with_contract(context,standard)
         max_corrections=getattr(self.settings,'fire_max_corrections',0) or None
         offset=build.get('resume_from_attempt',0) if continuing else 0
         max_attempts=offset+max_corrections+1 if max_corrections is not None else None
@@ -306,7 +310,7 @@ class Builder:
             "python": platform.python_version(),
             "dependencies": {n: metadata.version(n) for n in ("openai", "lupa", "pydantic")},
             "max_corrections": max_corrections,
-            "experience_contract":ux_contract,
+            "experience_contract":ux_contract,"standard_contract":standard,
             "development_policy_version":DEVELOPMENT_VERSION,
         }
         if len(canonical(request)) > self.settings.fire_max_build_kb * 1024:
@@ -334,6 +338,7 @@ class Builder:
             if offset and not malformed and prior_source.is_file() and prior_source.stat().st_size<=100000:
                 previous=prior_source.read_text(encoding='utf-8')
             last_error=checkpoint.get('last_validation_error') or checkpoint.get('error') or last_error
+            core=retained_standard_core(folder,build.get('repair_baseline_sha256'),offset)
             retained=retained_baseline(folder,offset)
             if retained:
                 previous=retained[0]
@@ -341,6 +346,11 @@ class Builder:
                 last_error=dumps({'primary_error':last_error,'retained_source_sha256':build['repair_baseline_sha256'],
                     'historical_review_advice_not_current_evidence':retained[1].correction(),
                     'instruction':'Continue from this locally tested source. Inspect actual code; historical reviewer claims must be checked against current backend source identity and development policy.'})
+            if core:
+                previous=core
+                last_error=dumps({'primary_error':checkpoint.get('last_validation_error') or checkpoint.get('error'),
+                    'retained_source_sha256':sha256(core.encode('utf-8')),
+                    'instruction':'Retain this core-tested app and make the targeted standard correction. Rerun all tests and review; core-tested is not deliverable.'})
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
             baseline=RepairBaseline(previous,last_error)
@@ -348,6 +358,12 @@ class Builder:
             for cycle_attempt in range(max_corrections+1) if max_corrections is not None else count():
                 attempt=offset+cycle_attempt
                 summary,context_revision=apply_context(self.store,build,attempt+1)
+                if standard:
+                    standard=sdk_standard_contract(capabilities,summary)
+                    context=context_with_contract(context,standard)
+                    self.store.write(folder/f'standard-contract-r{context_revision}.json',standard)
+                    if standard['game_requested'] and not standard['audio_available'] and not standard['explicit_audio_opt_out']:
+                        raise CapabilityError('game_audio_unavailable','Spillet krever lydadapter i firmware. Appønsket er bevart; ingen uannonsert tjeneste eller stille erstatning er levert.')
                 build['generation_attempt']=attempt+1
                 operation='repair' if build.get('repair_of') or build.get('repair_job_id') else 'update' if project.get('latest_package') else 'new'
                 await progress("generating", min(25,10 + attempt * 3), build_text('generating',operation=operation,attempt=attempt+1,total=max_attempts))
@@ -403,7 +419,7 @@ class Builder:
                         "api_contract":SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
                         "coverage_services":sorted(coverage),
                         "hardware":(capabilities or {}).get("hardware") or {},
-                        "require_io_coverage":self.settings.fire_ai_mode=="openai",
+                        "require_io_coverage":self.settings.fire_ai_mode=="openai","defer_io_coverage":bool(standard),
                         **({"experience_policy_version":UX_POLICY_VERSION} if self.settings.fire_ai_mode=="openai" else {})}, self.store, build_id)
                     local_passed=True
                     result['source_identity']=evidence_for(self.store,project['id'],generated.main_lua)
@@ -413,6 +429,11 @@ class Builder:
                         'profiles_run':[{k:p[k] for k in ('profile','scenario') if k in p} for p in profiles],
                         'peak_budgets':{key:max((p.get(key,0) for p in profiles),default=result.get(key,0))
                             for key in ('max_callback_operations','max_callback_text_bytes','max_callback_display_work','max_callback_rgb_calls')}})
+                    if standard:
+                        result['standard_contract']=standard
+                        result['standard_verification']=verify_sdk_standard(standard,generated.required_services,result,source_hash)
+                        self.store.write(folder/f'standard-verification-{attempt+1}.json',result['standard_verification'])
+                        require_sdk_standard(result['standard_verification'])
                     candidate_meta['local_validated']=True
                     self.store.write(folder/f'candidate-{attempt+1}.json',candidate_meta)
                     await progress("testing",75,build_text('testing',progress=75))
@@ -439,7 +460,7 @@ class Builder:
                         # Limited offline fixtures are explicitly identified; no live UX claim.
                         review_data.update(kind="app",**{name:True for name in FireAppReview.fire_checks()})
                     review=FireAppReview.model_validate(review_data)
-                    if (self.settings.fire_ai_mode=="openai" and review.kind=="game" and not ux_contract["game_audio_available"]):
+                    if (self.settings.fire_ai_mode=="openai" and review.kind=="game" and not ux_contract["game_audio_available"] and not (standard and standard["explicit_audio_opt_out"])):
                         raise CapabilityError("game_audio_unavailable","Spill med lyd/melodier krever Lua speaker/jobs i firmware. AI-talesvar gir ikke spilllyd. Ingen stille erstatningspakke er levert.")
                     review_record={"source_sha256":sha256(payload),"approved":review.approved,
                         "experience_policy_version":UX_POLICY_VERSION,

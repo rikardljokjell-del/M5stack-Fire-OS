@@ -22,7 +22,8 @@ def test_missing_dependency_is_rejected_before_archive_or_device_delivery():
     assert Manifest.model_validate(m)
 
 
-async def test_builder_supplies_dependencies_without_changing_melody_source(tmp_path):
+@pytest.mark.parametrize('sdk',[False,True])
+async def test_builder_supplies_dependencies_without_changing_melody_source(tmp_path,sdk):
     from fire_backend.app_quality import FireAppReview
     code="local j=nil function init() j=fire.speaker.tone(440,100,40) end function update(dt) if j and fire.jobs.poll(j).done then fire.jobs.close(j) j=nil end fire.display.text(4,4,'Melodi',2016) end"
     class Provider(MockProvider):
@@ -31,6 +32,11 @@ async def test_builder_supplies_dependencies_without_changing_melody_source(tmp_
     b=Backend(configured(tmp_path).model_copy(update={'fire_ai_mode':'openai'}),Provider())
     try:
         s=await b.desktop_conversation('fire-01',hardware_preview=True)
+        # This fixture isolates transitive speaker permissions, not experience
+        # defaults. Exercise legacy plus a legitimate SDK profile without RGB;
+        # mandatory RGB on advertised devices has its own real-builder tests.
+        if sdk:s.capabilities['services'].remove('rgb')
+        else:s.capabilities.pop('app_sdk')
         await b.text(s,'Lag en sirkel');await b.confirm_build(s,s.proposal_id);await s.task
         p=b.store.get('packages',s.package_id)
         assert {'speaker','sd','jobs'}<=set(p['manifest']['required_services'])

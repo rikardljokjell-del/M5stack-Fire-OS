@@ -52,7 +52,8 @@ def profile():
     return config,key
 
 
-def plan(config,key_present,*,pilot=False):
+def plan(config,key_present,*,pilot=False,remaining=False):
+    if remaining:config=SimpleNamespace(code_model='gpt-6-luna',review_model='gpt-6-luna')
     models={role:{'name':model,'usd_per_million_text_in':PRICES[model].text_in,
                         'usd_per_million_text_out':PRICES[model].text_out,
                         'usd_per_million_cached_in':PRICES[model].text_cache}
@@ -79,6 +80,11 @@ def plan(config,key_present,*,pilot=False):
             cap_expansion_retry='veto before paid request; format retry remains allowed',
             policy_delta='v3 restores mandatory init()+update(dt_ms); not a model-only causal comparison',
             control_scope='One V3 Luna control then three Sol/Terra SDK cases; no new legacy controls')
+    if remaining:
+        result.update(builds=10,cases=[{'case':label,'request':text,'profiles':['sdk']} for label,text in CASES if label!='stopwatch'],
+            case_order=[label for label,_ in CASES if label!='stopwatch'],
+            early_stop='budget/API/adapter failures only; preserve concrete individual app failures',
+            control_scope='Remaining ten V3 Luna/Luna SDK requests; no repeated stopwatch or legacy controls')
     return result
 
 
@@ -172,9 +178,10 @@ async def run_case(root,config,key,label,request,variant):
     finally:await backend.close()
 
 
-async def execute(root,config,key,*,prior_estimated_usd=0,pilot=False):
+async def execute(root,config,key,*,prior_estimated_usd=0,pilot=False,remaining=False):
+    if pilot and remaining:raise ValueError('Choose one bounded evaluation mode')
     root.mkdir(parents=True,exist_ok=False)
-    report={'plan':plan(config,True,pilot=pilot),'prior_estimated_usd':prior_estimated_usd,'results':[]}
+    report={'plan':plan(config,True,pilot=pilot,remaining=remaining),'prior_estimated_usd':prior_estimated_usd,'results':[]}
     report['plan']['execute']=True
     def save():
         (root/'results.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
@@ -183,6 +190,9 @@ async def execute(root,config,key,*,prior_estimated_usd=0,pilot=False):
         luna=SimpleNamespace(code_model='gpt-6-luna',review_model='gpt-6-luna',evaluation_output_cap=False)
         stronger=SimpleNamespace(code_model='gpt-6.2-sol',review_model='gpt-6.1-terra',evaluation_output_cap=True)
         specs=[('stopwatch','sdk-luna-v3-control',luna)]+[(label,'sdk',stronger) for label in ('stopwatch','dashboard','racing')]
+    if remaining:
+        luna=SimpleNamespace(code_model='gpt-6-luna',review_model='gpt-6-luna',evaluation_output_cap=False)
+        specs=[(label,'sdk',luna) for label,_ in CASES if label!='stopwatch']
     for label,variant,roles in specs:
         request=dict(CASES)[label]
         # Keep admission, accounting and per-case behavior identical in both modes.
@@ -196,11 +206,14 @@ async def execute(root,config,key,*,prior_estimated_usd=0,pilot=False):
         save()
         print(json.dumps({k:result[k] for k in ('case','profile','status','generation_attempts','calls','elapsed_seconds','estimated_usd')},ensure_ascii=False),flush=True)
         sdk_results=[r for r in report['results'] if r['profile']=='sdk']
-        if not pilot and len(sdk_results)==3 and sum(r['status']!='ready' for r in sdk_results)>=2:
+        if not pilot and not remaining and len(sdk_results)==3 and sum(r['status']!='ready' for r in sdk_results)>=2:
             report['evaluation_stopped']='broad_failure_in_first_three_sdk_cases'
             save();return report
         if result['status']!='ready' and result.get('api_failure_types'):
             report['evaluation_stopped']='unexpected_api_error'
+            save();return report
+        if result['status']!='ready' and any(marker in result.get('error','').casefold() for marker in ('sdk contract mismatch','unsupported lua api version','canonical sdk contract checksum mismatch')):
+            report['evaluation_stopped']='unexpected_adapter_contract_error'
             save();return report
     return report
 
@@ -208,16 +221,18 @@ async def execute(root,config,key,*,prior_estimated_usd=0,pilot=False):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute',action='store_true',help='Make real paid code/review calls; requires coordinated authorization')
-    parser.add_argument('--pilot-stronger',action='store_true',help='Authorized four-case V3 control and Sol/Terra pilot only')
+    mode=parser.add_mutually_exclusive_group()
+    mode.add_argument('--pilot-stronger',action='store_true',help='Authorized four-case V3 control and Sol/Terra pilot only')
+    mode.add_argument('--remaining-luna',action='store_true',help='Authorized remaining ten V3 SDK cases, Luna/Luna only')
     options=parser.parse_args()
     config,key=profile()
     if not options.execute:
-        print(json.dumps(plan(config,bool(key),pilot=options.pilot_stronger),ensure_ascii=False,indent=2));return
+        print(json.dumps(plan(config,bool(key),pilot=options.pilot_stronger,remaining=options.remaining_luna),ensure_ascii=False,indent=2));return
     if not key:raise ValueError('No saved OpenAI credential')
     base=Path(__file__).resolve().parents[1]/'workspace'/'sdk-benchmark'
     prior=sum(sum(r['estimated_usd'] for r in json.loads(p.read_text(encoding='utf-8')).get('results',[])) for p in base.glob('evaluation-*/results.json'))
     root=base/new_id('evaluation')
-    asyncio.run(execute(root,config,key,prior_estimated_usd=prior,pilot=options.pilot_stronger))
+    asyncio.run(execute(root,config,key,prior_estimated_usd=prior,pilot=options.pilot_stronger,remaining=options.remaining_luna))
 
 
 if __name__=='__main__':main()

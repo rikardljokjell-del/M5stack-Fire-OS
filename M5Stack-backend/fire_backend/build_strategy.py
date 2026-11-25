@@ -103,6 +103,28 @@ def retained_baseline(folder,last_attempt):
     return best
 
 
+def retained_standard_core(folder,checksum,last_attempt):
+    """Resume the persisted strongest core, even if later corrections regressed.
+
+    A standard failure is not a release approval. Both core validation and its
+    source-bound standard record must exist; all gates rerun after correction.
+    """
+    if not isinstance(checksum,str) or len(checksum)!=64:return None
+    for path in folder.glob('standard-verification-*.json'):
+        number=path.stem.split('-')[-1]
+        if not number.isdigit() or not 1<=int(number)<=last_attempt:continue
+        source_path=folder/f'attempt-{number}.lua';validation_path=folder/f'validation-{number}.json'
+        try:
+            if path.stat().st_size>24000 or validation_path.stat().st_size>24000 or source_path.stat().st_size>100000:continue
+            record=json.loads(path.read_text(encoding='utf-8'))
+            validation=json.loads(validation_path.read_text(encoding='utf-8'))
+            if record.get('source_sha256')!=checksum or validation.get('source_sha256')!=checksum or validation.get('local_checks_passed') is not True:continue
+            source=source_path.read_bytes().decode('utf-8')
+            if source_hash(source)==checksum:return source
+        except (OSError,ValueError,UnicodeError):continue
+    return None
+
+
 class RepairBaseline:
     """Keep the strongest tested candidate when a later response regresses."""
     def __init__(self,source=None,initial_error=None):
