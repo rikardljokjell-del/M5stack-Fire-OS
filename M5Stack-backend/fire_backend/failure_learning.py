@@ -31,7 +31,7 @@ def regression_evidence(category):
     }
 
 
-DEPLOYMENT_COMMAND_ERRORS=frozenset({'not_installed','archive_mismatch','expired_command','metadata_error','command_busy'})
+DEPLOYMENT_COMMAND_ERRORS=frozenset({'not_installed','archive_mismatch','expired_command','metadata_error','command_busy','invalid_command'})
 
 
 def deployment_failure(provenance,error_code):

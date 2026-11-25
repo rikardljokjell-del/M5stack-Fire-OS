@@ -10,7 +10,7 @@ from test_device_protocol import configured,Device,headers,ADMIN
 from test_repair_target import saved_app
 
 
-@pytest.mark.parametrize('code',['not_installed','archive_mismatch','expired_command','metadata_error','command_busy'])
+@pytest.mark.parametrize('code',['not_installed','archive_mismatch','expired_command','metadata_error','command_busy','invalid_command'])
 def test_failed_run_remains_failed_but_same_tested_source_can_be_reinstalled(code,tmp_path):
     with TestClient(create_app(configured(tmp_path,fire_desktop_enabled=True))) as client:
         with client.websocket_connect('/ws/device',headers=headers()) as socket:

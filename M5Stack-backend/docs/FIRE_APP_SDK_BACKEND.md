@@ -175,7 +175,7 @@ aldri gammel reviewgodkjenning. Reparasjonstekst normaliseres kun i
 modellvisningen; gamle logger og forespørsler beholdes.
 
 Eksplisitte startfeil `not_installed`, `archive_mismatch`, `expired_command`,
-`metadata_error` og `command_busy`
+`metadata_error`, `command_busy` og `invalid_command`
 fra enhetens run-kvittering er deploymentfeil før Lua-kjøring. Feilkvittering,
 feilhistorikk og mislykket run beholdes, men de sperrer ikke testet Lua-kilde.
 Vanlig installasjons-, arkiv- og startbekreftelse kreves fortsatt. Runtime-,
