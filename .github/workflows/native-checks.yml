@@ -6,14 +6,12 @@ on:
     branches: [main, master, 'codex/**']
     paths:
       - '.github/workflows/native-checks.yml'
-      - 'M5Stack-device/src/fire_byte_queue.h'
-      - 'M5Stack-device/src/fire_json_guard.h'
+      - 'M5Stack-device/src/**'
       - 'M5Stack-device/tests/**'
   pull_request:
     paths:
       - '.github/workflows/native-checks.yml'
-      - 'M5Stack-device/src/fire_byte_queue.h'
-      - 'M5Stack-device/src/fire_json_guard.h'
+      - 'M5Stack-device/src/**'
       - 'M5Stack-device/tests/**'
 
 permissions:
