@@ -47,6 +47,11 @@ class Surface {
       int64_t(top_)+height_<=kHeight;
   }
 
+  // M5Canvas returns logical RGB565 and owns bounds/rotation/depth conversion.
+  // Reading a sprite is RAM-only. Preserve its read semantics (drawing clip
+  // applies to fillRect); never reinterpret raw storage or alter current color.
+  uint16_t readPixel(int32_t x,int32_t y) { return canvas_.readPixel(x,y); }
+
   void fillRect(int32_t x,int32_t y,int32_t w,int32_t h,uint16_t color) {
     // Let M5GFX reuse its source row for multi-row fills; raw writes are only
     // for single-row spans. Unsupported layouts/negative dimensions still delegate.

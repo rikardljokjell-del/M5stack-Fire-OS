@@ -8,6 +8,7 @@
 #include "fire_runtime_ai_json.h"
 #include "fire_ai_workflow.h"
 #include "fire_ui.h"
+#include "fire_ui_antialias.h"
 
 #include <M5Unified.h>
 #ifdef FIRE_OS_BLE
@@ -61,7 +62,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.4.0-rc1";
+constexpr char kFirmwareVersion[] = "fire-os-1.4.0-rc2";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -9667,15 +9668,15 @@ void FireOS::drawStatusBar(const char* title) {
   drawBluetoothIcon(276, 5, bluetoothState);
   drawBatteryIcon(298, 6, batteryLevel(), batteryCharging());
   if (backgroundBuildActive_) {
-    ui.drawRoundRect(112, 23, 96, 3, 1, kMuted);
-    ui.fillRoundRect(113, 24,
-                     max<int>(2, 94 * buildProgress_ / 100), 1, 1, kCyan);
+    drawRounded(112, 23, 96, 3, 1, kMuted, false);
+    drawRounded(113, 24,
+                     max<int>(2, 94 * buildProgress_ / 100), 1, 1, kCyan, true);
   } else if (luaRepairRequested_ && luaRepairProgress_ > 0 &&
              luaRepairStatus_ != "ready") {
-    ui.drawRoundRect(112, 23, 96, 3, 1, kMuted);
-    ui.fillRoundRect(113, 24,
+    drawRounded(112, 23, 96, 3, 1, kMuted, false);
+    drawRounded(113, 24,
                      max<int>(2, 94 * luaRepairProgress_ / 100), 1, 1,
-                     kOrange);
+                     kOrange, true);
   } else if (buildNoticeActive_) {
     ui.fillCircle(160, 24, 2, kGreen);
   }
@@ -10001,7 +10002,7 @@ void FireOS::drawBluetooth() {
 
 void FireOS::drawBluetoothScanDialog() {
   drawPanel(8, 31, 304, 181);
-  ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
+  drawRounded(8, 31, 304, 181, 8, kCyan, false);
   drawText(18, 39, bluetoothUnknownDialog_ ? "Unknown devices" : "BLE devices",
            kText, 2, kPanel);
 
@@ -10052,7 +10053,7 @@ void FireOS::drawBluetoothScanDialog() {
 
 void FireOS::drawBluetoothSavedDialog() {
   drawPanel(8, 31, 304, 181);
-  ui.drawRoundRect(8, 31, 304, 181, 8, kCyan);
+  drawRounded(8, 31, 304, 181, 8, kCyan, false);
   drawText(18, 39, "Saved devices", kText, 2, kPanel);
 
   const uint8_t itemCount = bluetoothSavedCount_ + 2;
@@ -10142,8 +10143,8 @@ void FireOS::drawFirmware() {
     if (status.length() > 42)
       drawText(24, 119, status.substring(42, 84), kText, 1, kPanel);
     if (ota_.busy()) {
-      ui.fillRoundRect(24, 151, 270, 10, 3, kBg);
-      ui.fillRoundRect(24, 151, 270 * ota_.progress() / 100, 10, 3, kCyan);
+      drawRounded(24, 151, 270, 10, 3, kBg, true);
+      drawRounded(24, 151, 270 * ota_.progress() / 100, 10, 3, kCyan, true);
     }
     drawFooter(ota_.busy() ? "A  AVBRYT" : "VENT", "ARBEIDER", "");
     return;
@@ -10153,8 +10154,8 @@ void FireOS::drawFirmware() {
     String message = ota_.message();
     drawText(18, 85, message.substring(0, 35), kText, 1);
     if (message.length() > 35) drawText(18, 105, message.substring(35, 70), kText, 1);
-    ui.drawRoundRect(18, 140, 284, 18, 4, kMuted);
-    ui.fillRoundRect(20, 142, 280 * ota_.progress() / 100, 14, 3, kCyan);
+    drawRounded(18, 140, 284, 18, 4, kMuted, false);
+    drawRounded(20, 142, 280 * ota_.progress() / 100, 14, 3, kCyan, true);
     drawFooter("Avbryt", "Vent", "Vent"); return;
   }
   if (firmwareInstallConfirm_) {
@@ -10480,10 +10481,10 @@ void FireOS::drawAiDeveloper() {
     ui.drawLine(eyeRight - 13, rightEyeY, eyeRight + 13, rightEyeY, line);
   } else if (squint || tired) {
     const int height = tired ? 5 : 7;
-    ui.fillRoundRect(eyeLeft - 13, leftEyeY - height / 2, 26, height,
-                     height / 2, line);
-    ui.fillRoundRect(eyeRight - 13, rightEyeY - height / 2, 26, height,
-                     height / 2, line);
+    drawRounded(eyeLeft - 13, leftEyeY - height / 2, 26, height,
+                     height / 2, line, true);
+    drawRounded(eyeRight - 13, rightEyeY - height / 2, 26, height,
+                     height / 2, line, true);
   } else {
     ui.fillCircle(eyeLeft, leftEyeY, 12, line);
     ui.fillCircle(eyeRight, rightEyeY, 12, line);
@@ -10598,10 +10599,10 @@ void FireOS::drawAiDeveloper() {
     drawText(cx, 174, assistant, kText, 1, kBg);
   }
   if (aiWorkflowState_ == 4) {
-    ui.drawRoundRect(45, 184, 230, 7, 3, FireUI::Border);
-    ui.fillRoundRect(47, 186,
+    drawRounded(45, 184, 230, 7, 3, FireUI::Border, false);
+    drawRounded(47, 186,
                      static_cast<int32_t>(226 * aiBuildProgress_ / 100), 3,
-                     1, kCyan);
+                     1, kCyan, true);
   }
   const char* leftHint = "HOLD HOME";
   const char* centerHint = "SPEAK";
@@ -10753,10 +10754,10 @@ void FireOS::drawLuaApp() {
                  : kOrange,
              1, kBg);
     if (luaRepairProgress_ > 0 && luaRepairStatus_ != "ready") {
-      ui.drawRoundRect(32, 160, 256, 10, 4, kMuted);
-      ui.fillRoundRect(34, 162,
+      drawRounded(32, 160, 256, 10, 4, kMuted, false);
+      drawRounded(34, 162,
                        max<int>(2, 252 * luaRepairProgress_ / 100), 6, 3,
-                       kCyan);
+                       kCyan, true);
     }
     const uint16_t actionColor = luaErrorAction_ == 0 ? kCyan : kGreen;
     const bool waitingForRepair = luaRepairRequested_ && luaErrorAction_ == 0;
@@ -11252,7 +11253,7 @@ void FireOS::drawDebug() {
   };
   auto drawStatusRow = [&](uint8_t row, const String& label, const String& status) {
     const int y = 65 + row * 23;
-    ui.fillRoundRect(10, y, 300, 21, 5, kPanel);
+    drawRounded(10, y, 300, 21, 5, kPanel, true);
     fire_canvas_fill::Surface<M5Canvas> surface(ui);
     FireUI::text(surface, 20, y + 4, label.c_str(), kMuted, "ui12", 170);
     FireUI::text(surface, 195, y + 4, status.c_str(), statusColor(status), "ui12b", 105, 2);
@@ -11330,7 +11331,7 @@ void FireOS::drawDebug() {
     m5::imu_data_t imu{};
     const bool imuReady = M5.Imu.isEnabled();
     if (imuReady) M5.Imu.getImuData(&imu);
-    ui.drawRoundRect(12, 65, 70, 64, 5, kPanel);
+    drawRounded(12, 65, 70, 64, 5, kPanel, false);
     ui.drawRect(18, 71, 58, 50, kMuted);
     ui.drawLine(47, 73, 47, 119, kMuted);
     ui.drawLine(21, 96, 73, 96, kMuted);
@@ -11483,9 +11484,16 @@ void FireOS::drawFactoryReset() {
   drawFooter("", "Confirm", "Back");
 }
 
+void FireOS::drawRounded(int x, int y, int width, int height, int radius,
+                         uint16_t color, bool filled) {
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  FireUI::roundRect(surface, x, y, width, height, radius, color, filled);
+}
+
 void FireOS::drawSelection(int x, int y, int width, int height, uint16_t accent) {
-  ui.fillRoundRect(x, y, width, height, min<int>(6, height / 2), FireUI::Selected);
-  ui.drawRoundRect(x, y, width, height, min<int>(6, height / 2), FireUI::Border);
+  fire_canvas_fill::Surface<M5Canvas> surface(ui);
+  fire_ui_aa::rounded(surface, x, y, width, height, min<int>(6, height / 2),
+                      FireUI::Selected, FireUI::Border, true, true);
   ui.fillRect(x, y + 4, 3, max<int>(1, height - 8), accent);
 }
 
@@ -11527,7 +11535,6 @@ void FireOS::drawRow(uint8_t row, const String& label, bool selected,
   FireUI::menuRow(surface, y, label.c_str(), value.c_str(), selected, osMenuIcon(label));
   if (selected && editing) {
     ui.fillRect(10, y + 7, 3, 11, kOrange);
-    ui.drawRoundRect(10, y, 300, 25, 7, kOrange);
   }
 }
 
@@ -11535,8 +11542,8 @@ void FireOS::drawLevelRow(uint8_t row, const String& label, uint8_t step,
                           uint8_t stepCount, bool selected, uint16_t accent,
                           bool editing) {
   const int y = 62 + row * 25;
-  ui.fillRoundRect(10, y, 300, 25, 7, kPanel);
   if (selected) drawSelection(10, y, 300, 25, editing ? kOrange : kCyan);
+  else drawRounded(10, y, 300, 25, 7, kPanel, true);
   fire_canvas_fill::Surface<M5Canvas> surface(ui);
   FireUI::icon(surface, osMenuIcon(label), 18, y + 3, selected ? kCyan : kMuted, 19);
   FireUI::text(surface, 42, y + 5, label.c_str(), kText, "ui12", 108);
@@ -11544,7 +11551,7 @@ void FireOS::drawLevelRow(uint8_t row, const String& label, uint8_t step,
   const uint8_t filled = stepCount <= 1 ? 0 : uint8_t(step * segments / (stepCount - 1));
   for (int segment = 0; segment < segments; ++segment) {
     const uint16_t color = segment < filled ? (editing ? kOrange : accent) : FireUI::Border;
-    ui.fillRoundRect(166 + segment * 13, y + 8, 10, 9, 2, color);
+    drawRounded(166 + segment * 13, y + 8, 10, 9, 2, color, true);
   }
 }
 

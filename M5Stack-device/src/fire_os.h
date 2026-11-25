@@ -996,6 +996,8 @@ class FireOS {
   int batteryLevel() const;
   bool batteryCharging() const;
   void refreshBatteryStatus() const;
+  void drawRounded(int x, int y, int width, int height, int radius,
+                   uint16_t color, bool filled);
   void drawSelection(int x, int y, int width, int height, uint16_t accent);
   void drawPanel(int x, int y, int width, int height);
   void drawRow(uint8_t row, const String& label, bool selected,

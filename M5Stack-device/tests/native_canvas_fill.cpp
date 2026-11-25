@@ -15,6 +15,7 @@ struct Canvas {
   size_t storage=bytes;bool nullBuffer=false,swap=true;
   uint16_t current=0;unsigned fallbackCalls=0;
   unsigned colorCalls=0;mutable unsigned rawReads=0;
+  unsigned pixelReads=0;int readX=0,readY=0;
   int last[4]={};uint16_t lastColor=0;
   Canvas() {memory.fill(0xa5);}
   uint8_t* pixels() {return memory.data()+guard+offset;}
@@ -25,6 +26,15 @@ struct Canvas {
   void getClipRect(int* x,int* y,int* cw,int* ch) {*x=clipX;*y=clipY;*cw=clipW;*ch=clipH;}
   void setColor(uint16_t color) {++colorCalls;current=swap?uint16_t((color<<8)|(color>>8)):color;}
   uint32_t getRawColor() const {++rawReads;return current;}
+  uint16_t readPixel(int x,int y) {
+    ++pixelReads;readX=x;readY=y;
+    if(nullBuffer || x<0 || y<0 || x>=w || y>=h) return 0;
+    // Non-native formats deliberately return a palette/rotation sentinel;
+    // the production Surface must delegate rather than inspect raw storage.
+    if(depth!=16 || rotation) return 0x4a69;
+    uint16_t raw=0;memcpy(&raw,pixels()+(size_t(y)*320+size_t(x))*2,2);
+    return swap?uint16_t((raw<<8)|(raw>>8)):raw;
+  }
   // Independent scalar pixel oracle. Does not use clipping/span helpers under test.
   void fillRect(int x,int y,int rw,int rh,uint16_t color) {
     ++fallbackCalls;last[0]=x;last[1]=y;last[2]=rw;last[3]=rh;lastColor=color;
@@ -123,6 +133,30 @@ void repeatedSpanColors() {
   }
   puts("PASS Surface repeated-span color conversion reuse and fallback invalidation");
 }
+void delegatedPixelReads() {
+  for(bool swap:{false,true}) {
+    reset(0,swap);
+    actual.fillRect(7,9,1,1,0x1234);
+    actual.clipX=20;actual.clipY=30;actual.clipW=100;actual.clipH=80;
+    fire_canvas_fill::Surface<Canvas> surface(actual);
+    const auto memory=actual.memory;
+    const auto color=actual.current;const auto calls=actual.colorCalls;const auto raw=actual.rawReads;
+    assert(surface.readPixel(7,9)==0x1234); // Canvas reads ignore the drawing clip.
+    assert(actual.pixelReads==1 && actual.readX==7 && actual.readY==9);
+    for(const auto& xy:{std::array<int,2>{-1,9},{320,9},{7,-1},{7,240}}) {
+      assert(surface.readPixel(xy[0],xy[1])==0);
+      assert(actual.readX==xy[0] && actual.readY==xy[1]);
+    }
+    assert(actual.memory==memory && actual.current==color && actual.colorCalls==calls && actual.rawReads==raw);
+  }
+  for(int mode=0;mode<3;++mode) {
+    reset();actual.rotation=mode==0?1:0;actual.depth=mode==1?8:16;actual.nullBuffer=mode==2;
+    fire_canvas_fill::Surface<Canvas> surface(actual);
+    assert(surface.readPixel(7,9)==(mode==2?0:0x4a69));
+    assert(actual.pixelReads==1 && actual.readX==7 && actual.readY==9);
+  }
+  puts("PASS Surface logical RGB565 read delegation bounds clip semantics fallback and unchanged color/storage");
+}
 void sharedAssetsAndFonts() {
   size_t index=0;
   for(const auto& asset:FireSdkData::kAssets) {
@@ -169,6 +203,6 @@ void shapes() {
 }
 } // namespace
 int main() {
-  allColors();rectangles();fallback();repeatedSpanColors();sharedAssetsAndFonts();shapes();
+  allColors();rectangles();fallback();repeatedSpanColors();delegatedPixelReads();sharedAssetsAndFonts();shapes();
   puts("PASS canvas raw16 all65536 colors alignment canaries clipping fallback color-state and shared SDK raster parity");
 }

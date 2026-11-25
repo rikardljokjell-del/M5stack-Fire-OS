@@ -24,9 +24,22 @@ jobs:
         run: python M5Stack-backend/scripts/build_app_sdk.py --check
       - name: Verify optional Runtime AI contract and generated constants
         run: python M5Stack-backend/scripts/build_runtime_ai_contract.py --check
+      - name: Verify OS-only antialiased fonts and icons
+        run: python M5Stack-device/tools/build_ui_antialias.py --check
       - name: Native guards and release tests
         run: |
           python -m unittest discover -s M5Stack-device/tests -p 'test_*.py' -v
+      - name: Render actual OS and Home drawing helpers
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -IM5Stack-device/src M5Stack-device/tests/native_ui_preview.cpp -o "$RUNNER_TEMP/fire-ui-preview"
+          mkdir -p "$RUNNER_TEMP/fire-ui-preview-images"
+          cd "$RUNNER_TEMP/fire-ui-preview-images"
+          "$RUNNER_TEMP/fire-ui-preview"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: fire-ui-preview-${{ github.sha }}
+          path: ${{ runner.temp }}/fire-ui-preview-images/*.ppm
+          if-no-files-found: error
       - name: Normal firmware with Bluetooth and audio
         run: pio run --project-dir M5Stack-device -e m5stack-fire-ble
       - name: Independent factory recovery

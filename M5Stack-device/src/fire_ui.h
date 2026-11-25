@@ -1,10 +1,11 @@
 #pragma once
 #include "fire_app_bitmap.h"
 #include "fire_app_sdk_data.h"
+#include "fire_ui_antialias.h"
 #include <cstring>
 
-// Small shared OS/Home drawing vocabulary. It reuses the existing flash fonts
-// and icons, draws directly into the OS canvas, and owns no heap or framebuffer.
+// Shared OS/Home drawing vocabulary. Coverage data stays in flash; rendering
+// uses the existing OS canvas and owns no heap or additional framebuffer.
 namespace FireUI {
 constexpr uint16_t rgb(unsigned r, unsigned g, unsigned b) {
   return uint16_t(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
@@ -23,14 +24,22 @@ inline constexpr uint16_t Amber = rgb(255, 195, 105);
 inline constexpr uint16_t Red = rgb(255, 126, 145);
 inline constexpr uint16_t Purple = rgb(185, 158, 255);
 
-inline const FireSdkData::Font& font(const char* id) {
-  const auto* found = fire_app_bitmap::find(FireSdkData::kFonts, FireSdkData::kFontCount, id);
-  return found ? *found : FireSdkData::kFonts[4];  // canonical ui12
+inline const FireUiAaData::Font& font(const char* id) {
+  // OS labels use proportional text; the SDK's deliberate pixel font stays intact.
+  if (id && std::strcmp(id, "pixel8") == 0) id = "small10";
+  const auto* found = fire_app_bitmap::find(FireUiAaData::kFonts, FireUiAaData::kFontCount, id ? id : "ui12");
+  return found ? *found : FireUiAaData::kFonts[3];  // ui12
 }
 inline int width(const char* value, const char* id = "ui12") {
   if (!value) return 0;
-  int w = 0, h = 0;
-  return fire_app_bitmap::measure(font(id), value, std::strlen(value), w, h) ? w : 10000;
+  int w = 0; size_t offset = 0, length = std::strlen(value);
+  while (offset < length) {
+    uint32_t cp = 0;
+    if (!fire_app_bitmap::codepoint(value, length, offset, cp)) return 10000;
+    const auto* g = fire_app_bitmap::glyph(font(id), cp);
+    if (g) w += g->advance;
+  }
+  return w;
 }
 template<class Surface>
 void text(Surface& c, int x, int y, const char* value, uint16_t color = Text,
@@ -52,31 +61,49 @@ void text(Surface& c, int x, int y, const char* value, uint16_t color = Text,
     used += offset - start;
     advance += g->advance;
   }
-  fire_app_bitmap::text(c, f, x, y, clipped, used, color, align, maxWidth);
+  int pen = x + (align == 1 ? (maxWidth - advance) / 2 : align == 2 ? maxWidth - advance : 0);
+  const auto clip = fire_app_graphics::clippedRect(x, y, maxWidth, f.lineHeight);
+  offset = 0;
+  while (offset < used) {
+    uint32_t cp = 0;
+    if (!fire_app_bitmap::codepoint(clipped, used, offset, cp)) break;
+    const auto* g = fire_app_bitmap::glyph(f, cp);
+    if (!g) continue;
+    fire_ui_aa::mask(c, g->mask, pen + g->xOffset, y + g->yOffset, color, clip);
+    pen += g->advance;
+  }
+}
+
+template<class Surface>
+void roundRect(Surface& c, int x, int y, int w, int h, int radius, uint16_t color, bool filled) {
+  fire_ui_aa::rounded(c, x, y, w, h, radius, color, color, filled, !filled);
 }
 template<class Surface>
 void panel(Surface& c, int x, int y, int w, int h, bool selected = false,
            uint16_t accent = Accent) {
-  fire_app_graphics::roundRect(c, x, y, w, h, 10, selected ? Selected : Panel, true);
-  fire_app_graphics::roundRect(c, x, y, w, h, 10, selected ? accent : Border, false);
+  fire_ui_aa::rounded(c, x, y, w, h, 10, selected ? Selected : Panel,
+                     selected ? accent : Border, true, true);
 }
 template<class Surface>
 void icon(Surface& c, const char* id, int x, int y, uint16_t color = Text, int size = 24) {
-  const auto* a = fire_app_bitmap::find(FireSdkData::kAssets, FireSdkData::kAssetCount, id);
-  if (!a || a->width != 24 || a->height != 24 || size < 8 || size > 64) return;
-  struct Target {
-    Surface& c; int x, y, size;
-    void fillRect(int sx, int sy, int w, int h, uint16_t ink) {
-      const int left = sx * size / 24, top = sy * size / 24;
-      const int right = (sx + w) * size / 24, bottom = (sy + h) * size / 24;
-      if (right > left && bottom > top) c.fillRect(x + left, y + top, right - left, bottom - top, ink);
-    }
-  } target{c, x, y, size};
-  fire_app_bitmap::asset(target, *a, 0, 0, 1, color, false, false);
+  if (!id) return;
+  size_t lo = 0, hi = FireUiAaData::kIconCount;
+  while (lo < hi) {
+    const size_t mid = lo + (hi - lo) / 2;
+    const auto& a = FireUiAaData::kIcons[mid];
+    const int order = std::strcmp(a.id, id);
+    if (order < 0 || (order == 0 && a.size < size)) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo < FireUiAaData::kIconCount) {
+    const auto& a = FireUiAaData::kIcons[lo];
+    if (std::strcmp(a.id, id) == 0 && a.size == size)
+      fire_ui_aa::mask(c, a.mask, x, y, color, fire_app_graphics::clippedRect(0, 0, 320, 240));
+  }
 }
 template<class Surface>
 void pill(Surface& c, int x, int y, int w, const char* label, uint16_t color = Accent) {
-  fire_app_graphics::roundRect(c, x, y, w, 20, 9, Raised, true);
+  roundRect(c, x, y, w, 20, 9, Raised, true);
   text(c, x + 5, y + 2, label, color, "ui12b", w - 10, 1);
 }
 template<class Surface>
@@ -88,7 +115,7 @@ void footer(Surface& c, const char* left, const char* middle, const char* right)
     text(c, 25, 220, left, Muted, "ui12", 76);
   }
   if (middle && *middle) {
-    fire_app_graphics::roundRect(c, 105, 219, 110, 20, 7, Selected, true);
+    roundRect(c, 105, 219, 110, 20, 7, Selected, true);
     text(c, 113, 221, "B", Accent, "ui12b", 12);
     text(c, 127, 221, middle, Text, "ui12b", 80, 1);
   }
@@ -101,7 +128,7 @@ template<class Surface>
 void tile(Surface& c, int x, int y, int w, int h, const char* label,
           const char* iconId, uint16_t color, bool selected) {
   panel(c, x, y, w, h, selected, color);
-  fire_app_graphics::roundRect(c, x + 10, y + 8, 34, 32, 8, Raised, true);
+  roundRect(c, x + 10, y + 8, 34, 32, 8, Raised, true);
   icon(c, iconId, x + 15, y + 12, color, 24);
   if (selected) icon(c, "icon.circle-check", x + w - 25, y + 10, color, 15);
   const char* labelFont = width(label, "ui16") <= w - 24 ? "ui16" : "ui12b";
@@ -110,7 +137,7 @@ void tile(Surface& c, int x, int y, int w, int h, const char* label,
 template<class Surface>
 void menuRow(Surface& c, int y, const char* label, const char* value,
              bool selected, const char* iconId = nullptr) {
-  fire_app_graphics::roundRect(c, 10, y, 300, 25, 7, selected ? Selected : Panel, true);
+  roundRect(c, 10, y, 300, 25, 7, selected ? Selected : Panel, true);
   if (selected) c.fillRect(10, y + 7, 3, 11, Accent);
   const int x = iconId ? 42 : 20;
   if (iconId) icon(c, iconId, 18, y + 3, selected ? Accent : Muted, 19);
