@@ -66,7 +66,9 @@ def test_browser_package_download_rejects_tampered_archive_and_nonready_build(tm
         build=response.json()
         deadline=time.monotonic()+40
         while time.monotonic()<deadline:
-            saved=app.state.backend.store.get("builds",build["id"])
+            # Read on the backend loop as production routes do, rather than
+            # racing its atomic file replacement from the TestClient thread.
+            saved=client.portal.call(app.state.backend.store.get,"builds",build["id"])
             if saved["status"] in {"ready","failed"}:break
             time.sleep(.05)
         assert saved["status"]=="ready",saved.get("error")
