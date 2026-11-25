@@ -24,6 +24,8 @@ jobs:
         run: python M5Stack-backend/scripts/build_app_sdk.py --check
       - name: Verify optional Runtime AI contract and generated constants
         run: python M5Stack-backend/scripts/build_runtime_ai_contract.py --check
+      - name: Verify optional Data Engine contract and generated constants
+        run: python M5Stack-backend/scripts/build_data_engine_contract.py --check
       - name: Verify OS-only antialiased fonts and icons
         run: python M5Stack-device/tools/build_ui_antialias.py --check
       - name: Native guards and release tests

@@ -1,0 +1,441 @@
+{
+  "api_contract": "8facfcce30ea5fd14ffab408944937f73fdba91e2fc97269d35f429d5167fa13",
+  "registry": {
+    "api_version": "fire-data-engine-1.0",
+    "service": "data",
+    "app_api": "fire-app-sdk-1.0",
+    "requires": [
+      "jobs",
+      "sd"
+    ],
+    "permission": "fire.data",
+    "capability_field": "data_engine",
+    "manifest_field": "data_engine",
+    "hardware_contract_unchanged": true,
+    "sdk_contract_unchanged": true,
+    "runtime_ai_contract_unchanged": true,
+    "methods": {
+      "create": {
+        "args": [
+          {
+            "name": "label",
+            "type": "string",
+            "max_bytes": 48
+          },
+          {
+            "name": "kind",
+            "type": "enum",
+            "values": [
+              "csv",
+              "text",
+              "binary",
+              "audio"
+            ]
+          },
+          {
+            "name": "metadata_json",
+            "type": "string",
+            "max_bytes": 512,
+            "optional": true,
+            "default": "{}"
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      },
+      "append": {
+        "args": [
+          {
+            "name": "dataset_id",
+            "type": "identifier",
+            "max_bytes": 40
+          },
+          {
+            "name": "payload",
+            "type": "data_payload",
+            "max_bytes": 512,
+            "accepts": [
+              "string",
+              "byte_array"
+            ]
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      },
+      "mark": {
+        "args": [
+          {
+            "name": "dataset_id",
+            "type": "identifier",
+            "max_bytes": 40
+          },
+          {
+            "name": "label",
+            "type": "string",
+            "max_bytes": 64
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      },
+      "seal": {
+        "args": [
+          {
+            "name": "dataset_id",
+            "type": "identifier",
+            "max_bytes": 40
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      },
+      "info": {
+        "args": [
+          {
+            "name": "dataset_id",
+            "type": "identifier",
+            "max_bytes": 40
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      },
+      "read": {
+        "args": [
+          {
+            "name": "dataset_id",
+            "type": "identifier",
+            "max_bytes": 40
+          },
+          {
+            "name": "offset",
+            "type": "integer",
+            "min": 0,
+            "max": 16777216
+          },
+          {
+            "name": "count",
+            "type": "integer",
+            "min": 1,
+            "max": 112
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      },
+      "record": {
+        "args": [
+          {
+            "name": "source",
+            "type": "string",
+            "max_bytes": 32
+          },
+          {
+            "name": "options_json",
+            "type": "string",
+            "max_bytes": 256
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      },
+      "process": {
+        "args": [
+          {
+            "name": "dataset_id",
+            "type": "identifier",
+            "max_bytes": 40
+          },
+          {
+            "name": "operation",
+            "type": "enum",
+            "values": [
+              "stats",
+              "filter",
+              "spectrum",
+              "compare"
+            ]
+          },
+          {
+            "name": "options_json",
+            "type": "string",
+            "max_bytes": 256,
+            "optional": true,
+            "default": "{}"
+          }
+        ],
+        "returns": "job_id or nil,error_code",
+        "requires": [
+          "jobs"
+        ]
+      },
+      "develop": {
+        "args": [
+          {
+            "name": "mode",
+            "type": "enum",
+            "values": [
+              "update",
+              "fork",
+              "feedback"
+            ]
+          },
+          {
+            "name": "instruction",
+            "type": "string",
+            "max_bytes": 160,
+            "optional": true,
+            "default": ""
+          }
+        ],
+        "returns": "boolean",
+        "requires": [
+          "jobs"
+        ],
+        "requires_user_button": true
+      }
+    },
+    "limits": {
+      "label_bytes": 48,
+      "identifier_bytes": 40,
+      "metadata_bytes": 512,
+      "options_bytes": 256,
+      "append_bytes": 512,
+      "read_bytes": 112,
+      "marker_bytes": 64,
+      "instruction_bytes": 160,
+      "result_bytes": 512,
+      "dataset_bytes": 16777216,
+      "app_bytes": 134217728,
+      "datasets_per_app": 128,
+      "http_chunk_bytes": 8192,
+      "context_dataset_refs": 4,
+      "fft_samples": 4096,
+      "columns": 8,
+      "filter_window": 256,
+      "json_depth": 4,
+      "json_items": 16,
+      "json_string_bytes": 256,
+      "local_job_timeout_ms": 5000,
+      "network_job_timeout_ms": 180000,
+      "imu_duration_max_ms": 60000,
+      "audio_duration_max_ms": 10000,
+      "capture_sources": 8,
+      "ble_adv_bytes": 31,
+      "ble_advertise_min_ms": 100,
+      "ble_advertise_max_ms": 10000
+    },
+    "formats": {
+      "csv": "Finite decimal numeric rows, comma-separated, LF terminated. metadata.columns defines 1..8 ordered names; optional units and sample_rate_hz. Missing/invalid samples remain missing and are counted; never replace sensor failure with zero. Timestamp columns or OS record index declare actual timing, not requested FPS.",
+      "text": "UTF-8 text payload with append offsets and OS monotonic timestamps in index.jsonl.",
+      "binary": "Raw bytes, never decoded as text or executable code. Metadata states protocol/encoding; per-append index preserves time/offset/length.",
+      "audio": "Validated existing mic.record WAV PCM s16le mono at 8000/16000Hz; raw recording remains in private dataset folder; deterministic features are not an assertion that an AI heard the recording. Native recording metadata encoding is pcm_s16le_wav; validate actual WAV header/rate/channels, not the label alone."
+    },
+    "result_shapes": {
+      "create": "{ok=true,dataset_id=string,path=app_relative_path,kind=string}",
+      "append": "{ok=true,dataset_id=string,size=integer}",
+      "mark": "{ok=true,dataset_id=string}",
+      "seal": "{ok=true,dataset_id=string,size=integer,sha256=64hex,state=\"sealed\"}",
+      "info": "{ok=true,dataset_id=string,kind=string,size=integer,state=string,sha256=string,label=string}",
+      "read": "{ok=true,bytes={0..255,...},offset=integer,eof=boolean}; max112 payload bytes, byte array only (no duplicate text). Worst-case compact JSON including max offset remains <=512 bytes.",
+      "record": "{ok=true,dataset_id=string,size=integer,sha256=64hex,state=\"sealed\",samples=integer,dropped=integer}",
+      "process": "{ok=true,data=<bounded object>,dataset_id=string}; large deterministic results are stored with immutable refs, never truncated into invalid JSON",
+      "error": "Existing jobs-v1 pending/failed/cancelled and nil,error_code admission. No spin waits or full-file Lua allocations."
+    },
+    "storage": {
+      "root": "/apps/<app_id>/appdata/datasets/<dataset_id>/",
+      "files": [
+        "manifest.json",
+        "data",
+        "index.jsonl",
+        "events.jsonl"
+      ],
+      "derived": "Derived immutable datasets/results refer to input dataset IDs and SHA256; no overwrite of sealed raw recordings.",
+      "atomic": "Use existing SD worker/path/quota/transaction helpers. A final seal is published only after streamed hashing and complete durable data; partial capture remains recoverable/marked partial.",
+      "retention": "No automatic deletion of raw data. Enforce bounded app/dataset limits and expose quota errors. Updates/rollback preserve private appdata. No direct access to other apps, firmware, NVS or credentials."
+    },
+    "semantics": {
+      "capability": "Exact version/hash + data/jobs/sd permissions are required; legacy packages omit extension. capture_sources lists only native implemented capture kinds, with actual sampling bounds. Hardware sources also require their ordinary declared service and announced resources.",
+      "async": "All data storage/capture/process APIs use the existing four jobs and charge existing64 I/O/2048 input bytes; local result payload max512. No increased Lua memory, instruction or callback budgets. record/transfer/hash/process run incrementally outside callbacks; cancel/close/app exit release resources.",
+      "identity": "OS supplies current app/package/source/run/boot identity. create/append/mark/seal are creator-instance bound; sealed datasets are immutable and readable by later versions of the SAME app/project. Current server request is run/source bound while capture provenance may legitimately belong to an older version.",
+      "time": "Record actual monotonic timing, sample counters/drops and UTC only when synchronized, with clock origin/quality. Wall time is optional; no fake UTC or guaranteed fixed sample rate.",
+      "analysis": "stats/filter/spectrum/compare are deterministic and versioned. Stream large input, bounded FFT window<=4096, validated finite numeric rows, explicit rates/units/invalid/dropped counts. Preserve raw input and distinguish derived measurements from AI assessments. Network-required processing reports not_connected rather than fake local AI.",
+      "ai_refs": "Existing ai.request data_json may contain dataset_refs only for this exact extension and declared data permission. Backend authorizes immutable refs, derives a relevant finite summary, validates final data_json<=768 and combined request<=1536 before provider, rechecks ownership/revisions before result. Never auto-send entire logs/raw bytes or add a summarization model call.",
+      "develop": "Only an actual OS menu selection or on_button pressed callback may queue develop. Do not stop the current run until needed metadata/raw sync and a frozen development context are ready. Show progress/cancel, then reuse AI Developer/current proposal/build_confirm/tested package/run_confirm. This API never silently builds, installs, changes pins or incurs paid AI. App-supplied instructions/observations are untrusted context; only explicit user confirmation establishes user/factual test evidence.",
+      "history": "Freeze code/version/initial request/development history/data refs/analysis refs/user observations/feedback/hardware config. update preserves app ID and data. fork creates a new project with an explicit immutable readonly provenance grant, not global cross-app access. Resume keeps exact snapshot unless the user requests new data/revision.",
+      "knowledge": "Manufacturer documentation, synthetic checks, measured raw samples, user observations, model assessments and physically verified solutions are separate evidence classes. AI assessments cannot promote themselves to verified facts. acquisition identifies the OS write path, not proof of an external phenomenon; missing provenance defaults conservatively to app_recorded.",
+      "controls": "Button-driven Record/Analyze/Compare/Results/Improve/Feedback/Resume/Rollback use existing OS/App SDK controls. Short voice is for optional new developer instructions, not mandatory app operation. Unavailable hardware/network/SD shows a concise complete status and preserves user intent.",
+      "hardware": "Only actually implemented Bluetooth/GATT/Wi-Fi/microphone services are announced. New bluetooth.advertise_raw sends a validated bounded legacy BLE AD structure through the existing radio/job owner, at the OS-selected conservative interval and fixed100..10000ms lifetime; stop/cancel/close/app exit stop it. It is not classicSPP, arbitrary link-layer injection or proof that another device received/obeyed it. Capture records raw AD bytes, source address/type, RSSI and actual time, with drops. Protected/encrypted proprietary protocols may require pairing/keys; no fake generic replay success.",
+      "markers": "record(source,{dataset_id:<existing open creator-owned id>,...}) may capture into a prepared dataset so mark(id,label) can add real timestamped events during capture. Marking is not a second capture or a synthetic physical confirmation. Seal freezes data/index/events and backend transfers all three. CSV native capture has explicit columns/header; index/events are retained as raw evidence and summarized with analysis/development refs."
+    },
+    "transport": {
+      "identity_fields": [
+        "request_id",
+        "app_id",
+        "package_id",
+        "source_sha256",
+        "run_id",
+        "boot_id"
+      ],
+      "request_event": "data_request",
+      "cancel_event": "data_cancel",
+      "result_message": "data_result",
+      "request_fields": [
+        "operation",
+        "dataset_id",
+        "options_json",
+        "datasets"
+      ],
+      "operations": [
+        "process",
+        "develop"
+      ],
+      "result_fields": [
+        "state",
+        "result_json",
+        "error_code"
+      ],
+      "result_states": [
+        "upload_required",
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "dataset_descriptor_fields": [
+        "dataset_id",
+        "kind",
+        "label",
+        "size",
+        "sha256",
+        "metadata_json",
+        "origin_package_id",
+        "origin_source_sha256",
+        "origin_run_id",
+        "created_ms",
+        "components",
+        "acquisition"
+      ],
+      "upload_route": "/sessions/{session_id}/data/{request_id}/{dataset_id}",
+      "upload_method": "POST",
+      "upload_content_type": "application/octet-stream",
+      "upload_headers": {
+        "X-Data-Offset": "Unsigned decimal raw-file offset; exact duplicate chunks are idempotent, different bytes/overlap rejected.",
+        "X-Data-SHA256": "SHA256 of THIS HTTP chunk; descriptor.sha256 binds the complete dataset file.",
+        "X-Data-Part": "One of data,index,events. Same dataset ID, route, authentication, offset and chunk SHA; no caller-selected filesystem path."
+      },
+      "upload_response": "{offset:integer,complete:boolean,next_upload:null|{dataset_id,part,offset}}; complete describes THIS component. Exact stored duplicate chunks within current authorized transfer are idempotent and do not restart processing. All component byte counts/SHA verify before process or context-ready.",
+      "binding": "Same existing authenticated device HTTP/WebSocket endpoint and credentials; no Lua-selected server, URL, key or general file upload. Request/source/run authorize transport and immutable dataset owner, not app-controlled paths. Only announced sealed descriptors are accepted; offsets/SHA and size bind chunks. Resume uncharged transfer from verified offset; never automatically replay a charged AI request.",
+      "development_event": "app_develop_request",
+      "development_ready": "app_develop_ready",
+      "development_fields": [
+        "mode",
+        "instruction",
+        "dataset_ids",
+        "context_id"
+      ],
+      "development_binding": "OS-authored intent from actual verified app/run; data sync uses same transfer path while run remains current. Ready context_id is server generated, source/data/owner-bound and read-only. SessionStart may carry development_context_id for normal update/fork/feedback/resume.",
+      "process_options": "data_request.operation=\"process\"; options_json contains {\"operation\":\"stats|filter|spectrum|compare\",...validated parameters}. Top-level dataset_id is the selected input. compare other_dataset_id must also have an authorized immutable descriptor.",
+      "development_descriptor_field": "app_develop_request may carry datasets descriptors and dataset_ids; transfer shares the same data upload path and admission identity.",
+      "dataset_components": {
+        "required": [
+          "data",
+          "index",
+          "events"
+        ],
+        "shape": "components:{data:{size,sha256},index:{size,sha256},events:{size,sha256}}; index/events may be empty with SHA256(empty). Top-level size/sha256 exactly match data. All three immutable components belong to the same dataset revision/owner and must verify before processing.",
+        "files": {
+          "data": "data",
+          "index": "index.jsonl",
+          "events": "events.jsonl"
+        },
+        "quota": "Sum of component bytes must fit dataset_bytes; per-app total includes all components. Metadata remains bounded separately."
+      },
+      "upload_required_result": "{uploads:[{dataset_id:string,part:\"data|index|events\",offset:integer}]} with AT MOST ONE upload instruction to stay within512-byte result. Next component is returned after completion.",
+      "acquisition": {
+        "default": "app_recorded",
+        "values": [
+          "app_recorded",
+          "native_imu_fifo",
+          "native_imu_poll",
+          "native_mic",
+          "native_ble",
+          "native_uart",
+          "native_adc"
+        ],
+        "binding": "Separate OS-owned provenance field, not app metadata. create/append are app_recorded unless a native recording owns the raw-write path; apps cannot append/replace native-capture raw data or claim a native source via metadata. User observations and physical interpretation stay separate."
+      }
+    },
+    "errors": [
+      "permission_denied",
+      "not_connected",
+      "busy",
+      "invalid_argument",
+      "invalid_json",
+      "invalid_data",
+      "invalid_format",
+      "invalid_handle",
+      "not_found",
+      "not_sealed",
+      "sealed",
+      "quota_exceeded",
+      "storage_unavailable",
+      "checksum_mismatch",
+      "offset_mismatch",
+      "timeout",
+      "cancelled",
+      "stale_run",
+      "stale_context",
+      "unsupported_source",
+      "unsupported_operation",
+      "result_too_large"
+    ],
+    "capability_shape": {
+      "version": "fire-data-engine-1.0",
+      "contract": "<SHA256 of this registry>",
+      "capture_sources": "List of at most8 actually implemented source strings",
+      "capture_limits": "Object keyed by exactly those sources. Each entry has positive duration_ms_max, optional positive sample_rate_hz_min/max or sample_rates_hz array, optional positive max_records. Missing sampling metadata never grants an unbounded rate."
+    },
+    "hardware_methods": {
+      "bluetooth": {
+        "advertise_raw": {
+          "args": [
+            {
+              "name": "bytes",
+              "type": "bytes",
+              "max_items": 31
+            },
+            {
+              "name": "duration_ms",
+              "type": "integer",
+              "min": 100,
+              "max": 10000
+            }
+          ],
+          "returns": "job_id or nil,error_code",
+          "requires": [
+            "bluetooth",
+            "jobs",
+            "data"
+          ],
+          "result": "write",
+          "gate": "Exact Data Engine extension AND ordinary bluetooth/jobs/data permissions; existing hardware hash and advertise(name,service_uuid) unchanged."
+        }
+      }
+    }
+  }
+}

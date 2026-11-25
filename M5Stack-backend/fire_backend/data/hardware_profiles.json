@@ -1,0 +1,425 @@
+{
+  "schema": 1,
+  "reviewed_on": "2026-11-25",
+  "board_source": "https://docs.m5stack.com/en/core/Fire",
+  "rules": [
+    "Documentation is not physical verification or a capability grant.",
+    "Use actual announced methods, dependencies and resource allowlists.",
+    "FIRE GPIO16/17 belongs to PSRAM; keep OS pins and internal I2C devices protected.",
+    "An I2C ACK/address alone does not identify a chip or wiring; unknown devices require evidence.",
+    "Generic bus access enables future protocols; timing-critical bit banging needs a native adapter or hardware bridge.",
+    "Never auto-promote AI guesses, simulation or unconfirmed user reports to physically verified knowledge."
+  ],
+  "profiles": [
+    {
+      "id": "env-family",
+      "label": "M5 ENV I/II/III/IV/Pro",
+      "aliases": [
+        "unit env",
+        "env-iii",
+        "env-iv",
+        "env-pro",
+        "sht40",
+        "sht30",
+        "qmp6988",
+        "bme688",
+        "bmp280"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "ENV revisions use different chips; choose the actual model, not just an ACK at the same address.",
+        "ENV I: DHT12 0x5c + BMP280 0x76; II: SHT30 0x44 + BMP280 0x76; III: SHT30 0x44 + QMP6988 0x70; IV: SHT40 0x44 + BMP280 0x76; Pro: BME688 0x77.",
+        "Use model-specific commands, conversion delays, CRC/calibration and declared external write addresses. Never write internal OS devices."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_ENV-IV"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        92,
+        118,
+        68,
+        112,
+        119
+      ]
+    },
+    {
+      "id": "adc-unit",
+      "label": "M5 Unit ADC / ADC v1.1",
+      "aliases": [
+        "unit adc",
+        "ads1100",
+        "ads1110"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "Original ADC uses ADS1100 (default 0x48); ADC v1.1 uses ADS1110. Confirm revision and address.",
+        "Gain, reference and conversion rates differ. Preserve calibration/raw ADC counts; do not assume board GPIO voltage limits match module input range."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/adc",
+        "https://docs.m5stack.com/en/unit/Unit_ADC_v1.1"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false
+    },
+    {
+      "id": "ina226",
+      "label": "M5 INA226 power monitor",
+      "aliases": [
+        "ina226"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "INA226-1A and -10A units use I2C 0x41; their shunt values differ (80mOhm vs5mOhm).",
+        "Use exact module range/shunt/calibration; never infer wiring, isolation or a safe circuit from an I2C ACK. Raw bus/shunt readings and calibration belong in dataset metadata."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_INA226-1A"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        65
+      ]
+    },
+    {
+      "id": "tof",
+      "label": "M5 ToF / ToF4M",
+      "aliases": [
+        "unit tof",
+        "tof4m",
+        "vl53l0x",
+        "vl53l1c"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "ToF uses VL53L0X; ToF4M uses VL53L1CXV0FY/1. Both default to0x29 but require different drivers.",
+        "Model initialization/ranging is not a single generic register read. Address conflicts need verified enable pins or an I2C multiplexer."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_ToF",
+        "https://docs.m5stack.com/en/unit/Unit_ToF4M"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        41
+      ]
+    },
+    {
+      "id": "color",
+      "label": "M5 Unit Color",
+      "aliases": [
+        "unit color",
+        "tcs3472"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "TCS3472, I2C0x29, RGBC measurements; record gain/integration/light configuration with samples.",
+        "Shares the default address with ToF; require explicit actual model and bus topology."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_Color"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        41
+      ]
+    },
+    {
+      "id": "dac-unit",
+      "label": "M5 Unit DAC",
+      "aliases": [
+        "unit dac",
+        "mcp4725"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "MCP4725 12-bit DAC, I2C0x60. Output changes are physical actions.",
+        "Prefer volatile output writes for normal operation; EEPROM persistence is a separate explicit requirement. Confirm output range/load before use."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/dac"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        96
+      ]
+    },
+    {
+      "id": "pahub",
+      "label": "M5 PaHub I2C expansion",
+      "aliases": [
+        "pahub",
+        "tca9548a"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "TCA9548A-based six-port PaHub, default I2C0x70; select channel before downstream transactions.",
+        "Channel selection and device transaction must remain in the same logical acquisition sequence. Address/topology conflicts are not solved by parallel uncoordinated app writes."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_PaHub"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        112
+      ]
+    },
+    {
+      "id": "encoder",
+      "label": "M5 Unit Encoder",
+      "aliases": [
+        "unit encoder",
+        "u135"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "STM32-based I2C0x40 module handles the real-time rotary acquisition; Lua reads the module protocol, not raw high-rate GPIO pulses.",
+        "Do not confuse encoder registers/LED writes with other 0x40 devices; identify exact unit."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_Encoder"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        64
+      ]
+    },
+    {
+      "id": "weight-i2c",
+      "label": "M5 Weight-I2C",
+      "aliases": [
+        "weight-i2c",
+        "weight i2c",
+        "u180"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "STM32+HX711 module uses I2C0x26 and its own documented register protocol.",
+        "Tare, calibration, raw ADC count and load-cell setup are separate facts; do not reuse the GPIO-only HX711 interface."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_Weight-I2C"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        38
+      ]
+    },
+    {
+      "id": "weight-gpio",
+      "label": "M5 GPIO Weight / bare HX711",
+      "aliases": [
+        "unit weight",
+        "hx711"
+      ],
+      "required_services": [
+        "gpio",
+        "jobs"
+      ],
+      "facts": [
+        "Bare HX711/Unit Weight uses clock/data GPIO timing; it is not an I2C register device.",
+        "No Lua delay/microsecond bit-banging API is granted. Use an explicitly implemented native timing adapter or a supported I2C bridge/module; normal GPIO calls alone do not establish support."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_Weight"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "native_adapter_required": true,
+      "exclude_aliases": [
+        "weight-i2c",
+        "weight i2c"
+      ]
+    },
+    {
+      "id": "gps-uart",
+      "label": "M5 GPS / UART GNSS",
+      "aliases": [
+        "unit gps",
+        "at6558",
+        "gnss",
+        "nmea"
+      ],
+      "required_services": [
+        "uart",
+        "jobs"
+      ],
+      "facts": [
+        "Unit GPS contains AT6558; documented default is9600 baud, no parity, one stop bit. Parse complete frames/checksums and reject invalid fixes.",
+        "FIRE has no built-in GPS. Its stock Port C16/17 conflicts with PSRAM; remap to actual announced free pins and verify wiring."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_GPS"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false
+    },
+    {
+      "id": "rs485",
+      "label": "RS485 / Modbus adapter",
+      "aliases": [
+        "rs485",
+        "modbus"
+      ],
+      "required_services": [
+        "uart",
+        "jobs"
+      ],
+      "facts": [
+        "RS485 requires a suitable electrical transceiver; UART bytes are not RS485 electrical signaling.",
+        "Confirm variant, supply, direction control/automatic direction, baud/parity, addressing and protocol CRC. Read-only diagnostic polls first; writes require the requested app behavior. Stock FIRE Port C16/17 is reserved by PSRAM."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_RS485"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false
+    },
+    {
+      "id": "commu-can",
+      "label": "M5 COMMU / external CAN",
+      "aliases": [
+        "commu",
+        "mcp2515",
+        "canbus",
+        "can-bus"
+      ],
+      "required_services": [
+        "spi",
+        "jobs"
+      ],
+      "facts": [
+        "COMMU contains MCP2515 CAN and an RS485 interface. SPI access alone is not a complete CAN driver.",
+        "Require correct oscillator/bitrate, transceiver, termination, wiring and OS-approved shared-bus/CS policy. Do not claim a high-level CAN API absent from actual capabilities."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/module/Module_COMMU"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false
+    },
+    {
+      "id": "rfid",
+      "label": "M5 Unit RFID",
+      "aliases": [
+        "unit rfid",
+        "mfrc522"
+      ],
+      "required_services": [
+        "i2c",
+        "jobs"
+      ],
+      "facts": [
+        "M5 Unit RFID is an MFRC522-based13.56MHz I2C module at0x28; a generic bare RC522 board may use a different interface.",
+        "Use the exact unit protocol. Card reads and writes are separate actions; unavailable keys/card types must not be replaced by fabricated data."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/unit/Unit_RFID"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false,
+      "i2c_addresses": [
+        40
+      ]
+    },
+    {
+      "id": "fire-imu",
+      "label": "FIRE built-in IMU / vibration",
+      "aliases": [
+        "imu",
+        "vibrasjon",
+        "vibration"
+      ],
+      "required_services": [
+        "imu"
+      ],
+      "facts": [
+        "Actual firmware capabilities determine available acceleration/gyro/temperature and Data Engine capture sources. Capture actual timestamps, dropped samples, rate and units.",
+        "Requested sampling rate/FPS is not measured uniform sample timing. Spectrum requires valid time basis and an adequate bounded window; do not claim oscilloscope-class bandwidth."
+      ],
+      "source_urls": [
+        "https://docs.m5stack.com/en/core/Fire"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false
+    },
+    {
+      "id": "ble-tool",
+      "label": "ESP32 BLE tools",
+      "aliases": [
+        "ble",
+        "bluetooth"
+      ],
+      "required_services": [
+        "bluetooth",
+        "jobs"
+      ],
+      "facts": [
+        "ESP32 shares its2.4GHz radio between Wi-Fi and BLE. Bound scan/advertising/GATT work and report busy/unavailable instead of blocking the OS.",
+        "Raw advertisements, GATT and classic SPP are different protocols. An encrypted/proprietary light may require pairing/keys; recording packets does not prove replay/control. Only actual advertised methods are allowed."
+      ],
+      "source_urls": [
+        "https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/coexist.html"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false
+    },
+    {
+      "id": "fire-adc",
+      "label": "FIRE GPIO/analog inputs",
+      "aliases": [
+        "gpio36",
+        "gpio 36",
+        "adc2"
+      ],
+      "required_services": [
+        "adc"
+      ],
+      "facts": [
+        "Only advertised ADC pins are allowed; microphone and other OS pins stay reserved. A disconnected/floating pin is not a valid reference measurement.",
+        "ESP32 ADC2 conflicts with active Wi-Fi. Use permitted ADC1/external ADC and actual calibration; never infer volts from raw counts without the configured scale."
+      ],
+      "source_urls": [
+        "https://docs.espressif.com/projects/esp-faq/en/latest/software-framework/peripherals/adc.html"
+      ],
+      "evidence": "manufacturer_documentation",
+      "physical_verified": false
+    }
+  ]
+}
