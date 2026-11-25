@@ -4312,6 +4312,7 @@ bool FireOS::rollbackLuaPackage(const String& packageId,const String& archiveHas
     const String folder=source.substring(0,source.lastIndexOf('/')),app=sdBaseName(folder);
     if(!fire_lua_install::id(app.c_str())) return false;
     const String previous="/apps/.previous-"+app;
+    const String temporary="/apps/.rollback-"+app;
     for(unsigned version=0;version<2;++version) {
       const String selected=version?previous:folder;
       fire_lua_install::Identity identity;
@@ -4330,11 +4331,11 @@ bool FireOS::rollbackLuaPackage(const String& packageId,const String& archiveHas
         if(fire_lua_install::id(project.c_str(),true)) strlcpy(identity.project,project.c_str(),sizeof(identity.project));
         if(!fire_lua_install::writeVerified(SD,(selected+"/"+fire_lua_install::kFilename).c_str(),identity)) return false;
       }
-      if(version && !fire_lua_install::swapPrevious(SD,folder,previous,String("/apps/.rollback-")+app)) return false;
+      if(version && !fire_lua_install::swapPrevious(SD,folder,previous,temporary)) return false;
       fire_lua_install::Identity back;
       const bool verified=fire_lua_install::read(SD,(folder+"/"+fire_lua_install::kFilename).c_str(),back)==fire_lua_install::Read::Valid &&
         back==identity && filesMatch(folder,app);
-      if(!verified && version) fire_lua_install::swapPrevious(SD,folder,previous,String("/apps/.rollback-")+app);
+      if(!verified && version) fire_lua_install::swapPrevious(SD,folder,previous,temporary);
       return verified;
     }
     return false;
