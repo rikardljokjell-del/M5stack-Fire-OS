@@ -18,7 +18,51 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-### Polert FIRE OS og Home – installert 1.4.0-rc3
+### FIRE Data Engine – installert 1.5.0-rc2, praktisk appprøve pågår
+
+Data Engine er integrert med eksisterende Lua-jobber, SD, transport, Runtime AI
+og AI Developer. Appene kan lagre tidsindekserte opptak og hendelser, behandle
+data med statistikk, filtrering, spektrum og sammenligning, og sende relevant
+grunnlag til videreutvikling. Improve, ny app fra eksisterende app, tilbakemelding
+og Resume bruker kilde-/eierbundet, frosset kontekst. Vanlige bygge-, installasjons-
+og kjørebekreftelser beholdes. Data og innstillinger følger samme app ved oppdatering.
+
+Generelle bussgrensesnitt og et selektivt produsentregister utvider relevante
+maskinvareopplysninger uten å annonsere funksjoner som enheten ikke tilbyr.
+Tre representative BLE-, elektronikk- og IMU-forløp er testet med simulert
+nettklient; dette er ikke fysisk kontroll av eksternt utstyr.
+
+Backendens fullkjøring ga 1097 PASS og tre utdaterte testforutsetninger.
+Rettede forventninger og de siste avgrensede adapterendringene har 120/120
+berørte tester PASS. Separat utpakket wheel kjører fra pakkede ressurser.
+CI45709316709 på kilde `8ab274f` har 25 native tester og tre bygg PASS;
+strenge C++-kontroller består separat. Statisk RAM er økt med åtte byte,
+og IRAM-marginen er uendret. Eksisterende tids-/minne-/I/O-grenser beholdes.
+
+Eksakt signert RC2 er fysisk tilbakeavlest med MD5/SHA256 og kjører i B50
+VALID/CRC. 1.4.0-rc3 A49 er beholdt. Helseprøve 45,021 s og vanlig omstart
+35,097 s ga ingen panic/abort/watchdog. Dette bekrefter firmware/oppstart;
+måling → SD → analyse → Improve prøves nå separat med en vanlig Lua-app.
+Ingen betalte AI-kall er utført i denne oppgraderingen så langt.
+
+«Måledata kontroll» er ordinært installert og har gitt ekte, kildebundet
+started/healthy på RC2. Den var fortsatt healthy etter 20 sekunder. Det er
+foreløpig ikke mottatt noen dataforespørsel eller noe datasett fra opptaket.
+Skjermstatusen må avklare den lokale fasen før videre prøve; dette resultatet
+føres ikke som bestått opptak, synkronisering, analyse eller Improve.
+RC2-utgivelsesfilene holdes foreløpig private; offentlig katalog er ikke flyttet.
+
+Fersk faktisk HELLO annonserer Data Engine `15a9ff7e…` med IMU 50/100 Hz,
+mikrofon 8/16 kHz og BLE-opptak. SDK- og Runtime AI-hashene er uendret.
+SD er klar; alle 12 apper er rapportert etter forespørselen på gjeldende
+boot/forbindelse. Alle sju opprinnelige app-ID-er er bevart. Dette er ikke
+en påstand om uendrede versjoner eller fysisk testing av hver opptakskilde.
+
+Se [praktisk veiledning](M5Stack-backend/docs/DATA_ENGINE.md),
+[maskinvareoversikt](M5Stack-backend/docs/HARDWARE_COMPATIBILITY.md) og
+[fysisk rapport](M5Stack-device/PHYSICAL_DATA_ENGINE_2026-11-25.md).
+
+### Polert FIRE OS og Home – tidligere installert 1.4.0-rc3
 
 Fire appkort per side og felles utforming i OS/Home er på plass. Tekst og
 ikoner er kantutjevnet, og kort/knapper har jevnere avrundede kanter. Brukeren
@@ -69,7 +113,7 @@ Se [Runtime AI og teststeg](M5Stack-backend/docs/RUNTIME_AI.md). Tidligere
 appspesifikke 24 ms-feil er ikke friskmeldt. Den aktuelle GitHub → SD-prøven er nå bestått, se øverst.
 
 
-### FIRE App SDK – under implementering
+### FIRE App SDK – tidligere utviklings- og testhistorikk
 
 SDK-arbeidet er godkjent og pågår i eksisterende firmware/backend. Felles
 grafikk-/fontdata, UI-kit, temaer og kontrakt ligger i

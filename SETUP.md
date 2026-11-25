@@ -61,6 +61,14 @@ designinstrukser. Eksisterende apper beholdes.
 Forhåndsvisningen bruker PC-simulatoren. En app som ser riktig ut der, må
 fortsatt prøves på FIRE for fysisk respons, sensorer og lyd.
 
+### Målinger og datadrevet forbedring
+
+Med oppdatert backend og FIRE OS 1.5 kan apper bruke Data Engine. Opptak og
+logger lagres automatisk på SD og følger appen til analyse og **Improve app**.
+Du trenger ikke en ny API-nøkkel eller manuell eksport. Se den korte
+[arbeidsflyten og kontrollappen](M5Stack-backend/docs/DATA_ENGINE.md), og
+[status](STATUS.md) for hva som faktisk er fysisk prøvd.
+
 ## 2. Bruk AI og Studio fra andre nett
 
 Dette oppsettet gjøres én gang. Du trenger en Cloudflare-konto, et domene under
