@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <array>
+#include <vector>
 using namespace fire_app_graphics;
 struct Surface {
   std::array<uint16_t,kWidth*kHeight> pixels{};
@@ -22,7 +23,51 @@ static bool roundedContains(int px,int py,int x,int y,int w,int h,int radius) {
   if(yy<2*radius) dy=2*radius-yy;else if(yy>2*(h-radius)) dy=yy-2*(h-radius);
   return dx*dx+dy*dy<=4*radius*radius;
 }
+
+// Frozen pre-reuse arc algorithm. Its four independently calculated polar
+// points are the oracle for both pixels and the exact ordered fill operations.
+static Point oldPolar(int x,int y,int radius,int degrees) {
+  const double radians=degrees*0.017453292519943295;
+  return {int16_t(x+int(lround(cos(radians)*radius))),int16_t(y+int(lround(sin(radians)*radius)))};
+}
+template<class Target>
+static void oldArc(Target& surface,int x,int y,int radius,int start,int end,uint16_t color,int thickness) {
+  if(radius<1 || radius>160 || start<0 || end>360 || end<start || thickness<1 || thickness>radius) return;
+  for(int angle=start;angle<end;angle+=3) {
+    const int next=angle+3<end?angle+3:end;
+    const Point quad[]={oldPolar(x,y,radius,angle),oldPolar(x,y,radius,next),
+                        oldPolar(x,y,radius-thickness,next),oldPolar(x,y,radius-thickness,angle)};
+    polygon(surface,quad,4,color);
+  }
+}
+struct ArcSurface:Surface {
+  std::vector<std::array<int,5>> operations;
+  void fillRect(int x,int y,int w,int h,uint16_t color) {
+    operations.push_back({x,y,w,h,color});Surface::fillRect(x,y,w,h,color);
+  }
+};
+static void arcEquivalence() {
+  const auto check=[](int x,int y,int radius,int start,int end,int thickness,uint16_t color) {
+    static ArcSurface expected,actual;expected=ArcSurface{};actual=ArcSurface{};
+    expected.pixels.fill(0xa55a);actual.pixels.fill(0xa55a);
+    oldArc(expected,x,y,radius,start,end,color,thickness);
+    arc(actual,x,y,radius,start,end,color,thickness);
+    assert(expected.operations==actual.operations && expected.pixels==actual.pixels);
+  };
+  const int centers[][2]={{-1024,-1024},{0,0},{160,120},{319,239},{1024,1024}};
+  const int angles[][2]={{0,360},{0,1},{1,2},{1,4},{2,5},{89,94},{90,180},{179,182},{270,359},{359,360},{3,3}};
+  unsigned index=0;
+  for(int radius:{1,2,7,20,40,56,160}) for(int thickness:{1,radius/2+1,radius}) for(const auto& range:angles) {
+    const auto& center=centers[index%5];
+    check(center[0],center[1],radius,range[0],range[1],thickness,index&1?0:0xf81f);++index;
+  }
+  const int invalid[][4]={{0,0,360,1},{161,0,360,1},{20,-1,360,1},{20,0,361,1},
+                         {20,180,90,1},{20,0,360,0},{20,0,360,21}};
+  for(const auto& args:invalid) check(160,120,args[0],args[1],args[2],args[3],7);
+  puts("PASS arc previous-algorithm exact ordered operations and pixel equivalence");
+}
 int main() {
+  arcEquivalence();
   auto r=clippedRect(-4,-2,8,5);assert(r.x==0 && r.y==0 && r.w==4 && r.h==3);
   r=clippedRect(INT_MAX,0,INT_MAX,1);assert(r.w==0);
   r=clippedRect(INT_MIN,INT_MIN,INT_MAX,INT_MAX);assert(r.w==0 && r.h==0);

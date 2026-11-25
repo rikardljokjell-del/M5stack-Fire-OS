@@ -35,15 +35,21 @@ piksler for alle seks gallerisider og fire representative appkilder.
 Den samordnede native endringen avventer nytt CI-bygg og fysisk måling.
 Koordinatoren har prøvd faktisk Studio-forhåndsvisning med virtuelle A/B/C,
 nullstilling og tidsfremdrift. Dette er PC-verifikasjon. De private
-SDK-prøvene på FIRE stoppet ved den uendrede 12 ms callbackgrensen; ren SDK-
-firmware er derfor ikke godkjent eller offentlig publisert. Enheten er
-ført tilbake til RC9 i A/app0, sekvens 31 VALID/CRC, med COM3 lukket.
+De første SDK-prøvene stoppet ved 12 ms. Etter kontrollert kalibrering bestod
+første faktiske galleriskjerm; tung buegrafikk traff fortsatt grensen.
+Ren CI-testfirmware **1.3.0-rc1 kjører nå i B34 VALID/CRC**, med RC9 beholdt
+i A33 som tilbakefall og COM lukket. Dette er en lokal testkandidat, ikke
+en godkjent offentlig SDK-leveranse.
 Arbeidet er avgrenset til ferdigstilling av SDK-fundament, ytelse og fysisk
 kontroll; nye funksjoner og betalte appforsøk er stanset.
 Tegnerammen kalibreres nå uttrykkelig til 24 ms for SDK-update etter målte
 15–17 ms galleriframes. Eldre update/knappetrykk beholder 12 ms; oppstart
 beholder faktisk eksisterende 250 ms. De øvrige ressursgrensene endres ikke.
 Ny fysisk prøve av tegning, OS-respons og feilavbrudd kreves før publisering.
+Brukerens faktiske redigering fra API0.2 til SDK1.0 er ferdigbygd med samme
+app-ID/prosjekt og ny versjon. Normal SDK-pakkeinstallasjon avdekket deretter
+en manglende SDK-gren i firmwareinstalleren. En avgrenset retting og gjenbruk
+av trigonometriske buepunkter klargjøres som RC2; brukerens pakke beholdes.
 Den første AI-kohorten ga ingen godkjente leveranser; dette skjules ikke av grønne
 adaptertester. Se [den løpende SDK-evalueringen](M5Stack-backend/docs/FIRE_APP_SDK_EVALUATION.md).
 

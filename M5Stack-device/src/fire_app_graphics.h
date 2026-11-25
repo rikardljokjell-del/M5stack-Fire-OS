@@ -142,11 +142,20 @@ inline Point polar(int x,int y,int radius,int degrees) {
 template<class Surface>
 void arc(Surface& surface,int x,int y,int radius,int start,int end,uint16_t color,int thickness) {
   if (radius<1 || radius>160 || start<0 || end>360 || end<start || thickness<1 || thickness>radius) return;
+  if (start==end) return;
+  const auto pointsAt=[&](int degrees,Point& outer,Point& inner) {
+    const double radians=degrees*0.017453292519943295;
+    const double c=cos(radians),s=sin(radians);
+    outer={int16_t(x+int(lround(c*radius))),int16_t(y+int(lround(s*radius)))};
+    inner={int16_t(x+int(lround(c*(radius-thickness)))),int16_t(y+int(lround(s*(radius-thickness))))};
+  };
+  Point outer,inner;pointsAt(start,outer,inner);
   for (int angle=start;angle<end;angle+=3) {
     const int next=angle+3<end?angle+3:end;
-    const Point quad[]={polar(x,y,radius,angle),polar(x,y,radius,next),
-                        polar(x,y,radius-thickness,next),polar(x,y,radius-thickness,angle)};
+    Point nextOuter,nextInner;pointsAt(next,nextOuter,nextInner);
+    const Point quad[]={outer,nextOuter,nextInner,inner};
     polygon(surface,quad,4,color);
+    outer=nextOuter;inner=nextInner;
   }
 }
 

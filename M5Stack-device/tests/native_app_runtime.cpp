@@ -291,11 +291,48 @@ static void callbackTimingTests() {
   puts("PASS SDK update24ms legacy update/button12ms preserved init250ms exact native elapsed and runaway guard");
 }
 
+static void manifestApiTests() {
+  const auto accepted=[](const char* version,const char* contract) {
+    return FireLuaRuntime::supportsManifestApi(version,version?strlen(version):0,
+                                               contract,contract?strlen(contract):0);
+  };
+  const char* hardware=FireLuaRuntime::hardwareApiContract();
+  const char* sdk=FireLuaRuntime::appSdkContract();
+  assert(accepted("fire-lua-0.1",nullptr));
+  assert(accepted("fire-lua-0.1","") && accepted("fire-lua-0.1","legacy ignored contract"));
+  assert(accepted(FireLuaRuntime::hardwareApiVersion(),hardware));
+  assert(accepted(FireLuaRuntime::appSdkVersion(),sdk));
+  assert(!accepted(FireLuaRuntime::hardwareApiVersion(),sdk));
+  assert(!accepted(FireLuaRuntime::appSdkVersion(),hardware));
+  for(const char* version:{FireLuaRuntime::hardwareApiVersion(),FireLuaRuntime::appSdkVersion()}) {
+    assert(!accepted(version,nullptr) && !accepted(version,""));
+    assert(!accepted(version,"0") && !accepted(version,(std::string(sdk)+"0").c_str()));
+    std::string wrong=sdk;wrong[0]=wrong[0]=='0'?'1':'0';assert(!accepted(version,wrong.c_str()));
+    assert(!accepted(version,"64d1f826d3ac1af5fa041a7aaf1a82a8af6dd1f57ea30ae1020421db34f67857"));
+  }
+  assert(!accepted(nullptr,sdk) && !accepted("",sdk));
+  assert(!accepted("fire-lua-0.3",hardware) && !accepted("fire-app-sdk-2.0",sdk));
+  assert(!accepted("fire-app-sdk-1.0 ",sdk) && !accepted("FIRE-APP-SDK-1.0",sdk));
+  const std::string nulSuffix("\0suffix",7);
+  for(const char* version:{"fire-lua-0.1",FireLuaRuntime::hardwareApiVersion(),FireLuaRuntime::appSdkVersion()}) {
+    const std::string badVersion=std::string(version)+nulSuffix;
+    assert(!FireLuaRuntime::supportsManifestApi(badVersion.data(),badVersion.size(),sdk,strlen(sdk)));
+  }
+  for(const char* version:{FireLuaRuntime::hardwareApiVersion(),FireLuaRuntime::appSdkVersion()}) {
+    const char* correct=!strcmp(version,FireLuaRuntime::hardwareApiVersion())?hardware:sdk;
+    const std::string badContract=std::string(correct)+nulSuffix;
+    assert(!FireLuaRuntime::supportsManifestApi(version,strlen(version),badContract.data(),badContract.size()));
+    assert(!FireLuaRuntime::supportsManifestApi(version,strlen(version),badContract.data(),strlen(correct)+1));
+  }
+  puts("PASS installer manifest API gate exact SDK/current contract, legacy preservation and invalid/stale/cross-profile rejection");
+}
+
 int main(int argc,char** argv) {
   if(argc==2 && !strcmp(argv[1],"--old-instruction-counter")) {instructionResetTest(true);return 0;}
   static_assert(sizeof(lua_Integer)==4 && sizeof(lua_Number)==4,"match ESP32 Lua numeric profile");
   assert(!strcmp(FireLuaRuntime::hardwareApiContract(),"0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40"));
   assert(!strcmp(FireLuaRuntime::appSdkContract(),FireSdkData::kContract));
+  manifestApiTests();
   instructionResetTest(false);backgroundTests();
   uiLoadMeasurement(false);uiLoadMeasurement(true);
   assert(run("fire.ui.screen('FIRE');fire.ui.card(10,60,300,100,'Status',42)"));

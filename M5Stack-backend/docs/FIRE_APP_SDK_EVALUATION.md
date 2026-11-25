@@ -491,6 +491,48 @@ The final draft contract is
 Glyphs, assets, UI source and palette metadata are byte-identical to the
 preceding snapshot. Implementation tests and physical acceptance are pending.
 
+SDKQA7 subsequently completed gallery1 (83 frames/6.296s, maximum callback
+22,868us). Its actual320x240 RGB565 canvas was captured with CRC/SHA checking;
+the coordinator inspected the four-card screen and found readable labels and
+no visible clipping. Gallery2 then reached49,409us before its guard; five arc
+calls accounted for42,060 Host us. Remaining scenes and the planned negative
+case did not run. No complete27-scene success is claimed.
+
+At the user's explicit request for practical testing, clean CI9bd925b was
+installed locally in B34 VALID/CRC, with full-slot CI-prefix/FF readback and
+RC9 A33 retained untouched. Ordinary reboot completed and COM closed. All36
+old public firmware artifacts remain byte-identical; this local test image
+was not published. The actual normal image is2,654,640 bytes, SHA256
+`4e4976da2470548431bbbe0c1af27110b08a652c7a8505baf690e95d4600a3ce`.
+
+The final backend timing full run reported963 passes and one Windows test-thread
+file-read race in340.77s. Only the lifecycle test was corrected to read through
+the backend event loop;12 affected tests then passed. Production files stayed
+unchanged. V5/current0e331 was activated with unchanged settings/credential
+fingerprints and one listener. Its179 targeted timing/context checks passed.
+
+A manually authored, explicitly mock-origin demo passed11 local profiles,
+but its first real normal installation received install_failed with the
+combined manifest/checksum error. No demo RUN was sent. The root cause was
+the firmware PackageManager API allowlist still accepting only0.1/0.2, despite
+SDK support in the runtime and HELLO. The SDK ZIP/source checksums were correct.
+The user then chose to test New App and real editing directly; demo delivery
+was stopped and no AI-generation proof is attributed to that manual artifact.
+
+The user's actual existing-app update did finish READY: same project/app-ID,
+legacy0.2 version0.1.4 to SDK1.0/current0e331 version0.1.5, with real fire.ui
+usage. It used the user's ordinary confirmations and three attempts. No own
+agent AI calls were made. This proves the backend update profile migration,
+not physical installation or gameplay/UI correctness.
+
+RC2 fixes only the installer API predicate (current SDK hash required, exact
+length checks, legacy/hash/source/resource/data-preservation gates retained)
+and reuses identical double sin/cos endpoint pairs in the existing3-degree
+arc algorithm. The latter has an ordered-operation/pixel oracle against the
+old algorithm; target speed is still unmeasured. No SDK contract/budget or
+backend restart is needed. CI and the user's ordinary install/run are the
+next gates; no extra synthetic physical matrix is scheduled.
+
 ## Compile-time footprint
 
 Exact production CI linker maps provide this compile-time comparison:

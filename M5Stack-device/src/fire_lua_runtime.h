@@ -160,6 +160,8 @@ class FireLuaRuntime {
   static const char* hardwareApiVersion() { return "fire-lua-0.2"; }
   static const char* appSdkVersion();
   static const char* appSdkContract();
+  static bool supportsManifestApi(const char* version, size_t versionLength,
+                                  const char* contract, size_t contractLength);
   const char* lastPhase() const;
 
  private:

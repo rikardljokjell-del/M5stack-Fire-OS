@@ -88,6 +88,19 @@ const char* FireLuaRuntime::hardwareApiContract() {
 const char* FireLuaRuntime::appSdkVersion() {return FireSdkData::kVersion;}
 const char* FireLuaRuntime::appSdkContract() {return FireSdkData::kContract;}
 
+bool FireLuaRuntime::supportsManifestApi(const char* version, size_t versionLength,
+                                        const char* contract, size_t contractLength) {
+  const auto exact=[](const char* value, size_t length, const char* expected) {
+    return value && length==strlen(expected) && !memcmp(value, expected, length);
+  };
+  // Legacy0.1 did not require an API contract; retain that installation rule.
+  if (exact(version, versionLength, "fire-lua-0.1")) return true;
+  if (exact(version, versionLength, hardwareApiVersion()))
+    return exact(contract, contractLength, hardwareApiContract());
+  return exact(version, versionLength, appSdkVersion()) &&
+         exact(contract, contractLength, appSdkContract());
+}
+
 void* FireLuaRuntime::allocator(void* user, void* pointer, size_t oldSize,
                                 size_t newSize) {
   auto* runtime = static_cast<FireLuaRuntime*>(user);

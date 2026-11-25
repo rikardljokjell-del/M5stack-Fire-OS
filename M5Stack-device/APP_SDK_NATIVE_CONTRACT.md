@@ -5,9 +5,12 @@ Canonical UI/fonts/assets/licenses live in [app_sdk](../M5Stack-backend/fire_bac
 `M5Stack-backend/scripts/build_app_sdk.py --check` checks the generated
 `src/fire_app_sdk_data.h` against those sources. Do not edit the generated header.
 
-Private SDK probes have run on FIRE, but the gallery still exceeds the unchanged
-callback guard. No clean SDK release is approved or installed. RC9 is retained
-in A/app0, sequence29 VALID/CRC, with COM closed. The current
+Private SDK probes have run on FIRE. Gallery1 passed the calibrated24ms guard;
+gallery2's arc rendering remains too slow. Clean CI9bd925b is now installed as
+a LOCAL TEST CANDIDATE in B34 VALID/CRC, retaining RC9 in A33, with COM closed.
+It is not a production-approved public SDK release. Normal SDK package delivery
+found a missing installer API gate; the bounded RC2 correction is under CI.
+The current
 physical RC9 delivery remains documented in PHYSICAL_SD_2026-11-25.md. The newly
 reported firmware SD-write fault is a separate deferred TODO; this SDK change
 does not investigate or repair firmware download, SD storage or OTA.
