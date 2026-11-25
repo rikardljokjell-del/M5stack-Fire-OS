@@ -16,6 +16,7 @@ from importlib import metadata
 from pathlib import Path
 from openai import APIStatusError,APIConnectionError
 
+from .sdk_context import normalize as sdk_context_normalize,VERSION as SDK_POLICY_VERSION
 from .app_sdk import SDK_VERSION,SDK_CONTRACT,package_api,selected_context
 from .models import Manifest,AppTestSequence,GeneratedApp
 from .storage import canonical
@@ -102,6 +103,10 @@ async def validate_release(app, store, build_id):
     visual=await asyncio.to_thread(save_screenshots,visual_candidates,store,build_id,sha256(app['main_lua'].encode('utf-8')))
     return {**results[0], "profiles": results, "resources_used":resources,"io_calls":calls,"jobs_started":jobs,"suite": "release-v4", "rendering_contract": "cleared-sprite-v1", "physical_verified": False,
             'visual_evidence':visual,
+            'negotiated_contract':{'api_version':app.get('api_version',BASE_API),'api_contract':app.get('api_contract'),
+                'sdk_policy_version':SDK_POLICY_VERSION if app.get('api_version')==SDK_VERSION else None,
+                'limits':experience_contract({'services':app['required_services'],'max_memory':app.get('max_memory',131072),
+                    'app_sdk':{'version':SDK_VERSION,'contract':SDK_CONTRACT} if app.get('api_version')==SDK_VERSION else None})['limits']},
             "native_host_policy":app.get("native_host_policy"),
             "native_numeric_parity": False}
 
@@ -279,7 +284,7 @@ class Builder:
         if APP_QUALITY_POLICY not in context:
             context += APP_QUALITY_POLICY
         if DEVELOPMENT_POLICY not in context:context+=DEVELOPMENT_POLICY
-        sdk_context=selected_context(build["summary"],capabilities)
+        sdk_context=selected_context(build["summary"],capabilities,include_native=False)
         if sdk_context and sdk_context not in context:context+=sdk_context
         ux_contract=experience_contract(capabilities)
         context+="\nBackend-authored FIRE experience contract:\n"+json.dumps(ux_contract,ensure_ascii=False)
@@ -287,6 +292,8 @@ class Builder:
         # Also applies to direct Builder callers, new apps and the first attempt.
         learned_policy=Quality(self.store).policy()
         if learned_policy and learned_policy not in context:context+=learned_policy
+        base_manifest=self.store.get('packages',project['latest_package'])['manifest'] if project.get('latest_package') else None
+        context=sdk_context_normalize(context,capabilities=capabilities,summary=build['summary'],base_manifest=base_manifest)
         max_corrections=getattr(self.settings,'fire_max_corrections',0) or None
         offset=build.get('resume_from_attempt',0) if continuing else 0
         max_attempts=offset+max_corrections+1 if max_corrections is not None else None

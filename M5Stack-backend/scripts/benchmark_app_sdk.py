@@ -17,6 +17,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 
 from fire_backend.ai import OpenAIProvider
 from fire_backend.app_sdk import SDK_CONTRACT, data_fingerprint
+from fire_backend.sdk_context import VERSION as SDK_POLICY_VERSION
 from fire_backend.config import Settings
 from fire_backend.desktop_config import DesktopConfig, WindowsVault, data_directory
 from fire_backend.model_catalog import CODE_MODELS, PRICES, PRICING_DATE, SOURCE
@@ -34,6 +35,8 @@ CASES=(('stopwatch','Lag en stoppeklokke.'),('weather','Lag en værapp.'),
        ('space','Lag et space shooter-spill.'),('platform','Lag et plattformspill.'),
        ('adventure','Lag et eventyrspill.'))
 CONTROLS={'stopwatch','calculator','racing'}
+# Same literal cases and models, with tool/sensor/game sentinels first.
+ORDER=('stopwatch','dashboard','racing','weather','calculator','instrument','snake','tetris','space','platform','adventure')
 
 
 def profile():
@@ -55,8 +58,9 @@ def plan(config,key_present):
             for role,model in [('generate',config.code_model),('review',config.review_model)]}
     return dict(execute=False,key_present=key_present,models=models,pricing_date=PRICING_DATE,
         pricing_source=SOURCE,pricing_basis='existing reviewed local catalog; estimated list-price USD, not invoice',
-        sdk_contract=SDK_CONTRACT,sdk_data_sha256=data_fingerprint(),
+        sdk_contract=SDK_CONTRACT,sdk_data_sha256=data_fingerprint(),sdk_policy_version=SDK_POLICY_VERSION,
         cases=[{'case':key,'request':text,'profiles':['legacy','sdk'] if key in CONTROLS else ['sdk']} for key,text in CASES],
+        case_order=list(ORDER),early_stop='two or more failures in first three SDK cases',
         builds=14,max_generations_per_build=2,paid_operations=['generate','review'],
         max_response_format_retries=1,max_transport_retries=4,max_actual_api_requests_per_build=8,
         evaluation_total_budget_usd=1.0,evaluation_build_budget_usd=.25,
@@ -143,15 +147,16 @@ async def run_case(root,config,key,label,request,variant):
     finally:await backend.close()
 
 
-async def execute(root,config,key):
+async def execute(root,config,key,*,prior_estimated_usd=0):
     root.mkdir(parents=True,exist_ok=False)
-    report={'plan':plan(config,True),'results':[]}
+    report={'plan':plan(config,True),'prior_estimated_usd':prior_estimated_usd,'results':[]}
     report['plan']['execute']=True
     def save():
         (root/'results.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
-    for label,request in CASES:
+    for label in ORDER:
+        request=dict(CASES)[label]
         for variant in (['legacy','sdk'] if label in CONTROLS else ['sdk']):
-            if sum(r['estimated_usd'] for r in report['results'])+.25>1.0+1e-12:
+            if prior_estimated_usd+sum(r['estimated_usd'] for r in report['results'])+.25>1.0+1e-12:
                 report['evaluation_stopped']='insufficient_reserved_room_for_next_case'
                 save();return report
             result=await run_case(root,config,key,label,request,variant)
@@ -160,6 +165,10 @@ async def execute(root,config,key):
             # credentials, raw provider responses or private settings printed.
             save()
             print(json.dumps({k:result[k] for k in ('case','profile','status','generation_attempts','calls','elapsed_seconds','estimated_usd')},ensure_ascii=False),flush=True)
+            sdk_results=[r for r in report['results'] if r['profile']=='sdk']
+            if len(sdk_results)==3 and sum(r['status']!='ready' for r in sdk_results)>=2:
+                report['evaluation_stopped']='broad_failure_in_first_three_sdk_cases'
+                save();return report
             if result['status']!='ready' and result.get('api_failure_types'):
                 report['evaluation_stopped']='unexpected_api_error'
                 save();return report
@@ -174,8 +183,10 @@ def main():
     if not options.execute:
         print(json.dumps(plan(config,bool(key)),ensure_ascii=False,indent=2));return
     if not key:raise ValueError('No saved OpenAI credential')
-    root=Path(__file__).resolve().parents[1]/'workspace'/'sdk-benchmark'/new_id('evaluation')
-    asyncio.run(execute(root,config,key))
+    base=Path(__file__).resolve().parents[1]/'workspace'/'sdk-benchmark'
+    prior=sum(sum(r['estimated_usd'] for r in json.loads(p.read_text(encoding='utf-8')).get('results',[])) for p in base.glob('evaluation-*/results.json'))
+    root=base/new_id('evaluation')
+    asyncio.run(execute(root,config,key,prior_estimated_usd=prior))
 
 
 if __name__=='__main__':main()

@@ -78,7 +78,8 @@ def _ui_source(fingerprint):
 
 CATEGORIES = {
     'clock': ('klokke tidtaker stoppeklokke nedtelling timer clock watch', 'clock', 'modern_dark', 'clock timer alarm calendar'),
-    'instrument': ('sensor dashboard imu vater instrument måler temperatur elektronikk i2c gpio pwm uart', 'instrument', 'professional_instrument', 'gauge activity thermometer compass cpu circuit-board'),
+    'dashboard': ('sensordashboard sensor dashboard', 'sensor_monitor', 'professional_instrument', 'activity thermometer battery gauge'),
+    'instrument': ('imu vater instrument måler temperatur elektronikk i2c gpio pwm uart', 'instrument', 'professional_instrument', 'gauge activity thermometer compass cpu circuit-board'),
     'weather': ('vær vaer weather vind regn sol', 'dashboard', 'nature', 'sun cloud rain wind thermometer'),
     'calculator': ('kalkulator regne calculator', 'calculator', 'minimal', 'calculator hash equal percent'),
     'racing': ('bil racing race kjøretøy kjoretoy', 'racing', 'neon', 'car-top bus-top car flag fuel'),
@@ -89,43 +90,78 @@ CATEGORIES = {
 }
 
 
-def selected_context(summary, capabilities):
+# Prefixes are restricted to actual app nouns, not arbitrary substring matches.
+# Norwegian compounds are normal user language (bilspill, værapp, måleinstrument).
+CATEGORY_PATTERNS={
+ 'clock':r'\b(?:stoppeklokk\w*|stopwatch\w*|tidtak\w*|nedtell\w*|klokke\w*|clock\w*)',
+ 'dashboard':r'\b(?:sensor(?:dashboard|monitor)\w*|sensordashbord\w*|dashboard\w*|dashbord\w*)',
+ 'instrument':r'\b(?:måleinstrument\w*|maaleinstrument\w*|instrument\w*|vater\w*|inclinometer\w*|imu|kompass\w*|compass\w*)',
+ 'weather':r'\b(?:vær\w*|vaer\w*|weather\w*|forecast\w*)',
+ 'calculator':r'\b(?:kalkulator\w*|calculator\w*)',
+ 'racing':r'\b(?:bilspill\w*|billøp\w*|billop\w*|biler|racing\w*|race|car\s+(?:game|racing)|driving\w*)',
+ 'space':r'\b(?:romskip\w*|romspill\w*|space\s*(?:shooter|game)|shooter\w*|asteroid\w*)',
+ 'platformer':r'\b(?:plattform\w*|platform\w*|jump(?:ing)?\s+game)',
+ 'adventure':r'\b(?:eventyr\w*|adventure\w*|rpg|dungeon\w*)',
+ 'puzzle':r'\b(?:tetris\w*|snake\w*|slangespill\w*|prikkjakt\w*|pacman|sjakk\w*|chess\w*|puzzle\w*|pusle\w*)',
+}
+
+
+def classify(summary):
+    words=set(re.findall(r'[a-zæøå0-9-]+',summary.casefold()))
+    scores={key:len(words.intersection(value[0].split()))+2*bool(re.search(CATEGORY_PATTERNS[key],summary,re.I))
+            for key,value in CATEGORIES.items()}
+    best=max(scores,key=scores.get)
+    return best if scores[best] else None
+
+
+def selected_context(summary, capabilities, *, include_native=True):
     if not available(capabilities):
         return ''
     words = set(re.findall(r'[a-zæøå0-9-]+', summary.casefold()))
-    best = max(CATEGORIES, key=lambda k: len(words.intersection(CATEGORIES[k][0].split())))
-    score = len(words.intersection(CATEGORIES[best][0].split()))
-    _, layout, theme, hints = CATEGORIES[best] if score else ('', 'dashboard', 'modern_dark', 'activity settings check circle-help')
-    wanted = words | set(hints.split())
+    best=classify(summary)
+    _, layout, theme, hints = CATEGORIES[best] if best else ('', 'dashboard', 'modern_dark', 'activity settings check circle-help')
+    hint_words=set(hints.split())
+    query_words=words-{'lag','lage','en','et','ei','app','spill','game','create','make','build','a','an','the','with','med'}
+    wanted=query_words|hint_words
     ranked = []
     for asset in assets().values():
         searchable = set(re.findall(r'[a-z0-9-]+', ' '.join(str(asset.get(k) or '') for k in
                               ('id', 'alias', 'description', 'category', 'style')).casefold()))
-        rank = len(searchable.intersection(wanted))
+        rank = 3*len(searchable.intersection(hint_words))+len(searchable.intersection(query_words))
+        if rank and layout in {'racing','arcade','platformer','adventure','puzzle'} and asset.get('kind')=='sprite':rank+=3
         if rank:
             ranked.append((rank, asset['id'], asset))
     ranked.sort(key=lambda row: (-row[0], row[1]))
     chosen = [{k: a.get(k) for k in ('id', 'alias', 'width', 'height', 'kind', 'style', 'description', 'tintable')}
               for _, _, a in ranked[:12]]
-    functions = _json(DATA / 'sdk.json')['ui_signatures']
-    common = ['set_theme', 'screen', 'label', 'title', 'panel', 'card', 'button', 'buttons', 'menu',
+    metadata=_json(DATA / 'sdk.json')
+    functions = metadata['ui_signatures']
+    common = ['set_theme', 'theme', 'background', 'screen', 'label', 'title', 'panel', 'card', 'button', 'buttons', 'menu',
               'toggle', 'icon', 'progress', 'navigate']
-    specific = {'instrument': ['gauge', 'ring', 'line_chart', 'compass'], 'clock': ['clock', 'timer', 'countdown'],
+    specific = {'sensor_monitor':['gauge','line_chart','table','battery'], 'instrument': ['gauge', 'ring', 'line_chart', 'compass'], 'clock': ['clock', 'timer', 'countdown'],
                 'racing': ['sprite', 'hud', 'game_menu', 'pause', 'game_over', 'collides'],
                 'arcade': ['sprite', 'hud', 'game_menu', 'pause', 'game_over', 'burst'],
                 'platformer': ['sprite', 'hud', 'game_menu', 'collides', 'particles'],
                 'puzzle': ['hud', 'game_menu', 'pause', 'game_over'],
                 'adventure': ['sprite', 'dialog', 'hud', 'game_menu', 'game_over']}.get(layout, ['tabs', 'empty', 'error'])
     payload = {'version': SDK_VERSION, 'api_contract': SDK_CONTRACT, 'suggested_layout': layout,
-               'suggested_theme': theme, 'alternative_themes': ['modern_dark', 'minimal'],
+               'suggested_theme': theme,
+               'palette':{k:int(v) for k,v in re.findall(r'(\w+)=(\d+)',re.search(r'\n\s*'+re.escape(theme)+r'=\{([^}]+)\}',ui_source()).group(1))}, 'alternative_themes': ['modern_dark', 'minimal'],
                'ui': {name: functions[name] for name in dict.fromkeys(common + specific) if name in functions},
                'fonts': {name: {'line_height': f['line_height']} for name, f in _json(DATA / 'fonts.json')['fonts'].items()},
-               'assets': chosen, 'native_display': contract()['registry']['display'],
+               'assets': chosen,
+               'ui_help':{name:metadata['ui_help'][name] for name in dict.fromkeys(common+specific) if name in metadata.get('ui_help',{})},
+               'ui_options':{name:metadata['ui_options'][name] for name in dict.fromkeys(common+specific) if name in metadata.get('ui_options',{})},
+               'examples':{'text':'local c=fire.ui.theme(); fire.ui.label(10,85,"12:34",{width=300,align="center",font="digits28",color=c.fg})',
+                           'input':'local selected,mode=1,0\nfunction on_button(button,action)\n if action~="pressed" then return end\n local activate; selected,activate=fire.ui.navigate(selected,button,3)\n if activate then mode=selected end\nend',
+                           'clock':'fire.ui.screen("STOPPEKLOKKE",running and "Måling" or "Klar"); fire.ui.timer(10,85,elapsed_ms,{width=300,align="center"})',
+                           'controls':'fire.ui.buttons("Forrige","Velg","Neste","B") -- bind actual A/B/C actions; adapt labels to the app'},
                'rules': ['Use fire.ui and selected real asset IDs to avoid regenerating standard widgets.',
                          'Aliases are search metadata, never runtime asset IDs.',
                          'Compose a distinctive readable full frame; UI helpers do not own a framebuffer.',
                          'Shared text_style is transparent and clips its aligned box; legacy text remains unchanged.',
-                         'SDK supersedes legacy-only 24-call/120000-work/128-grid policies: 64 TOTAL I/O calls, 2048 I/O bytes, 256 text bytes including measure, 384 grid cells and 32768 grid pixels per callback. Display work is an estimate, not native timing. 128KiB app quota includes UI prelude; keep app allocations small.',
-                         'Keep old callback/memory/I/O/time limits. SDK grid permits 384 cumulative cells and 32768 pixels.',
+                         'SDK: 64 total I/O calls, 2048 I/O bytes, 256 text bytes including measurement, 384 grid cells and 32768 grid pixels per callback. Preserve announced app memory including UI prelude. Work estimates never prove native timing.',
+                         'Use tested theme palette fields; UI helpers only draw and app owns EVERY action/state transition.',
                          'Choose defaults and preserve agreed scope; normally one generation and one review, targeted corrections only.']}
+    if include_native:payload['native_display']=contract()['registry']['display']
     return '\nAuthoritative selected FIRE App SDK context (overrides legacy-only font/UI restrictions):\n' + json.dumps(payload, ensure_ascii=False, separators=(',', ':'))

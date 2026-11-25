@@ -1,5 +1,15 @@
 # FIRE Developer device protocol 0.2
 
+Optional [FIRE App SDK](FIRE_APP_SDK.md) adds
+`capabilities.app_sdk: {version: "fire-app-sdk-1.0", contract: "<SDK SHA256>"}`.
+The protocol stays 0.2 and the hardware `api_version`/`api_contract` remain the
+unchanged `fire-lua-0.2` contract. An SDK manifest instead uses
+`api_version=fire-app-sdk-1.0` and the separate hash from
+[APP_SDK-v1.json](../contracts/APP_SDK-v1.json). Require exact SDK advertisement,
+normal services/permissions and existing build/run confirmations. A missing SDK
+field preserves legacy behavior. Backend/PC implementation is not physical proof;
+fresh SDK hardware verification remains separately recorded.
+
 Hardware extension: [HARDWARE_API_HANDOFF.md](HARDWARE_API_HANDOFF.md) adds
 negotiated `fire-lua-0.2`, `capabilities.api_contract`, resource allowlists in
 `capabilities.hardware` and matching manifest hash. This does not change the

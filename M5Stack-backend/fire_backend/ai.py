@@ -12,6 +12,7 @@ from importlib.resources import files
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
+from .sdk_context import normalize as normalize_sdk_context,from_context as is_sdk_context,GENERATION_STAGE as SDK_GENERATION_STAGE
 from .models import DialogReply, GeneratedApp
 from .rendering import VISUAL_POLICY
 from .app_quality import APP_QUALITY_POLICY, AppReview, FireAppReview
@@ -273,10 +274,12 @@ class OpenAIProvider:
             raise ValueError("OpenAI Realtime connection closed")
 
     async def generate(self, summary, context, error=None, previous=None):
+        context=normalize_sdk_context(context)
+        sdk=is_sdk_context(context)
         request = {"confirmed_app": summary, "previous_code": previous, "validation_error": error}
         response = await self.parsed(
             "generate", self.settings.openai_code_model,
-            context + ("" if VISUAL_POLICY in context else VISUAL_POLICY) + ("" if APP_QUALITY_POLICY in context else APP_QUALITY_POLICY) + "\nGenerate a complete Lua app for this confirmed plan. "
+            (context+SDK_GENERATION_STAGE if sdk else (context + ("" if VISUAL_POLICY in context else VISUAL_POLICY) + ("" if APP_QUALITY_POLICY in context else APP_QUALITY_POLICY) + "\nGenerate a complete Lua app for this confirmed plan. "
             "This is the backend CODE GENERATION stage, not the user dialogue. The backend has already "
             "validated the explicit current build_confirm before invoking this operation. Generate and "
             "repair the complete source now; do not ask for another build_confirm. main_lua must contain "
@@ -296,7 +299,7 @@ class OpenAIProvider:
             "at most 32 characters, describing its actual purpose (e.g. Sprettsirkel, Snake, Helningsmaaler). "
             "Never use technical IDs, random suffixes, version numbers or generic AI app labels as the name. "
             "Use the exact injected versioned host contract; hardware services, resources and API version are negotiated. "
-            "Never call or declare services missing from the device handshake. Never include credentials.",
+            "Never call or declare services missing from the device handshake. Never include credentials.")),
             request, GeneratedApp, 24000 if self.settings.openai_code_model in {'gpt-6-luna','gpt-5.6-luna'} else 12000, "low",
         )
         if response.status != "completed" or response.output_parsed is None:
@@ -305,7 +308,8 @@ class OpenAIProvider:
 
     async def review(self, summary, context, generated, validation):
         # Fresh request: no generator justification/history is accepted as proof.
-        context=scoped_review_context(context)
+        context=normalize_sdk_context(scoped_review_context(context))
+        sdk=is_sdk_context(context)
         identity=validation.get('source_identity',{'candidate_sha256':source_hash(generated.main_lua),
             'historical_device_failures':[],'exact_source_has_device_failure':False,'candidate_physical_status':'not_verified'})
         images=validation.get('_visual_review_images',[])
@@ -329,7 +333,7 @@ class OpenAIProvider:
             if images else 'No screenshots are attached. Evaluate layout from drawing code; do not pretend to have seen rendered output. ')
         response = await self.parsed(
             "review", self.settings.openai_review_model,
-            context + ("" if APP_QUALITY_POLICY in context else APP_QUALITY_POLICY) + ("" if DEVELOPMENT_POLICY in context else DEVELOPMENT_POLICY) + "\nIndependently review this candidate before user-visible delivery. "
+            context + ("" if sdk or APP_QUALITY_POLICY in context else APP_QUALITY_POLICY) + ("" if sdk or DEVELOPMENT_POLICY in context else DEVELOPMENT_POLICY) + "\nIndependently review this candidate before user-visible delivery. "
             "Use backend source_identity as the authority for checksum attribution. Old device callback_us "
             "does NOT measure a changed candidate. Put pending physical verification in verification_notes; "
             "it alone must not make checks false or create a blocking issue. For each real issue cite the "

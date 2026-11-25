@@ -105,6 +105,30 @@ def test_sdk_valid_frames_do_not_hit_old_global_32_calls_per_frame_proxy():
     assert result['api_operations']==625*40 and result['max_io_calls']==40
 
 
+def test_capture_diagnostics_do_not_consume_app_heap_or_raise_app_quota():
+    source=(DATA/'gallery.lua').read_text(encoding='utf-8')
+    peaks=[];host=[]
+    for times in ([],[16],[16,1000,2000,3000,4000,5000,5900,6000]):
+        request=app(source);request.update(preview_duration_ms=6000,capture_at_ms=times)
+        r=simulate(request);peaks.append(r['app_memory_peak']);host.append(r['diagnostic_memory_bytes'])
+    assert max(peaks)-min(peaks)<=64 and peaks[0]>50000  # actual UI remains charged
+    assert host[0]<host[1]<host[2]
+    bloated='local retained={} function init() for i=1,12000 do retained[i]=i end end function update(dt) fire.ui.screen("Heap") end'
+    for times in ([],[16,32,48]):
+        request=app(bloated);request['capture_at_ms']=times
+        with pytest.raises(Exception,match='memory|Memory'):simulate(request)
+
+
+@pytest.mark.parametrize('sdk',[False,True])
+def test_standalone_compatibility_checks_missing_services_for_legacy_and_sdk(sdk):
+    from fire_backend.api_registry import API_CONTRACT
+    caps=preview_capabilities();caps['services'].remove('wifi')
+    package={'manifest':{'api_version':SDK_VERSION if sdk else 'fire-lua-0.2',
+        'api_contract':SDK_CONTRACT if sdk else API_CONTRACT,
+        'required_services':['display','wifi','jobs']}}
+    assert package_compatibility(package,caps)
+
+
 def test_shared_bitmap_metrics_alignment_clipping_and_transparency():
     text='æøåÆØÅ°';width,height=text_size(text,'ui16')
     expected=sum(fonts()['ui16']['glyphs'][str(ord(c))]['advance'] for c in text)
@@ -114,6 +138,15 @@ def test_shared_bitmap_metrics_alignment_clipping_and_transparency():
     assert image.getpixel((9,10))==rgb565(31) and image.getpixel((25,10))==rgb565(31)
     assert r.metrics['text_boxes'][0]['clipped']
     assert text_size('☃','ui12')==text_size('?','ui12')
+
+
+def test_font_evidence_distinguishes_sdk_from_unverified_legacy_font_settings():
+    old=render_frame({'ops':[['text',0,0,'Legacy',65535]]})
+    sdk=render_frame({'ops':[['text_style',0,0,'SDK',65535,'ui12','left',100]]})
+    assert old.metrics['font_mode']=='legacy_reference' and old.metrics['font_data_exact']
+    assert old.metrics['legacy_font_settings_verified'] is False
+    assert sdk.metrics['font_mode']=='shared_sdk' and sdk.metrics['font_data_exact']
+    assert not old.metrics['native_raster_exact'] and not sdk.metrics['native_raster_exact']
 
 
 def test_assets_use_real_rle_transparency_and_ignore_tint_on_colored_assets():

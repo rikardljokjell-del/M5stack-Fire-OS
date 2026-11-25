@@ -23,6 +23,16 @@ layoutretning, fontmetrikker og maksimalt tolv ressursbeskrivelser. Hele katalog
 bitmapdataene og UI-modulen sendes ikke i prompten. Ved feil beholdes eksisterende
 avgrenset reparasjonsflyt og kildebundet feilhistorikk.
 
+`fire-sdk-generation-v2` erstatter de generelle legacyinstruksene i SDK-kall med
+én konsistent versjonsstyrt policy. Valgte komponenter får kanonisk hjelp og
+options, ekte temapalett og korte kjørbare Lua-eksempler. Norske sammensatte
+appnavn som «bilspill», «værapp» og «måleinstrument» samt engelske aliaser velges
+av samme kategorisering som brukes for relevante maskinvaredetaljer. Hele den
+faktiske tilgjengelighetslisten beholdes; detaljerte signaturer velges fra mål,
+avhengigheter og eksisterende apps manifest. Dette gir ingen nye tillatelser.
+Kodekontrollen får eksplisitt aktuell kandidatkontrakt og skal skille konkrete
+feil fra valgfri ekstra funksjonalitet og umålt fysisk ytelse.
+
 Release-testene kjører ekte Lua i den eksisterende isolerte worker-prosessen.
 Utvalgte komplette frames fanges uavhengig av den korte diagnostikktracen.
 Oppstart, navigasjon, aktiv bruk, lengre kjøring og relevante feilstier kan gi
@@ -40,6 +50,11 @@ SDK bruker kontraktens 64 totale I/O-kall, 2048 I/O-bytes og 256 tekstbytes per
 callback, inkludert måling. Grid har 384 kumulative celler og 32768 piksler.
 Appens annonserte minnekvote gjelder også UI-preluden. Hostens private
 font-/assetoppslag telles før appens minnebaseline og eksponeres ikke til appen.
+Private, varig beholdte trace-/skjermbildetabeller måles separat ved allokeringen;
+de bruker ikke appens heapkvote. Identisk galleriapp er kontrollert med
+null/ett/åtte captures; for stor reell appallokering avvises fortsatt. UI-kode og
+appdata er fullt kvotebelagt. Ingen Python-callback eller appkode kjøres under
+den private diagnostikkmålingen.
 Ingen Python-callback, generell filtilgang, `require`, OS-funksjon eller loader
 gjøres tilgjengelig i appmiljøet.
 
@@ -55,6 +70,9 @@ PNG-er er maksimalt 240000 bytes. En ny svart framebuffer brukes per frame,
 tilsvarende OS-eid clear-before-update. Bitmapfontene og atlasdataene er felles;
 eksakt native rasterisering, numerisk paritet og fysisk ytelse er ikke bevist
 av en PC-simulering. Dette vises også i metadata og brukergrensesnittet.
+`font_data_exact` gjelder bitmapdataidentitet. `font_mode` skiller delte
+SDK-fonter fra legacyreferanse; historiske firmwarefontinnstillinger har separat
+`legacy_font_settings_verified=false`. Ingen av feltene beviser fysisk rasterparitet.
 
 ## Studio
 
@@ -89,3 +107,8 @@ vanlig ledger håndhever USD 0.25 per testcase. Før neste testcase reserveres
 plass til hele USD 0.25 innen samlet USD 1, ellers stoppes bare evalueringen. Dette er
 evalueringsrammer og gjelder ikke vanlige brukerjobber. Tre enkeltkontroller
 gir ingen statistisk garanti for generell ytelse eller feilfri appgenerering.
+
+Senere kohorter registrerer egen policyversjon og SDK-datahash. Samlet testbudsjett
+inkluderer tidligere kohorters registrerte kostnad. Tre første SDK-sentineller
+prøver verktøy, sensordashboard og spill; ved minst to feil stoppes videre betalte
+cases for analyse. Første negative kohort beholdes uendret som måleresultat.

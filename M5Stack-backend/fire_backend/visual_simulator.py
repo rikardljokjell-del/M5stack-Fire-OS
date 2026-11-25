@@ -99,6 +99,8 @@ class RasterRenderer:
         self.image = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
         self.draw = ImageDraw.Draw(self.image)
         self.font_exact = True
+        self.sdk_text_used = False
+        self.legacy_text_used = False
         self.text_boxes = []
 
     def bitmap_text(self, x, y, text, color, font_id, background=None,clip=None):
@@ -134,6 +136,9 @@ class RasterRenderer:
         return cursor - x
 
     def legacy_text(self, x, y, text, color):
+        # The reference bytes are shared, but historical M5 font settings and
+        # Unicode handling have not established exact native legacy parity.
+        self.legacy_text_used = True
         if 'legacy6x8' in fonts():
             return self.bitmap_text(x, y, text, color, 'legacy6x8', (0, 0, 0))
         # Existing hardware font bytes are not yet part of the old API contract.
@@ -195,6 +200,7 @@ class RasterRenderer:
                 px, py = x + (i % cols) * cw, y + (i // cols) * ch
                 self.draw.rectangle((px, py, px + cw - 1, py + ch - 1), fill=c)
         elif name=='text_style':
+            self.sdk_text_used = True
             x,y=integer(a[0],-1024,1024),integer(a[1],-1024,1024)
             text,color,font_id,align,width=a[2],rgb565(a[3]),a[4],a[5],integer(a[6],1,1024)
             if not isinstance(text,str) or len(text.encode('utf-8'))>80 or '\0' in text:raise ValueError('Invalid SDK text')
@@ -274,6 +280,10 @@ class RasterRenderer:
         metrics = {'width': WIDTH, 'height': HEIGHT, 'draw_commands': len(ops),
                    'unique_colors': len(histogram), 'content_bbox': self.image.getbbox(),
                    'font_data_exact': self.font_exact, 'native_raster_exact': False,
+                   'legacy_font_settings_verified': False if self.legacy_text_used else None,
+                   'font_mode': ('mixed' if self.sdk_text_used and self.legacy_text_used else
+                                 'shared_sdk' if self.sdk_text_used else
+                                 'legacy_reference' if self.legacy_text_used else 'none'),
                    'text_boxes': self.text_boxes, 'physical_verified': False}
         return RenderedFrame(png, hashlib.sha256(raw).hexdigest(), hashlib.sha256(png).hexdigest(), metrics)
 

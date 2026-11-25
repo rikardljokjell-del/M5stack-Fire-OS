@@ -88,6 +88,17 @@ local min_update_draws, update_count, peak_clears = nil,0,0
 local frames_run = 0
 local os_suppressed, os_suspended, os_exited, os_navigation = 0,0,false,""
 local host_baseline, app_memory_peak = 0,0
+local diagnostic_bytes,diagnostic_active=0,false
+-- Only trusted, retained diagnostic tables are allocated between these calls.
+-- No app callback runs here; app/UI allocation and callback guards are intact.
+local function diagnostic_begin()
+  diagnostic_active=true;collectgarbage("stop")
+  return collectgarbage("count")*1024
+end
+local function diagnostic_end(before)
+  diagnostic_bytes=diagnostic_bytes+math.max(0,collectgarbage("count")*1024-before)
+  diagnostic_active=false;collectgarbage("restart")
+end
 local hardware
 local has_display = string.match(services,"display") ~= nil
 local trace, trace_count = {}, 0
@@ -101,6 +112,7 @@ local visual_button, visual_inputs = "",0
 local function capture(name,...)
   if not visual_current then return end
   if #visual_current.ops>=64 then error("Visual capture operation bound exceeded") end
+  local diagnostic_before=diagnostic_begin()
   local values={name,...}
   if name=="grid" then
     local cells,palette={},{}
@@ -113,6 +125,7 @@ local function capture(name,...)
     end
   end
   visual_current.ops[#visual_current.ops+1]=values
+  diagnostic_end(diagnostic_before)
 end
 local function imu_value()
   if profile=="imu_motion" then
@@ -194,7 +207,7 @@ local function record(name, ...)
   if total > operation_limit then error("API operation budget exceeded") end
   if trace_count < 240 then
     trace_count = trace_count + 1
-    trace[trace_count] = {name, ...}
+    local before=diagnostic_begin();trace[trace_count] = {name, ...};diagnostic_end(before)
   end
 end
 local function xy(x,y) whole(x,0,319); whole(y,0,239) end
@@ -273,7 +286,7 @@ hardware=nil
 if api_version~="fire-lua-0.1" then
   hardware=hardware_factory(available,specs,resources,profile,function()return elapsed end,function(name,bytes)
     total=total+1;if total>operation_limit then error("API operation budget exceeded") end
-    if trace_count<240 then trace_count=trace_count+1;trace[trace_count]={name,bytes} end
+    if trace_count<240 then trace_count=trace_count+1;local before=diagnostic_begin();trace[trace_count]={name,bytes};diagnostic_end(before) end
   end,service_set)
 end
 if sdk_enabled then
@@ -295,7 +308,7 @@ if sdk_enabled then
     if callback_phase=="on_button" then error("Visual frame: SDK drawing belongs in update") end
     if ink~=nil and ink~=background and work>0 then visible_ops=visible_ops+1 end
     capture(name,...)
-    if trace_count<240 then trace_count=trace_count+1;trace[trace_count]={name,...} end
+    if trace_count<240 then trace_count=trace_count+1;local before=diagnostic_begin();trace[trace_count]={name,...};diagnostic_end(before) end
   end,function(name,bytes)
     hardware.charge_sdk(name,bytes)
     if name=="text_style" or name=="measure_text" then
@@ -319,9 +332,9 @@ if hardware then env.string=hardware.string;env.table=hardware.table end
 local string_meta=getmetatable("")
 if string_meta then string_meta.__index=hardware and hardware.string or {};string_meta.__metatable=false end
 local function memory_check()
-  if hardware and host_baseline>0 then
+  if hardware and host_baseline>0 and not diagnostic_active then
     collectgarbage("step",20)
-    local used=math.max(0,math.ceil(collectgarbage("count")*1024-host_baseline))
+    local used=math.max(0,math.ceil(collectgarbage("count")*1024-host_baseline-diagnostic_bytes))
     app_memory_peak=math.max(app_memory_peak,used)
     if used>app_memory_budget then error("App memory budget exceeded") end
   end
@@ -446,12 +459,12 @@ for frame=1,frames do
   else
     callback_phase="update"
     if visual_index<=#capture_times and elapsed>=capture_times[visual_index] then
-      visual_current={at_ms=elapsed,frame=frame,button=visual_button,input_count=visual_inputs,ops={}}
+      local before=diagnostic_begin();visual_current={at_ms=elapsed,frame=frame,button=visual_button,input_count=visual_inputs,ops={}};diagnostic_end(before)
     end
     call(env.update,dt)
     frames_run=frames_run+1
     if visual_current then
-      visual_frames[#visual_frames+1]=visual_current;visual_current=nil
+      local before=diagnostic_begin();visual_frames[#visual_frames+1]=visual_current;visual_current=nil;diagnostic_end(before)
       visual_index=visual_index+1
     end
   end
@@ -463,7 +476,7 @@ for frame=1,frames do
 end
 return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,max_callback_operations=peak_ops,max_callback_display_work=peak_work,
         min_update_draws=min_update_draws or 0,update_count=update_count,max_callback_clears=peak_clears,max_callback_text_bytes=peak_text_bytes,
-        hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,
+        hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,diagnostic_memory_bytes=math.ceil(diagnostic_bytes),
         os_reserved_callbacks_suppressed=os_suppressed,os_updates_suspended=os_suspended,os_exited=os_exited,os_navigation=os_navigation,
         max_callback_grid_pixels=peak_grid_pixels,max_callback_grid_cells=peak_grid_cells,max_callback_rgb_calls=peak_rgb_calls,
         imu_reads=imu_reads,imu_scenes=scenes,visual_frames=visual_frames}
@@ -546,7 +559,7 @@ def simulate(request):
             "max_callback_grid_cells":result["max_callback_grid_cells"],"max_callback_rgb_calls":result["max_callback_rgb_calls"],
             "imu_reads":result["imu_reads"],"imu_scenes":unpack(result["imu_scenes"]),
             "visual_frames":unpack(result["visual_frames"]),
-            "hardware_simulated":api_version!="fire-lua-0.1","app_memory_peak":result["app_memory_peak"],"max_io_calls":hardware_metrics["max_io_calls"] if hardware_metrics else 0,
+            "hardware_simulated":api_version!="fire-lua-0.1","app_memory_peak":result["app_memory_peak"],"diagnostic_memory_bytes":result["diagnostic_memory_bytes"],"max_io_calls":hardware_metrics["max_io_calls"] if hardware_metrics else 0,
             "max_io_bytes":hardware_metrics["max_io_bytes"] if hardware_metrics else 0,"max_jobs":hardware_metrics["max_jobs"] if hardware_metrics else 0,
             "io_calls":dict(hardware_metrics["calls"].items()) if hardware_metrics else {},
             "jobs_started":dict(hardware_metrics["jobs_started"].items()) if hardware_metrics else {},

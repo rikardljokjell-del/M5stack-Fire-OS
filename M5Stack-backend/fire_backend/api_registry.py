@@ -49,6 +49,8 @@ def service_closure(services,api_version=HARDWARE_API):
 
 def package_compatibility(package,capabilities):
     manifest=package["manifest"]
+    if not set(manifest['required_services'])<=set(capabilities.get('services',[])):
+        return 'Appen krever tjenester som denne enheten ikke annonserer.'
     if manifest.get('api_version')==SDK_VERSION:
         if not sdk_available(capabilities):return 'Appen krever annonsert FIRE App SDK med samme kontrakt i firmware.'
         if (manifest.get('api_contract')!=SDK_CONTRACT or capabilities.get('api_version')!=HARDWARE_API

@@ -1,5 +1,17 @@
 # Negotiated Lua runtime contract
 
+Optional FIRE App SDK: [FIRE_APP_SDK.md](FIRE_APP_SDK.md) and
+[APP_SDK-v1.json](../contracts/APP_SDK-v1.json) define shared UI, fonts, assets and
+native graphics for `fire-app-sdk-1.0` packages. The device still advertises the
+unchanged `fire-lua-0.2` hardware contract, plus optional
+`app_sdk: {version: "fire-app-sdk-1.0", contract: "<SDK SHA256>"}`. Both version and
+SDK hash must match before delivery. Old packages remain valid. See
+[backend/preview details](FIRE_APP_SDK_BACKEND.md). SDK physical verification is
+tracked separately; PC rendering is not physical runtime or timing proof.
+
+The older baselines below are historical contracts; actual fresh capabilities
+and the negotiated version take precedence over their historical service lists.
+
 The baseline below documents fire-lua-0.1. For the new fire-lua-0.2 contract, all exact method arguments/result shapes, OS resource ownership and firmware work, see [HARDWARE_API_HANDOFF.md](HARDWARE_API_HANDOFF.md) and [the exported registry](../contracts/HARDWARE_API-v0.2.json). Never infer physical hardware support from the PC simulator. Current inspected firmware dae75bf / 74ac26a exposes display/buttons/rgb/imu/time/jobs/gpio/pwm/i2c/uart, with the limited resource profile in the device handoff. Other registered services remain unavailable. Conversation audio is independent of Lua mic/speaker permissions. Release-v4 adds a cumulative 256-text-byte callback limit and three I/O failure profiles for hardware apps.
 
 # fire-lua-0.1 runtime contract
