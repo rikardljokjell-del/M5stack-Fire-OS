@@ -97,12 +97,13 @@ bool FireGithubFirmwareManager::startManifest() {
   manifestMode_ = true;
   overwriteExisting_ = false;
   requestPath_ = kGithubManifestPath;
-  headerBuffer_ = "";
-  manifestBody_ = "";
+  headerBuffer_ = static_cast<const char*>(nullptr);
+  manifestBody_ = static_cast<const char*>(nullptr);
   startedAt_ = millis();
   lastDataAt_ = startedAt_;
   clockSyncStartedAt_ = startedAt_;
   clockSyncRequested_ = false;
+  connectionMeasured_ = false;
   state_ = State::Connecting;
   emitStatus("GitHub: connecting");
   return launch();
@@ -134,9 +135,13 @@ bool FireGithubFirmwareManager::startDownload(const FireRelease& release,
   tempPath_ = catalogStage_ = globalStage_ = ""; ownsStage_ = ownsCatalogStage_ = ownsGlobalStage_ = false;
   expectedHash_ = release.hash; expectedSize_ = release.size;
   requestPath_ = String(kGithubFirmwarePrefix) + release.name;
-  headerBuffer_ = manifestBody_ = "";
+  // Empty-string assignment retains Arduino String capacity. These completed
+  // response buffers are redundant with verifiedManifest_/downloadCatalog_
+  // and must release their internal RAM before a second TLS handshake.
+  headerBuffer_ = static_cast<const char*>(nullptr);
+  manifestBody_ = static_cast<const char*>(nullptr);
   startedAt_ = lastDataAt_ = clockSyncStartedAt_ = millis();
-  clockSyncRequested_ = false; state_ = State::Connecting;
+  clockSyncRequested_ = false; connectionMeasured_ = false; state_ = State::Connecting;
   emitStatus("GitHub: henter til arbeidsminne");
   return launch();
 }
@@ -214,7 +219,7 @@ bool FireGithubFirmwareManager::prepareDownload(bool sdReady) {
     errorCode_ = "sd_directory"; errorMessage_ = "Kan ikke opprette firmwaremappe"; return false;
   }
   const uint64_t total = SD.totalBytes(), used = SD.usedBytes();
-  const uint64_t required = uint64_t(expectedSize_) + downloadCatalog_.length() + 131072ULL;
+  const uint64_t required = uint64_t(expectedSize_) + stagedCatalogLength_ * 2ULL + 131072ULL;
   Serial.printf("FIRE SD space total=%llu used=%llu required=%llu\n", total, used, required);
   if (!total || used > total) { errorCode_ = "sd_stats"; errorMessage_ = "Kan ikke lese SD-kapasitet"; return false; }
   if (required > total - used) { errorCode_ = "sd_full"; errorMessage_ = "Ikke nok ledig plass pa SD"; return false; }
@@ -253,15 +258,23 @@ bool FireGithubFirmwareManager::prepareDownload(bool sdReady) {
 bool FireGithubFirmwareManager::prepareStaging() {
   const uint32_t caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
   const size_t free = heap_caps_get_free_size(caps), largest = heap_caps_get_largest_free_block(caps);
-  Serial.printf("FIRE GitHub staging bytes=%lu psram_total=%u free=%u largest=%u\n",
-      (unsigned long)expectedSize_, unsigned(heap_caps_get_total_size(caps)), unsigned(free), unsigned(largest));
-  if (!FireFirmwareStaging::fits(expectedSize_, kMaxBytes, free, largest, 512UL * 1024UL)) {
+  stagedCatalogLength_ = downloadCatalog_.length();
+  const size_t allocation = size_t(expectedSize_) + stagedCatalogLength_ + 1;
+  Serial.printf("FIRE GitHub staging bytes=%lu catalog_bytes=%u psram_total=%u free=%u largest=%u\n",
+      (unsigned long)expectedSize_, unsigned(stagedCatalogLength_), unsigned(heap_caps_get_total_size(caps)), unsigned(free), unsigned(largest));
+  if (!stagedCatalogLength_ || stagedCatalogLength_ > kManifestLimit ||
+      !FireFirmwareStaging::fits(allocation, kMaxBytes + kManifestLimit + 1, free, largest, 512UL * 1024UL)) {
     errorCode_ = "staging_memory"; errorMessage_ = "Ikke nok arbeidsminne. Bruk direkte installering"; return false;
   }
-  downloadBuffer_ = static_cast<uint8_t*>(heap_caps_malloc(expectedSize_, caps));
+  downloadBuffer_ = static_cast<uint8_t*>(heap_caps_malloc(allocation, caps));
   if (!downloadBuffer_) {
     errorCode_ = "staging_memory"; errorMessage_ = "Kan ikke reservere arbeidsminne. SD er urort"; return false;
   }
+  // The verified catalog shares this worker-owned PSRAM allocation, outside
+  // the binary append bounds. It stays intact for both signed SD copies.
+  stagedCatalog_ = reinterpret_cast<const char*>(downloadBuffer_ + expectedSize_);
+  memcpy(downloadBuffer_ + expectedSize_, downloadCatalog_.c_str(), stagedCatalogLength_ + 1);
+  downloadCatalog_ = static_cast<const char*>(nullptr);
   staging_.attach(downloadBuffer_, expectedSize_); received_ = sdWritten_ = 0;
   mbedtls_sha256_init(&sha256_);
   shaInitialized_ = true;
@@ -275,6 +288,7 @@ void FireGithubFirmwareManager::freeStaging() {
   staging_.attach(nullptr, 0);
   if (downloadBuffer_) heap_caps_free(downloadBuffer_);
   downloadBuffer_ = nullptr;
+  stagedCatalog_ = nullptr; stagedCatalogLength_ = 0;
 }
 
 bool FireGithubFirmwareManager::writeBytes(const uint8_t* data, size_t length) {
@@ -336,6 +350,8 @@ void FireGithubFirmwareManager::fail(const String& code,
 void FireGithubFirmwareManager::finishManifest() {
   releaseClient();
   const bool ok = parseManifest();
+  manifestBody_ = static_cast<const char*>(nullptr);
+  headerBuffer_ = static_cast<const char*>(nullptr);
   state_ = State::Idle;
   emitStatus(ok ? "GitHub firmware list ready" : "GitHub catalog invalid");
   emitResult(true, ok, ok ? "ready" : "Invalid firmware catalog");
@@ -371,16 +387,16 @@ bool FireGithubFirmwareManager::writeCatalogFile(const String& path, bool& owned
   owned = true;
   if (!file.setBufferSize(512)) { file.close(); return false; }
   errno = 0;
-  const size_t written = file.write(reinterpret_cast<const uint8_t*>(downloadCatalog_.c_str()), downloadCatalog_.length());
+  const size_t written = file.write(reinterpret_cast<const uint8_t*>(stagedCatalog_), stagedCatalogLength_);
   const int error = errno;
   file.close();
-  if (written != downloadCatalog_.length()) {
+  if (written != stagedCatalogLength_) {
     Serial.printf("FIRE SD catalog_short_write requested=%u written=%u errno=%d\n",
-        unsigned(downloadCatalog_.length()), unsigned(written), error);
+        unsigned(stagedCatalogLength_), unsigned(written), error);
     return false;
   }
   file = SD.open(path, FILE_READ);
-  const size_t expected = downloadCatalog_.length();
+  const size_t expected = stagedCatalogLength_;
   if (!file || !file.setBufferSize(512) || file.size() != expected) { file.close(); return false; }
   String actual; bool ok = actual.reserve(expected); uint8_t buffer[512];
   while (ok && actual.length() < expected) {
@@ -390,7 +406,8 @@ bool FireGithubFirmwareManager::writeCatalogFile(const String& path, bool& owned
     delay(1);
   }
   file.close(); FireReleaseCatalog checked;
-  return ok && actual == downloadCatalog_ && fireVerifyCatalog(actual, checked);
+  return ok && actual.length() == expected && !memcmp(actual.c_str(), stagedCatalog_, expected) &&
+      fireVerifyCatalog(actual, checked);
 }
 
 void FireGithubFirmwareManager::finishDownload() {
@@ -492,6 +509,13 @@ void FireGithubFirmwareManager::serviceWorker(bool wifiConnected, bool sdReady) 
     }
     client_.secure(true);
     client_.setTimeout(5);
+    if (!connectionMeasured_) {
+      connectionMeasured_ = true;
+      const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+      Serial.printf("FIRE GitHub TLS phase=%s heap=%u largest=%u stack=%u\n",
+          manifestMode_ ? "catalog" : "firmware", unsigned(heap_caps_get_free_size(caps)),
+          unsigned(heap_caps_get_largest_free_block(caps)), unsigned(uxTaskGetStackHighWaterMark(nullptr)));
+    }
     if (!client_.connect(kGithubHost, 443, 5000)) {
       if (client_.connecting() || client_.stopping()) return;
       fail("connect_failed", "GitHub TLS connection failed");
@@ -568,7 +592,7 @@ void FireGithubFirmwareManager::serviceWorker(bool wifiConnected, bool sdReady) 
       state_ = State::DownloadBody;
       emitStatus("GitHub: 0% downloaded");
     }
-    headerBuffer_ = "";
+    headerBuffer_ = static_cast<const char*>(nullptr);
   }
   if (state_ == State::ManifestBody) {
     while (client_.available() && manifestBody_.length() < contentLength_) {

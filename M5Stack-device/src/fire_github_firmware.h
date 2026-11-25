@@ -66,6 +66,8 @@ class FireGithubFirmwareManager {
   FireAsyncClient client_;
   File stagedFile_;
   uint8_t* downloadBuffer_ = nullptr;
+  const char* stagedCatalog_ = nullptr;
+  size_t stagedCatalogLength_ = 0;
   FireFirmwareStaging staging_;
   uint32_t sdWritten_ = 0, phaseStartedAt_ = 0;
   bool manifestMode_ = false;
@@ -92,6 +94,7 @@ class FireGithubFirmwareManager {
   uint32_t lastDataAt_ = 0;
   uint32_t clockSyncStartedAt_ = 0;
   bool clockSyncRequested_ = false;
+  bool connectionMeasured_ = false;
   String status_;
   String errorCode_;
   String errorMessage_;

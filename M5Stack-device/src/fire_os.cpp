@@ -52,7 +52,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc8";
+constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc9";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -1783,6 +1783,10 @@ void FireOS::serviceFirmwareAction() {
   else if (action == FirmwareAction::InstallGithub)
     started = ota_.startGithub(firmwareGithubCatalog_, firmwareGithubRelease_.name);
   else if (action == FirmwareAction::InstallSd) started = installFirmwareFile(firmwarePendingSdPath_);
+  // The selected worker now owns its frozen signed envelope. The catalog
+  // manager retains the verified list for a later explicit selection/retry.
+  if (started && (action == FirmwareAction::SaveSd || action == FirmwareAction::InstallGithub))
+    firmwareGithubCatalog_ = static_cast<const char*>(nullptr);
   if (!started) { firmwareMessage_ = "Firmwarearbeid kunne ikke starte. Prov igjen"; firmwareNetworkPaused_ = false; }
   redrawRequested_ = true;
 }
