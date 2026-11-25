@@ -379,5 +379,100 @@
       "x",
       "y"
     ]
+  },
+  "ui_help": {
+    "label": "Draw transparent text in a top-left box. options.width is the alignment/clipping box width, not a right edge. Example: label(10,70,\"Hei\",{width=300,align=\"center\",font=\"ui16\"}).",
+    "buttons": "Draw bottom labels in physical LEFT A, MIDDLE B, RIGHT C order at y=211. focused is \"A\", \"B\" or \"C\". Bind those exact actions in on_button; nil omits a label.",
+    "button": "Draw a button only; it does not read input, register handlers or change app state.",
+    "menu": "Draw strings or {label=...} items with a 1-based selected index and automatic paging. It does not process input.",
+    "navigate": "Return updated 1-based index and selected boolean for a short button press: index,chosen=ui.navigate(index,button,count). A previous, C next, B chosen. App implements the chosen action.",
+    "toggle": "Draw the supplied boolean state only; app toggles it in its own handler.",
+    "checkbox": "Draw the supplied boolean state only; app changes it in its own handler.",
+    "selector": "Draw label/value and focus only; app owns value changes.",
+    "dialog": "Draw title/message plus left cancel and right confirm controls; bind and label their A/B/C actions explicitly. Does not block, wait or handle input.",
+    "pause": "Draw a pause dialog with Avslutt/Fortsett. App owns paused state and binds the visible actions; keep rendering every update.",
+    "game_menu": "Draw Start/Innstillinger/Tilbake and previous/select/next labels. Implement all three entries, or use menu with your own actual entries.",
+    "game_over": "Draw score/best and A Tilbake/B Igjen. Implement A and B explicitly.",
+    "timer": "Draw HH:MM:SS from non-negative milliseconds. App owns elapsed time and state; ui.timer does not start or advance a timer.",
+    "clock": "Draw hour:minute with optional :second. x/y is the top-left of the text alignment box.",
+    "sprite": "Draw a canonical asset ID or animation ID alien.walk/coin.spin/flag.wave. milliseconds drives animation; scale is integer. App owns position and simulation.",
+    "theme": "Return current app-private palette or a named palette: bg,panel,fg,muted,accent,good,bad,border. Other color field names do not exist.",
+    "set_theme": "Select an existing named theme for this app. Shared native bitmap data remain unchanged.",
+    "layout": "Return x,y,w,h composition coordinates for a 1-based slot. instrument returns center x,y and radius-sized slots; this is geometry, not an interactive screen.",
+    "ring": "value is fraction 0..1. x/y is center and r radius. Label is optional; thickness must be 1..r.",
+    "progress": "value is fraction 0..1. Draw only; app updates value.",
+    "gauge": "value uses minimum..maximum; x/y is center and r radius. Draw only; app owns measurement.",
+    "line_chart": "Draw at most 64 numeric values as one bounded polyline plus panel. Minimum and maximum set vertical scale.",
+    "bar_chart": "Draw at most 16 numeric values, scaled from zero to maximum.",
+    "screen": "Clear current frame and draw title/subtitle. Call before scene content, every update. It never presents or schedules frames.",
+    "card": "Draw label, value and optional detail/icon. Keep short text inside the card; x/y is top-left.",
+    "burst": "Append at most 16 bounded particles; use a persistent app table and call only when an event occurs.",
+    "particles": "Advance/draw at most 16 particles; dt is milliseconds. Call every update while particles are active."
+  },
+  "ui_options": {
+    "label": {
+      "color": "RGB565",
+      "font": "font ID",
+      "width": "integer box width1..1024",
+      "align": "left|center|right"
+    },
+    "panel": {
+      "color": "RGB565",
+      "radius": "non-negative integer",
+      "border": "optional RGB565 outline"
+    },
+    "card": {
+      "background": "RGB565",
+      "icon": "canonical asset ID",
+      "accent": "RGB565 icon tint",
+      "color": "RGB565 value color",
+      "font": "font ID",
+      "detail": "short string"
+    },
+    "button": {
+      "height": "positive integer"
+    },
+    "sprite": {
+      "scale": "integer1..4",
+      "tint": "optional RGB565; ignored for non-tintable assets",
+      "flip_x": "boolean",
+      "flip_y": "boolean",
+      "fps": "positive animation frames per second"
+    },
+    "progress": {
+      "color": "RGB565 fill",
+      "track": "RGB565"
+    },
+    "ring": {
+      "color": "RGB565 fill",
+      "track": "RGB565",
+      "label": "short string",
+      "font": "font ID",
+      "thickness": "integer1..r"
+    },
+    "gauge": {
+      "color": "RGB565 needle",
+      "thickness": "integer1..r"
+    },
+    "line_chart": {
+      "color": "RGB565 line",
+      "background": "RGB565 panel"
+    },
+    "bar_chart": {
+      "color": "RGB565 bars",
+      "background": "RGB565 panel"
+    },
+    "clock": {
+      "color": "RGB565",
+      "font": "font ID",
+      "width": "integer box width1..1024",
+      "align": "left|center|right"
+    },
+    "timer": {
+      "color": "RGB565",
+      "font": "font ID",
+      "width": "integer box width1..1024",
+      "align": "left|center|right"
+    }
   }
 }

@@ -3158,17 +3158,17 @@ local ui = {version="fire-app-sdk-1.0"}
 local d, floor, min, max = fire.display, math.floor, math.min, math.max
 local themes = {
  modern_dark={bg=2113,panel=6339,fg=65535,muted=35921,accent=1983,good=2024,bad=64170,border=10597},
- modern_light={bg=63422,panel=65535,fg=4258,muted=25388,accent=1468,good=1094,bad=53800,border=52857},
- minimal={bg=65535,panel=65535,fg=0,muted=31727,accent=0,good=1094,bad=53800,border=57083},
+ modern_light={bg=63422,panel=65535,fg=4258,muted=25388,accent=978,good=998,bad=49671,border=52857},
+ minimal={bg=65535,panel=65535,fg=0,muted=29582,accent=0,good=1094,bad=51720,border=57083},
  professional_instrument={bg=2145,panel=4258,fg=65470,muted=33840,accent=64960,good=2024,bad=63488,border=14823},
  industrial={bg=4226,panel=10565,fg=65470,muted=40179,accent=64960,good=1824,bad=63810,border=23275},
  retro_arcade={bg=2049,panel=6147,fg=65535,muted=38066,accent=63519,good=2016,bad=63488,border=22575},
- pixel_art={bg=2116,panel=8457,fg=65502,muted=33874,accent=64810,good=2000,bad=63530,border=19051},
- sci_fi={bg=2083,panel=4199,fg=55295,muted=25421,accent=2047,good=2032,bad=63855,border=12782},
- adventure={bg=6369,panel=14849,fg=65468,muted=44335,accent=62854,good=26272,bad=60098,border=29444},
+ pixel_art={bg=2116,panel=8457,fg=65502,muted=35955,accent=64810,good=2000,bad=63530,border=19051},
+ sci_fi={bg=2083,panel=4199,fg=55295,muted=31760,accent=2047,good=2032,bad=63855,border=12782},
+ adventure={bg=6369,panel=14849,fg=65468,muted=46416,accent=62854,good=26272,bad=60098,border=29444},
  nature={bg=2146,panel=6339,fg=63389,muted=35954,accent=22004,good=2024,bad=64170,border=16937},
  neon={bg=2051,panel=6215,fg=65535,muted=40180,accent=63519,good=2047,bad=64320,border=28787},
- classic_console={bg=8580,panel=16968,fg=65468,muted=42260,accent=64170,good=22240,bad=63488,border=29581}
+ classic_console={bg=8580,panel=16968,fg=65468,muted=48567,accent=64267,good=22240,bad=64268,border=29581}
 }
 local T=themes.modern_dark
 local scratch={}

@@ -30,7 +30,7 @@ end
 function update(dt_ms)
   ui.screen("Teller", "Trykk B for a telle")
   ui.card(10,55,300,135,"ANTALL",count,{font="digits28",icon="icon.activity"})
-  ui.buttons("","Tell","Nullstill","B")
+  ui.buttons(nil,"Tell","Nullstill","B")
 end
 ```
 
