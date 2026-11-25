@@ -203,6 +203,33 @@ have an estimated list-price cost of USD0.663989390. No physical AI-app
 installation or RUN command was created. Weather remains rejected with its
 source preserved; no additional weather request is authorized in this batch.
 
+The three retained Luna-ready apps were then updated in their existing
+projects, with the same app IDs and new0.1.2 versions. Temporary Luna/Luna
+requests kept the 4,000/2,000 output caps, full USD0.25 per-case admission
+and the global USD1 guard. Original packages were not overwritten.
+
+| RGB/settings update | Generations / reviews | Seconds | Estimated USD | Pipeline/standard result |
+| --- | ---: | ---: | ---: | --- |
+| Stopwatch | 2 / 2 | 75.854 | 0.008215695 | Ready / pass |
+| Calculator | 1 / 1 | 60.598 | 0.005054525 | Ready / pass |
+| Sensor dashboard | 2 / 2 | 87.892 | 0.008812760 | Ready / pass; sensor-status caveat below |
+
+All ten requests reported provider usage:169,047 input tokens (11,983
+cached),12,116 output tokens,224.344 summed seconds and USD0.022082980.
+Total estimated experimental spend through this checkpoint is USD0.686072370.
+Source-bound on/off tests exercised nonzero output on every LED and finished
+with all ten zero, for each app. The coordinator inspected the main images:
+the calculator preserves its keyboard and adds a navigable RGB choice; the
+stopwatch retains its core controls via a small options menu; the dashboard
+keeps its panels and replaces unsupported separators with ASCII.
+
+Static follow-up found a real dashboard fault-path issue: the Lua expression
+`index < 5 and accel_ok or temp_ok` can report a good left status when
+acceleration is invalid but temperature is valid. The measured ready/standard
+result remains historical and is not an exhaustive sensor-error approval.
+That precise source is retained for targeted correction. No physical app
+operation is established by the PC toggle tests or screenshots.
+
 One simulator accounting defect was reproduced with the same gallery source
 and duration: retaining more diagnostic frames increased the reported app
 memory, and eight captures could falsely exhaust the 128 KiB quota. The
