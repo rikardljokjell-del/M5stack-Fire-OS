@@ -217,7 +217,7 @@ class DeviceLifecycle:
                     raise ValueError("App failure requires error_code")
                 failed_package = self.store.get("packages", package_id)
                 self.quality.record(project_id=session.project_id,package_id=package_id,device_id=session.device_id,
-                    source_hash=failed_package["manifest"]["checksum"],message=(event.error_code+": "+(event.message or "")),provenance="device_receipt")
+                    source_hash=failed_package["manifest"]["checksum"],message=(event.error_code+": "+(event.message or "")),provenance="device_receipt",error_code=event.error_code)
                 self.finish_command(command, "failed")
                 device.update(running_package_id=None, runtime_status="failed", last_error=event.error_code,
                               active_run_id=None, pending_run_id=None,last_failure_package_id=package_id,last_failure_boot_id=session.boot_id)

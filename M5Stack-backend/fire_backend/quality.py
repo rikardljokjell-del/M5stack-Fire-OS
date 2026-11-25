@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 
 from .storage import new_id
 from .rendering import VISUAL_POLICY
-from .failure_learning import REGRESSION_CHECKS,regression_evidence,repair_delta,source_delta,source_from_archive,source_guard_eligible
+from .failure_learning import REGRESSION_CHECKS,regression_evidence,repair_delta,source_delta,source_from_archive,source_guard_eligible,deployment_failure,deployment_case
 
 
 class RepairChoiceNeeded(ValueError):
@@ -57,10 +57,11 @@ class Quality:
     def __init__(self, store):
         self.store = store
 
-    def record(self, *, project_id, package_id=None, source_hash=None, message, provenance, device_id=None, build_id=None,block_package=True):
+    def record(self, *, project_id, package_id=None, source_hash=None, message, provenance, device_id=None, build_id=None,block_package=True,error_code=None):
         package=self.store.get("packages",package_id) if package_id else None
         source_hash=source_hash or (package["manifest"]["checksum"] if package else None)
-        category = "installation" if provenance=="device_installation" else failure_class(message)
+        deployment=deployment_failure(provenance,error_code)
+        category = "installation" if deployment or provenance=="device_installation" else failure_class(message)
         safe = self.store.redactor.text(message)[:1200]
         fingerprint = hashlib.sha256(json.dumps([project_id, package_id, source_hash, category, safe, provenance], ensure_ascii=True).encode()).hexdigest()[:32]
         case_id = "case-" + fingerprint
@@ -71,21 +72,23 @@ class Quality:
                     "device_id":device_id,"build_id":build_id,"category":category,"message":safe,
                     "provenance":provenance,"status":"open","first_seen":time.time(),"count":0}
         case.update(count=case["count"]+1,last_seen=time.time())
+        if error_code is not None:case['error_code']=error_code
+        if deployment:case.update(failure_scope='deployment',package_blocking=False)
         case.setdefault("regression",regression_evidence(category))
         case.setdefault("failure_evidence",{"source_sha256":source_hash,"provenance":provenance,
             "physical_failure_observed":provenance in {"device_receipt","device_diagnostic"},"root_cause_verified":False})
         self.store.put("quality",case_id,case,critical=True)
         self.store.put("quality", "rule-"+category,
             {"id":"rule-"+category,"project_id":None,"category":category,"provenance":"fixed_rule_registry"},critical=True)
-        if package_id and block_package:
+        if package_id and block_package and not deployment:
             package["quality"]={"blocked":True,"case_id":case_id,"reason":category}
             self.store.put("packages",package_id,package,critical=True)
-        if package and source_hash and re.fullmatch(r"[a-f0-9]{64}",source_hash) and source_guard_eligible(provenance,package,safe):
+        if package and source_hash and re.fullmatch(r"[a-f0-9]{64}",source_hash) and source_guard_eligible(provenance,package,safe,error_code):
             # Survives deletion without retaining app names, source or logs.
             guard_id="bad-source-"+source_hash[:48]
             self.store.put("quality",guard_id,{"id":guard_id,"project_id":None,"category":category,
                 "source_sha256":source_hash,"provenance":"observed_native_source_failure", "last_seen":time.time()},critical=True)
-        if package_id and provenance in {"device_receipt","device_diagnostic"}:
+        if package_id and provenance in {"device_receipt","device_diagnostic"} and not deployment:
             for prior in self._project_cases(project_id):
                 if prior.get("candidate_package_id")==package_id:
                     prior.update(status="candidate_failed_on_device",candidate_failure_case_id=case_id)
@@ -142,7 +145,7 @@ class Quality:
         if any(c.get("provenance")=="observed_native_source_failure" and c.get("source_sha256")==source_hash for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a live app with an observed native runtime failure. Make a substantive repair before release.")
         if any(c.get("project_id")==project_id and c.get("source_sha256")==source_hash and c.get("package_id")
-               and c.get("provenance") not in {"device_installation","package_contract"} for c in self.store.list("quality")):
+               and c.get("provenance") not in {"device_installation","package_contract"} and not deployment_case(c) for c in self.store.list("quality")):
             raise ValueError("Generated source is identical to a version reported broken. Make a substantive repair before release.")
 
     def repair_target(self, service, session, text, *, source="text", continuing_repair=False):

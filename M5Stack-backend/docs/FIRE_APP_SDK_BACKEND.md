@@ -173,3 +173,10 @@ lokal kjøring, standardkrav, deretter review. Færre review-feil kan ikke velge
 en eldre kandidat som fortsatt feiler standardkrav. Resume gjenbruker kilde,
 aldri gammel reviewgodkjenning. Reparasjonstekst normaliseres kun i
 modellvisningen; gamle logger og forespørsler beholdes.
+
+Eksplisitte startfeil `not_installed`, `archive_mismatch` og `expired_command`
+fra enhetens run-kvittering er deploymentfeil før Lua-kjøring. Feilkvittering,
+feilhistorikk og mislykket run beholdes, men de sperrer ikke testet Lua-kilde.
+Vanlig installasjons-, arkiv- og startbekreftelse kreves fortsatt. Runtime-,
+init-, load- og sandboxfeil beholder kildesperren. En senere deploymentfeil
+fjerner aldri en uavhengig kilderelatert sperre.

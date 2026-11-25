@@ -31,10 +31,23 @@ def regression_evidence(category):
     }
 
 
-def source_guard_eligible(provenance, package, message):
+DEPLOYMENT_COMMAND_ERRORS=frozenset({'not_installed','archive_mismatch','expired_command'})
+
+
+def deployment_failure(provenance,error_code):
+    """Explicit authenticated run-command failure before Lua, not a source crash."""
+    return provenance=='device_receipt' and error_code in DEPLOYMENT_COMMAND_ERRORS
+
+
+def deployment_case(case):
+    code=case.get('error_code') or case.get('failure_evidence',{}).get('latest_feedback',{}).get('error_code')
+    return deployment_failure(case.get('provenance'),code)
+
+
+def source_guard_eligible(provenance, package, message, error_code=None):
     # Shared fixture code is not physical evidence. User reports and known
     # firmware/transport faults must not poison unrelated new app projects.
-    if provenance not in {"device_receipt", "device_diagnostic"} or package.get("mode") != "openai":
+    if deployment_failure(provenance,error_code) or provenance not in {"device_receipt", "device_diagnostic"} or package.get("mode") != "openai":
         return False
     text=message.casefold()
     if any(token in text for token in ("invalid lua source", "checksum", "download", "transport", "storage", "out of memory creating", "cannot create lua")):
