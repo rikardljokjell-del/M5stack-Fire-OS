@@ -224,8 +224,9 @@ class DeviceLifecycle:
                 restore = device.get("current") if device.get("current") != package_id else device.get("previous")
                 state = State.failed
                 if restore:
-                    self.verify_package(session, restore)
-                    rollback = self.issue_command(session, "rollback", restore, failed_package_id=package_id, start=False)
+                    restored_package=self.verify_package(session, restore)
+                    rollback = self.issue_command(session, "rollback", restore, failed_package_id=package_id, start=False,
+                        source_sha256=restored_package['manifest']['checksum'],archive_sha256=restored_package['archive_sha256'])
                     device["pending_rollback_id"] = rollback["id"]
                     self.store.put("devices", device["id"], device, critical=True)
                     await self.state(session, State.rollback_pending)

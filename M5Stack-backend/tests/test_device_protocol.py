@@ -183,6 +183,12 @@ def test_three_versions_and_confirmed_rollback(tmp_path):
             device.send("app_failed", package_id=ids[2], run_id=run["run_id"], error_code="lua-error")
             rollback = device.until("rollback_request")
             assert rollback["package_id"] == ids[1] and rollback["start"] is False
+            restored=client.app.state.backend.store.get('packages',ids[1])
+            failed=client.app.state.backend.store.get('packages',ids[2])
+            assert rollback['source_sha256']==restored['manifest']['checksum']
+            assert rollback['archive_sha256']==restored['archive_sha256']!=failed['archive_sha256']
+            saved=client.app.state.backend.store.get('commands',rollback['rollback_id'])
+            assert (saved['source_sha256'],saved['archive_sha256'])==(rollback['source_sha256'],rollback['archive_sha256'])
             assert client.get("/devices/fire-01", headers=headers()).json()["current"] == ids[2]
             sent = device.send("rollback_result", package_id=ids[1], rollback_id=rollback["rollback_id"], status="ok")
             device.ack(sent)

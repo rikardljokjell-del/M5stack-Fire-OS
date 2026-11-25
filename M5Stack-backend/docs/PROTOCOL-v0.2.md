@@ -213,7 +213,9 @@ Persist consumed run_id on FIRE BEFORE starting. Repeated run_request must retur
 the original receipt and never start twice. Expired/old-boot commands are rejected.
 `stop_request`: stop_id, run_id, package_id, boot_id, expires_at.
 `rollback_request`: rollback_id, package_id (restore target), failed_package_id,
-boot_id, expires_at, start=false. These commands are distinct from user confirmations.
+source_sha256, archive_sha256, boot_id, expires_at, start=false. Both hashes come
+from the verified restore package, never the failed candidate. These commands
+are distinct from user confirmations.
 
 Device record separates installed_package_id, running_package_id, runtime_status,
 current (last healthy version), previous, backup. On disconnect/restart online=false
