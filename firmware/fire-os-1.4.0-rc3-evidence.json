@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "candidate": true,
+  "production_verified": false,
+  "guide": "M5Stack-backend/docs/FIRE_OS_UI.md",
+  "version": "fire-os-1.4.0-rc3",
+  "source_commit": "72dc9b494550aa0fa1078641b727152846f4cac8",
+  "foundation": "Unchanged physically verified RC2 bootloader/table/recovery from RC9 bundle",
+  "changes": [
+    "Main-menu tile icon/badge and title centered within each of the four cards",
+    "OS and Home footer shows centered action names without separate A/B/C letters"
+  ],
+  "unchanged": [
+    "AA font/icon/corner data and renderer",
+    "Four-card main-menu grid and physical button bindings",
+    "App SDK and Runtime AI contracts/rendering/quotas",
+    "Home protocol, permissions, persistent settings and app data"
+  ],
+  "physical_usb": {
+    "verified": true,
+    "active": "A/app0 sequence49 VALID/CRC",
+    "fallback": "Accepted UI RC2 B/app1 sequence48 VALID/CRC",
+    "flash_md5_verified": true,
+    "exact_normal_length_sha256_readback": true,
+    "full_slot_ff_suffix_rechecked": false,
+    "health_seconds": 45.06,
+    "ordinary_reboot_seconds": 35.183,
+    "panic": 0,
+    "abort": 0,
+    "watchdog": 0,
+    "com_closed": true,
+    "local_evidence_sha256": "63478546f6f5e56cba2edc5264b9c296a055d64b9a07ebbca6e9b13e5bfbbee9",
+    "health_loop_max_us": 148315,
+    "normal_reboot_loop_max_us": 124164,
+    "health_gap_max_us": 153953,
+    "normal_reboot_gap_max_us": 129016,
+    "these_are_not_measured_button_latencies": true,
+    "backend_observation_sha256": "9ecaa52691dd38332738db84f86082ebd5413160e4d72df047417b34bb415149"
+  },
+  "user_visual_acceptance": false,
+  "all_old_versioned_artifacts_preserved": true,
+  "limitations": [
+    "User appearance and navigation acceptance pending",
+    "No new live Home Assistant control, Runtime AI request or OTA/SD transfer was triggered by this UI verification",
+    "No claim that the fixed 320x240 physical resolution is increased"
+  ],
+  "backend_physical_observation": {
+    "firmware": "fire-os-1.4.0-rc3",
+    "new_boot": true,
+    "sdk_contract_unchanged": true,
+    "runtime_ai_contract_unchanged": true,
+    "storage_ready": true,
+    "current_boot_epoch_inventory_complete": true,
+    "present_count": 12,
+    "original_app_ids_preserved": 7,
+    "versions_unchanged_claimed": false,
+    "app_commands_or_agent_ai_calls": 0
+  },
+  "previous_ui_feedback": "User confirmed RC2 looks good, then requested centered tile contents and no ABC footer labels",
+  "ci": {
+    "run": 45687899559,
+    "job": 139465266498,
+    "artifact": 15058435035,
+    "native_tests": 24,
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "strict_native_run": 45687899464
+  },
+  "firmware": {
+    "name": "fire-os-1.4.0-rc3.bin",
+    "size": 2524960,
+    "sha256": "30091789ea111c247cbd5963fd2e72a1469f56df21dfb5ff0c90bcb023f5a14c"
+  },
+  "migration": {
+    "name": "fire-os-1.4.0-rc3-usb.zip",
+    "size": 2583940,
+    "sha256": "946806bcda7726c13bdcbc3159810d0f704d0a5e6a6e980d9d44a540ae30f7e7",
+    "manifest_sha256": "d9b39defa8f41bae8bfb17d113969a02921f27a4dfcfeabd326da1dd0aa39d06",
+    "files": [
+      "APP_SDK_NOTICES.txt",
+      "app-sdk-licenses/1-bit-pack.txt",
+      "app-sdk-licenses/atkinson-OFL.txt",
+      "app-sdk-licenses/legacy-font.txt",
+      "app-sdk-licenses/lucide.txt",
+      "app-sdk-licenses/pixel-OFL.txt",
+      "app-sdk-licenses/pixel-platformer.txt",
+      "app-sdk-licenses/tiny-dungeon.txt",
+      "app-sdk-licenses/tiny-town.txt",
+      "bootloader.bin",
+      "catalog-v2.json",
+      "migration.json",
+      "migration.sig",
+      "normal.bin",
+      "partitions.bin",
+      "recovery.bin",
+      "release-public.pem"
+    ],
+    "required_signed_core_files": 8,
+    "license_notice_files": 9
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "30091789ea111c247cbd5963fd2e72a1469f56df21dfb5ff0c90bcb023f5a14c",
+      "size": 2524960
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "compile_footprint": {
+    "static_ram_bytes": 63796,
+    "iram_spare_bytes": 1128,
+    "previous_ui_rc2_normal_bytes": 2525072,
+    "normal_bytes_reduction": 112,
+    "compile_numbers_are_runtime_performance_proof": false
+  },
+  "pc_visual_verification": {
+    "actual_cpp_fonts_icons_and_drawing_helpers": true,
+    "representative_screens": 6,
+    "preview_artifact": 15056194160,
+    "preview_artifact_sha256": "e00407a9b6625d939f14bed50b74e393538f11b4ea35df770fd1b838fde6e8bd",
+    "bounded_surface_writes": true,
+    "new_device_framebuffers": 0,
+    "physical_home_assistant_verified": false
+  },
+  "catalog_note": "New signed index corrects RC2 description text only; original RC2 catalog and every versioned file stay byte-identical."
+}

@@ -116,3 +116,29 @@ Backend mottok deretter en ny RC2-oppstart med uendrede SDK-/Runtime
 AI-kontrakter og komplett, ferskt SD-inventar for den oppstarten: tolv apper,
 inkludert alle de opprinnelige sju app-ID-ene. Brukerredigerte versjoner
 hevdes ikke å være uendret. Ingen appkommando eller AI-kall ble sendt.
+
+## RC3: sentrerte hovedmenykort og enklere knapperad
+
+Etter at brukeren bekreftet at RC2 så bra ut, er ikon og appnavn sentrert
+i hvert hovedmenykort. Knapperaden i OS og Home viser bare handlingene,
+uten egne A/B/C-bokstaver. Venstre/midt/høyre knapp har samme funksjon
+som før. Kantutjevningen og resten av utformingen er uendret.
+
+Kilde `72dc9b494550aa0fa1078641b727152846f4cac8`, CI45687899559: 24
+native tester, seks faktiske C++-tegnede skjermer og tre bygg består.
+Strenge C++-kontroller bestod separat i CI45687899464. Normalbildet er
+2 524 960 byte, SHA256
+`30091789ea111c247cbd5963fd2e72a1469f56df21dfb5ff0c90bcb023f5a14c`.
+Statisk RAM og IRAM-margin er uendret. Den nye signerte pakken har også
+bestått uavhengig signatur-/hash-/bilde-/layoutkontroll.
+
+RC3 er fysisk kontrollert med MD5/SHA256 og kjører i A49 VALID/CRC. Den
+aksepterte, polerte RC2-utgaven er beholdt i B48. Helsekontroll 45,06 sekunder
+og vanlig omstart 35,183 sekunder ga ingen panic/abort/watchdog, og COM er
+lukket. Eksisterende logger viste maks loop/gap 148,315/153,953 ms og
+124,164/129,016 ms etter omstart. Dette er oppstartsmaksima, ikke en måling
+av knappetrykk eller isolert tegning. Ingen AI- eller HA-kall ble utløst.
+
+Backend bekreftet en ny RC3-oppstart med uendrede kontrakter og ferskt,
+komplett inventar for den oppstarten: tolv apper, inkludert de opprinnelige
+sju app-ID-ene. Ingen appkommandoer eller betalte AI-kall ble sendt.

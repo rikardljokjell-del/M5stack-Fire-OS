@@ -1,6 +1,33 @@
 # FIRE OS firmware
 
-## Aktuell testkandidat: fire-os-1.4.0-rc2
+## Aktuell testkandidat: fire-os-1.4.0-rc3
+
+Sentrerte ikoner og navn i de fire hovedmenykortene. Knapperaden i OS og
+Home viser bare handlingene, uten A/B/C-bokstaver. Samme knappefunksjoner,
+kantutjevning, SDK og Home-tilgang som før. Ingen ekstra skjermbuffer.
+
+RC3 er installert i A49 VALID/CRC med eksakt MD5/SHA256-tilbakekontroll.
+Den aksepterte polerte RC2-utgaven er bevart i B48. Helsekontroll 45,06s og
+vanlig omstart 35,183s ga ingen panic/abort/watchdog; COM er lukket.
+
+[Normal firmware](fire-os-1.4.0-rc3.bin) ·
+[signert USB-pakke](fire-os-1.4.0-rc3-usb.zip) ·
+[kontrollsummer](fire-os-1.4.0-rc3-SHA256SUMS.txt) ·
+[utgivelsesbevis](fire-os-1.4.0-rc3-evidence.json) ·
+[lisensinformasjon](fire-os-1.4.0-rc3-NOTICES.txt).
+
+Kilde `72dc9b4`, CI45687899559: 24 native tester, seks tegnede
+forhåndsvisninger og tre bygg består; strenge C++-kontroller består separat.
+Statisk RAM er fortsatt 63 796 byte og IRAM-margin 1 128 byte. Signert
+USB-pakke er kontrollert i ny utpakking og beholder testet bootloader,
+partisjonstabell, recovery og alle lisens-/varselfiler.
+
+Alle eldre publiserte firmwarefiler beholdes byteidentisk, inkludert
+[RC2](fire-os-1.4.0-rc2.bin) og dens [originale katalog](fire-os-1.4.0-rc2-catalog.json).
+Aktiv katalog har åtte valg; eldre utgaver ligger fortsatt i arkivet.
+Se [UI-veiledning og kontrollstatus](../M5Stack-backend/docs/FIRE_OS_UI.md).
+
+## Historisk polert UI-kandidat: fire-os-1.4.0-rc2
 
 Polert OS og Home med kantutjevnet tekst, proporsjonale små etiketter,
 ikoner tegnet i riktig størrelse og jevnere avrundede kort-/knappekanter.

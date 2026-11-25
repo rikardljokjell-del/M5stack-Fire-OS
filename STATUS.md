@@ -18,20 +18,20 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-### Polert FIRE OS og Home – installert 1.4.0-rc2
+### Polert FIRE OS og Home – installert 1.4.0-rc3
 
-Fire appkort per side, uendret A/C/B og felles utforming i OS/Home er på plass.
-Etter brukerens første prøve er tekst og ikoner nå kantutjevnet fra originale
-font-/ikonfiler. Små etiketter er proporsjonale, og kort/knapper har jevnere
-avrundede kanter. Ingen ekstra skjermbuffer eller endring av SDK/Runtime AI,
-Home-rettigheter, protokoll, lagrede valg eller appdata.
+Fire appkort per side og felles utforming i OS/Home er på plass. Tekst og
+ikoner er kantutjevnet, og kort/knapper har jevnere avrundede kanter. Brukeren
+bekreftet at RC2 så bra ut; deretter ble ikon og navn sentrert i hvert
+hovedmenykort. Knapperaden viser nå bare handlingene, uten A/B/C-merker.
+Fysiske knappetrykk, lagrede valg og appdata fungerer etter samme logikk.
 
-24 native tester, alle tre bygg og strenge C++-kontroller består. Seks
-faktiske C++-tegnede forhåndsvisninger er kontrollert. Statisk RAM/IRAM-margin
-er uendret. Eksakt CI-bilde er fysisk MD5/SHA256-kontrollert og helsegodkjent
-i B48 VALID/CRC; UI RC1 A47 er urørt reserve. Vanlig omstart bestod uten
-panic/watchdog, COM er lukket. Ingen ny stor løkkestopp ble observert i de
-korte oppstartsloggene; brukerens utseende-/responsprøve pågår.
+Ingen ekstra skjermbuffer eller endring av SDK/Runtime AI, Home-rettigheter
+eller protokoll. 24 native tester, seks faktiske C++-tegnede skjermer, tre
+bygg og strenge C++-kontroller består. Statisk RAM/IRAM-margin er uendret.
+Eksakt RC3 er fysisk MD5/SHA256-kontrollert og helsegodkjent i A49 VALID/CRC;
+akseptert RC2 B48 er urørt reserve. Vanlig omstart bestod uten panic/watchdog,
+COM er lukket. Oppstartsmaksima er ikke en måling av knapperespons.
 Alle eldre publiserte firmwareversjoner beholdes. HA-styring er ikke
 bekreftet av denne UI-prøven. Se [UI-veiledningen](M5Stack-backend/docs/FIRE_OS_UI.md).
 
