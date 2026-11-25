@@ -4,7 +4,30 @@ Samlet arbeid følger [godkjent plan](DELIVERY_PLAN.md). Bruk
 [oppsettsveiledningen](SETUP.md) som inngang. Dette dokumentet skiller kildekode,
 lokale tester og faktisk fysisk verifikasjon.
 
+## Åpne gjøremål
+
+- [ ] **GitHub-firmware til SD: skrivefeil etter nedlasting.** Brukeren meldte
+  25. november 2026, etter RC9-leveransen, at nedlastingen ble etterfulgt av
+  feilmeldingen «SD-skriving feilet». Feilen er åpen; årsak og gjeldende
+  enhetsstatus er ikke undersøkt på nytt. Tidligere beståtte tester nedenfor
+  er avgrensede resultater og betyr ikke at brukerflyten er feilfri.
+  **Kun notert etter brukerens ønske. Ingen feilsøking eller retting nå.**
+
 ## Status nå
+
+### FIRE App SDK – under implementering
+
+SDK-arbeidet er godkjent og pågår i eksisterende firmware/backend. Felles
+grafikk-/fontdata, UI-kit, temaer og kontrakt ligger i
+`M5Stack-backend/fire_backend/data/app_sdk/` og
+`M5Stack-backend/contracts/APP_SDK-v1.json`. Se
+[SDK-veiledningen](M5Stack-backend/docs/FIRE_APP_SDK.md).
+Eksisterende Lua-apper og hardwarehash skal bevares; SDK krever eksplisitt
+ny kapabilitet. Simulator, Studio-preview og eksisterende AI-review utvides
+samordnet. Innhold og tidlige PC-tester er ikke fysisk SDK-verifikasjon.
+Den registrerte firmware-SD-skrivefeilen over undersøkes ikke i dette arbeidet.
+
+### Sist fysisk overlevert firmware
 
 **RC9** viderefører et separat **Last ned til SD** uten installering eller
 omstart. Filen hentes til avgrenset PSRAM, lengde/hash kontrolleres og alle

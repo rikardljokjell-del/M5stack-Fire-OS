@@ -23,16 +23,21 @@ local ui=fire.ui
 local count=0
 function init() ui.set_theme("modern_dark") end
 function on_button(button,action)
-  if action=="pressed" and button=="B" then count=count+1 end
+  if action~="pressed" then return end
+  if button=="B" then count=count+1 end
+  if button=="C" then count=0 end
 end
 function update(dt_ms)
   ui.screen("Teller", "Trykk B for a telle")
   ui.card(10,55,300,135,"ANTALL",count,{font="digits28",icon="icon.activity"})
-  ui.buttons("Hjem","Tell","Tilbake","B")
+  ui.buttons("","Tell","Nullstill","B")
 end
 ```
 
 Reserve the bottom button bar at y=211. The usual body is y=48..201.
+Button labels follow the physical left/middle/right A/B/C order. UI helpers
+draw controls; the app implements their actions in `on_button`. A label
+must never advertise an action that the app does not handle.
 Layouts are composition starting points, not restrictions on custom drawing.
 Do not use init-only graphics, partial redraws or automatic app-close timers.
 
