@@ -32,6 +32,11 @@ fullkjøring hevdes. Windows-backenden er aktivert med bevarte innstillinger/nø
 er fysisk installert og helsegodkjent i B38; RC9A37 er reserve. Faktiske
 appstart-/Runtime AI-resultater og opplevd respons gjenstår i sluttprøven.
 
+Fersk fysisk prøve: begge manuelle testapper installeres korrekt.
+Oppdragsappen stoppet etter152 frames/11,485s på24,278ms update over24ms.
+Ingen AI-kall var sendt. Det undersøkes en avgrenset generell tegneoptimalisering;
+Runtime AI er fortsatt ikke fysisk sluttgodkjent.
+
 Se [Runtime AI og teststeg](M5Stack-backend/docs/RUNTIME_AI.md). Tidligere
 appspesifikke 24 ms-feil er ikke friskmeldt. SD-skrivefeilen over er utsatt.
 

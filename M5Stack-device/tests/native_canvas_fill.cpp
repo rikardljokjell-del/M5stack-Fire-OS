@@ -14,6 +14,7 @@ struct Canvas {
   int clipX=0,clipY=0,clipW=320,clipH=240;
   size_t storage=bytes;bool nullBuffer=false,swap=true;
   uint16_t current=0;unsigned fallbackCalls=0;
+  unsigned colorCalls=0;mutable unsigned rawReads=0;
   int last[4]={};uint16_t lastColor=0;
   Canvas() {memory.fill(0xa5);}
   uint8_t* pixels() {return memory.data()+guard+offset;}
@@ -22,8 +23,8 @@ struct Canvas {
   int width() const {return w;} int height() const {return h;}
   int getColorDepth() const {return depth;} int getRotation() const {return rotation;}
   void getClipRect(int* x,int* y,int* cw,int* ch) {*x=clipX;*y=clipY;*cw=clipW;*ch=clipH;}
-  void setColor(uint16_t color) {current=swap?uint16_t((color<<8)|(color>>8)):color;}
-  uint32_t getRawColor() const {return current;}
+  void setColor(uint16_t color) {++colorCalls;current=swap?uint16_t((color<<8)|(color>>8)):color;}
+  uint32_t getRawColor() const {++rawReads;return current;}
   // Independent scalar pixel oracle. Does not use clipping/span helpers under test.
   void fillRect(int x,int y,int rw,int rh,uint16_t color) {
     ++fallbackCalls;last[0]=x;last[1]=y;last[2]=rw;last[3]=rh;lastColor=color;
@@ -101,6 +102,27 @@ void fallback() {
     assert(actual.last[0]==-3 && actual.last[1]==5 && actual.last[2]==11 && actual.last[3]==height && actual.lastColor==0x0812);
   }
 }
+void repeatedSpanColors() {
+  for(int offset:{0,2}) for(bool swap:{false,true}) {
+    reset(offset,swap);fire_canvas_fill::Surface<Canvas> surface(actual);
+    const auto draw=[&](int x,int y,int w,int h,uint16_t color) {
+      expected.fillRect(x,y,w,h,color);surface.fillRect(x,y,w,h,color);equal();
+    };
+    // First use is clipped away, but must still set current-color correctly.
+    draw(-20,4,3,1,0x1234);
+    for(int row=0;row<100;++row) draw(row%13,row,19,1,0x1234);
+    assert(actual.colorCalls==1 && actual.rawReads==1 && !actual.fallbackCalls);
+    draw(319,239,3,1,0xabcd);draw(400,400,3,1,0xabcd);
+    assert(actual.colorCalls==2 && actual.rawReads==2);
+    // Native multi-row fallback changes the canvas color and invalidates even
+    // when the next raw span uses the previously cached RGB565 value.
+    draw(2,3,7,4,0x4567);
+    assert(actual.fallbackCalls==1 && actual.colorCalls==3 && actual.rawReads==2);
+    draw(5,7,9,1,0xabcd);draw(8,9,2,1,0xabcd);
+    assert(actual.colorCalls==4 && actual.rawReads==3);
+  }
+  puts("PASS Surface repeated-span color conversion reuse and fallback invalidation");
+}
 void sharedAssetsAndFonts() {
   size_t index=0;
   for(const auto& asset:FireSdkData::kAssets) {
@@ -147,6 +169,6 @@ void shapes() {
 }
 } // namespace
 int main() {
-  allColors();rectangles();fallback();sharedAssetsAndFonts();shapes();
+  allColors();rectangles();fallback();repeatedSpanColors();sharedAssetsAndFonts();shapes();
   puts("PASS canvas raw16 all65536 colors alignment canaries clipping fallback color-state and shared SDK raster parity");
 }

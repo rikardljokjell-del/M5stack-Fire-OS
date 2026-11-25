@@ -9,6 +9,11 @@ RC9 er beholdt i A, sekvens37 VALID/CRC. Hele B er tilbakekontrollert;
 45,1s helsekontroll og 20,1s vanlig omstart ga ingen panic/watchdog.
 Dette er en testkandidat, ikke generell produksjonsgodkjenning av alle apper.
 
+**Fersk fysisk begrensning:** Den lille «AI Oppdrag test»-appen ble installert,
+men stoppet etter152 frames/11,485s med update-callback24,278ms over
+24ms-grensen. Ingen AI-kall var utløst. Runtime AI er derfor fortsatt ikke
+fysisk sluttgodkjent; en konkret generell tegneoptimalisering undersøkes.
+
 - [Normal firmware](fire-os-1.3.0-rc3.bin)
 - [Signert USB-arkiv](fire-os-1.3.0-rc3-usb.zip) – åtte signerte kjernefiler
   pluss ni SDK-lisens-/varselfiler, signatur/hash/bilde/layout kontrollert
