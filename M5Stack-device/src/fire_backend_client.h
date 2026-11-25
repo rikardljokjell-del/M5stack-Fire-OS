@@ -18,6 +18,9 @@ class FireBackendClient {
   void setConversationMode(const String& mode);
   void setRuntimeAiMode(const String& mode,bool publish=true);
   void setAppMode(const String& mode, const String& basePackageId = String());
+  void setDevelopmentContext(const String& context) {
+    developmentContext_=context;pendingAppMode_=String();pendingBasePackageId_=String();projectId_=String();
+  }
   void setCallbacks(void* context, MessageCallback message,
                     StateCallback state);
   void setReverseTransport(FireReverseTransport* transport) {
@@ -32,9 +35,13 @@ class FireBackendClient {
   bool beginAudioUpload(const String& turnId, const uint8_t* wavData,
                         size_t wavLength);
   bool beginAudioDownload(const String& url, uint8_t* buffer, size_t capacity);
+  bool beginDataUpload(const String& request,const String& dataset,const String& part,
+                       uint32_t offset,const String& chunkHash,const uint8_t* bytes,size_t length);
+  const String& dataUploadNext() const {return dataUploadNext_;}
   void cancelAudioTransfer();
   bool audioTransferActive() const { return audioTransferRunning_; }
-  bool audioTransferFinished() const { return !audioTransferRunning_ && audioTransferFinished_; }
+  bool audioTransferFinished() const { return (dataTransferActive_ && dataChunkDone_) || (!audioTransferRunning_ && audioTransferFinished_); }
+  bool dataTransferActive() const {return dataTransferActive_;}
   bool audioTransferOk() const { return audioTransferOk_; }
   size_t audioTransferLength() const { return audioTransferLength_; }
 
@@ -71,6 +78,15 @@ class FireBackendClient {
                         const String& data,const String& schema,uint32_t timeoutMs);
   bool runtimeAiCancel(const String& requestId,const String& appId,const String& packageId,
                        const String& sourceHash,const String& runId);
+  bool dataRequest(const String& requestId,const String& appId,const String& packageId,
+                   const String& sourceHash,const String& runId,const String& operation,
+                   const String& datasetId,const String& options,const String& datasets);
+  bool dataCancel(const String& requestId,const String& appId,const String& packageId,
+                  const String& sourceHash,const String& runId);
+  bool appDevelop(const String& requestId,const String& appId,const String& packageId,
+                  const String& sourceHash,const String& runId,const String& mode,
+                  const String& instruction,const String& ids,const String& datasets);
+  bool confirmObservation(const String& context,const String& action,const String& eventId);
   bool appRepairPrepare(const String& appId, const String& packageId,
                         const String& appVersion, const String& sha256,
                         const String& errorCode, const String& message,
@@ -135,13 +151,14 @@ class FireBackendClient {
   String runtimeAiMode_ = "auto";
   String pendingAppMode_;
   String pendingBasePackageId_;
+  String developmentContext_;
   bool sessionStarted_ = false;
   uint32_t lastServerSeq_ = 0;
   uint32_t handshakeStartedAt_ = 0;
   uint32_t lastReceiveAt_ = 0;
   uint32_t lastPingAt_ = 0;
   uint32_t lastPongAt_ = 0;
-  enum class AudioTransfer : uint8_t { None, Upload, Download };
+  enum class AudioTransfer : uint8_t { None, Upload, Download, DataUpload };
   AudioTransfer audioTransfer_ = AudioTransfer::None;
   TaskHandle_t audioTask_ = nullptr;
   std::atomic<bool> audioTransferRunning_{false};
@@ -154,6 +171,9 @@ class FireBackendClient {
   const uint8_t* audioTransferUploadData_ = nullptr;
   uint8_t* audioTransferDownloadBuffer_ = nullptr;
   size_t audioTransferBytes_ = 0;
+  String dataUploadDataset_,dataUploadPart_,dataUploadHash_,dataUploadNext_;
+  uint32_t dataUploadOffset_=0,dataUploadResponseOffset_=0;
+  std::atomic<bool> dataTransferActive_{false},dataChunkReady_{false},dataChunkDone_{false};
   // Immutable for the lifetime of one audio task, including config changes.
   String audioHost_, audioToken_, audioSession_;
   uint16_t audioPort_ = 0;

@@ -1,4 +1,5 @@
 #include "fire_audio_capture.h"
+#include "fire_audio_capture_core.h"
 
 #include <M5Unified.h>
 #include <driver/adc.h>
@@ -21,6 +22,7 @@ struct CaptureState {
   int16_t* target = nullptr;
   size_t maxSamples = 0;
   uint32_t sampleRate = 0;
+  bool rawMeasurement = false;
   std::atomic<size_t> capturedSamples{0};
   std::atomic<bool> running{false};
   std::atomic<bool> stopRequested{false};
@@ -81,13 +83,11 @@ void micCaptureTask(void*) {
       if (++rawInAverage < kOversampling) continue;
       rawInAverage = 0;
 
-      const size_t outputIndex =
-          capture.capturedSamples.fetch_add(1, std::memory_order_acq_rel);
+      const size_t outputIndex=capture.capturedSamples.load(std::memory_order_relaxed);
       if (outputIndex >= capture.maxSamples) break;
-      capture.target[outputIndex] =
-          processSpeechSample((rawSum + (kOversampling / 2)) /
-                                  static_cast<int32_t>(kOversampling),
-                              baselineQ16);
+      const int32_t average=(rawSum+(kOversampling/2))/static_cast<int32_t>(kOversampling);
+      const int16_t sample=capture.rawMeasurement?fire_audio_capture_core::rawPcm(average):processSpeechSample(average,baselineQ16);
+      fire_audio_capture_core::publish(capture.target,outputIndex,sample,capture.capturedSamples);
       rawSum = 0;
     }
   }
@@ -129,7 +129,7 @@ bool installAdcDma(uint32_t sampleRate) {
 }  // namespace
 
 bool fireStartMicCapture(int16_t* target, size_t maxSamples,
-                         uint32_t sampleRate) {
+                         uint32_t sampleRate,bool rawMeasurement) {
   if (!target || maxSamples == 0 || sampleRate == 0 ||
       !M5.Mic.isEnabled() || capture.running.load(std::memory_order_acquire) ||
       capture.driverInstalled) {
@@ -145,6 +145,7 @@ bool fireStartMicCapture(int16_t* target, size_t maxSamples,
   capture.target = target;
   capture.maxSamples = maxSamples;
   capture.sampleRate = sampleRate;
+  capture.rawMeasurement = rawMeasurement;
   capture.capturedSamples.store(0, std::memory_order_release);
   capture.stopRequested.store(false, std::memory_order_release);
   capture.failed.store(false, std::memory_order_release);
@@ -202,15 +203,23 @@ bool fireReleaseMicCapture() {
     vTaskDelay(1);
   }
 
-  // A stopped I2S read returns promptly; stop the peripheral as a final
-  // watchdog-safe guard before uninstalling its DMA descriptors.
+  if (capture.running.load(std::memory_order_acquire)) {
+    i2s_stop(I2S_NUM_0);
+    return false; // only the producer may acknowledge exit; retain its buffer
+  }
+  return fireTryReleaseMicCapture();
+}
+
+bool fireTryReleaseMicCapture() {
+  fireStopMicCapture();
+  if (capture.running.load(std::memory_order_acquire)) return false;
+  if (!capture.driverInstalled) return true;
   i2s_stop(I2S_NUM_0);
   if (capture.driverInstalled) {
     i2s_adc_disable(I2S_NUM_0);
     i2s_driver_uninstall(I2S_NUM_0);
     capture.driverInstalled = false;
   }
-  capture.running.store(false, std::memory_order_release);
 
   if (capture.speakerWasEnabled) M5.Speaker.begin();
   capture.speakerWasEnabled = false;

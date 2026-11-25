@@ -1,6 +1,8 @@
 #include "fire_lua_runtime.h"
 #include "fire_app_sdk_data.h"
 #include "fire_runtime_ai_json.h"
+#include "fire_data_engine_contract.h"
+#include "fire_data_paths.h"
 #include "fire_app_bitmap.h"
 
 #include <esp_heap_caps.h>
@@ -37,6 +39,7 @@ constexpr uint32_t kServiceSd = 1u << 17;
 constexpr uint32_t kServicePower = 1u << 18;
 constexpr uint32_t kServiceRtc = 1u << 19;
 constexpr uint32_t kServiceAi = 1u << 20;
+constexpr uint32_t kServiceData = 1u << 21;
 
 int boundedInt(lua_State* state, int index, int minimum, int maximum) {
   const lua_Integer value = luaL_checkinteger(state, index);
@@ -326,7 +329,40 @@ void FireLuaRuntime::registerApi(lua_State* state) {
     setFunction(state, "stop", speakerStop);
     lua_setfield(state, -2, "speaker");
   }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime, kServiceMic) &&
+      serviceAllowed(runtime, kServiceJobs) && serviceAllowed(runtime, kServiceSd) &&
+      runtime->host_.micRecord) {
+    lua_newtable(state);
+    setFunction(state, "level", micLevel);
+    setFunction(state, "record", micRecord);
+    lua_setfield(state, -2, "mic");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime,kServiceBluetooth) &&
+      serviceAllowed(runtime,kServiceJobs) && runtime->host_.bluetoothRequest) {
+    lua_newtable(state);setFunction(state,"scan",bluetoothScan);
+    setFunction(state,"read_gatt",bluetoothReadGatt);setFunction(state,"write_gatt",bluetoothWriteGatt);
+    setFunction(state,"advertise",bluetoothAdvertise);setFunction(state,"close",bluetoothClose);
+    if (runtime->appSdk_ && runtime->dataEngine_ && serviceAllowed(runtime,kServiceData))
+      setFunction(state,"advertise_raw",bluetoothAdvertiseRaw);
+    lua_setfield(state,-2,"bluetooth");
+  }
+  if (runtime->hardwareApi_ && serviceAllowed(runtime,kServiceWifi) && runtime->host_.wifiStatus) {
+    lua_newtable(state);setFunction(state,"status",wifiStatus);
+    if (serviceAllowed(runtime,kServiceJobs) && runtime->host_.wifiScan) setFunction(state,"scan",wifiScan);
+    lua_setfield(state,-2,"wifi");
+  }
 
+  if (runtime->hardwareApi_ && runtime->appSdk_ && runtime->dataEngine_ &&
+      serviceAllowed(runtime,kServiceData) && serviceAllowed(runtime,kServiceJobs) &&
+      serviceAllowed(runtime,kServiceSd) && runtime->host_.dataRequest) {
+    lua_newtable(state);
+    setFunction(state,"create",dataCreate);setFunction(state,"append",dataAppend);
+    setFunction(state,"mark",dataMark);setFunction(state,"seal",dataSeal);
+    setFunction(state,"info",dataInfo);setFunction(state,"read",dataRead);
+    setFunction(state,"record",dataRecord);setFunction(state,"process",dataProcess);
+    setFunction(state,"develop",dataDevelop);
+    lua_setfield(state,-2,"data");
+  }
   lua_setglobal(state, "fire");
 }
 
@@ -826,11 +862,14 @@ bool FireLuaRuntime::button(const char* name, const char* action) {
   }
   lua_pushstring(lua_, name);
   lua_pushstring(lua_, action);
+  callbackButtonPressed_ = action && !strcmp(action,"pressed");
   beginCallback(CallbackPhase::OnButton, kMaxCallbackMs);
   if (lua_pcall(lua_, 2, 0, 0) != LUA_OK) {
+    callbackButtonPressed_ = false;
     finishCallback();
     return fail(String("Lua on_button: ") + lua_tostring(lua_, -1));
   }
+  callbackButtonPressed_ = false;
   return finishCallback();
 }
 
@@ -1143,6 +1182,7 @@ int FireLuaRuntime::rgbSet(lua_State* state) {
 int FireLuaRuntime::imuAccel(lua_State* state) {
   auto* runtime = self(state);
   if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  if (runtime->dataEngine_ && runtime->host_.imuBusy && runtime->host_.imuBusy(runtime->host_.context)) return pushError(state,"busy");
   float x = 0.0f, y = 0.0f, z = 0.0f;
   if (runtime->host_.imuAccel) runtime->host_.imuAccel(runtime->host_.context, &x, &y, &z);
   lua_newtable(state);
@@ -1158,6 +1198,7 @@ int FireLuaRuntime::imuAccel(lua_State* state) {
 int FireLuaRuntime::imuGyro(lua_State* state) {
   auto* runtime = self(state);
   if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  if (runtime->dataEngine_ && runtime->host_.imuBusy && runtime->host_.imuBusy(runtime->host_.context)) return pushError(state,"busy");
   float x = 0.0f, y = 0.0f, z = 0.0f;
   if (!runtime->host_.imuGyro ||
       !runtime->host_.imuGyro(runtime->host_.context, &x, &y, &z))
@@ -1678,6 +1719,188 @@ int FireLuaRuntime::rtcSet(lua_State* state) {
   return 1;
 }
 
+namespace {
+const char* dataString(lua_State* state,int index,size_t maximum,size_t* length=nullptr) {
+  const char* value=sdkString(state,index,maximum,length);
+  size_t at=0;uint32_t cp=0;const size_t bytes=strlen(value);
+  while (at<bytes) if (!fire_app_bitmap::codepoint(value,bytes,at,cp)) luaL_argerror(state,index,"invalid UTF-8");
+  return value;
+}
+const char* dataId(lua_State* state,int index) {
+  size_t length=0;const char* id=dataString(state,index,FireDataEngineContract::kIdentifierBytes,&length);
+  if (!length) luaL_argerror(state,index,"empty dataset identifier");
+  for (size_t i=0;i<length;++i) {
+    const char c=id[i];
+    if (!((c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') || c=='_' || c=='-'))
+      luaL_argerror(state,index,"invalid dataset identifier");
+  }
+  return id;
+}
+const char* dataOptions(lua_State* state,int index,size_t maximum) {
+  if (lua_isnoneornil(state,index)) return "{}";
+  size_t length=0;const char* value=dataString(state,index,maximum,&length);
+  if (!fire_runtime_ai_json::validObject(value,length,maximum,FireDataEngineContract::kJsonDepth))
+    luaL_argerror(state,index,"invalid bounded JSON object");
+  return value;
+}
+} // namespace
+
+int FireLuaRuntime::dataCreate(lua_State* s) {return dataCall(s,"create");}
+int FireLuaRuntime::dataAppend(lua_State* s) {return dataCall(s,"append");}
+int FireLuaRuntime::dataMark(lua_State* s) {return dataCall(s,"mark");}
+int FireLuaRuntime::dataSeal(lua_State* s) {return dataCall(s,"seal");}
+int FireLuaRuntime::dataInfo(lua_State* s) {return dataCall(s,"info");}
+int FireLuaRuntime::dataRead(lua_State* s) {return dataCall(s,"read");}
+int FireLuaRuntime::dataRecord(lua_State* s) {return dataCall(s,"record");}
+int FireLuaRuntime::dataProcess(lua_State* s) {return dataCall(s,"process");}
+int FireLuaRuntime::dataCall(lua_State* state,const char* op) {
+  auto* runtime=self(state);
+  if (!runtime->appSdk_ || !runtime->dataEngine_ || !serviceAllowed(runtime,kServiceData) ||
+      !serviceAllowed(runtime,kServiceJobs) || !serviceAllowed(runtime,kServiceSd)) return pushError(state,"permission_denied");
+  const char *first="",*second="",*options="{}";
+  uint8_t bytes[FireDataEngineContract::kAppendBytes];
+  const uint8_t* payload=nullptr;size_t length=0;uint32_t offset=0;uint16_t count=0;
+  if (!strcmp(op,"create")) {
+    first=dataString(state,1,FireDataEngineContract::kLabelBytes);
+    second=dataString(state,2,8);
+    if (strcmp(second,"csv") && strcmp(second,"text") && strcmp(second,"binary") && strcmp(second,"audio")) return pushError(state,"invalid_argument");
+    options=dataOptions(state,3,FireDataEngineContract::kMetadataBytes);
+  } else if (!strcmp(op,"record")) {
+    first=dataString(state,1,32);options=dataOptions(state,2,FireDataEngineContract::kOptionsBytes);
+  } else {
+    first=dataId(state,1);
+    if (!strcmp(op,"append")) {
+      if (lua_type(state,2)==LUA_TSTRING) payload=reinterpret_cast<const uint8_t*>(lua_tolstring(state,2,&length));
+      else {
+        luaL_checktype(state,2,LUA_TTABLE);length=lua_rawlen(state,2);
+        if (!length || length>sizeof(bytes)) return pushError(state,"invalid_argument");
+        for (size_t i=0;i<length;++i) {
+          lua_geti(state,2,i+1);if (!lua_isinteger(state,-1)) return luaL_argerror(state,2,"byte must be an integer");
+          bytes[i]=static_cast<uint8_t>(strictInt(state,-1,0,255));lua_pop(state,1);
+        }
+        payload=bytes;
+      }
+      if (!length || length>FireDataEngineContract::kAppendBytes) return pushError(state,"invalid_argument");
+    } else if (!strcmp(op,"mark")) second=dataString(state,2,FireDataEngineContract::kMarkerBytes);
+    else if (!strcmp(op,"read")) {
+      offset=static_cast<uint32_t>(strictInt(state,2,0,FireDataEngineContract::kDatasetBytes));
+      count=static_cast<uint16_t>(strictInt(state,3,1,FireDataEngineContract::kReadBytes));
+    } else if (!strcmp(op,"process")) {
+      second=dataString(state,2,16);
+      if (strcmp(second,"stats") && strcmp(second,"filter") && strcmp(second,"spectrum") && strcmp(second,"compare")) return pushError(state,"unsupported_operation");
+      options=dataOptions(state,3,FireDataEngineContract::kOptionsBytes);
+    }
+  }
+  if (!runtime->chargeIo(strlen(first)+strlen(second)+strlen(options)+length)) return luaL_error(state,"hardware io budget exceeded");
+  const char* error="unavailable";
+  const uint16_t id=runtime->host_.dataRequest?runtime->host_.dataRequest(runtime->host_.context,op,first,second,options,payload,length,offset,count,&error):0;
+  if (!id) return pushError(state,error);
+  lua_pushinteger(state,id);return 1;
+}
+int FireLuaRuntime::dataDevelop(lua_State* state) {
+  auto* runtime=self(state);
+  if (!runtime->dataEngine_ || !runtime->callbackButtonPressed_ || runtime->callbackPhase_!=CallbackPhase::OnButton)
+    return pushError(state,"permission_denied");
+  const char* mode=dataString(state,1,8);
+  if (strcmp(mode,"update") && strcmp(mode,"fork") && strcmp(mode,"feedback")) return pushError(state,"invalid_argument");
+  const char* instruction=lua_isnoneornil(state,2)?"":dataString(state,2,FireDataEngineContract::kInstructionBytes);
+  if (!runtime->chargeIo(strlen(mode)+strlen(instruction))) return luaL_error(state,"hardware io budget exceeded");
+  const char* error="unavailable";
+  if (!runtime->host_.dataDevelop || !runtime->host_.dataDevelop(runtime->host_.context,mode,instruction,&error)) return pushError(state,error);
+  lua_pushboolean(state,1);return 1;
+}
+int FireLuaRuntime::bluetoothAdvertiseRaw(lua_State* state) {
+  auto* runtime=self(state);luaL_checktype(state,1,LUA_TTABLE);
+  const size_t length=lua_rawlen(state,1);uint8_t bytes[31];
+  if (!length || length>sizeof(bytes)) return pushError(state,"invalid_argument");
+  for (size_t i=0;i<length;++i) {
+    lua_geti(state,1,i+1);if (!lua_isinteger(state,-1)) return luaL_argerror(state,1,"byte must be an integer");
+    bytes[i]=static_cast<uint8_t>(strictInt(state,-1,0,255));lua_pop(state,1);
+  }
+  const uint32_t duration=static_cast<uint32_t>(strictInt(state,2,100,10000));
+  if (!runtime->chargeIo(length)) return luaL_error(state,"hardware io budget exceeded");
+  const char* error="unavailable";
+  const uint16_t id=runtime->host_.bluetoothAdvertiseRaw?runtime->host_.bluetoothAdvertiseRaw(runtime->host_.context,bytes,length,duration,&error):0;
+  if (!id) return pushError(state,error);
+  lua_pushinteger(state,id);return 1;
+}
+int FireLuaRuntime::bluetoothScan(lua_State* s) {return bluetoothCall(s,"scan");}
+int FireLuaRuntime::bluetoothReadGatt(lua_State* s) {return bluetoothCall(s,"read_gatt");}
+int FireLuaRuntime::bluetoothWriteGatt(lua_State* s) {return bluetoothCall(s,"write_gatt");}
+int FireLuaRuntime::bluetoothAdvertise(lua_State* s) {return bluetoothCall(s,"advertise");}
+int FireLuaRuntime::bluetoothCall(lua_State* state,const char* op) {
+  auto* runtime=self(state);const char *a="",*b="",*c="";uint8_t bytes[128];size_t length=0;
+  if (!strcmp(op,"scan")) {
+    a=dataString(state,1,8);if (strcmp(a,"ble")) return pushError(state,"unavailable");
+  } else if (!strcmp(op,"advertise")) {a=dataString(state,1,32);b=dataString(state,2,40);}
+  else {
+    a=dataString(state,1,64);b=dataString(state,2,40);c=dataString(state,3,40);
+    if (!strcmp(op,"write_gatt")) {
+      luaL_checktype(state,4,LUA_TTABLE);length=lua_rawlen(state,4);
+      if (!length || length>sizeof(bytes)) return pushError(state,"invalid_argument");
+      for (size_t i=0;i<length;++i) {
+        lua_geti(state,4,i+1);if (!lua_isinteger(state,-1)) return luaL_argerror(state,4,"byte must be an integer");
+        bytes[i]=static_cast<uint8_t>(strictInt(state,-1,0,255));lua_pop(state,1);
+      }
+    }
+  }
+  if (!runtime->chargeIo(strlen(a)+strlen(b)+strlen(c)+length)) return luaL_error(state,"hardware io budget exceeded");
+  const char* error="unavailable";
+  const uint16_t id=runtime->host_.bluetoothRequest?runtime->host_.bluetoothRequest(runtime->host_.context,op,a,b,c,bytes,length,&error):0;
+  if (!id) return pushError(state,error);
+  lua_pushinteger(state,id);return 1;
+}
+int FireLuaRuntime::bluetoothClose(lua_State* state) {
+  auto* runtime=self(state);const uint16_t id=static_cast<uint16_t>(strictInt(state,1,1,65535));
+  if (!runtime->chargeIo(1)) return luaL_error(state,"hardware io budget exceeded");
+  lua_pushboolean(state,runtime->host_.bluetoothClose && runtime->host_.bluetoothClose(runtime->host_.context,id));return 1;
+}
+
+int FireLuaRuntime::micLevel(lua_State* state) {
+  auto* runtime = self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state, "hardware io budget exceeded");
+  float level = 0;
+  const char* error = "unavailable";
+  if (!runtime->host_.micLevel ||
+      !runtime->host_.micLevel(runtime->host_.context, &level, &error))
+    return pushError(state, error);
+  lua_pushnumber(state, level);
+  return 1;
+}
+int FireLuaRuntime::wifiStatus(lua_State* state) {
+  auto* runtime=self(state);String ssid,ip;int rssi=0;bool connected=false;
+  if (!runtime->chargeIo(1)) return luaL_error(state,"hardware io budget exceeded");
+  if (!runtime->host_.wifiStatus || !runtime->host_.wifiStatus(runtime->host_.context,&ssid,&ip,&rssi,&connected)) return pushError(state,"unavailable");
+  lua_newtable(state);lua_pushboolean(state,connected);lua_setfield(state,-2,"connected");
+  lua_pushlstring(state,ssid.c_str(),ssid.length());lua_setfield(state,-2,"ssid");
+  lua_pushlstring(state,ip.c_str(),ip.length());lua_setfield(state,-2,"ip");
+  lua_pushinteger(state,rssi);lua_setfield(state,-2,"rssi");return 1;
+}
+int FireLuaRuntime::wifiScan(lua_State* state) {
+  auto* runtime=self(state);
+  if (!runtime->chargeIo(1)) return luaL_error(state,"hardware io budget exceeded");
+  const char* error="unavailable";const uint16_t id=runtime->host_.wifiScan?runtime->host_.wifiScan(runtime->host_.context,&error):0;
+  if (!id) return pushError(state,error);
+  lua_pushinteger(state,id);return 1;
+}
+
+int FireLuaRuntime::micRecord(lua_State* state) {
+  auto* runtime = self(state);
+  size_t length = 0;
+  const char* path = checkedPath(state, 1, &length);
+  const int duration = strictInt(state, 2, 100, 10000);
+  if (!fire_data_paths::safeMutation(path)) return pushError(state,"permission_denied");
+  const int rate = strictInt(state, 3, 8000, 16000);
+  if (rate != 8000 && rate != 16000) return luaL_argerror(state, 3, "unsupported sample rate");
+  if (!runtime->chargeIo(length, true)) return luaL_error(state, "hardware io budget exceeded");
+  const char* error = "unavailable";
+  const uint16_t job = runtime->host_.micRecord
+      ? runtime->host_.micRecord(runtime->host_.context, path, duration, rate, &error) : 0;
+  if (!job) return pushError(state, error);
+  lua_pushinteger(state, job);
+  return 1;
+}
+
 int FireLuaRuntime::speakerTone(lua_State* state) {
   auto* runtime = self(state);
   const int frequency = strictInt(state, 1, 20, 20000);
@@ -1781,7 +2004,18 @@ static void pushJobResult(lua_State* state,
   lua_newtable(state);
   lua_pushboolean(state, 1);
   lua_setfield(state, -2, "ok");
-  if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::RuntimeAi) {
+  if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::Data) {
+    const int top=lua_gettop(state);AiLuaJsonSink sink{state};
+    const bool valid=snapshot.text.length()<=FireDataEngineContract::kResultBytes &&
+      fire_runtime_ai_json::Reader<AiLuaJsonSink>(snapshot.text.c_str(),snapshot.text.length(),sink,FireDataEngineContract::kJsonDepth).object();
+    if (valid) lua_replace(state,top);
+    else {lua_settop(state,top);lua_pushboolean(state,0);lua_setfield(state,-2,"ok");lua_pushliteral(state,"invalid_data");lua_setfield(state,-2,"error_code");}
+  } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::DataRead) {
+    lua_newtable(state);
+    for (uint16_t i=0;i<snapshot.byteCount && i<FireDataEngineContract::kReadBytes;++i) {lua_pushinteger(state,snapshot.bytes[i]);lua_seti(state,-2,i+1);}
+    lua_setfield(state,-2,"bytes");lua_pushinteger(state,snapshot.written);lua_setfield(state,-2,"offset");
+    lua_pushboolean(state,snapshot.connected);lua_setfield(state,-2,"eof");
+  } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::RuntimeAi) {
     const int top=lua_gettop(state);AiLuaJsonSink sink{state};
     const bool valid=snapshot.text.length()<=FireRuntimeAiContract::kResultBytes &&
       fire_runtime_ai_json::Reader<AiLuaJsonSink>(snapshot.text.c_str(),snapshot.text.length(),sink,FireRuntimeAiContract::kJsonDepth).object();
@@ -1821,6 +2055,15 @@ static void pushJobResult(lua_State* state,
       lua_seti(state, -2, index + 1);
     }
     lua_setfield(state, -2, "entries");
+  } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::Recording) {
+    lua_pushlstring(state, snapshot.path.c_str(), snapshot.path.length());
+    lua_setfield(state, -2, "path");
+    lua_pushinteger(state, snapshot.sizeBytes);
+    lua_setfield(state, -2, "size_bytes");
+    lua_pushinteger(state, snapshot.sampleRate);
+    lua_setfield(state, -2, "sample_rate");
+  } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::Handle) {
+    lua_pushinteger(state,snapshot.handle);lua_setfield(state,-2,"handle");
   } else if (snapshot.resultKind == FireLuaRuntime::JobSnapshot::Write) {
     lua_pushinteger(state, snapshot.written);
     lua_setfield(state, -2, "written");
@@ -1847,8 +2090,9 @@ int FireLuaRuntime::jobsResult(lua_State* state) {
   if (!runtime->host_.jobResult ||
       !runtime->host_.jobResult(runtime->host_.context, id, &snapshot))
     return pushError(state, "invalid_handle");
-  if(snapshot.resultKind==JobSnapshot::RuntimeAi &&
+  if((snapshot.resultKind==JobSnapshot::RuntimeAi || snapshot.resultKind==JobSnapshot::Data) &&
      !runtime->chargeIo(snapshot.text.length())) return luaL_error(state,"hardware io budget exceeded");
+  if(snapshot.resultKind==JobSnapshot::DataRead && !runtime->chargeIo(snapshot.byteCount)) return luaL_error(state,"hardware io budget exceeded");
   pushJobResult(state, snapshot);
   return 1;
 }

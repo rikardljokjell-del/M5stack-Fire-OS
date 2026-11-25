@@ -30,7 +30,9 @@ class FireLuaRuntime {
       Handle,
       Recording,
       Http,
-      RuntimeAi
+      RuntimeAi,
+      Data,
+      DataRead
     };
     uint8_t state = 0;  // 0=pending, 1=ready, 2=failed, 3=cancelled
     ResultKind resultKind = None;
@@ -82,6 +84,7 @@ class FireLuaRuntime {
     bool (*imuAccel)(void*, float*, float*, float*) = nullptr;
     bool (*imuGyro)(void*, float*, float*, float*) = nullptr;
     bool (*imuTemperature)(void*, float*) = nullptr;
+    bool (*imuBusy)(void*) = nullptr;
     uint32_t (*timeMillis)(void*) = nullptr;
     bool (*gpioMode)(void*, int, const char*, const char**) = nullptr;
     bool (*gpioRead)(void*, int, int*, const char**) = nullptr;
@@ -122,12 +125,25 @@ class FireLuaRuntime {
     uint16_t (*speakerTone)(void*, int, int, int, const char**) = nullptr;
     uint16_t (*speakerPlay)(void*, const char*, int, const char**) = nullptr;
     bool (*speakerStop)(void*, const char**) = nullptr;
+    bool (*micLevel)(void*, float*, const char**) = nullptr;
+    uint16_t (*micRecord)(void*, const char*, int, int, const char**) = nullptr;
     bool (*jobPoll)(void*, uint16_t, JobSnapshot*) = nullptr;
     bool (*jobResult)(void*, uint16_t, JobSnapshot*) = nullptr;
     bool (*jobClose)(void*, uint16_t) = nullptr;
     bool (*jobCancel)(void*, uint16_t) = nullptr;
     uint16_t (*aiRequest)(void*, const char*, size_t, const char*, size_t,
                           const char*, size_t, uint32_t, const char**) = nullptr;
+    uint16_t (*dataRequest)(void*, const char* operation, const char* first,
+                           const char* second, const char* options,
+                           const uint8_t* payload, size_t length,
+                           uint32_t offset, uint16_t count, const char**) = nullptr;
+    bool (*dataDevelop)(void*, const char* mode, const char* instruction, const char**) = nullptr;
+    uint16_t (*bluetoothAdvertiseRaw)(void*, const uint8_t*, size_t, uint32_t, const char**) = nullptr;
+    uint16_t (*bluetoothRequest)(void*,const char*,const char*,const char*,const char*,
+                                const uint8_t*,size_t,const char**) = nullptr;
+    bool (*bluetoothClose)(void*,uint16_t) = nullptr;
+    bool (*wifiStatus)(void*,String*,String*,int*,bool*) = nullptr;
+    uint16_t (*wifiScan)(void*,const char**) = nullptr;
   };
 
   static constexpr size_t kMaxSourceBytes = 100000;
@@ -141,6 +157,7 @@ class FireLuaRuntime {
   void setHardwareApi(bool enabled) { hardwareApi_ = enabled; }
   void setAppSdk(bool enabled) { appSdk_ = enabled; }
   bool appSdkEnabled() const { return appSdk_; }
+  void setDataEngine(bool enabled) { dataEngine_ = enabled; }
   uint16_t frameBackground() const { return appSdk_ ? frameBackground_ : 0; }
   void setServiceMask(uint32_t mask) { serviceMask_ = mask; }
   void setMaxRuntimeMs(uint32_t maxRuntimeMs);
@@ -190,6 +207,8 @@ class FireLuaRuntime {
   size_t peakMemoryUsed_ = 0;
   bool hardwareApi_ = false;
   bool appSdk_ = false;
+  bool dataEngine_ = false;
+  bool callbackButtonPressed_ = false;
   uint16_t frameBackground_ = 0; // Preference for NEXT OS-prepared frame, per VM.
   uint32_t serviceMask_ = 0x1FU;
   uint16_t ioCalls_ = 0;
@@ -270,6 +289,27 @@ class FireLuaRuntime {
   static int speakerTone(lua_State* state);
   static int speakerPlay(lua_State* state);
   static int speakerStop(lua_State* state);
+  static int micLevel(lua_State* state);
+  static int micRecord(lua_State* state);
+  static int dataCreate(lua_State* state);
+  static int dataAppend(lua_State* state);
+  static int dataMark(lua_State* state);
+  static int dataSeal(lua_State* state);
+  static int dataInfo(lua_State* state);
+  static int dataRead(lua_State* state);
+  static int dataRecord(lua_State* state);
+  static int dataProcess(lua_State* state);
+  static int dataDevelop(lua_State* state);
+  static int dataCall(lua_State* state,const char* operation);
+  static int bluetoothAdvertiseRaw(lua_State* state);
+  static int bluetoothScan(lua_State* state);
+  static int bluetoothReadGatt(lua_State* state);
+  static int bluetoothWriteGatt(lua_State* state);
+  static int bluetoothAdvertise(lua_State* state);
+  static int bluetoothClose(lua_State* state);
+  static int bluetoothCall(lua_State* state,const char* operation);
+  static int wifiStatus(lua_State* state);
+  static int wifiScan(lua_State* state);
   static int jobsPoll(lua_State* state);
   static int jobsResult(lua_State* state);
   static int jobsClose(lua_State* state);

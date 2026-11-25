@@ -3,6 +3,7 @@
 #include "fire_app_bitmap.h"
 #include "fire_app_frame.h"
 #include "fire_runtime_ai_contract.h"
+#include "fire_data_engine_contract.h"
 #include "fire_io_mailbox.h"
 #include <assert.h>
 #include <stdio.h>
@@ -441,6 +442,94 @@ static void generationalGuiTests(const char* directory) {
   puts("PASS SDK generational GUI allocation cycles, retained state,128KiB hard limit and legacy allocation regression");
 }
 
+static unsigned dataRequests=0,developRequests=0,rawAdvertisements=0;
+static uint16_t dataHost(void*,const char* operation,const char* first,const char*,const char*,
+    const uint8_t* payload,size_t length,uint32_t offset,uint16_t count,const char**) {
+  ++dataRequests;
+  if (!strcmp(operation,"append")) assert(!strcmp(first,"ds-a-b-c") && length==2 && payload[0]==0 && payload[1]==255);
+  if (!strcmp(operation,"read")) assert(offset==2 && count==FireDataEngineContract::kReadBytes);
+  return 41;
+}
+static bool developHost(void*,const char* mode,const char* instruction,const char**) {
+  ++developRequests;assert(!strcmp(mode,"update") && !strcmp(instruction,"Improve graph"));return true;
+}
+static uint16_t rawAdvertisementHost(void*,const uint8_t* bytes,size_t length,uint32_t duration,const char**) {
+  ++rawAdvertisements;assert(length==3 && bytes[0]==2 && bytes[2]==6 && duration==100);return 42;
+}
+static uint16_t bluetoothHost(void*,const char*,const char*,const char*,const char*,const uint8_t*,size_t,const char**) {return 43;}
+static bool dataResultHost(void*,uint16_t id,FireLuaRuntime::JobSnapshot* snapshot) {
+  assert(id==41);snapshot->state=1;snapshot->resultKind=FireLuaRuntime::JobSnapshot::DataRead;
+  snapshot->byteCount=FireDataEngineContract::kReadBytes;memset(snapshot->bytes,255,snapshot->byteCount);
+  snapshot->written=2;snapshot->connected=true;return true;
+}
+static void dataAdapterTests() {
+  constexpr uint32_t mask=1u|2u|32u|(1u<<17)|(1u<<21)|(1u<<14);
+  auto h=host();h.dataRequest=dataHost;h.dataDevelop=developHost;h.jobResult=dataResultHost;
+  h.bluetoothAdvertiseRaw=rawAdvertisementHost;h.bluetoothRequest=bluetoothHost;
+  auto check=[&](const std::string& body,bool enabled,uint32_t services,bool expected) {
+    FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(true);r.setDataEngine(enabled);r.setServiceMask(services);assert(r.begin(h));
+    const std::string source="function init() end function update(dt) "+body+" end";
+    const bool ok=r.loadSource(reinterpret_cast<const uint8_t*>(source.data()),source.size()) && r.update(16);
+    assert(ok==expected);r.stop();assert(r.memoryUsed()==0);
+  };
+  check("local id=fire.data.append('ds-a-b-c',{0,255}) if id~=41 then fire.display.clear(-1) end "
+      "local r=fire.jobs.result(fire.data.read('ds-a-b-c',2,"+std::to_string(FireDataEngineContract::kReadBytes)+")) "
+      "if not r.ok or r.offset~=2 or not r.eof or #r.bytes~="+std::to_string(FireDataEngineContract::kReadBytes)+" or r.text~=nil or r.bytes[1]~=255 then fire.display.clear(-1) end",true,mask,true);
+  const unsigned before=dataRequests;
+  check("local id,e=fire.data.append('ds-a-b-c',{'0'})",true,mask,false);
+  check("fire.data.read('ds-a-b-c',0,"+std::to_string(FireDataEngineContract::kReadBytes+1)+")",true,mask,false);
+  check("fire.data.info('../another-app')",true,mask,false);
+  check("fire.data.create('x','csv','{bad')",true,mask,false);
+  assert(dataRequests==before);
+  for (uint32_t services:{mask&~32u,mask&~(1u<<17),mask&~(1u<<21)})
+    check("if fire.data~=nil then fire.display.clear(-1) end",true,services,true);
+  check("if fire.data~=nil or fire.bluetooth.advertise_raw~=nil then fire.display.clear(-1) end",false,mask,true);
+  check("local ok,e=fire.data.develop('update','Improve graph') if ok~=nil or e~='permission_denied' then fire.display.clear(-1) end",true,mask,true);
+  assert(developRequests==0);
+  FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(true);r.setDataEngine(true);r.setServiceMask(mask);assert(r.begin(h));
+  const char* source="function init() local ok=fire.data.develop('update','Improve graph') if ok~=nil then fire.display.clear(-1) end end "
+      "function update(dt) end function on_button(b,a) fire.data.develop('update','Improve graph') end";
+  assert(r.loadSource(reinterpret_cast<const uint8_t*>(source),strlen(source)));
+  assert(r.button("B","released") && developRequests==0);
+  assert(r.button("B","pressed") && developRequests==1);r.stop();
+  check("if fire.bluetooth.advertise_raw({2,1,6},100)~=42 then fire.display.clear(-1) end",true,mask,true);
+  assert(rawAdvertisements==1);
+  check("fire.bluetooth.advertise_raw({2,1,6},99)",true,mask,false);assert(rawAdvertisements==1);
+  puts("PASS Data Engine actual Lua adapter extension dependency quotas binary results and physical-button intent gate");
+}
+
+static unsigned micRequests = 0;
+static uint16_t micRecordHost(void*,const char* path,int duration,int rate,const char**) {
+  assert(!strcmp(path,"record.wav") && duration==10000 && rate==16000);
+  ++micRequests;return 73;
+}
+static bool micLevelHost(void*,float* value,const char**) {*value=0.25f;return true;}
+static bool micResultHost(void*,uint16_t id,FireLuaRuntime::JobSnapshot* snapshot) {
+  assert(id==73);snapshot->state=1;snapshot->resultKind=FireLuaRuntime::JobSnapshot::Recording;
+  snapshot->path="record.wav";snapshot->sizeBytes=320044;snapshot->sampleRate=16000;return true;
+}
+static void micAdapterTests() {
+  auto h=host();h.micRecord=micRecordHost;h.micLevel=micLevelHost;h.jobResult=micResultHost;
+  const uint32_t mask=1u|32u|(1u<<15)|(1u<<17);
+  auto check=[&](const char* body,uint32_t services,bool expected) {
+    FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(true);r.setServiceMask(services);assert(r.begin(h));
+    const std::string source=std::string("function init() end function update(dt) ")+body+" end";
+    const bool ok=r.loadSource(reinterpret_cast<const uint8_t*>(source.data()),source.size()) && r.update(16);
+    assert(ok==expected);r.stop();assert(r.memoryUsed()==0);
+  };
+  micRequests=0;
+  check("local id=fire.mic.record('record.wav',10000,16000) if id~=73 or fire.mic.level()~=0.25 then fire.display.clear(-1) end "
+        "local t=fire.jobs.result(id) if not t.ok or t.path~='record.wav' or t.sample_rate~=16000 or t.size_bytes~=320044 then fire.display.clear(-1) end",mask,true);
+  assert(micRequests==1);
+  check("fire.mic.record('../outside',10000,16000)",mask,false);
+  check("fire.mic.record('record.wav',10001,16000)",mask,false);
+  check("fire.mic.record('record.wav',100,12000)",mask,false);
+  check("if fire.mic~=nil then fire.display.clear(-1) end",mask&~32u,true);
+  check("if fire.mic~=nil then fire.display.clear(-1) end",mask&~(1u<<17),true);
+  assert(micRequests==1);
+  puts("PASS microphone existing-contract adapter permissions limits private paths and recording results");
+}
+
 static void installCompletionTest() {
   FireIoMailbox mailbox;mailbox.running=true;
   mailbox.result(false,true,"package-a","hash-a","installed","install-a");
@@ -464,6 +553,8 @@ int main(int argc,char** argv) {
   manifestApiTests();
   runtimeAiTests();
   installCompletionTest();
+  micAdapterTests();
+  dataAdapterTests();
   instructionResetTest(false);backgroundTests();
   uiLoadMeasurement(false);uiLoadMeasurement(true);
   assert(run("fire.ui.screen('FIRE');fire.ui.card(10,60,300,100,'Status',42)"));

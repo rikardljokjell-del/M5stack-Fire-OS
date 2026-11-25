@@ -37,6 +37,11 @@ def host_compiler():
 
 
 class NativeGuardTests(unittest.TestCase):
+    def test_data_storage_guards(self):
+        output=self.run_native("native_data_engine.cpp")
+        self.assertIn("PASS data journal",output)
+        self.assertIn("PASS data protected paths",output)
+
     def run_native(self, source_name):
         compiler = host_compiler()
         if compiler is None:

@@ -5,12 +5,56 @@
 #include <esp_timer.h>
 #include "fire_lua_runtime.h"
 #include "fire_runtime_ai_contract.h"
+#include "fire_data_engine_contract.h"
+#include "fire_hardware_policy.h"
+#include "fire_firmware_http.h"
 #include "fire_json_guard.h"
 #include "fire_ws_handshake.h"
 #include <mbedtls/sha1.h>
+#include <cJSON.h>
+#include <M5Unified.h>
 
 namespace {
 constexpr size_t kMaxFrameBytes = 8192;
+String dataCapabilities() {
+  String sources="[",limits="{";
+  const auto add=[&](const char* source,const char* values) {
+    if (sources.length()>1) {sources+=",";limits+=",";}
+    sources+="\""+String(source)+"\"";limits+="\""+String(source)+"\":"+values;
+  };
+  if (M5.Imu.isEnabled() && M5.Imu.getType()==m5::imu_mpu6886)
+    add("imu","{\"duration_ms_max\":60000,\"sample_rates_hz\":[50,100],\"max_records\":6000}");
+#if defined(FIRE_AUDIO_CAPTURE_ENABLED) && FIRE_AUDIO_CAPTURE_ENABLED
+  if (M5.Mic.isEnabled()) add("mic","{\"duration_ms_max\":10000,\"sample_rates_hz\":[8000,16000],\"max_records\":160000}");
+#endif
+#ifdef FIRE_OS_BLE
+  add("ble.advertisements","{\"duration_ms_max\":60000,\"max_records\":6000}");
+#endif
+  return "{\"version\":\""+String(FireDataEngineContract::kVersion)+"\",\"contract\":\""+FireDataEngineContract::kContract+
+      "\",\"capture_sources\":"+sources+"],\"capture_limits\":"+limits+"}}";
+}
+String i2cWriteResources() {
+  String values="[";
+  for (uint8_t address=8;address<=0x77;++address) {
+    if (!fire_hardware_policy::externalI2cWrite(address) || (address==0x6c && M5.Imu.getType()==m5::imu_sh200q)) continue;
+    if (values.length()>1) values+=",";
+    values+=String(address);
+  }
+  return values+"]";
+}
+String hardwareServiceCapabilities() {
+  String services="\"display\",\"buttons\",\"rgb\",\"imu\",\"time\",\"jobs\",\"gpio\",\"pwm\",\"i2c\",\"uart\",\"adc\",\"dac\",\"spi\",\"sd\",\"rtc\",\"speaker\",\"ai\",\"wifi\",\"data\"";
+  String methods="\"wifi\":[\"status\",\"scan\"]",modes="{}";
+#ifdef FIRE_OS_BLE
+  services+=",\"bluetooth\"";
+  methods+=",\"bluetooth\":[\"scan\",\"read_gatt\",\"write_gatt\",\"advertise\",\"advertise_raw\",\"close\"]";
+  modes="{\"bluetooth.scan\":[\"ble\"]}";
+#endif
+#if defined(FIRE_AUDIO_CAPTURE_ENABLED) && FIRE_AUDIO_CAPTURE_ENABLED
+  services+=",\"mic\"";methods+=",\"mic\":[\"level\",\"record\"]";
+#endif
+  return ",\"services\":["+services+"],\"service_methods\":{"+methods+"},\"service_modes\":"+modes;
+}
 
 String jsonEscape(const String& input) {
   String output;
@@ -183,18 +227,20 @@ void FireBackendClient::resetReceiveFrame() {
 bool FireBackendClient::uploadAudio(const String& turnId,
                                     const uint8_t* wavData,
                                     size_t wavLength) {
-  if (audioTransferCancel_ || audioSession_.length() == 0 || !wavData || wavLength == 0 ||
-      wavLength > 524288) {
+  const bool dataUpload=audioTransfer_==AudioTransfer::DataUpload;
+  if (audioTransferCancel_ || audioSession_.length() == 0 || !wavData || (!dataUpload && wavLength == 0) ||
+      wavLength > (dataUpload?FireDataEngineContract::kHttpChunkBytes:524288u)) {
     return false;
   }
   WiFiClient* audio = nullptr;
-  if (!audioSecure_ && audioReverse_) audioTransportClient_ = audioReverse_->acquire(audioReverseGeneration_);
+  if (!audioTransportClient_ && !audioSecure_ && audioReverse_) audioTransportClient_ = audioReverse_->acquire(audioReverseGeneration_);
   if (audioTransportClient_) {
     audio = audioTransportClient_;
   } else {
-    audioClient_.stop();
-    audioClient_.secure(audioSecure_);
-    if (!audioClient_.connectBlocking(audioHost_.c_str(), audioPort_, 15000, &audioTransferCancel_)) return false;
+    if (!dataUpload || !audioClient_.connected()) {
+      audioClient_.stop();audioClient_.secure(audioSecure_);
+      if (!audioClient_.connectBlocking(audioHost_.c_str(), audioPort_, 15000, &audioTransferCancel_)) return false;
+    }
     audio = &audioClient_;
   }
   auto closeAudio = [&]() {
@@ -205,11 +251,14 @@ bool FireBackendClient::uploadAudio(const String& turnId,
       audioClient_.stop();
     }
   };
-  const String path = "/sessions/" + audioSession_ + "/audio/" + turnId;
+  const String path = dataUpload
+      ? "/sessions/"+audioSession_+"/data/"+turnId+"/"+dataUploadDataset_
+      : "/sessions/" + audioSession_ + "/audio/" + turnId;
   const String request = "POST " + path + " HTTP/1.1\r\nHost: " + audioHost_ + ":" +
                String(audioPort_) + "\r\nAuthorization: Bearer " + audioToken_ +
-               "\r\nContent-Type: audio/wav\r\nContent-Length: " +
-               String(wavLength) + "\r\nConnection: close\r\n\r\n";
+               (dataUpload?"\r\nContent-Type: application/octet-stream\r\nX-Data-Offset: "+String(dataUploadOffset_)+
+                   "\r\nX-Data-SHA256: "+dataUploadHash_+"\r\nX-Data-Part: "+dataUploadPart_:String("\r\nContent-Type: audio/wav")) + "\r\nContent-Length: " +
+               String(wavLength) + (dataUpload?"\r\nConnection: keep-alive\r\n\r\n":"\r\nConnection: close\r\n\r\n");
   if (audioTransferCancel_ || audio->print(request) != request.length()) { closeAudio(); return false; }
   size_t offset = 0;
   while (offset < wavLength) {
@@ -240,12 +289,43 @@ bool FireBackendClient::uploadAudio(const String& turnId,
       closeAudio();
       return false;
     }
-    while (audio->available() && response.length() < 512)
+    while (audio->available() && response.length() < 512) {
       response += static_cast<char>(audio->read());
+      if (dataUpload && response.endsWith("\r\n\r\n")) break;
+    }
     if (response.indexOf("\r\n\r\n") < 0) delay(1);
   }
-  closeAudio();
-  return response.startsWith("HTTP/1.1 2") || response.startsWith("HTTP/1.0 2");
+  const bool accepted=response.startsWith("HTTP/1.1 2") || response.startsWith("HTTP/1.0 2");
+  if (dataUpload && accepted) {
+    const int headerEnd=response.indexOf("\r\n\r\n");
+    String headers=response.substring(0,headerEnd);headers.toLowerCase();
+    const int at=headers.indexOf("content-length:");
+    if (headerEnd<0 || at<0 || headers.indexOf("transfer-encoding:")>=0 || headers.indexOf("content-encoding:")>=0) {closeAudio();return false;}
+    const int bodyBytes=headers.substring(at+15).toInt();
+    if (bodyBytes<=0 || bodyBytes>256 ||
+        !fire_firmware_http::validResponse(response.c_str(),headerEnd+4,static_cast<uint32_t>(bodyBytes))) {closeAudio();return false;}
+    String body=response.substring(headerEnd+4);
+    while (body.length()<static_cast<size_t>(bodyBytes) && millis()<deadline && !audioTransferCancel_) {
+      while (audio->available() && body.length()<static_cast<size_t>(bodyBytes)) body+=static_cast<char>(audio->read());
+      if (body.length()<static_cast<size_t>(bodyBytes)) delay(1);
+    }
+    if (body.length()!=static_cast<size_t>(bodyBytes) || !fireJsonSafe(body.c_str(),body.length(),256,4,32)) {closeAudio();return false;}
+    cJSON* obj=cJSON_Parse(body.c_str());
+    const cJSON* offset=cJSON_GetObjectItemCaseSensitive(obj,"offset");
+    const cJSON* complete=cJSON_GetObjectItemCaseSensitive(obj,"complete");
+    const cJSON* next=cJSON_GetObjectItemCaseSensitive(obj,"next_upload");
+    const bool valid=cJSON_IsNumber(offset) && offset->valuedouble==static_cast<double>(dataUploadOffset_+wavLength) && cJSON_IsBool(complete) &&
+        (!next || cJSON_IsNull(next) || cJSON_IsObject(next));
+    if (valid) {
+      dataUploadResponseOffset_=static_cast<uint32_t>(offset->valuedouble);
+      char* encoded=cJSON_IsObject(next)?cJSON_PrintUnformatted(next):nullptr;
+      dataUploadNext_=encoded?String(encoded):String();cJSON_free(encoded);
+    }
+    cJSON_Delete(obj);
+    if (!valid || headers.indexOf("connection: close")>=0) closeAudio();
+    return valid;
+  }
+  closeAudio();return accepted;
 }
 
 bool FireBackendClient::downloadAudio(const String& url, uint8_t* buffer,
@@ -385,6 +465,29 @@ bool FireBackendClient::beginAudioDownload(const String& url, uint8_t* buffer,
   }
   return true;
 }
+bool FireBackendClient::beginDataUpload(const String& request,const String& dataset,const String& part,
+    uint32_t offset,const String& chunkHash,const uint8_t* bytes,size_t length) {
+  const auto safe=[](const String& id) {
+    if (!id.length() || id.length()>128) return false;
+    for (size_t i=0;i<id.length();++i) {const char c=id[i];if (!isalnum(static_cast<unsigned char>(c)) && c!='-' && c!='_') return false;}
+    return true;
+  };
+  const bool reuse=audioTransferRunning_ && dataTransferActive_ && dataChunkDone_ && !audioTransferCancel_ && audioTransferTurnId_==request;
+  if ((audioTransferRunning_ && !reuse) || !sessionReady() || !bytes || length>FireDataEngineContract::kHttpChunkBytes ||
+      !safe(request) || !safe(dataset) || (part!="data" && part!="index" && part!="events") || chunkHash.length()!=64) return false;
+  for (size_t i=0;i<chunkHash.length();++i) if (!isxdigit(static_cast<unsigned char>(chunkHash[i]))) return false;
+  if (!reuse) {snapshotAudioEndpoint();audioTransfer_=AudioTransfer::DataUpload;}
+  dataUploadDataset_=dataset;dataUploadPart_=part;dataUploadOffset_=offset;dataUploadHash_=chunkHash;dataUploadNext_=String();
+  audioTransferTurnId_=request;audioTransferUploadData_=bytes;audioTransferDownloadBuffer_=nullptr;audioTransferBytes_=length;
+  audioTransferLength_=0;audioTransferFinished_=false;audioTransferOk_=false;dataChunkDone_=false;
+  dataChunkReady_.store(true,std::memory_order_release);
+  if (reuse) return true;
+  audioTransferCancel_=false;dataTransferActive_=true;audioTransferRunning_=true;
+  if (xTaskCreatePinnedToCore(audioTaskEntry,"fire-data-http",6144,this,2,&audioTask_,0)!=pdPASS) {
+    dataTransferActive_=false;audioTransferRunning_=false;audioTransfer_=AudioTransfer::None;return false;
+  }
+  return true;
+}
 
 void FireBackendClient::cancelAudioTransfer() {
   if (!audioTransferRunning_) return;
@@ -405,7 +508,21 @@ void FireBackendClient::audioTaskEntry(void* context) {
 void FireBackendClient::runAudioTransfer() {
   bool ok = false;
   size_t length = 0;
-  if (audioTransfer_ == AudioTransfer::Upload) {
+  if (audioTransfer_==AudioTransfer::DataUpload) {
+    const uint32_t started=millis();
+    while (!audioTransferCancel_ && millis()-started<FireDataEngineContract::kNetworkJobTimeoutMs) {
+      if (!dataChunkReady_.load(std::memory_order_acquire)) {delay(2);continue;}
+      dataChunkReady_=false;
+      ok=uploadAudio(audioTransferTurnId_,audioTransferUploadData_,audioTransferBytes_);
+      audioTransferLength_=ok?dataUploadResponseOffset_:0;
+      audioTransferOk_=ok && !audioTransferCancel_;
+      dataChunkDone_.store(true,std::memory_order_release);
+      if (!ok) break;
+    }
+    if (audioTransportClient_ && audioReverse_) {audioReverse_->release(audioTransportClient_);audioTransportClient_=nullptr;}
+    else audioClient_.stop();
+    dataTransferActive_=false;
+  } else if (audioTransfer_ == AudioTransfer::Upload) {
     ok = uploadAudio(audioTransferTurnId_, audioTransferUploadData_,
                      audioTransferBytes_);
   } else if (audioTransfer_ == AudioTransfer::Download) {
@@ -592,6 +709,29 @@ bool FireBackendClient::runtimeAiRequest(const String& requestId,const String& a
 bool FireBackendClient::runtimeAiCancel(const String& requestId,const String& appId,const String& packageId,
                                       const String& sourceHash,const String& runId) {
   return sendEvent("runtime_ai_cancel",runtimeIdentityFields(requestId,appId,packageId,sourceHash,runId));
+}
+bool FireBackendClient::dataRequest(const String& requestId,const String& appId,const String& packageId,
+    const String& sourceHash,const String& runId,const String& operation,const String& datasetId,
+    const String& options,const String& datasets) {
+  return sendEvent("data_request",runtimeIdentityFields(requestId,appId,packageId,sourceHash,runId)+
+      ",\"operation\":\""+jsonEscape(operation)+"\",\"dataset_id\":\""+jsonEscape(datasetId)+
+      "\",\"options_json\":\""+jsonEscape(options)+"\",\"datasets\":"+datasets);
+}
+bool FireBackendClient::dataCancel(const String& requestId,const String& appId,const String& packageId,
+    const String& sourceHash,const String& runId) {
+  return sendEvent("data_cancel",runtimeIdentityFields(requestId,appId,packageId,sourceHash,runId));
+}
+bool FireBackendClient::appDevelop(const String& requestId,const String& appId,const String& packageId,
+    const String& sourceHash,const String& runId,const String& mode,const String& instruction,
+    const String& ids,const String& datasets) {
+  return sendEvent("app_develop_request",runtimeIdentityFields(requestId,appId,packageId,sourceHash,runId)+
+      ",\"mode\":\""+jsonEscape(mode)+"\",\"instruction\":\""+jsonEscape(instruction)+
+      "\",\"dataset_ids\":"+ids+",\"datasets\":"+datasets);
+}
+bool FireBackendClient::confirmObservation(const String& context,const String& action,const String& id) {
+  if (action!="confirm" && action!="reject") return false;
+  return sendEvent("app_observation_confirm",",\"context_id\":\""+jsonEscape(context)+
+      "\",\"observation_action\":\""+action+"\"",id);
 }
 
 bool FireBackendClient::appRepairPrepare(
@@ -895,8 +1035,8 @@ void FireBackendClient::handleHandshake() {
                         "\",\"app_sdk\":{\"version\":\"" + FireLuaRuntime::appSdkVersion() +
                         "\",\"contract\":\"" + FireLuaRuntime::appSdkContract() +
                         "\"},\"runtime_ai\":{\"version\":\""+FireRuntimeAiContract::kVersion+
-                        "\",\"contract\":\""+FireRuntimeAiContract::kContract+"\"}" +
-                        ",\"services\":[\"display\",\"buttons\",\"rgb\",\"imu\",\"time\",\"jobs\",\"gpio\",\"pwm\",\"i2c\",\"uart\",\"adc\",\"dac\",\"spi\",\"sd\",\"rtc\",\"speaker\",\"ai\"],\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":[64],\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":false,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
+                        "\",\"contract\":\""+FireRuntimeAiContract::kContract+"\"},\"data_engine\":"+dataCapabilities() +
+                        hardwareServiceCapabilities() + ",\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":"+i2cWriteResources()+",\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":false,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
                         jsonEscape(firmwareVersion_) + "\"}";
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +
@@ -907,6 +1047,7 @@ void FireBackendClient::handleHandshake() {
                    (projectId_.length() > 0
                         ? ",\"project_id\":\"" + jsonEscape(projectId_) + "\""
                         : String()) +
+                   (developmentContext_.length()>0?",\"development_context_id\":\""+jsonEscape(developmentContext_)+"\"":String())+
                    (conversationMode_.length() > 0
                         ? ",\"conversation_mode\":\"" + jsonEscape(conversationMode_) + "\""
                         : String()) +
@@ -1106,6 +1247,7 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
         sessionId_ = newSession;
         resumeSessionId_ = "";
         sessionStarted_ = true;
+        developmentContext_=String();
         setState(State::Connected, usingReverseTransport_
                                       ? "Backend connected (Reverse TCP)"
                                       : "Backend connected (Direct)");

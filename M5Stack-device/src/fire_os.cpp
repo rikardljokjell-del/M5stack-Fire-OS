@@ -6,6 +6,9 @@
 #include "fire_canvas_fill.h"
 #include "fire_app_sdk_data.h"
 #include "fire_runtime_ai_json.h"
+#include "fire_hardware_policy.h"
+#include "fire_data_paths.h"
+#include "fire_data_deadline.h"
 #include "fire_ai_workflow.h"
 #include "fire_ui.h"
 #include "fire_ui_antialias.h"
@@ -20,6 +23,7 @@
 #include <nvs.h>
 #include <SD.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <Wire.h>
 #include <WebServer.h>
 #include <driver/gpio.h>
@@ -62,7 +66,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.4.0-rc3";
+constexpr char kFirmwareVersion[] = "fire-os-1.5.0-rc1";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -102,6 +106,7 @@ constexpr uint32_t kLuaServiceSd = 1u << 17;
 constexpr uint32_t kLuaServicePower = 1u << 18;
 constexpr uint32_t kLuaServiceRtc = 1u << 19;
 constexpr uint32_t kLuaServiceAi = 1u << 20;
+constexpr uint32_t kLuaServiceData = 1u << 21;
 constexpr uint32_t kBootMelodySampleRate = 8000;
 constexpr size_t kBootMelodySampleCount = 3160;  // 395 ms at 8 kHz
 int8_t kBootMelodyPcm[kBootMelodySampleCount] = {};
@@ -636,10 +641,14 @@ bool luaManifestServiceMask(const String& manifest, uint32_t& mask) {
     else if (service == "adc") bit = kLuaServiceAdc;
     else if (service == "dac") bit = kLuaServiceDac;
     else if (service == "spi") bit = kLuaServiceSpi;
+    else if (service == "bluetooth") bit = kLuaServiceBluetooth;
+    else if (service == "wifi") bit = kLuaServiceWifi;
     else if (service == "sd") bit = kLuaServiceSd;
     else if (service == "rtc") bit = kLuaServiceRtc;
     else if (service == "speaker") bit = kLuaServiceSpeaker;
+    else if (service == "mic") bit = kLuaServiceMic;
     else if (service == "ai") bit = kLuaServiceAi;
+    else if (service == "data") bit = kLuaServiceData;
     else return false;
     if ((mask & bit) != 0) return false;
     mask |= bit;
@@ -662,6 +671,25 @@ const char* luaFailureCode(const String& error) {
     return "memory_error";
   if (error == "runtime_limit") return "runtime_limit";
   return "load_error";
+}
+
+bool luaDataManifest(const String& manifest,bool sdk,uint32_t mask) {
+  if (manifest.indexOf("\\u0000")>=0) return false;
+  cJSON* root=cJSON_Parse(manifest.c_str());if (!root) return false;
+  const cJSON* extension=cJSON_GetObjectItemCaseSensitive(root,"data_engine");
+  const bool requested=(mask&kLuaServiceData)!=0;
+  const cJSON* permissions=cJSON_GetObjectItemCaseSensitive(root,"permissions");
+  bool permitted=false;
+  const cJSON* permission=nullptr;
+  if (cJSON_IsArray(permissions)) {cJSON_ArrayForEach(permission,permissions)
+    if (cJSON_IsString(permission) && !strcmp(permission->valuestring,"fire.data")) permitted=true;}
+  const cJSON* version=cJSON_GetObjectItemCaseSensitive(extension,"version");
+  const cJSON* contract=cJSON_GetObjectItemCaseSensitive(extension,"contract");
+  const bool valid=requested?(sdk && (mask&kLuaServiceJobs) && (mask&kLuaServiceSd) && permitted &&
+      cJSON_IsObject(extension) && cJSON_GetArraySize(extension)==2 && cJSON_IsString(version) &&
+      !strcmp(version->valuestring,FireDataEngineContract::kVersion) && cJSON_IsString(contract) &&
+      !strcmp(contract->valuestring,FireDataEngineContract::kContract)):!extension;
+  cJSON_Delete(root);return valid;
 }
 
 bool luaRuntimeAiManifest(const String& manifest,bool sdk,uint32_t mask) {
@@ -1189,7 +1217,7 @@ void FireOS::update() {
   // and the shared Lua IMU service so both expose live sensor values.
   static uint32_t lastImuUpdateAt = 0;
   const uint32_t now = millis();
-  if (M5.Imu.isEnabled() && now - lastImuUpdateAt >= 20) {
+  if (M5.Imu.isEnabled() && !luaDataImu_.active() && now - lastImuUpdateAt >= 20) {
     M5.Imu.update();
     lastImuUpdateAt = now;
   }
@@ -1314,6 +1342,7 @@ void FireOS::update() {
   updateWifiState();
   updateBluetoothScan();
   { FireUiPhaseTimer timing("hardware_jobs"); serviceLuaHardwareJobs(); }
+  serviceDataDevelopHandoff();
   {
   FireUiPhaseTimer timing("reverse_service");
   reverseTransport_.service(!firmwareNetworkPaused_ && WiFi.status() == WL_CONNECTED &&
@@ -2609,18 +2638,23 @@ bool FireOS::luaPwmAllowed(int pin) const { return pin == 26; }
 
 bool FireOS::luaI2cAllowed(uint8_t bus, uint8_t address, bool write) const {
   if (bus != 0) return false;
-  return !write || address == 0x40;
+  if (write && address==0x6c && M5.Imu.getType()==m5::imu_sh200q) return false;
+  return !write || fire_hardware_policy::externalI2cWrite(address);
 }
 
 void FireOS::releaseLuaHardware() {
+  for (LuaHardwareJob& job:luaJobs_) if (job.kind==LuaJobKind::Data && job.state==0) cancelLuaDataJob(job,"cancelled");
+  finishPartialDataCapture();
+  luaDataStore_.close();luaDataAllowed_=false;luaServiceMask_=0;
+  luaDataImu_.end();luaDataCaptureJob_=0;
+  luaBluetooth_.cancel(luaBluetooth_.owner());luaBluetoothHandle_=0;
+  if (luaWifiScanJob_) {esp_wifi_scan_stop();WiFi.scanDelete();luaWifiScanJob_=0;}
+  luaDevelopMode_=String();luaDevelopInstruction_=String();luaDevelopContext_=String();luaDevelopJob_=0;
+  luaFeedbackConfirmation_=false;luaFeedbackOutcome_=String();luaFeedbackAck_=String();
   for(LuaHardwareJob& job:luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.state==0)
     cancelLuaRuntimeAi(job,"cancelled");
   luaRuntimeAiAllowed_=false;luaAiBindPackageId_=String();luaAiBindSent_=false;
-  // Lua currently has no microphone service, but keeping this reset here
-  // makes the exit boundary safe if an audio adapter or an interrupted app
-  // owns the capture path in a future build.
-  fireStopMicCapture();
-  fireReleaseMicCapture();
+  releaseLuaMic();
   if (M5.Speaker.isEnabled()) M5.Speaker.stop(kLuaSpeakerChannel);
   luaSpeakerFile_.close();
   if (luaSpeakerBuffer_ && (!luaSpeakerPlaying_ ||
@@ -2650,8 +2684,8 @@ void FireOS::releaseLuaHardware() {
     luaDacPin_ = -1;
   }
   if (luaSpi_) {
-    luaSpi_->end();
-    delete luaSpi_;
+    digitalWrite(26, HIGH);
+    pinMode(26, INPUT);
     luaSpi_ = nullptr;
     luaSpiBus_ = -1;
     luaSpiFrequency_ = 1000000;
@@ -2674,7 +2708,7 @@ bool FireOS::luaGpioModeCallback(void* context, int pin, const char* mode,
   if (os->luaGpioClaimed_[pin] ||
       (os->luaUartOpen_ &&
        (pin == os->luaUartRxPin_ || pin == os->luaUartTxPin_)) ||
-      (pin == 26 && (os->luaPwmPin_ >= 0 || os->luaDacPin_ >= 0))) {
+      (pin == 26 && (os->luaPwmPin_ >= 0 || os->luaDacPin_ >= 0 || os->luaSpi_))) {
     setLuaError(error, "busy");
     return false;
   }
@@ -2753,7 +2787,7 @@ bool FireOS::luaPwmConfigureCallback(void* context, int pin, int frequency,
     return false;
   }
   if (os->luaGpioClaimed_[pin] || os->luaUartOpen_ ||
-      os->luaDacPin_ >= 0 ||
+      os->luaDacPin_ >= 0 || os->luaSpi_ ||
       (os->luaPwmPin_ >= 0 && os->luaPwmPin_ != pin)) {
     setLuaError(error, "busy");
     return false;
@@ -2803,7 +2837,7 @@ bool FireOS::luaUartOpenCallback(void* context, int port, int baud, int rxPin,
     return false;
   }
   if (os->luaUartOpen_ || os->luaGpioClaimed_[rxPin] ||
-      os->luaGpioClaimed_[txPin] || os->luaPwmPin_ >= 0) {
+      os->luaGpioClaimed_[txPin] || os->luaPwmPin_ >= 0 || os->luaDacPin_>=0 || os->luaSpi_) {
     setLuaError(error, "busy");
     return false;
   }
@@ -2898,6 +2932,9 @@ uint16_t FireOS::luaI2cReadCallback(void* context, int bus, int address,
     setLuaError(error, "unavailable");
     return 0;
   }
+  if (address==0x68 && os->luaDataImu_.active()) {
+    setLuaError(error,"busy");return 0;
+  }
   if (!os->luaI2cStarted_) {
     Wire.begin(21, 22, 400000);
     Wire.setTimeOut(3);
@@ -2940,8 +2977,8 @@ bool FireOS::luaAdcReadCallback(void* context, int pin, int* value,
   // GPIO36 is ADC1 and is the only ADC resource exposed by the FIRE profile.
   // It is also the fixed UART2 RX pin, so never sample it while UART owns it.
   if (!os || !value || pin != 36 || os->luaUartOpen_ ||
-      os->luaGpioClaimed_[pin] || os->aiAudioCaptureActive_) {
-    setLuaError(error, os && os->aiAudioCaptureActive_ ? "busy" : "unavailable");
+      os->luaGpioClaimed_[pin] || os->aiAudioCaptureActive_ || os->luaMicJobId_) {
+    setLuaError(error, os && (os->aiAudioCaptureActive_ || os->luaMicJobId_) ? "busy" : "unavailable");
     return false;
   }
   analogReadResolution(12);
@@ -2955,7 +2992,7 @@ bool FireOS::luaDacWriteCallback(void* context, int pin, int value,
   // GPIO25 drives the FIRE speaker and is never handed to an app. GPIO26 is
   // the safe Grove-B output and the only DAC resource in the device profile.
   if (!os || pin != 26 || os->luaGpioClaimed_[pin] || os->luaUartOpen_ ||
-      os->luaPwmPin_ >= 0 || (os->luaDacPin_ >= 0 && os->luaDacPin_ != pin)) {
+      os->luaPwmPin_ >= 0 || os->luaSpi_ || (os->luaDacPin_ >= 0 && os->luaDacPin_ != pin)) {
     setLuaError(error, "busy");
     return false;
   }
@@ -2980,25 +3017,23 @@ bool FireOS::luaSpiOpenCallback(void* context, int bus, int sclk, int miso,
                                 int mosi, int cs, int frequency, int mode,
                                 const char** error) {
   auto* os = static_cast<FireOS*>(context);
-  // FIRE's SD card owns VSPI (18/19/23). The SPI adapter is therefore only
-  // available when SD is absent, with a fixed, validated CS on GPIO27. This
-  // prevents an app from corrupting SD traffic or selecting flash/PSRAM pins.
-  if (!os || bus != 2 || sclk != 18 || miso != 19 || mosi != 23 || cs != 27) {
+  // SD/LCD and the external device use the same Arduino HAL transaction lock.
+  // GPIO27 is LCD D/C, never an external CS. Grove B GPIO26 is exclusive.
+  if (!os || !fire_hardware_policy::externalSpi(bus, sclk, miso, mosi, cs)) {
     setLuaError(error, "unavailable");
     return false;
   }
-  if (os->sdReady_ || os->luaSpi_ || os->luaUartOpen_ ||
+  if (os->firmwareBusy() || os->luaSpi_ || os->luaUartOpen_ ||
       os->luaGpioClaimed_[cs] || os->luaPwmPin_ >= 0 || os->luaDacPin_ >= 0) {
     setLuaError(error, "busy");
     return false;
   }
-  auto* spi = new SPIClass(VSPI);
-  if (!spi) {
-    setLuaError(error, "memory");
-    return false;
-  }
-  spi->begin(sclk, miso, mosi, cs);
-  os->luaSpi_ = spi;
+  // Reuse the established bus object. Never end/reinitialize a bus owned by
+  // the display or SD when an app closes its own chip-select resource.
+  SPI.begin(sclk, miso, mosi);
+  pinMode(cs, OUTPUT);
+  digitalWrite(cs, HIGH);
+  os->luaSpi_ = &SPI;
   os->luaSpiBus_ = bus;
   os->luaSpiFrequency_ = static_cast<uint32_t>(frequency);
   os->luaSpiMode_ = static_cast<uint8_t>(mode);
@@ -3029,8 +3064,8 @@ bool FireOS::luaSpiCloseCallback(void* context, int bus, const char** error) {
     setLuaError(error, "invalid_handle");
     return false;
   }
-  os->luaSpi_->end();
-  delete os->luaSpi_;
+  digitalWrite(26, HIGH);
+  pinMode(26, INPUT);
   os->luaSpi_ = nullptr;
   os->luaSpiBus_ = -1;
   os->luaSpiFrequency_ = 1000000;
@@ -3093,6 +3128,7 @@ uint16_t FireOS::luaSdReadCallback(void* context, const char* path,
 uint16_t FireOS::luaSdWriteCallback(void* context, const char* path,
                                     const char* text, size_t length, bool append,
                                     const char** error) {
+  if (!fire_data_paths::safeMutation(path)) {setLuaError(error,"permission_denied");return 0;}
   auto* os = static_cast<FireOS*>(context);
   String resolved;
   if (!os || !os->luaPrivateAppPath(path, resolved, error)) return 0;
@@ -3116,6 +3152,7 @@ uint16_t FireOS::luaSdWriteCallback(void* context, const char* path,
 
 uint16_t FireOS::luaSdRemoveCallback(void* context, const char* path,
                                      const char** error) {
+  if (!fire_data_paths::safeMutation(path,true)) {setLuaError(error,"permission_denied");return 0;}
   auto* os = static_cast<FireOS*>(context);
   String resolved;
   if (!os || !os->luaPrivateAppPath(path, resolved, error)) return 0;
@@ -3131,6 +3168,7 @@ uint16_t FireOS::luaSdRemoveCallback(void* context, const char* path,
 
 bool FireOS::luaSdMkdirCallback(void* context, const char* path,
                                 const char** error) {
+  if (!fire_data_paths::safeMutation(path)) {setLuaError(error,"permission_denied");return false;}
   auto* os = static_cast<FireOS*>(context);
   String resolved;
   if (!os || !os->luaPrivateAppPath(path, resolved, error)) return false;
@@ -3299,7 +3337,7 @@ uint16_t FireOS::luaSpeakerToneCallback(void* context, int frequency,
     setLuaError(error, "unavailable");
     return 0;
   }
-  if (os->aiAudioCaptureActive_ || os->aiAudioOutputActive_) {
+  if (os->aiAudioCaptureActive_ || os->aiAudioOutputActive_ || os->luaMicJobId_) {
     setLuaError(error, "busy");
     return 0;
   }
@@ -3330,7 +3368,7 @@ uint16_t FireOS::luaSpeakerPlayCallback(void* context, const char* path,
     setLuaError(error, "unavailable");
     return 0;
   }
-  if (os->aiAudioCaptureActive_ || os->aiAudioOutputActive_ ||
+  if (os->aiAudioCaptureActive_ || os->aiAudioOutputActive_ || os->luaMicJobId_ ||
       os->luaSpeakerJobId_ != 0 || os->luaSpeakerPlaying_) {
     setLuaError(error, "busy");
     return 0;
@@ -3371,6 +3409,153 @@ bool FireOS::luaSpeakerStopCallback(void* context, const char** error) {
   return true;
 }
 
+void FireOS::releaseLuaMic() {
+  if (!luaMicJobId_ && !luaMicBuffer_) return;
+  if (!fireTryReleaseMicCapture()) return;
+  luaMicFile_.close();
+  if (luaMicStageOwned_ && luaMicStage_.length()) SD.remove(luaMicStage_);
+  free(luaMicBuffer_);
+  luaMicBuffer_ = nullptr;
+  luaMicBufferBytes_ = 0;
+  luaMicStageOwned_ = false;
+  luaMicStage_ = String();
+  luaMicPrevious_ = String();
+  luaMicJobId_ = 0;
+}
+
+bool FireOS::luaMicLevelCallback(void* context, float* level, const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  if (!os || !level || !os->luaMicJobId_) {
+    setLuaError(error, "not_recording");
+    return false;
+  }
+  *level = os->luaMicLevel_;
+  return true;
+}
+
+uint16_t FireOS::luaMicRecordCallback(void* context, const char* path,
+    int duration, int rate, const char** error) {
+  auto* os = static_cast<FireOS*>(context);
+  String resolved;
+  if (!os || !os->luaPrivateAppPath(path, resolved, error)) return 0;
+  if (duration < 100 || duration > 10000 || (rate != 8000 && rate != 16000)) {
+    setLuaError(error, "invalid_argument");
+    return 0;
+  }
+  if (!os->sdReady_ || !M5.Mic.isEnabled()) {
+    setLuaError(error, "unavailable");
+    return 0;
+  }
+  if (os->firmwareBusy() || os->aiAudioCaptureActive_ || os->aiAudioOutputActive_ ||
+      os->aiAudioDownloadPending_ || os->luaSpeakerJobId_ || os->luaMicJobId_ ||
+      fireMicCaptureRunning()) {
+    setLuaError(error, "busy");
+    return 0;
+  }
+  const size_t bytes = (static_cast<size_t>(duration) * rate / 1000) * 2 + 44;
+  const uint16_t id = os->createLuaJob(LuaJobKind::MicRecord, error);
+  if (!id) return 0;
+  auto* job = os->findLuaJob(id);
+  job->path = resolved;
+  job->text = path;
+  job->durationMs = duration;
+  job->frequency = rate;
+  job->mediaSize = bytes;
+  job->timeoutMs = duration + 3000;
+  os->luaMicJobId_ = id;
+  os->luaMicStage_ = resolved + ".record-part";
+  os->luaMicPrevious_ = resolved + ".record-previous";
+  os->luaMicLevel_ = 0;
+  return id;
+}
+
+void FireOS::serviceLuaMicJob(LuaHardwareJob& job) {
+  const auto fail = [&](const char* code) {
+    job.state = 2;
+    job.errorCode = code;
+    releaseLuaMic();
+  };
+  if (job.id != luaMicJobId_) { job.state = 3; job.errorCode = "cancelled"; return; }
+  if (!job.started) {
+    if (M5.Speaker.isPlaying()) return;
+    const uint64_t total = SD.totalBytes(), used = SD.usedBytes();
+    if (used > total || total - used < job.mediaSize + 4096) { fail("no_space"); return; }
+    // Never remove an unowned stage or an earlier recovery copy.
+    if (SD.exists(luaMicStage_) || SD.exists(luaMicPrevious_)) { fail("busy"); return; }
+    luaMicBuffer_ = static_cast<uint8_t*>(heap_caps_malloc(job.mediaSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!luaMicBuffer_) { fail("memory"); return; }
+    luaMicBufferBytes_ = job.mediaSize;
+    writeWavHeader(luaMicBuffer_, job.mediaSize - 44, job.frequency);
+    luaMicFile_ = SD.open(luaMicStage_, FILE_WRITE);
+    if (!luaMicFile_) { fail("open_failed"); return; }
+    luaMicStageOwned_ = true;
+    if (!luaMicFile_.setBufferSize(512) ||
+        !fireStartMicCapture(reinterpret_cast<int16_t*>(luaMicBuffer_ + 44),
+                             (job.mediaSize - 44) / 2, job.frequency,true)) {
+      fail("capture_failed"); return;
+    }
+    job.started = true;
+  }
+  if (job.step == 0) {
+    const size_t samples = fireMicCapturedSamples();
+    const bool running = fireMicCaptureRunning();
+    if (fireMicCaptureFailed() || (!running && samples != (job.mediaSize - 44) / 2)) {
+      fail("capture_failed"); return;
+    }
+    if (samples) {
+      const auto* pcm = reinterpret_cast<const int16_t*>(luaMicBuffer_ + 44);
+      const size_t count = min<size_t>(samples, 128);
+      uint32_t peak = 0;
+      for (size_t i = samples - count; i < samples; ++i)
+        peak = max<uint32_t>(peak, static_cast<uint32_t>(abs(static_cast<int>(pcm[i]))));
+      luaMicLevel_ = static_cast<float>(peak) / 32768.0f;
+    }
+    const size_t ready = 44 + samples * 2;
+    const size_t amount = min<size_t>(ready - job.mediaRead, 4096);
+    if (amount) {
+      if (luaMicFile_.write(luaMicBuffer_ + job.mediaRead, amount) != amount) {
+        fail("write_failed"); return;
+      }
+      job.mediaRead += amount;
+    }
+    if (running || job.mediaRead != job.mediaSize) return;
+    fireReleaseMicCapture();
+    luaMicFile_.close();
+    luaMicFile_ = SD.open(luaMicStage_, FILE_READ);
+    if (!luaMicFile_ || luaMicFile_.size() != job.mediaSize || !luaMicFile_.setBufferSize(512)) {
+      fail("readback_failed"); return;
+    }
+    job.step = 1;
+    return;
+  }
+  if (job.step == 1) {
+    uint8_t buffer[512];
+    // Bounded persistence check of every byte, not the fwrite/flush result.
+    for (uint8_t part = 0; part < 8 && job.offset < job.mediaSize; ++part) {
+      const size_t count = min<size_t>(sizeof(buffer), job.mediaSize - job.offset);
+      if (luaMicFile_.read(buffer, count) != count ||
+          memcmp(buffer, luaMicBuffer_ + job.offset, count)) {
+        fail("readback_failed"); return;
+      }
+      job.offset += count;
+    }
+    if (job.offset != job.mediaSize) return;
+    luaMicFile_.close();
+    const bool previous = SD.exists(job.path);
+    if (previous && !SD.rename(job.path, luaMicPrevious_)) { fail("commit_failed"); return; }
+    if (!SD.rename(luaMicStage_, job.path)) {
+      if (previous) SD.rename(luaMicPrevious_, job.path);
+      fail("commit_failed"); return;
+    }
+    luaMicStageOwned_ = false;
+    // Keep the old copy if cleanup fails; never destroy it on a failed rename.
+    if (previous) SD.remove(luaMicPrevious_);
+    job.state = 1;
+    job.written = job.mediaSize;
+    releaseLuaMic();
+  }
+}
+
 bool FireOS::luaJobPollCallback(void* context, uint16_t id,
                                 FireLuaRuntime::JobSnapshot* snapshot) {
   auto* os = static_cast<FireOS*>(context);
@@ -3404,6 +3589,30 @@ uint16_t FireOS::luaAiRequestCallback(void* context,const char* instructions,siz
   if(!copied || job->text.length()!=ni || job->path.length()!=nd || job->aiSchema.length()!=ns) {
     *job=LuaHardwareJob();setLuaError(error,"busy");return 0;
   }
+  job->requestRun=os->luaRunId_;
+  cJSON* parsed=cJSON_ParseWithLength(data,nd+1);
+  if (!parsed) {*job=LuaHardwareJob();setLuaError(error,"busy");return 0;}
+  const cJSON* refs=cJSON_GetObjectItemCaseSensitive(parsed,"dataset_refs");
+  if (refs) {
+    if (!os->luaDataAllowed_ || !cJSON_IsArray(refs) || cJSON_GetArraySize(refs)<1 ||
+        cJSON_GetArraySize(refs)>static_cast<int>(FireDataEngineContract::kContextDatasetRefs)) {
+      cJSON_Delete(parsed);*job=LuaHardwareJob();setLuaError(error,"permission_denied");return 0;
+    }
+    cJSON* ids=cJSON_CreateArray();const cJSON* ref=nullptr;bool valid=ids!=nullptr;
+    cJSON_ArrayForEach(ref,refs) {
+      const cJSON* name=cJSON_IsString(ref)?ref:cJSON_GetObjectItemCaseSensitive(ref,"dataset_id");
+      if (!cJSON_IsString(name) || !FireDataStore::identifier(name->valuestring,strlen(name->valuestring))) {valid=false;break;}
+      if (!cJSON_AddItemToArray(ids,cJSON_CreateString(name->valuestring))) {valid=false;break;}
+    }
+    char* encoded=valid?cJSON_PrintUnformatted(ids):nullptr;
+    const String names=encoded?String(encoded):String();cJSON_free(encoded);cJSON_Delete(ids);
+    if (!names.length()) {cJSON_Delete(parsed);*job=LuaHardwareJob();setLuaError(error,"invalid_argument");return 0;}
+    const uint16_t child=os->createLuaJob(LuaJobKind::Data,error);
+    if (!child) {cJSON_Delete(parsed);*job=LuaHardwareJob();return 0;}
+    auto* sync=os->findLuaJob(child);sync->dataOperation="sync";sync->path=names;sync->aiSchema="{}";
+    sync->timeoutMs=FireDataEngineContract::kNetworkJobTimeoutMs;job->count=child;
+  }
+  cJSON_Delete(parsed);
   return id;
 }
 
@@ -3411,6 +3620,7 @@ void FireOS::cancelLuaRuntimeAi(LuaHardwareJob& job,const char* reason) {
   if(job.kind!=LuaJobKind::RuntimeAi || job.state!=0) return;
   if(job.started && backendClient_ && backendClient_->sessionReady())
     backendClient_->runtimeAiCancel(job.aiRequestId,luaAppId_,luaPackageId_,luaSourceHash_,luaRunId_);
+  if (job.count) {luaJobCloseCallback(this,job.count);job.count=0;}
   job.state=!strcmp(reason,"cancelled")?3:2;job.errorCode=reason;
   job.text=String();job.path=String();job.aiSchema=String();
 }
@@ -3458,6 +3668,7 @@ bool FireOS::luaJobResultCallback(void* context, uint16_t id,
   memcpy(snapshot->bytes, job->bytes, job->byteCount);
   snapshot->text = job->text;
   snapshot->written = job->written;
+  if (job->kind==LuaJobKind::Bluetooth && job->dataOperation=="advertise") snapshot->handle=job->written;
   snapshot->entryCount = job->entryCount;
   for (uint16_t index = 0; index < job->entryCount && index < 32; ++index) {
     snapshot->entries[index].name = job->entryNames[index];
@@ -3465,6 +3676,14 @@ bool FireOS::luaJobResultCallback(void* context, uint16_t id,
     snapshot->entries[index].directory = job->entryDirectories[index];
   }
   snapshot->path = job->path;
+  if (job->kind==LuaJobKind::Data && job->dataOperation=="read") {
+    snapshot->written=job->offset;snapshot->connected=job->append;
+  }
+  if (job->kind == LuaJobKind::MicRecord) {
+    snapshot->path = job->text;
+    snapshot->sizeBytes = job->mediaSize;
+    snapshot->sampleRate = job->frequency;
+  }
   snapshot->resultKind = job->kind == LuaJobKind::I2cScan
                              ? FireLuaRuntime::JobSnapshot::I2cScan
                          : job->kind == LuaJobKind::UartRead
@@ -3478,6 +3697,16 @@ bool FireOS::luaJobResultCallback(void* context, uint16_t id,
                              ? FireLuaRuntime::JobSnapshot::Files
                          : job->kind == LuaJobKind::RuntimeAi
                              ? FireLuaRuntime::JobSnapshot::RuntimeAi
+                         : job->kind == LuaJobKind::MicRecord
+                             ? FireLuaRuntime::JobSnapshot::Recording
+                         : job->kind == LuaJobKind::Data
+                             ? (job->dataOperation=="read"?FireLuaRuntime::JobSnapshot::DataRead:FireLuaRuntime::JobSnapshot::Data)
+                         : job->kind == LuaJobKind::Bluetooth
+                             ? (job->dataOperation=="scan"?FireLuaRuntime::JobSnapshot::Data:
+                                job->dataOperation=="advertise"?FireLuaRuntime::JobSnapshot::Handle:
+                                job->dataOperation=="read_gatt"?FireLuaRuntime::JobSnapshot::Bytes:FireLuaRuntime::JobSnapshot::Write)
+                         : job->kind == LuaJobKind::WifiScan
+                             ? FireLuaRuntime::JobSnapshot::Data
                          : FireLuaRuntime::JobSnapshot::Write;
   return true;
 }
@@ -3486,6 +3715,7 @@ bool FireOS::luaJobCloseCallback(void* context, uint16_t id) {
   auto* os = static_cast<FireOS*>(context);
   LuaHardwareJob* job = os ? os->findLuaJob(id) : nullptr;
   if (!job) return false;
+  if (job->kind==LuaJobKind::Data && job->state==0) os->cancelLuaDataJob(*job,"cancelled");
   if(job->kind==LuaJobKind::RuntimeAi && job->state==0) os->cancelLuaRuntimeAi(*job,"cancelled");
   if (os && id == os->luaSpeakerJobId_) {
     if (M5.Speaker.isEnabled()) M5.Speaker.stop(kLuaSpeakerChannel);
@@ -3502,6 +3732,7 @@ bool FireOS::luaJobCancelCallback(void* context, uint16_t id) {
   auto* os = static_cast<FireOS*>(context);
   LuaHardwareJob* job = os ? os->findLuaJob(id) : nullptr;
   if (!job || job->state != 0) return false;
+  if (job->kind==LuaJobKind::Data) {os->cancelLuaDataJob(*job,"cancelled");return true;}
   if(job->kind==LuaJobKind::RuntimeAi) {os->cancelLuaRuntimeAi(*job,"cancelled");return true;}
   job->state = 3;
   job->errorCode = "cancelled";
@@ -3515,26 +3746,83 @@ bool FireOS::luaJobCancelCallback(void* context, uint16_t id) {
   return true;
 }
 
+#include "fire_os_bluetooth.inc"
+#include "fire_os_data.inc"
+
 void FireOS::serviceLuaHardwareJobs() {
+  finishPartialDataCapture();
+  if (luaWifiScanJob_) {
+    const LuaHardwareJob* job=findLuaJob(luaWifiScanJob_);
+    if (!job || job->state!=0) {esp_wifi_scan_stop();WiFi.scanDelete();luaWifiScanJob_=0;}
+  }
+  luaBluetooth_.service();
+  if (luaBluetooth_.owner() && luaBluetooth_.owner()!=luaBluetoothHandle_) {
+    const uint16_t id=luaBluetooth_.owner();const LuaHardwareJob* owner=findLuaJob(id);
+    if (!owner || owner->state!=0) luaBluetooth_.cancel(id);
+  }
+  if (luaDataUploadJob_) {
+    const LuaHardwareJob* upload=findLuaJob(luaDataUploadJob_);
+    if (!upload || upload->state!=0 || luaDataUploadCancelled_) {
+      if (backendClient_ && backendClient_->audioTransferActive()) backendClient_->cancelAudioTransfer();
+      else {
+        free(luaDataUploadBuffer_);luaDataUploadBuffer_=nullptr;
+        luaDataUploadJob_=0;luaDataUploadCancelled_=false;
+      }
+    }
+  }
+  if (luaMicJobId_) {
+    const LuaHardwareJob* mic=findLuaJob(luaMicJobId_);
+    if (!mic || mic->state!=0) releaseLuaMic();
+  }
+  if (luaDataStore_.hashingJob()) {
+    const uint16_t id=luaDataStore_.hashingJob();const LuaHardwareJob* active=findLuaJob(id);
+    if (!active || active->state!=0) luaDataStore_.cancel(id);
+  }
+  if (luaDataCaptureJob_) {
+    const LuaHardwareJob* active=findLuaJob(luaDataCaptureJob_);
+    if (!active || active->state!=0) {
+      luaDataImu_.end();luaDataCaptureJob_=0;
+    }
+  }
   if (luaSpeakerJobId_ == 0) releaseLuaSpeakerBufferIfReady();
   if (luaSpeakerPlaying_ && volume_ == 0 && M5.Speaker.isEnabled())
     M5.Speaker.stop(kLuaSpeakerChannel);
   for (LuaHardwareJob& job : luaJobs_) {
     if (job.id == 0 || job.state != 0) continue;
     const uint32_t now = millis();
-    if (now - job.startedAt > job.timeoutMs) {
+    const bool dataLocal=job.kind==LuaJobKind::Data && job.dataOperation!="process" && job.dataOperation!="develop" && job.dataOperation!="sync";
+    if (fire_data_deadline::expired(now,job.startedAt,job.lastProgressAt,job.timeoutMs,dataLocal,
+          job.kind==LuaJobKind::RuntimeAi && job.count!=0)) {
+      if (job.kind==LuaJobKind::Data) {cancelLuaDataJob(job,"timeout");continue;}
+      if (job.kind == LuaJobKind::MicRecord) releaseLuaMic();
       if(job.kind==LuaJobKind::RuntimeAi) {cancelLuaRuntimeAi(job,"timeout");continue;}
       job.state = 2;
       job.errorCode = "timeout";
+      continue;
+    }
+    if (job.kind == LuaJobKind::WifiScan) {serviceLuaWifiScan(job);continue;}
+    if (job.kind == LuaJobKind::Bluetooth) {serviceLuaBluetoothJob(job);continue;}
+    if (job.kind == LuaJobKind::Data) {serviceLuaDataJob(job);continue;}
+    if (job.kind == LuaJobKind::MicRecord) {
+      serviceLuaMicJob(job);
       continue;
     }
     if(job.kind==LuaJobKind::RuntimeAi) {
       if(!luaAppActive_ || !luaRuntimeAiAllowed_ || !luaRuntime_ || !luaRuntime_->running()) {cancelLuaRuntimeAi(job,"stale_run");continue;}
       if(!runtimeAiEnabled_) {cancelLuaRuntimeAi(job,"disabled");continue;}
       if(!backendClient_ || !backendClient_->sessionReady()) {cancelLuaRuntimeAi(job,"not_connected");continue;}
+      if (job.requestRun!=luaRunId_) {cancelLuaRuntimeAi(job,"stale_run");continue;}
+      if (job.count) {
+        const LuaHardwareJob* sync=findLuaJob(job.count);
+        if (!sync || sync->state>1) {cancelLuaRuntimeAi(job,sync?sync->errorCode.c_str():"cancelled");continue;}
+        if (sync->state==0) continue;
+        if (!jsonBoolField(sync->text,"ok",false)) {cancelLuaRuntimeAi(job,"invalid_data");continue;}
+        luaJobCloseCallback(this,job.count);job.count=0;job.append=true;
+      }
       if(!job.started) {
         if(backendClient_->runtimeAiRequest(job.aiRequestId,luaAppId_,luaPackageId_,luaSourceHash_,luaRunId_,
               job.text,job.path,job.aiSchema,job.timeoutMs)) {
+          if (job.append) {job.startedAt=millis();job.append=false;}
           job.started=true;job.text=String();job.path=String();job.aiSchema=String();
         } else cancelLuaRuntimeAi(job,"not_connected");
       }
@@ -3549,6 +3837,9 @@ void FireOS::serviceLuaHardwareJobs() {
       }
       if (job.step >= 127) job.state = 1;
     } else if (job.kind == LuaJobKind::I2cRead) {
+      if (job.address==0x68 && luaDataImu_.active()) {
+        job.state=2;job.errorCode="busy";continue;
+      }
       if (job.reg >= 0) {
         Wire.beginTransmission(job.address);
         Wire.write(static_cast<uint8_t>(job.reg));
@@ -3600,14 +3891,15 @@ void FireOS::serviceLuaHardwareJobs() {
         job.errorCode = "spi_closed";
         continue;
       }
-      const uint16_t remaining = job.payloadCount - job.step;
-      const uint16_t chunk = min<uint16_t>(remaining, 64);
+      const uint16_t chunk = job.payloadCount;
       luaSpi_->beginTransaction(
           SPISettings(luaSpiFrequency_, MSBFIRST, luaSpiMode_));
+      digitalWrite(26, LOW);
       for (uint16_t index = 0; index < chunk; ++index) {
         job.bytes[job.step + index] =
             luaSpi_->transfer(job.payload[job.step + index]);
       }
+      digitalWrite(26, HIGH);
       luaSpi_->endTransaction();
       job.step = static_cast<uint16_t>(job.step + chunk);
       job.byteCount = job.step;
@@ -3678,7 +3970,7 @@ void FireOS::serviceLuaHardwareJobs() {
       if (!ok) job.errorCode = "remove_failed";
     } else if (job.kind == LuaJobKind::SpeakerTone) {
       if (!job.started) {
-        if (aiAudioCaptureActive_ || aiAudioOutputActive_) {
+        if (aiAudioCaptureActive_ || aiAudioOutputActive_ || luaMicJobId_) {
           job.state = 2;
           job.errorCode = "busy";
           luaSpeakerJobId_ = 0;
@@ -3777,7 +4069,7 @@ void FireOS::serviceLuaHardwareJobs() {
           luaSpeakerJobId_ = 0;
           continue;
         }
-        if (aiAudioCaptureActive_ || aiAudioOutputActive_) {
+        if (aiAudioCaptureActive_ || aiAudioOutputActive_ || luaMicJobId_) {
           free(luaSpeakerBuffer_);
           luaSpeakerBuffer_ = nullptr;
           luaSpeakerBufferSize_ = 0;
@@ -4005,11 +4297,14 @@ void FireOS::prepareAppManagerActions() {
   if (managerSelection_ >= managerItemCount_) return;
   const ManagerItem& item = managerItems_[managerSelection_];
   auto add = [&](uint8_t code, const char* label) {
-    if (appManagerActionCount_ >= 6) return;
+    if (appManagerActionCount_ >= 9) return;
     appManagerActionCodes_[appManagerActionCount_] = code;
     appManagerActionLabels_[appManagerActionCount_++] = label;
   };
   if (item.local) add(1, "Launch");
+  if (item.local && item.kind==1 && item.localPackageId.length()) {
+    add(7,"Improve app");add(8,"New app from this");add(9,"Test feedback");
+  }
   if (item.backend && item.packageId.length() > 0) add(2, "Download/update");
   if (item.local) add(3, "Delete local");
   if (item.backend && item.canDeleteBackend) add(4, "Delete backend");
@@ -4427,6 +4722,20 @@ void FireOS::onButton(uint8_t index, bool longPress) {
     return;
   }
 
+  if (luaDevelopJob_ && luaAppActive_) {
+    auto* job=findLuaJob(luaDevelopJob_);
+    if (luaFeedbackConfirmation_ && luaDevelopContext_.length()) {
+      if (index==0) {if (job) cancelLuaDataJob(*job,"cancelled");}
+      else if (!luaFeedbackAck_.length() && backendClient_) {
+        const String action=index==1?String("confirm"):String("reject");
+        const String event="obs-"+luaDevelopContext_+"-"+action;
+        if (backendClient_->confirmObservation(luaDevelopContext_,action,event)) {
+          luaFeedbackOutcome_=action;luaFeedbackAck_=event;
+        }
+      }
+    } else if (index==0 && job) cancelLuaDataJob(*job,"cancelled");
+    return;
+  }
   if (buildNoticeActive_) {
     if (index == 1) {
       const String noticeBuild = buildNoticeId_;
@@ -4798,6 +5107,7 @@ void FireOS::open(Screen screen) {
     appScanPending_ = true;
   }
   if (screen == Screen::AppsSettings) {
+    appManagerDevelopConfirm_=0;
     externalAppSelection_ = 0;
     externalAppOffset_ = 0;
     externalAppMessage_ = "";
@@ -5531,6 +5841,11 @@ bool FireOS::startAiRecording() {
     aiAudioError_ = "Audio is still playing";
     return false;
   }
+  if (luaMicJobId_) {
+    LuaHardwareJob* capture = findLuaJob(luaMicJobId_);
+    if (capture) { capture->state = 3; capture->errorCode = "audio_preempted"; }
+    releaseLuaMic();
+  }
   if (localVoiceTest) suspendVoiceTestRadio();
   if (!aiAudioBuffer_) {
     aiAudioBuffer_ = static_cast<uint8_t*>(ps_malloc(kAiAudioWavBytes));
@@ -6018,7 +6333,10 @@ bool FireOS::startLuaApp(const String& path, const String& name,
                        !(serviceMask & kLuaServiceJobs)) ||
                       (serviceMask & kLuaServiceSpeaker &&
                        (!(serviceMask & kLuaServiceJobs) ||
-                        !(serviceMask & kLuaServiceSd))))) {
+                        !(serviceMask & kLuaServiceSd))) ||
+                      (serviceMask & kLuaServiceMic &&
+                       (!(serviceMask & kLuaServiceJobs) || !(serviceMask & kLuaServiceSd))) ||
+                      (serviceMask & kLuaServiceBluetooth && !(serviceMask & kLuaServiceJobs)))) {
     luaAppError_ = "Hardware service dependencies invalid";
     return false;
   }
@@ -6035,6 +6353,9 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   }
   if(!luaRuntimeAiManifest(manifest,appSdk,serviceMask)) {
     luaAppError_="Runtime AI permission or contract invalid";return false;
+  }
+  if (!luaDataManifest(manifest,appSdk,serviceMask)) {
+    luaAppError_="Data Engine permission or contract invalid";return false;
   }
   // A new verified source starts with its own API/permissions and no live jobs
   // from the previous app. An identical authorized active run is handled before
@@ -6066,6 +6387,7 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaHost.buttonPressed = luaButtonPressed;
     luaHost.rgbSet = luaRgbSet;
     luaHost.imuAccel = luaImuAccel;
+    luaHost.imuBusy = [](void* context) {return static_cast<FireOS*>(context)->luaDataImu_.active();};
     luaHost.imuGyro = luaImuGyro;
     luaHost.imuTemperature = luaImuTemperature;
     luaHost.timeMillis = luaTimeMillis;
@@ -6102,6 +6424,15 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaHost.speakerTone = luaSpeakerToneCallback;
     luaHost.speakerPlay = luaSpeakerPlayCallback;
     luaHost.speakerStop = luaSpeakerStopCallback;
+    luaHost.micLevel = luaMicLevelCallback;
+    luaHost.micRecord = luaMicRecordCallback;
+    luaHost.bluetoothRequest = luaBluetoothRequestCallback;
+    luaHost.bluetoothAdvertiseRaw = luaBluetoothRawCallback;
+    luaHost.bluetoothClose = luaBluetoothCloseCallback;
+    luaHost.wifiStatus = luaWifiStatusCallback;
+    luaHost.wifiScan = luaWifiScanCallback;
+    luaHost.dataRequest = luaDataRequestCallback;
+    luaHost.dataDevelop = luaDataDevelopCallback;
     luaHost.jobPoll = luaJobPollCallback;
     luaHost.jobResult = luaJobResultCallback;
     luaHost.jobClose = luaJobCloseCallback;
@@ -6109,6 +6440,7 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaHost.aiRequest = luaAiRequestCallback;
     luaRuntime_->setHardwareApi(hardwareApi);
     luaRuntime_->setAppSdk(appSdk);
+    luaRuntime_->setDataEngine((serviceMask&kLuaServiceData)!=0);
     luaRuntime_->setServiceMask(serviceMask);
     luaRuntimeReady_ = luaRuntime_->begin(luaHost);
     if (!luaRuntimeReady_) {
@@ -6183,9 +6515,18 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     return false;
   }
   luaRuntime_->setMaxRuntimeMs(maxRuntimeMs);
+  luaDataAllowed_=(serviceMask&kLuaServiceData)!=0;luaServiceMask_=serviceMask;
+  if (luaDataAllowed_) {
+    FireDataStore::Owner owner;
+    owner.app=manifestId;owner.package=packageId;owner.source=sourceHash;
+    owner.boot=backendClient_?backendClient_->bootId():String("local-boot");
+    owner.instance=owner.boot+"-"+String(esp_random(),HEX);
+    luaDataStore_.configure(SD,owner);
+  }
   const bool loaded = readBytes == length && luaRuntime_->loadSource(buffer, length);
   free(buffer);
   if (!loaded) {
+    releaseLuaHardware();
     luaAppError_ = luaRuntime_->lastError();
     const char* failureCode = luaFailureCode(luaAppError_);
     const String diagnostics = luaDiagnosticsJson(
@@ -6214,7 +6555,7 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   luaAppActive_ = true;
   luaRunId_ = "";
   luaRuntimeAiAllowed_=(serviceMask&kLuaServiceAi)!=0;
-  if(luaRuntimeAiAllowed_ && packageId.length()) {
+  if((luaRuntimeAiAllowed_ || luaDataAllowed_) && packageId.length()) {
     luaAiBindPackageId_=packageId;luaAiBindAt_=millis();luaAiBindSent_=false;
   }
   luaHealthySent_ = false;
@@ -7003,7 +7344,7 @@ void FireOS::updateBackend() {
                          WiFi.status() == WL_CONNECTED &&
                          !backendBootAttempted_;
   const bool backendDemand = screen_ == Screen::AiDeveloper ||
-                              (luaAppActive_ && luaRuntimeAiAllowed_) ||
+                              (luaAppActive_ && (luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_)) ||
                               luaAiBindPackageId_.length()>0 ||
                               screen_ == Screen::AiApi ||
                               screen_ == Screen::LuaApp ||
@@ -7073,7 +7414,7 @@ void FireOS::updateBackend() {
   }
   serviceLuaRepair();
   if(luaAiBindPackageId_.length()) {
-    if(!luaAppActive_ || !luaRuntimeAiAllowed_ || luaPackageId_!=luaAiBindPackageId_ ||
+    if(!luaAppActive_ || !(luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_) || luaPackageId_!=luaAiBindPackageId_ ||
        millis()-luaAiBindAt_>30000) {luaAiBindPackageId_=String();luaAiBindSent_=false;}
     else if(!luaAiBindSent_ && !appInventoryPending_ && !luaScanPending_ &&
             luaCacheComplete_ && !backendClient_->pendingWrites() && backendClient_->sessionReady())
@@ -7094,7 +7435,9 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   if(!connected) {
     for(LuaHardwareJob& job:os->luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.state==0)
       os->cancelLuaRuntimeAi(job,"not_connected");
-    if(os->luaAppActive_ && os->luaRuntimeAiAllowed_) {
+    for (LuaHardwareJob& job:os->luaJobs_) if (job.kind==LuaJobKind::Data && job.state==0 && job.started && job.aiRequestId.length())
+      os->cancelLuaDataJob(job,"not_connected");
+    if(os->luaAppActive_ && (os->luaRuntimeAiAllowed_ || os->luaDataAllowed_ || os->luaDevelopJob_)) {
       // A new authenticated session must bind the real VM again. Failed jobs
       // stay failed; reconnect never replays a paid request.
       os->luaRunId_=String();os->luaAiBindPackageId_=os->luaPackageId_;
@@ -7240,6 +7583,7 @@ void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
   if(type=="runtime_ai_result") {handleRuntimeAiResult(message);return;}
+  if(type=="data_result" || type=="app_develop_ready") {handleDataResult(message);return;}
   if(type=="session_started" || type=="session_snapshot") {
     const String mode=jsonStringField(message,"runtime_ai_mode");
     if(mode=="auto" || mode=="off") {
@@ -7372,6 +7716,10 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "event_ack") {
     const String status = jsonStringField(message, "status");
+    if (luaFeedbackAck_.length() && jsonStringField(message,"event_id")==luaFeedbackAck_) {
+      if (status=="accepted" || status=="duplicate") {luaFeedbackAck_=String();luaFeedbackConfirmation_=false;}
+      else if (status=="rejected") {luaFeedbackAck_=String();luaFeedbackOutcome_=String();}
+    }
     if (status == "awaiting_device_install")
       managerStatus_ = "Download queued";
     else if (status == "confirmation_required")
@@ -7645,6 +7993,7 @@ void FireOS::handleBackendMessage(const String& message) {
       // The real local VM is already executing these exact verified bytes.
       // Bind the normal authorized command without resetting measurements/UI.
       luaRunId_=runId;luaHealthySent_=false;luaAiBindPackageId_=String();luaAiBindSent_=false;
+      luaDataStore_.bindRun(runId);
       receipt->state=fire_run_receipts::State::Started;
       if(backendClient_) backendClient_->appStarted(runId,packageId,luaSourceHash_,luaDiagnosticsJson("start"));
       redrawRequested_=true;return;
@@ -7652,6 +8001,7 @@ void FireOS::handleBackendMessage(const String& message) {
     if (path.length() > 0 &&
         startLuaApp(path, sdBaseName(path), packageId,commandSource)) {
       luaRunId_ = runId;
+      luaDataStore_.bindRun(runId);
       luaPackageId_ = packageId;
       luaAiBindPackageId_=String();luaAiBindSent_=false;
       luaHealthySent_ = false;
@@ -7965,6 +8315,17 @@ void FireOS::handleAppsButton(uint8_t index) {
 
 void FireOS::handleAppsSettingsButton(uint8_t index) {
   if (screen_ == Screen::AppsSettings) {
+    if (appManagerDevelopConfirm_) {
+      const uint8_t action=appManagerDevelopConfirm_;appManagerDevelopConfirm_=0;
+      if (index!=1 || managerSelection_>=managerItemCount_) return;
+      const ManagerItem& item=managerItems_[managerSelection_];
+      const String path=item.localPath,name=item.name,package=item.localPackageId;
+      if (!startLuaApp(path,name,package)) {managerStatus_=luaAppError_;return;}
+      const char* error=nullptr;
+      if (!queueDataDevelop(action==7?"update":action==8?"fork":"feedback","",true,&error))
+        managerStatus_=error?error:"Forbedring utilgjengelig";
+      return;
+    }
     if (appManagerVersionDialog_) {
       const uint8_t itemCount = appManagerVersionCount_ + 1;
       if (index == 0)
@@ -8047,6 +8408,13 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
             installExternalApp(item.localPath, true, false);
         } else if (action == 2) {
           requestSelectedAppVersions();
+        } else if (action==7 || action==8 || action==9) {
+          if (luaAppActive_ && luaPackageId_==item.localPackageId) {
+            const char* error=nullptr;
+            if (!queueDataDevelop(action==7?"update":action==8?"fork":"feedback","",true,&error)) {
+              managerStatus_=error?error:"Forbedring utilgjengelig";
+            }
+          } else appManagerDevelopConfirm_=action;
         } else if (action == 3) {
           appManagerDeleteMode_ = 1;
           appManagerDeleteConfirm_ = true;
@@ -8294,6 +8662,7 @@ void FireOS::handleBluetoothButton(uint8_t index) {
           setBluetoothVisibility(false);
 #ifdef FIRE_OS_BLE
           if (bluetoothRadioReady) {
+            luaBluetooth_.reset();
             NimBLEDevice::deinit(true);
             bluetoothRadioReady = false;
           }
@@ -9124,7 +9493,8 @@ void FireOS::closeBluetoothSettings() {
 #ifdef FIRE_OS_BLE
   if (bluetoothRadioReady && bluetoothMode_ != 1 && !bluetoothConnected_ &&
       !bluetoothPeripheralConnected) {
-    NimBLEDevice::deinit(true);
+    luaBluetooth_.reset();
+            NimBLEDevice::deinit(true);
     bluetoothRadioReady = false;
     bluetoothEnabled_ = false;
   }
@@ -9181,6 +9551,7 @@ void FireOS::handleQuickButton(uint8_t index) {
           setBluetoothVisibility(false);
 #ifdef FIRE_OS_BLE
           if (bluetoothRadioReady && bluetoothMode_ == 2) {
+            luaBluetooth_.reset();
             NimBLEDevice::deinit(true);
             bluetoothRadioReady = false;
           }
@@ -10709,6 +11080,29 @@ void FireOS::drawLuaApp() {
   }
   luaSdkFrame_.invalidate();
   if (sdk && !luaAppActive_ && luaAppError_.length()>0) ui.fillSprite(TFT_BLACK);
+  if (luaAppActive_ && luaDevelopJob_) {
+    ui.setTextDatum(TL_DATUM);
+    if (luaFeedbackConfirmation_) {
+      drawPanel(8,30,304,180);
+      drawText(20,39,"Din observasjon",kText,2,kPanel);
+      // At most 160 UTF-8 bytes, shown completely in bounded glyph lines.
+      size_t offset=0;const size_t length=luaDevelopInstruction_.length();
+      for (uint8_t line=0;line<8 && offset<length;++line) {
+        const size_t start=offset;uint32_t codepoint=0;
+        for (uint8_t count=0;count<20 && offset<length;++count)
+          if (!fire_app_bitmap::codepoint(luaDevelopInstruction_.c_str(),length,offset,codepoint)) {offset=length;break;}
+        drawText(20,65+line*16,luaDevelopInstruction_.substring(start,offset),kText,1,kPanel);
+      }
+      drawFooter("Avbryt",luaFeedbackAck_.length()?"Sender":"Bekreft","Avvis");
+    } else {
+      drawPanel(16,164,288,44);
+      const String status=luaDataUploadJob_?String("Overfører målegrunnlag"):
+          !backendClient_ || !backendClient_->sessionReady()?String("Kobler til"):
+          !luaRunId_.length()?String("Bekrefter appkjøring"):String("Samler appgrunnlag");
+      drawText(28,178,status,kText,1,kPanel);drawFooter("Avbryt","Vent","");
+    }
+    return;
+  }
   if (!luaAppActive_ && luaAppError_.length() > 0) {
     ui.fillSprite(kBg);
     drawPanel(10, 40, 300, 164);
@@ -10859,6 +11253,14 @@ void FireOS::drawAppsSettings() {
 
 void FireOS::drawAppsSettingsBackend() {
   drawStatusBar("App Manager");
+  if (appManagerDevelopConfirm_) {
+    drawPanel(12,48,296,150);
+    drawText(24,62,"Start appen først?",kText,2,kPanel);
+    drawText(24,98,"Appen startes før grunnlaget hentes.",kText,1,kPanel);
+    drawText(24,124,"Dette kjører appens vanlige funksjoner.",kMuted,1,kPanel);
+    if (managerSelection_<managerItemCount_) drawText(24,154,managerItems_[managerSelection_].name,kText,1,kPanel);
+    drawFooter("Avbryt","Start app","Avbryt");return;
+  }
   if (appManagerVersionDialog_) {
     drawAppManagerVersions();
     return;
@@ -10887,11 +11289,13 @@ void FireOS::drawAppsSettingsBackend() {
                       : String();
 
     drawText(24, 40, name, kText, 1, kPanel);
-    for (uint8_t row = 0; row < appManagerActionCount_; ++row) {
-      const String label = appManagerActionLabels_[row];
+    const uint8_t first=appManagerActionIndex_<6?0:appManagerActionIndex_-5;
+    for (uint8_t row = 0; row < 6 && first+row<appManagerActionCount_; ++row) {
+      const uint8_t item=first+row;
+      const String label = appManagerActionLabels_[item];
       fire_canvas_fill::Surface<M5Canvas> surface(ui);
       FireUI::menuRow(surface, 62 + row * 25, label.c_str(), "",
-                      row == appManagerActionIndex_, osMenuIcon(label));
+                      item == appManagerActionIndex_, osMenuIcon(label));
     }
     drawFooter("A  UP", "B  SELECT", "DOWN  C");
     return;

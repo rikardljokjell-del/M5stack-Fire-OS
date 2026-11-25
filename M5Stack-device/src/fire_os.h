@@ -15,6 +15,10 @@
 #include "fire_home.h"
 #include "fire_ota.h"
 #include "fire_setup_portal.h"
+#include "fire_data_store.h"
+#include "fire_data_imu.h"
+#include "fire_bluetooth_jobs.h"
+#include <memory>
 
 class DateTimeService {
  public:
@@ -284,8 +288,9 @@ class FireOS {
   bool appManagerActionMenu_ = false;
   uint8_t appManagerActionIndex_ = 0;
   uint8_t appManagerActionCount_ = 0;
-  uint8_t appManagerActionCodes_[6] = {};
-  String appManagerActionLabels_[6];
+  uint8_t appManagerActionCodes_[9] = {};
+  String appManagerActionLabels_[9];
+  uint8_t appManagerDevelopConfirm_ = 0;
   bool appManagerDeleteConfirm_ = false;
   uint8_t appManagerDeleteMode_ = 0;  // 1=local, 2=backend
   String appManagerDeleteId_;
@@ -390,6 +395,10 @@ class FireOS {
     PowerSleep,
     SpeakerTone,
     SpeakerPlay,
+    MicRecord,
+    Data,
+    Bluetooth,
+    WifiScan,
     RuntimeAi
   };
   struct LuaHardwareJob {
@@ -427,6 +436,11 @@ class FireOS {
     uint32_t mediaSize = 0;
     uint32_t mediaRead = 0;
     bool started = false;
+    String dataOperation;
+    String dataDescriptors, uploadId, uploadPart, requestRun;
+    uint32_t uploadOffset = 0;
+    bool uploadStarted = false;
+    std::unique_ptr<FireDataStore::Dataset> dataset;
   };
   static constexpr uint8_t kMaxLuaJobs = 4;
   LuaHardwareJob luaJobs_[kMaxLuaJobs];
@@ -458,6 +472,54 @@ class FireOS {
   volatile bool luaSpeakerBufferReleased_ = false;
   uint16_t luaSpeakerJobId_ = 0;
   bool luaSpeakerPlaying_ = false;
+  uint16_t luaMicJobId_ = 0;
+  uint8_t* luaMicBuffer_ = nullptr;
+  size_t luaMicBufferBytes_ = 0;
+  File luaMicFile_;
+  String luaMicStage_, luaMicPrevious_;
+  bool luaMicStageOwned_ = false;
+  float luaMicLevel_ = 0;
+  void serviceLuaMicJob(LuaHardwareJob& job);
+  void releaseLuaMic();
+  FireDataStore luaDataStore_;
+  bool luaDataAllowed_ = false;
+  uint32_t luaServiceMask_ = 0;
+  uint16_t luaDataCaptureJob_ = 0;
+  String luaDataPartialId_;
+  bool luaDataPartialOverflow_ = false;
+  void finishPartialDataCapture();
+  FireDataImu luaDataImu_;
+  FireBluetoothJobs luaBluetooth_;
+  uint16_t luaBluetoothHandle_ = 0;
+  uint16_t luaWifiScanJob_ = 0;
+  static bool luaWifiStatusCallback(void*,String*,String*,int*,bool*);
+  static uint16_t luaWifiScanCallback(void*,const char**);
+  void serviceLuaWifiScan(LuaHardwareJob& job);
+  void serviceLuaBluetoothJob(LuaHardwareJob& job);
+  static uint16_t luaBluetoothRequestCallback(void*,const char*,const char*,const char*,const char*,const uint8_t*,size_t,const char**);
+  static uint16_t luaBluetoothRawCallback(void*,const uint8_t*,size_t,uint32_t,const char**);
+  static bool luaBluetoothCloseCallback(void*,uint16_t);
+  uint32_t luaDataNextSample_ = 0;
+  uint32_t luaDataRequestCounter_ = 0;
+  uint16_t luaDataUploadJob_ = 0;
+  uint8_t* luaDataUploadBuffer_ = nullptr;
+  bool luaDataUploadCancelled_ = false;
+  String luaDevelopMode_, luaDevelopInstruction_, luaDevelopContext_;
+  uint16_t luaDevelopJob_ = 0;
+  bool luaFeedbackConfirmation_ = false;
+  String luaFeedbackOutcome_, luaFeedbackAck_, pendingDevelopmentContext_;
+  uint32_t developmentDrainAt_ = 0;
+  void serviceDataDevelopHandoff();
+  void serviceLuaDataJob(LuaHardwareJob& job);
+  void serviceLuaDataRecord(LuaHardwareJob& job);
+  void serviceLuaDataNetwork(LuaHardwareJob& job);
+  void cancelLuaDataJob(LuaHardwareJob& job,const char* reason);
+  void handleDataResult(const String& message);
+  bool queueDataDevelop(const char* mode,const char* instruction,bool fromOs,const char** error);
+  void setDataUploadInstruction(LuaHardwareJob& job,const String& instruction);
+  static uint16_t luaDataRequestCallback(void*, const char*, const char*, const char*, const char*,
+                                        const uint8_t*, size_t, uint32_t, uint16_t, const char**);
+  static bool luaDataDevelopCallback(void*,const char*,const char*,const char**);
 
   FireLuaRuntime* luaRuntime_ = nullptr;
   fire_app_frame::State luaSdkFrame_;
@@ -792,6 +854,8 @@ class FireOS {
   static uint16_t luaSpeakerToneCallback(void*, int, int, int, const char**);
   static uint16_t luaSpeakerPlayCallback(void*, const char*, int, const char**);
   static bool luaSpeakerStopCallback(void*, const char**);
+  static bool luaMicLevelCallback(void*, float*, const char**);
+  static uint16_t luaMicRecordCallback(void*, const char*, int, int, const char**);
   static void luaSpeakerBufferReleaseCallback(void*, const void*, uint8_t);
   bool validateLuaWav(const uint8_t*, size_t, uint32_t&, uint32_t&) const;
   void releaseLuaSpeakerBufferIfReady();
