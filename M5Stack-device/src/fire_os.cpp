@@ -52,7 +52,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc7";
+constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc8";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -1730,10 +1730,6 @@ bool FireOS::firmwareBusy() const {
 }
 
 bool FireOS::queueFirmwareAction(FirmwareAction action, bool overwrite) {
-  if (action == FirmwareAction::SaveSd) {
-    firmwareMessage_ = "Bruk direkte installering fra GitHub";
-    return false;
-  }
   if (firmwareBusy()) { firmwareMessage_ = "Vent til firmwarearbeidet er ferdig"; return false; }
   if (luaAppActive_ || backgroundBuildActive_ || aiAudioCaptureActive_ || aiAudioOutputActive_ ||
       aiAudioDownloadPending_ || aiVoiceTestPlaybackActive_ || aiBuildResumePending_ ||
@@ -4946,11 +4942,15 @@ void FireOS::handleFirmwareButton(uint8_t index) {
     return;
   }
   if (firmwareGithubActionMenu_) {
-    if (index != 1) firmwareGithubActionIndex_ ^= 1;
+    if (index != 1) firmwareGithubActionIndex_ = (firmwareGithubActionIndex_ + 3 + (index == 0 ? -1 : 1)) % 3;
     else if (firmwareGithubActionIndex_ == 0) {
       firmwareGithubActionMenu_ = false;
       firmwareInstallFromGithub_ = true; firmwareInstallConfirm_ = true;
       firmwareMessage_ = "Bekreft installering og omstart";
+    } else if (firmwareGithubActionIndex_ == 1) {
+      if (!sdReady_ && !initSdCard()) { firmwareMessage_ = "SD-kort er ikke tilgjengelig"; return; }
+      firmwareGithubActionMenu_ = false; firmwareGithubOverwriteConfirm_ = true;
+      firmwareMessage_ = "Lagre pa SD uten installering";
     } else { firmwareGithubActionMenu_ = false; firmwareGithubDialog_ = true; }
     return;
   }
@@ -6922,7 +6922,7 @@ void FireOS::githubFirmwareResult(void* context, bool manifest, bool ok,
                                   const String& message) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
-  os->firmwareMessage_ = ok ? (manifest ? "GitHub list ready" : "Saved on SD")
+  os->firmwareMessage_ = ok ? (manifest ? "GitHub list ready" : "SD kontrollert. Ikke installert")
                             : message;
   if (!manifest && ok) os->scanFirmwareFiles();
   os->redrawRequested_ = true;
@@ -9952,27 +9952,30 @@ void FireOS::drawFirmware() {
   }
   if (firmwareInstallConfirm_) {
     ui.fillRoundRect(14, 40, 292, 150, 12, kPanel);
-    drawText(28, 52, "Installer firmware?", kOrange, 2, kPanel);
+    const bool reinstall = firmwareInstallFromGithub_ && firmwareGithubRelease_.version == kFirmwareVersion;
+    drawText(28, 52, reinstall ? "Reinstaller firmware?" : "Installer firmware?", kOrange, 2, kPanel);
     String name = firmwareInstallFromGithub_ ? firmwareGithubRelease_.version : sdBaseName(firmwarePendingSdPath_);
     if (name.length() > 28) name = name.substring(0,25) + "...";
     drawText(28, 88, name, TFT_WHITE, 1, kPanel);
     drawText(28, 114, firmwareInstallFromGithub_ ? "Hentes direkte fra GitHub" : "Kontrollerer signert SD-kopi", kMuted, 1, kPanel);
     drawText(28, 138, "Installerer og starter pa nytt", kCyan, 1, kPanel);
-    drawFooter("Avbryt", "Installer", "Avbryt"); return;
+    drawFooter("Avbryt", reinstall ? "Reinstaller" : "Installer", "Avbryt"); return;
   }
   if (firmwareGithubOverwriteConfirm_) {
     ui.fillRoundRect(12, 44, 296, 142, 12, kPanel);
-    drawText(26, 56, "Erstatt SD-kopien?", kOrange, 2, kPanel);
+    drawText(26, 56, "Last ned til SD?", kOrange, 2, kPanel);
     String name = firmwareGithubRelease_.name;
     if (name.length() > 28) name = name.substring(0,25) + "...";
     drawText(26, 92, name, TFT_WHITE, 1, kPanel);
-    drawText(26, 125, "Tidligere kopi beholdes som backup", kMuted, 1, kPanel);
-    drawFooter("Avbryt", "Erstatt", "Avbryt"); return;
+    drawText(26, 116, "Lagrer uten installering/omstart", kMuted, 1, kPanel);
+    drawText(26, 137, "Gammel kopi beholdes som backup", kMuted, 1, kPanel);
+    drawFooter("Avbryt", "Last ned", "Avbryt"); return;
   }
   if (firmwareGithubActionMenu_) {
     drawText(16, 38, firmwareGithubRelease_.version, kCyan, 2);
-    const char* actions[] = {"Installer direkte fra GitHub", "Tilbake"};
-    for (uint8_t i=0; i<2; ++i) {
+    const char* actions[] = {firmwareGithubRelease_.version == kFirmwareVersion ?
+        "Reinstaller direkte fra GitHub" : "Installer direkte fra GitHub", "Last ned til SD", "Tilbake"};
+    for (uint8_t i=0; i<3; ++i) {
       const int y = 85 + i*28; const bool selected = i == firmwareGithubActionIndex_;
       if (selected) ui.fillRoundRect(10,y-4,300,23,4,kCyan);
       drawText(20,y,actions[i],selected?kBg:kText,1,selected?kCyan:kBg);

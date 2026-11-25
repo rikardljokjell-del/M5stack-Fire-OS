@@ -17,10 +17,11 @@ struct Hash {
 };
 struct Fs {
   std::map<std::string, std::string> files;
-  int renames = 0, failAt = 0;
+  int renames = 0, failAt = 0, failAgainAt = 0;
   bool exists(const char* p) { return files.count(p) != 0; }
   bool rename(const char* a, const char* b) {
-    if (++renames == failAt || !exists(a) || exists(b)) return false;
+    ++renames;
+    if (renames == failAt || renames == failAgainAt || !exists(a) || exists(b)) return false;
     files[b] = files[a]; files.erase(a); return true;
   }
 };
@@ -56,5 +57,19 @@ int main() {
   assert(fireFinalizeSdPair(good,paths,[](){return true;},[](){return true;}) == FireSdPublishResult::Ok);
   assert(good.files["bin"] == "new" && good.files["cat"] == "signed-new");
   assert(good.files["bin.backup"] == "old" && good.files["cat.backup"] == "signed-old");
+  const FireSdGlobalCatalogPaths global = {"global.stage","global","global.backup"};
+  const auto triple = [&]() { auto fs=fresh(); fs.files["global.stage"]="signed-new"; fs.files["global"]="signed-old"; return fs; };
+  for (int failure = 1; failure <= 6; ++failure) {
+    auto fs=triple(); fs.failAt=failure;
+    assert(fireFinalizeSdTriplet(fs,paths,global,[](){return true;},[](){return true;})!=FireSdPublishResult::Ok);
+    assert(fs.files["bin"]=="old" && fs.files["cat"]=="signed-old" && fs.files["global"]=="signed-old");
+  }
+  auto restoreFailed=triple(); restoreFailed.failAt=6; restoreFailed.failAgainAt=7;
+  assert(fireFinalizeSdTriplet(restoreFailed,paths,global,[](){return true;},[](){return true;})==FireSdPublishResult::Restore);
+  assert(restoreFailed.files["bin.backup"]=="old"); // failed rollback never deletes fallback
+  auto tripleGood=triple();
+  assert(fireFinalizeSdTriplet(tripleGood,paths,global,[](){return true;},[](){return true;})==FireSdPublishResult::Ok);
+  assert(tripleGood.files["bin"]=="new" && tripleGood.files["cat"]=="signed-new" && tripleGood.files["global"]=="signed-new");
+  assert(tripleGood.files["bin.backup"]=="old" && tripleGood.files["cat.backup"]=="signed-old" && tripleGood.files["global.backup"]=="signed-old");
   puts("PASS actual SD short-write/readback/publish guards");
 }

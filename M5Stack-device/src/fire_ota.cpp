@@ -103,7 +103,11 @@ void FireOta::run() {
     FireReleaseCatalog catalog;
     String envelope;
     if (!github_) {
-      File file = SD.open("/firmware/catalog-v2.json", FILE_READ);
+      // Each downloaded binary keeps its original signed catalog snapshot.
+      // Prefer it strictly; an invalid sidecar must never fall back to a newer
+      // global catalog and hide corruption. Legacy SD folders still work.
+      const String sidecar = path_ + ".catalog-v2.json";
+      File file = SD.open(SD.exists(sidecar) ? sidecar : String("/firmware/catalog-v2.json"), FILE_READ);
       if (!file || !file.size() || file.size() > 32768) {
         if (file) file.close(); error_ = "Signert katalog mangler"; break;
       }

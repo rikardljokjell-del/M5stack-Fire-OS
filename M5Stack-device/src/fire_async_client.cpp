@@ -110,7 +110,11 @@ bool FireAsyncClient::connectBlocking(const char* host, uint16_t port,
   return false;
 }
 void FireAsyncClient::task(void* context) {
-  static_cast<FireAsyncClient*>(context)->run();
+  auto* self = static_cast<FireAsyncClient*>(context);
+  self->run();
+  // run()'s local sockets (including TLS) have now been destroyed. Publish
+  // idle only after that cleanup, so an SD phase cannot overlap it.
+  self->active_ = false;
   vTaskDelete(nullptr);
 }
 void FireAsyncClient::run() {
@@ -160,7 +164,6 @@ void FireAsyncClient::run() {
   txWriting_ = false;
   fireMeasureWorker("net", measuredAt_);
   state_ = stop_ ? State::Idle : State::Failed;
-  active_ = false;
 }
 int FireAsyncClient::available() { return rx_.size() + (peeked_ >= 0); }
 int FireAsyncClient::read() {

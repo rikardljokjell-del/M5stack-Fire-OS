@@ -8,6 +8,7 @@
 #include "fire_async_client.h"
 #include "fire_release.h"
 #include "fire_io_mailbox.h"
+#include "fire_firmware_staging.h"
 
 // Reads the public, device-compatible firmware catalog from the FIRE OS
 // repository and downloads a selected image to /firmware. The URL and host
@@ -46,6 +47,8 @@ class FireGithubFirmwareManager {
     ManifestBody,
     DownloadBody,
     Verify,
+    StoppingNetwork,
+    WriteSd,
   };
 
   static constexpr size_t kChunkSize = 2048;
@@ -62,6 +65,9 @@ class FireGithubFirmwareManager {
   void serviceWorker(bool wifiConnected, bool sdReady);
   FireAsyncClient client_;
   File stagedFile_;
+  uint8_t* downloadBuffer_ = nullptr;
+  FireFirmwareStaging staging_;
+  uint32_t sdWritten_ = 0, phaseStartedAt_ = 0;
   bool manifestMode_ = false;
   bool overwriteExisting_ = false;
   uint8_t entryCount_ = 0;
@@ -69,8 +75,9 @@ class FireGithubFirmwareManager {
   FireRelease selectedRelease_;
   String verifiedManifest_;
   String downloadCatalog_;
-  bool selectionVerified_ = false, ownsStage_ = false, ownsCatalogStage_ = false;
-  String catalogStage_, binaryBackup_, catalogBackup_;
+  bool selectionVerified_ = false, ownsStage_ = false, ownsCatalogStage_ = false, ownsGlobalStage_ = false;
+  String catalogStage_, catalogFinal_, binaryBackup_, catalogBackup_;
+  String globalStage_, globalBackup_;
 
   String requestPath_;
   String headerBuffer_;
@@ -100,12 +107,16 @@ class FireGithubFirmwareManager {
   void fail(const String& code, const String& message);
   void releaseClient();
   bool writeBytes(const uint8_t* data, size_t length);
+  bool prepareStaging();
+  void freeStaging();
+  void writeSd();
   bool parseManifest();
   bool prepareDownload(bool sdReady);
   void finishManifest();
   void finishDownload();
   String sha256File(const String& path, uint32_t expectedSize) const;
   bool writeCatalog();
+  bool writeCatalogFile(const String& path, bool& owned);
   static String jsonStringField(const String& json, const char* key);
   static uint32_t jsonUintField(const String& json, const char* key);
   static bool validFilename(const String& name);

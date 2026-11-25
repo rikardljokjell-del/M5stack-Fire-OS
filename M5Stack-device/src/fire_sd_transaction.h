@@ -33,6 +33,12 @@ enum class FireSdPublishResult {
   CatalogBackup, CatalogActivate, BinaryBackup, BinaryActivate, Restore
 };
 
+struct FireSdGlobalCatalogPaths {
+  const char* stage;
+  const char* final;
+  const char* backup;
+};
+
 // All staging bytes must already have survived close/reopen verification.
 // Original files are renamed to unique backups and never deleted here.
 template<class Fs>
@@ -72,4 +78,26 @@ FireSdPublishResult fireFinalizeSdPair(Fs& fs, const FireSdPublishPaths& paths,
   if (!verifyBinary()) return FireSdPublishResult::BinaryReadback;
   if (!writeVerifyCatalog()) return FireSdPublishResult::CatalogReadback;
   return firePublishSdPair(fs, paths);
+}
+
+// Recovery uses the global catalog; the normal OS prefers the binary's own
+// signed snapshot. Both catalog staging files must be verified before this.
+template<class Fs, class VerifyBinary, class WriteVerifyCatalogs>
+FireSdPublishResult fireFinalizeSdTriplet(Fs& fs, const FireSdPublishPaths& paths,
+    const FireSdGlobalCatalogPaths& global, VerifyBinary verifyBinary,
+    WriteVerifyCatalogs writeVerifyCatalogs) {
+  if (!verifyBinary()) return FireSdPublishResult::BinaryReadback;
+  if (!writeVerifyCatalogs()) return FireSdPublishResult::CatalogReadback;
+  if (fs.exists(global.backup)) return FireSdPublishResult::BackupExists;
+  const bool old = fs.exists(global.final);
+  if (old && !fs.rename(global.final, global.backup)) return FireSdPublishResult::CatalogBackup;
+  if (!fs.rename(global.stage, global.final)) {
+    if (old && !fs.rename(global.backup, global.final)) return FireSdPublishResult::Restore;
+    return FireSdPublishResult::CatalogActivate;
+  }
+  const auto result = firePublishSdPair(fs, paths);
+  if (result == FireSdPublishResult::Ok) return result;
+  if (!fs.rename(global.final, global.stage)) return FireSdPublishResult::Restore;
+  if (old && !fs.rename(global.backup, global.final)) return FireSdPublishResult::Restore;
+  return result;
 }

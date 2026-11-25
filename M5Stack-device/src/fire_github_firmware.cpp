@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <errno.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include "fire_firmware_http.h"
 #include "fire_sd_transaction.h"
 
@@ -92,7 +93,7 @@ void FireGithubFirmwareManager::emitResult(bool manifest, bool ok,
 bool FireGithubFirmwareManager::startManifest() {
   if (busy()) return false;
   errorCode_ = errorMessage_ = "";
-  tempPath_ = catalogStage_ = ""; ownsStage_ = ownsCatalogStage_ = false;
+  tempPath_ = catalogStage_ = globalStage_ = ""; ownsStage_ = ownsCatalogStage_ = ownsGlobalStage_ = false;
   manifestMode_ = true;
   overwriteExisting_ = false;
   requestPath_ = kGithubManifestPath;
@@ -130,13 +131,13 @@ bool FireGithubFirmwareManager::startDownload(const FireRelease& release,
   if (downloadCatalog_ != envelope || selectedRelease_.name != release.name) return false;
   manifestMode_ = false; overwriteExisting_ = overwrite; selectionVerified_ = false;
   errorCode_ = errorMessage_ = "";
-  tempPath_ = catalogStage_ = ""; ownsStage_ = ownsCatalogStage_ = false;
+  tempPath_ = catalogStage_ = globalStage_ = ""; ownsStage_ = ownsCatalogStage_ = ownsGlobalStage_ = false;
   expectedHash_ = release.hash; expectedSize_ = release.size;
   requestPath_ = String(kGithubFirmwarePrefix) + release.name;
   headerBuffer_ = manifestBody_ = "";
   startedAt_ = lastDataAt_ = clockSyncStartedAt_ = millis();
   clockSyncRequested_ = false; state_ = State::Connecting;
-  emitStatus("GitHub: lagrer pa SD");
+  emitStatus("GitHub: henter til arbeidsminne");
   return launch();
 }
 
@@ -205,6 +206,9 @@ bool FireGithubFirmwareManager::parseManifest() {
 }
 
 bool FireGithubFirmwareManager::prepareDownload(bool sdReady) {
+  if (!staging_.readyForSd(client_.running())) {
+    errorCode_ = "phase_guard"; errorMessage_ = "Nedlastingen er ikke klar for SD"; return false;
+  }
   if (!sdReady) { errorCode_ = "no_sd"; errorMessage_ = "SD-kort er ikke tilgjengelig"; return false; }
   if (!SD.exists("/firmware") && !SD.mkdir("/firmware")) {
     errorCode_ = "sd_directory"; errorMessage_ = "Kan ikke opprette firmwaremappe"; return false;
@@ -215,6 +219,7 @@ bool FireGithubFirmwareManager::prepareDownload(bool sdReady) {
   if (!total || used > total) { errorCode_ = "sd_stats"; errorMessage_ = "Kan ikke lese SD-kapasitet"; return false; }
   if (required > total - used) { errorCode_ = "sd_full"; errorMessage_ = "Ikke nok ledig plass pa SD"; return false; }
   finalPath_ = "/firmware/" + selectedRelease_.name;
+  catalogFinal_ = finalPath_ + ".catalog-v2.json";
   if (SD.exists(finalPath_) && !overwriteExisting_) {
     errorCode_ = "file_exists"; errorMessage_ = "Filen finnes. Bekreft erstatning"; return false;
   }
@@ -224,8 +229,10 @@ bool FireGithubFirmwareManager::prepareDownload(bool sdReady) {
     const String stem = "/firmware/.fw-" + String(nonce);
     tempPath_ = stem + ".part"; catalogStage_ = stem + ".json.part";
     binaryBackup_ = stem + ".bin.bak"; catalogBackup_ = stem + ".json.bak";
+    globalStage_ = stem + ".global.part"; globalBackup_ = stem + ".global.bak";
     if (!SD.exists(tempPath_) && !SD.exists(catalogStage_) &&
-        !SD.exists(binaryBackup_) && !SD.exists(catalogBackup_)) break;
+        !SD.exists(binaryBackup_) && !SD.exists(catalogBackup_) &&
+        !SD.exists(globalStage_) && !SD.exists(globalBackup_)) break;
     tempPath_ = "";
   }
   if (!tempPath_.length()) { errorCode_ = "sd_staging"; errorMessage_ = "Kan ikke velge midlertidig fil"; return false; }
@@ -240,13 +247,34 @@ bool FireGithubFirmwareManager::prepareDownload(bool sdReady) {
   if (!stagedFile_.setBufferSize(512)) {
     errorCode_ = "sd_buffer"; errorMessage_ = "Ikke nok minne til SD-buffer"; return false;
   }
+  return true;
+}
+
+bool FireGithubFirmwareManager::prepareStaging() {
+  const uint32_t caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+  const size_t free = heap_caps_get_free_size(caps), largest = heap_caps_get_largest_free_block(caps);
+  Serial.printf("FIRE GitHub staging bytes=%lu psram_total=%u free=%u largest=%u\n",
+      (unsigned long)expectedSize_, unsigned(heap_caps_get_total_size(caps)), unsigned(free), unsigned(largest));
+  if (!FireFirmwareStaging::fits(expectedSize_, kMaxBytes, free, largest, 512UL * 1024UL)) {
+    errorCode_ = "staging_memory"; errorMessage_ = "Ikke nok arbeidsminne. Bruk direkte installering"; return false;
+  }
+  downloadBuffer_ = static_cast<uint8_t*>(heap_caps_malloc(expectedSize_, caps));
+  if (!downloadBuffer_) {
+    errorCode_ = "staging_memory"; errorMessage_ = "Kan ikke reservere arbeidsminne. SD er urort"; return false;
+  }
+  staging_.attach(downloadBuffer_, expectedSize_); received_ = sdWritten_ = 0;
   mbedtls_sha256_init(&sha256_);
+  shaInitialized_ = true;
   if (mbedtls_sha256_starts_ret(&sha256_, 0)) {
-    mbedtls_sha256_free(&sha256_); stagedFile_.close();
     errorCode_ = "hash_init"; errorMessage_ = "Kan ikke starte hashkontroll"; return false;
   }
-  shaInitialized_ = true; received_ = 0;
   return true;
+}
+
+void FireGithubFirmwareManager::freeStaging() {
+  staging_.attach(nullptr, 0);
+  if (downloadBuffer_) heap_caps_free(downloadBuffer_);
+  downloadBuffer_ = nullptr;
 }
 
 bool FireGithubFirmwareManager::writeBytes(const uint8_t* data, size_t length) {
@@ -256,22 +284,31 @@ bool FireGithubFirmwareManager::writeBytes(const uint8_t* data, size_t length) {
       return mbedtls_sha256_update_ret(context, bytes, count);
     }
   } hash{&sha256_};
-  while (length) {
-    const size_t amount = min<size_t>(kChunkSize, length);
-    const auto result = fireWriteSdBlock(stagedFile_, hash, data, amount);
-    if (result.written != amount) {
-      Serial.printf("FIRE SD short_write requested=%u written=%u errno=%d received=%lu position=%lu open=%u\n",
-          unsigned(amount), unsigned(result.written), result.writeError, (unsigned long)received_,
-          (unsigned long)stagedFile_.position(), bool(stagedFile_));
-      errorCode_ = "sd_short_write"; errorMessage_ = "SD-skriving feilet. Gjeldende OS beholdt"; return false;
-    }
-    if (result.hashError) {
-      Serial.printf("FIRE SD hash_update result=%d\n", result.hashError);
-      errorCode_ = "hash_update"; errorMessage_ = "Hashkontroll feilet"; return false;
-    }
-    received_ += amount; data += amount; length -= amount;
+  if (!staging_.append(hash, data, length)) {
+    errorCode_ = "staging_write"; errorMessage_ = "Nedlasting/hash feilet. SD er urort"; return false;
   }
+  received_ = staging_.received();
   return true;
+}
+
+void FireGithubFirmwareManager::writeSd() {
+  if (!staging_.readyForSd(client_.running()) || !stagedFile_) {
+    fail("phase_guard", "SD-fasen kunne ikke starte"); return;
+  }
+  struct Hash { int update(const unsigned char*, size_t) { return 0; } } hash;
+  const size_t amount = min<size_t>(kChunkSize, expectedSize_ - sdWritten_);
+  if (amount) {
+    const auto result = fireWriteSdBlock(stagedFile_, hash, downloadBuffer_ + sdWritten_, amount);
+    if (!result.ok(amount)) {
+      Serial.printf("FIRE SD short_write requested=%u written=%u errno=%d received=%lu position=%lu open=%u\n",
+          unsigned(amount), unsigned(result.written), result.writeError, (unsigned long)sdWritten_,
+          (unsigned long)stagedFile_.position(), bool(stagedFile_));
+      fail("sd_short_write", "SD-skriving feilet. Gjeldende OS beholdt"); return;
+    }
+    sdWritten_ += amount;
+  }
+  emitStatus("Skriver til SD: " + String(sdWritten_ * 100ULL / expectedSize_) + "%");
+  if (sdWritten_ == expectedSize_) { stagedFile_.close(); finishDownload(); }
 }
 
 void FireGithubFirmwareManager::fail(const String& code,
@@ -282,9 +319,11 @@ void FireGithubFirmwareManager::fail(const String& code,
     shaInitialized_ = false;
   }
   releaseClient();
+  freeStaging();
   if (ownsStage_ && tempPath_.length()) SD.remove(tempPath_);
   if (ownsCatalogStage_ && catalogStage_.length()) SD.remove(catalogStage_);
-  ownsStage_ = ownsCatalogStage_ = false;
+  if (ownsGlobalStage_ && globalStage_.length()) SD.remove(globalStage_);
+  ownsStage_ = ownsCatalogStage_ = ownsGlobalStage_ = false;
   Serial.printf("FIRE GitHub failure code=%s received=%lu expected=%lu\n", code.c_str(), (unsigned long)received_, (unsigned long)expectedSize_);
   state_ = State::Idle;
   overwriteExisting_ = false;
@@ -322,9 +361,14 @@ String FireGithubFirmwareManager::sha256File(const String& path, uint32_t expect
 }
 
 bool FireGithubFirmwareManager::writeCatalog() {
-  File file = SD.open(catalogStage_, FILE_WRITE);
+  return writeCatalogFile(catalogStage_, ownsCatalogStage_) &&
+      writeCatalogFile(globalStage_, ownsGlobalStage_);
+}
+
+bool FireGithubFirmwareManager::writeCatalogFile(const String& path, bool& owned) {
+  File file = SD.open(path, FILE_WRITE);
   if (!file) return false;
-  ownsCatalogStage_ = true;
+  owned = true;
   if (!file.setBufferSize(512)) { file.close(); return false; }
   errno = 0;
   const size_t written = file.write(reinterpret_cast<const uint8_t*>(downloadCatalog_.c_str()), downloadCatalog_.length());
@@ -335,7 +379,7 @@ bool FireGithubFirmwareManager::writeCatalog() {
         unsigned(downloadCatalog_.length()), unsigned(written), error);
     return false;
   }
-  file = SD.open(catalogStage_, FILE_READ);
+  file = SD.open(path, FILE_READ);
   const size_t expected = downloadCatalog_.length();
   if (!file || !file.setBufferSize(512) || file.size() != expected) { file.close(); return false; }
   String actual; bool ok = actual.reserve(expected); uint8_t buffer[512];
@@ -350,17 +394,14 @@ bool FireGithubFirmwareManager::writeCatalog() {
 }
 
 void FireGithubFirmwareManager::finishDownload() {
-  uint8_t digest[32] = {};
-  const int hashResult = mbedtls_sha256_finish_ret(&sha256_, digest);
-  mbedtls_sha256_free(&sha256_); shaInitialized_ = false;
-  stagedFile_.close();
-  if (hashResult || received_ != expectedSize_ || contentLength_ != expectedSize_ ||
-      !hexDigest(digest, sizeof(digest)).equalsIgnoreCase(expectedHash_)) {
-    fail("hash_mismatch", "GitHub-filen matcher ikke signert hash"); return;
+  if (!staging_.readyForSd(client_.running()) || sdWritten_ != expectedSize_) {
+    fail("phase_guard", "SD-filen er ikke ferdig skrevet"); return;
   }
+  emitStatus("Kontrollerer lagret SD-fil");
   const FireSdPublishPaths paths = {tempPath_.c_str(), finalPath_.c_str(), binaryBackup_.c_str(),
-      catalogStage_.c_str(), "/firmware/catalog-v2.json", catalogBackup_.c_str()};
-  const auto result = fireFinalizeSdPair(SD, paths,
+      catalogStage_.c_str(), catalogFinal_.c_str(), catalogBackup_.c_str()};
+  const FireSdGlobalCatalogPaths global = {globalStage_.c_str(), "/firmware/catalog-v2.json", globalBackup_.c_str()};
+  const auto result = fireFinalizeSdTriplet(SD, paths, global,
       [&]() { return sha256File(tempPath_, expectedSize_).equalsIgnoreCase(expectedHash_); },
       [&]() { return writeCatalog(); });
   if (result != FireSdPublishResult::Ok) {
@@ -369,11 +410,12 @@ void FireGithubFirmwareManager::finishDownload() {
         result == FireSdPublishResult::Restore ? "sd_restore" : "sd_activate";
     fail(code, "SD-kontroll/aktivering feilet. Tidligere kopier er beholdt"); return;
   }
-  ownsStage_ = ownsCatalogStage_ = false;
+  ownsStage_ = ownsCatalogStage_ = ownsGlobalStage_ = false;
+  freeStaging();
   releaseClient(); state_ = State::Idle; overwriteExisting_ = false;
   Serial.printf("FIRE GitHub SD verified bytes=%lu\n", (unsigned long)received_);
   emitStatus("GitHub firmware kontrollert og lagret pa SD");
-  emitResult(false, true, "Kontrollert og lagret pa SD");
+  emitResult(false, true, "Lagret og kontrollert pa SD. Ikke installert");
 }
 
 void FireGithubFirmwareManager::service(bool wifiConnected, bool sdReady) {
@@ -391,7 +433,7 @@ void FireGithubFirmwareManager::task(void* context) {
   auto* self = static_cast<FireGithubFirmwareManager*>(context);
   // Initial wifi/sd values come from the last UI service tick.
   while (self->state_ != State::Idle) {
-    self->serviceWorker(WiFi.isConnected(), SD.cardType() != CARD_NONE); delay(2);
+    self->serviceWorker(WiFi.isConnected(), self->io_.sd.load()); delay(2);
   }
   self->io_.running.store(false, std::memory_order_release);
   vTaskDelete(nullptr);
@@ -410,16 +452,30 @@ void FireGithubFirmwareManager::serviceWorker(bool wifiConnected, bool sdReady) 
     }
     if (!matched) { fail("selection_invalid", "Utgaven matcher ikke signert katalog"); return; }
     selectionVerified_ = true;
+    if (!prepareStaging()) { fail(errorCode_, errorMessage_); return; }
+  }
+  if (millis() - startedAt_ > kTransferTimeoutMs) {
+    fail("timeout", "GitHub/SD transfer timed out"); return;
+  }
+  if (state_ == State::StoppingNetwork) {
+    if (client_.running()) {
+      if (millis() - phaseStartedAt_ >= 6000) fail("network_stop", "Nettverket ble ikke avsluttet. SD er urort");
+      return;
+    }
+    if (!prepareDownload(sdReady)) { fail(errorCode_, errorMessage_); return; }
+    Serial.printf("FIRE GitHub SD phase network_running=0 bytes=%lu internal_free=%u\n",
+        (unsigned long)received_, unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+    state_ = State::WriteSd; return;
+  }
+  if (state_ == State::WriteSd) {
+    if (!sdReady) { fail("no_sd", "SD-kort er ikke tilgjengelig"); return; }
+    writeSd(); return;
   }
   if (!wifiConnected && state_ == State::Connecting && millis() - startedAt_ < 15000) {
     emitStatus("GitHub: venter pa Wi-Fi"); return;
   }
   if (!wifiConnected) {
     fail("wifi_disconnected", "Wi-Fi disconnected");
-    return;
-  }
-  if (millis() - startedAt_ > kTransferTimeoutMs) {
-    fail("timeout", "GitHub transfer timed out");
     return;
   }
   if (state_ == State::Connecting) {
@@ -494,15 +550,14 @@ void FireGithubFirmwareManager::serviceWorker(bool wifiConnected, bool sdReady) 
                                      ? headerBuffer_.length() - bodyStart
                                      : 0;
     const size_t initial = min<size_t>(availableBody, contentLength_);
+    if (availableBody > contentLength_) {
+      fail("extra_bytes", "GitHub-svaret hadde ekstra data"); return;
+    }
     if (manifestMode_) {
       manifestBody_ = initial > 0 ? headerBuffer_.substring(bodyStart) : "";
       state_ = State::ManifestBody;
       emitStatus("GitHub: reading catalog");
     } else {
-      if (!prepareDownload(sdReady)) {
-        fail(errorCode_, errorMessage_);
-        return;
-      }
       if (initial > 0 &&
           !writeBytes(reinterpret_cast<const uint8_t*>(headerBuffer_.c_str() +
                                                        bodyStart),
@@ -546,13 +601,27 @@ void FireGithubFirmwareManager::serviceWorker(bool wifiConnected, bool sdReady) 
                                  : received_ * 100UL / contentLength_;
     emitStatus("GitHub: " + String(percent) + "% downloaded");
     if (received_ == contentLength_) {
-      releaseClient();
-      state_ = State::Verify;
+      phaseStartedAt_ = millis(); state_ = State::Verify;
     } else if (millis() - lastDataAt_ > kDataTimeoutMs) {
       fail("data_timeout", "GitHub firmware download timed out");
     }
   }
-  if (state_ == State::Verify) finishDownload();
+  if (state_ == State::Verify) {
+    if (client_.available()) { fail("extra_bytes", "GitHub-svaret hadde ekstra data"); return; }
+    if (client_.connected()) {
+      if (millis() - phaseStartedAt_ >= 5000) fail("response_close", "GitHub-svaret ble ikke avsluttet");
+      return;
+    }
+    uint8_t digest[32] = {};
+    const int result = mbedtls_sha256_finish_ret(&sha256_, digest);
+    mbedtls_sha256_free(&sha256_); shaInitialized_ = false;
+    if (!staging_.verify(!result && contentLength_ == expectedSize_ &&
+        hexDigest(digest, sizeof(digest)).equalsIgnoreCase(expectedHash_))) {
+      fail("hash_mismatch", "GitHub-filen matcher ikke signert hash. SD er urort"); return;
+    }
+    releaseClient(); phaseStartedAt_ = millis(); state_ = State::StoppingNetwork;
+    emitStatus("Nedlasting kontrollert. Avslutter nettverk");
+  }
 }
 
 String FireGithubFirmwareManager::hexDigest(const uint8_t* digest,
