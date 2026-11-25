@@ -55,6 +55,38 @@ def test_missing_real_services_are_not_synthesized_and_legacy_is_unchanged():
     assert contract(caps,'Lag Snake') is None
 
 
+@pytest.mark.parametrize('summary,audio,off',[
+    ('Lag en stoppeklokke. Ingen nye sensorer/lyd/nettverk.',False,False),
+    ('Create a stopwatch. No new sensors/audio/network.',False,False),
+    ('Lag en kalkulator, ingen nye sensorer, lyd eller nettverk.',False,False),
+    ('Create a calculator without any additional sensors, audio, or networking.',False,False),
+    ('Lag Snake, men ingen ny lyd.',True,False),
+    ('Create Snake without any new audio.',True,False),
+    ('Lag Snake uten lyd.',False,True),
+    ('Create Snake without sound or music.',False,True),
+    ('Lag en kalkulator uten RGB, men med lyd.',True,False),
+    ('Create a calculator with no new sensors/audio/network; add music.',True,False),
+    ('Lag en klokke, ingen nye sensorer/lyd/nettverk, men legg til en melodi.',True,False),
+    ('Lag Snake uten lyd. Med musikk.',True,False),
+    ('Create Snake with music, but without sound.',False,True),
+    ('Lag Snake med lyd av/på.',True,False),
+    ('Create Snake with no sound by default.',True,False),
+    ('Lag Snake som starter uten lyd.',True,False),
+    ('Lag en melodiapp.',True,False),
+    ('Create a music player, do not add new network/audio features.',True,False),
+])
+def test_no_new_features_is_not_a_positive_audio_request_or_permanent_game_opt_out(summary,audio,off):
+    c=contract(preview_capabilities(),summary)
+    assert c['audio_required']==audio and c['explicit_audio_opt_out']==off
+
+
+def test_separate_rgb_and_audio_negations_keep_their_own_scope():
+    c=contract(preview_capabilities(),'Lag Snake uten RGB, med lyd av/på.')
+    assert not c['rgb_required'] and c['audio_required']
+    c=contract(preview_capabilities(),'Lag Snake. Ingen nye lys/lyd/nettverk.')
+    assert c['rgb_required'] and c['audio_required']
+
+
 @pytest.mark.parametrize('mode,passes', [('none',False),('clear',False),('left',False),('both',True)])
 def test_rgb_telemetry_measures_both_sides_beyond_truncated_trace(mode,passes):
     code='local step=0\nfunction init() end\nfunction update(dt) fire.display.pixel(10,10,1);step=step+1;'

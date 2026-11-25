@@ -114,6 +114,20 @@ def classify(summary):
     return best if scores[best] else None
 
 
+def glyph_coverage():
+    """Small factual groups derived from shipped masks, never system fonts."""
+    groups={};printable=set(range(32,127))
+    for name,font in _json(DATA/'fonts.json')['fonts'].items():
+        points=frozenset(map(int,font['glyphs']))
+        groups.setdefault(points,[]).append(name)
+    result=[]
+    for points,names in groups.items():
+        extra=''.join(chr(p) for p in sorted(points-printable))
+        result.append({'fonts':sorted(names),'printable_ascii':printable<=points,
+            'extra_characters':extra[:32],'extra_count':len(extra),'extra_list_complete':len(extra)<=32})
+    return {'groups':result,'unsupported_character_renders_as':'?'}
+
+
 def selected_context(summary, capabilities, *, include_native=True):
     if not available(capabilities):
         return ''
@@ -149,6 +163,7 @@ def selected_context(summary, capabilities, *, include_native=True):
                'palette':{k:int(v) for k,v in re.findall(r'(\w+)=(\d+)',re.search(r'\n\s*'+re.escape(theme)+r'=\{([^}]+)\}',ui_source()).group(1))}, 'alternative_themes': ['modern_dark', 'minimal'],
                'ui': {name: functions[name] for name in dict.fromkeys(common + specific) if name in functions},
                'fonts': {name: {'line_height': f['line_height']} for name, f in _json(DATA / 'fonts.json')['fonts'].items()},
+               'font_glyph_coverage':glyph_coverage(),
                'assets': chosen,
                'ui_help':{name:metadata['ui_help'][name] for name in dict.fromkeys(common+specific) if name in metadata.get('ui_help',{})},
                'ui_options':{name:metadata['ui_options'][name] for name in dict.fromkeys(common+specific) if name in metadata.get('ui_options',{})},

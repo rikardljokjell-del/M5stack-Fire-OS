@@ -88,6 +88,24 @@ def test_canonical_ui_help_options_and_real_palette_are_selected():
     assert payload['palette']['bg']<=65535 and len(payload['ui_help'])<len(metadata['ui_help'])
 
 
+def test_small_glyph_facts_are_derived_from_actual_masks_and_not_sent_to_legacy():
+    from fire_backend.app_sdk import glyph_coverage
+    facts=glyph_coverage();coverage=facts['groups']
+    assert facts['unsupported_character_renders_as']=='?' and len(coverage)==2
+    canonical=json.loads((DATA/'fonts.json').read_text(encoding='utf-8'))['fonts']
+    assert len(json.dumps(facts,ensure_ascii=False))<600
+    modern=next(g for g in coverage if 'ui12' in g['fonts'])
+    legacy=next(g for g in coverage if 'legacy6x8' in g['fonts'])
+    assert len(modern['fonts'])==6 and set(modern['extra_characters'])==set('æøåÆØÅ°×−')
+    assert legacy['extra_characters']=='' and modern['extra_list_complete'] and legacy['extra_list_complete']
+    for group in coverage:
+        assert group['printable_ascii']
+        expected=set(range(32,127))|set(map(ord,group['extra_characters']))
+        for name in group['fonts']:assert set(map(int,canonical[name]['glyphs']))==expected
+    caps=preview_capabilities();caps.pop('app_sdk')
+    assert 'font_glyph_coverage' not in selected_context('Lag klokke',caps)
+
+
 async def test_real_generate_and_review_requests_preserve_sdk_without_late_legacy_append(tmp_path):
     app=GeneratedApp(name='Klokke',required_services=['display'],main_lua='function init() end function update(dt) fire.ui.screen("KLOKKE") end')
     review=FireAppReview(**approve().model_dump(),kind='app',**{k:True for k in FireAppReview.fire_checks()})
@@ -110,6 +128,8 @@ async def test_real_generate_and_review_requests_preserve_sdk_without_late_legac
         assert 'function init()' in developer and 'function update(dt_ms)' in developer
         assert 'text_style(10,85' in developer and 'PHYSICAL left/middle/right' in developer
         assert developer.count('display_semantics')==1
+        assert developer.count('font_glyph_coverage')==1
+        assert 'unsupported_character_renders_as' in developer and 'extra_characters' in developer
         from fire_backend.app_sdk import contract
         detail=json.loads(context.split('Exact negotiated host contract (arguments, returns, dependencies, units and bounds):\n')[1])
         assert detail['display_semantics']=={k:v for k,v in contract()['registry']['display'].items() if k!='methods'}

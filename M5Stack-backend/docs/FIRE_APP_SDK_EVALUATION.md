@@ -255,6 +255,10 @@ scope was corrected to cover legacy and a legitimate SDK profile without
 advertised RGB. All 48 affected dependency/standards/Resume tests then passed,
 as did 65 context/standards checks and the earlier 103 integration checks.
 No production gate was relaxed. This is not described as a second full run.
+The later language/glyph checkpoint passed a complete 913-test run in
+306.23 seconds, plus 88 focused checks. Its compact font facts come from the
+actual shipped glyph masks, and its negation handling preserves the
+difference between requesting no new audio and disabling existing game audio.
 The native CI
 snapshot `8547e46ea26b3c4c9db9a71b0b6d1a4757d9047d` passed 19 tests and three
 firmware builds. These results do not establish physical callback time,

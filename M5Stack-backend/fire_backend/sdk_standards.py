@@ -10,19 +10,34 @@ from .storage import canonical
 VERSION='fire-sdk-standards-v1'
 
 
-def _opt_out(summary,feature):
-    # Permanent exceptions only; 'starts off' / an off-on menu is not an opt-out.
-    names=r'(?:rgb|led(?:s|lys)?|lys)' if feature=='rgb' else r'(?:(?:spill)?lyd|musikk|audio|(?:game\s+)?sound|music)'
-    pattern=r'\b(?:uten|ingen|ikke\s+(?:bruk|ha)|without|no)\s+'+names+r'\b'
-    for match in re.finditer(pattern,summary,re.I):
-        # A sound on/off clause must not cancel a separate 'without RGB' choice.
-        boundary=r'[,;.!]|\b(?:og|and|men|but|med|with)\b'
-        before=re.split(boundary,summary[max(0,match.start()-24):match.start()],flags=re.I)[-1]
-        after=re.split(boundary,summary[match.end():match.end()+64],flags=re.I)[0]
-        nearby=before+match.group()+after
-        if re.search(r'fra start|ved start|som standard|by default|initially|av\s*/\s*på|på\s*/\s*av|on\s*/\s*off|off\s*/\s*on',nearby,re.I):continue
-        return True
-    return False
+DIRECTIVE=re.compile(r"\b(?:ikke\s+(?:bruk|ha|legg(?:e)?\s+til|aktiver|inkluder)|do\s+not(?:\s+(?:add|use|enable|include))?|don['’]t(?:\s+(?:add|use|enable|include))?|uten|ingen|ikke|without|no|not|med|with|legg(?:e)?\s+til|add|aktiver|enable|inkluder|include|bruk|use)\b",re.I)
+
+
+def _intent(summary,feature):
+    """Distinguish a feature request, no NEW feature and a permanent exception.
+
+    Negation can govern a comma/slash list. Explicit later positive clauses
+    reset it; a prohibition on additions does not remove agreed game defaults.
+    This is bounded backend scope classification, not a claim of general NLU.
+    """
+    names=r'(?:rgb|led(?:s|lys)?|lys)' if feature=='rgb' else r'(?:(?:spill)?lyd\w*|melodi\w*|musikk\w*|audio|(?:game\s+)?sound\w*|music\w*|synth\w*)'
+    positive,off=False,False
+    for match in re.finditer(r'\b'+names+r'\b',summary,re.I):
+        prefix=re.split(r'[.;!?\n]|\b(?:men|but|however)\b',summary[:match.start()],flags=re.I)[-1]
+        directives=list(DIRECTIVE.finditer(prefix));directive=directives[-1] if directives else None
+        negated=bool(directive and re.match(r"(?:uten|ingen|ikke|without|no|not|do\s+not|don['’]t)\b",directive.group(),re.I))
+        if negated:
+            governed=prefix[directive.end():]
+            if re.search(r'\b(?:ny|nytt|nye|new|additional|extra|ekstra|ytterligere)\b',governed,re.I):
+                continue  # No addition: neither a positive request nor permanent mute.
+            after=re.split(r'[,;.!?\n]|\b(?:og|and|men|but|med|with)\b',summary[match.end():],flags=re.I)[0]
+            leading=re.split(r'[,;]|\b(?:og|and|med|with)\b',prefix[:directive.start()],flags=re.I)[-1]
+            nearby=leading+prefix[directive.start():]+match.group()+after
+            initial=bool(re.search(r'fra start|ved start|som standard|by default|initially|av\s*/\s*på|på\s*/\s*av|on\s*/\s*off|off\s*/\s*on',nearby,re.I) or re.search(r'\b(?:starter|start(?:s|ing)?)\s*$',leading,re.I))
+            positive,off=(True,False) if initial else (False,True)
+        else:
+            positive,off=True,False
+    return {'positive':positive,'off':off}
 
 
 def contract(capabilities,summary):
@@ -32,8 +47,9 @@ def contract(capabilities,summary):
     # The shared classifier recognizes Norwegian compounds and named game genres.
     # A candidate's own kind/service list must not turn a confirmed game into a tool.
     game=category in {'puzzle','racing','space','platformer','adventure'}
-    explicit_audio=bool(re.search(r'\b(?:melodi\w*|musikk\w*|music\w*|lyd\w*|audio|sound|synth\w*)\b',summary,re.I))
-    rgb_off,audio_off=_opt_out(summary,'rgb'),_opt_out(summary,'audio')
+    rgb_intent,audio_intent=_intent(summary,'rgb'),_intent(summary,'audio')
+    explicit_audio=audio_intent['positive']
+    rgb_off,audio_off=rgb_intent['off'],audio_intent['off']
     return {'version':VERSION,'authority':'actual capabilities and confirmed request; candidate declarations do not reduce defaults',
         'capabilities_sha256':hashlib.sha256(canonical(caps)).hexdigest(),
         'request_sha256':hashlib.sha256(summary.encode('utf-8')).hexdigest(),

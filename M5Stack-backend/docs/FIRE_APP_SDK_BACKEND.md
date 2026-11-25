@@ -30,6 +30,9 @@ appnavn som «bilspill», «værapp» og «måleinstrument» samt engelske alias
 av samme kategorisering som brukes for relevante maskinvaredetaljer. Hele den
 faktiske tilgjengelighetslisten beholdes; detaljerte signaturer velges fra mål,
 avhengigheter og eksisterende apps manifest. Dette gir ingen nye tillatelser.
+En liten gruppert opplysning hentes fra de faktiske fontmaskene: seks UI-fonter
+har skrivbar ASCII og ni ekstra tegn, mens legacyreferansen bare har skrivbar
+ASCII. Andre tegn blir `?`. Ingen ny font, API eller parallell tegnliste innføres.
 Kodekontrollen får eksplisitt aktuell kandidatkontrakt og skal skille konkrete
 feil fra valgfri ekstra funksjonalitet og umålt fysisk ytelse.
 
@@ -38,8 +41,11 @@ annonserte tjenester og bekreftet bestilling bestemmer RGB-/lydkravene; en
 kandidat kan ikke unngå dem ved å utelate `rgb` eller `speaker`. Lokale tester må
 vise ikke-null aktivitet på begge LED-sider og faktiske speaker-jobber når lyd
 er avtalt og tilgjengelig. Start med lyd av og permanent brukerunntak behandles
-forskjellig. Mangler rettes med den kjernetestede koden som grunnlag. Levering
-krever kilde-/kontraktbundet standardbevis i tillegg til lokale tester og review.
+forskjellig. Mangler rettes med den kjernetestede koden som grunnlag.
+Tolking av nektede tillegg støtter også norsk/engelsk kommaseparerte og skråstrek-
+lister: «ingen ny lyd» er verken et positivt lydønske eller et permanent unntak
+fra avtalt spilllyd. Separate positive/nektende klausuler beholdes.
+Levering krever kilde-/kontraktbundet standardbevis i tillegg til lokale tester og review.
 Se [SDK_STANDARD_GATE_PLAN.md](SDK_STANDARD_GATE_PLAN.md) for kontroll og avgrensning.
 
 Release-testene kjører ekte Lua i den eksisterende isolerte worker-prosessen.
