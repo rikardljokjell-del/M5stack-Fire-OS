@@ -13,6 +13,15 @@ struct Surface {
       for(int col=r.x;col<r.x+r.w;++col) pixels[row*kWidth+col]=c;
   }
 };
+// Independent pixel-center circle predicate, not the row-span renderer.
+static bool roundedContains(int px,int py,int x,int y,int w,int h,int radius) {
+  if(w<=0 || h<=0 || px<x || py<y || px>=x+w || py>=y+h) return false;
+  const int xx=2*(px-x)+1,yy=2*(py-y)+1;
+  int dx=0,dy=0;
+  if(xx<2*radius) dx=2*radius-xx;else if(xx>2*(w-radius)) dx=xx-2*(w-radius);
+  if(yy<2*radius) dy=2*radius-yy;else if(yy>2*(h-radius)) dy=yy-2*(h-radius);
+  return dx*dx+dy*dy<=4*radius*radius;
+}
 int main() {
   auto r=clippedRect(-4,-2,8,5);assert(r.x==0 && r.y==0 && r.w==4 && r.h==3);
   r=clippedRect(INT_MAX,0,INT_MAX,1);assert(r.w==0);
@@ -34,6 +43,20 @@ int main() {
   assert(rounded.pixels[10*kWidth+10]==0 && rounded.pixels[14*kWidth+14]==4);
   assert(outline.pixels[14*kWidth+14]==0);
   for (size_t i=0;i<outline.pixels.size();++i) if(outline.pixels[i]) assert(rounded.pixels[i]==4);
+  static Surface panel;
+  roundRect(panel,10,50,145,72,6,5,true);
+  assert(panel.calls<20); // Full panel used72 LGFX fills before row coalescing.
+  for(int pass=0;pass<40;++pass) {
+    const int x=pass%3==0?-7:pass%3==1?310:23,y=pass%2?-4:229;
+    const int w=2+pass*3,h=2+pass*2,r=(w<h?w:h)/2<6?(w<h?w:h)/2:6;
+    static Surface shape;shape=Surface{};
+    const bool fill=pass%2==0;roundRect(shape,x,y,w,h,r,11,fill);
+    for(int py=0;py<kHeight;++py)for(int px=0;px<kWidth;++px) {
+      const bool outer=roundedContains(px,py,x,y,w,h,r);
+      const bool inner=roundedContains(px,py,x+1,y+1,w-2,h-2,r?r-1:0);
+      assert(shape.pixels[py*kWidth+px]==((outer && (fill || !inner))?11:0));
+    }
+  }
   arc(ring,50,50,20,0,360,7,4);
   assert(ring.pixels[50*kWidth+50]==0 && ring.pixels[50*kWidth+68]==7);
   const auto before=ring.pixels;arc(ring,50,50,20,40,40,9,4);assert(before==ring.pixels);

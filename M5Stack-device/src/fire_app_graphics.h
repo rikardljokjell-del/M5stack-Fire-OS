@@ -111,10 +111,21 @@ template<class Surface>
 void roundRect(Surface& surface,int x,int y,int w,int h,int radius,uint16_t color,bool filled) {
   const auto clip=clippedRect(x,y,w,h);
   if (radius<0 || radius>160 || radius>w/2 || radius>h/2) return;
+  if (filled) {
+    // Identical adjacent row spans form one rectangle. In particular the
+    // straight middle of a panel is one fill, not one LGFX call per row.
+    int py=clip.y;
+    while (py<clip.y+clip.h) {
+      const int inset=roundInset(py-y,h,radius);int end=py+1;
+      while (end<clip.y+clip.h && roundInset(end-y,h,radius)==inset) ++end;
+      span(surface,x+inset,py,w-2*inset,end-py,color);py=end;
+    }
+    return;
+  }
   for (int py=clip.y;py<clip.y+clip.h;++py) {
     const int row=py-y,inset=roundInset(row,h,radius);
     const int left=x+inset,right=x+w-inset;
-    if (filled || row==0 || row==h-1 || w<=2 || h<=2) span(surface,left,py,right-left,1,color);
+    if (row==0 || row==h-1 || w<=2 || h<=2) span(surface,left,py,right-left,1,color);
     else {
       const int inner=roundInset(row-1,h-2,radius>0?radius-1:0);
       const int a=x+1+inner,b=x+w-1-inner;

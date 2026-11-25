@@ -55,6 +55,8 @@ int main() {
     assert(fire_app_bitmap::asset(tinted,entry,-4,-3,2,-1,true,false));
   }
   for (const auto& entry:FireSdkData::kFonts) {
+    for(size_t i=0;i<entry.glyphCount;++i)
+      assert(fire_app_bitmap::glyph(entry,entry.glyphs[i].codepoint)==entry.glyphs+i);
     assert(fire_app_bitmap::measure(entry,"FIRE 123",8,w,h) && h==entry.lineHeight);
     assert(fire_app_bitmap::text(tinted,entry,0,0,"FIRE 123",8,0xffff,0,320));
     assert(fire_app_bitmap::measure(entry," ",1,w,h));

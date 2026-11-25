@@ -33,8 +33,14 @@ inline bool codepoint(const char* text,size_t length,size_t& offset,uint32_t& ou
 
 template<class Font>
 auto glyph(const Font& font,uint32_t cp) -> decltype(font.glyphs) {
-  // Binary search is unnecessary for the small, immutable alphabet; tolerate
-  // source ordering and use '?' for valid but unsupported Unicode scalars.
+  // Canonical glyphs are sorted by codepoint. Probe in logarithmic time, then
+  // retain linear fallback for other/test fonts without imposing a new format.
+  size_t low=0,high=font.glyphCount;
+  while (low<high) {
+    const size_t middle=low+(high-low)/2;
+    if (font.glyphs[middle].codepoint<cp) low=middle+1;else high=middle;
+  }
+  if (low<font.glyphCount && font.glyphs[low].codepoint==cp) return font.glyphs+low;
   decltype(font.glyphs) fallback=nullptr;
   for (size_t i=0;i<font.glyphCount;++i) {
     if (font.glyphs[i].codepoint==cp) return font.glyphs+i;
