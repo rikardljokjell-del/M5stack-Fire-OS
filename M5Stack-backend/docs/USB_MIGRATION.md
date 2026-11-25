@@ -14,8 +14,10 @@ fysisk testede RC2-grunnlagsfilene.
 Stegene nedenfor gjelder førstegangsmigrering på en annen FIRE.
 Windows-backend, AI, webUI og Lua-apper kan ikke starte USB-verktøyet.
 Pakkekontroll uten COM er ikke fysisk flashing. Vanlige oppdateringer går
-fra Settings → Firmware direkte til GitHub. Den meldte firmware-SD-skrivefeilen
-er fortsatt utsatt og ikke rettet i SDK/Runtime AI-leveransen.
+fra Settings → Firmware direkte til GitHub. Den tidligere firmware-SD-skrivefeilen
+ble ikke gjenskapt i en senere normal RC7-prøve: nedlasting, lagring og
+tilbakekontroll bestod, og brukeren bekreftet funksjonen. Ingen ny USB- eller
+firmwareendring var nødvendig for denne prøven.
 
 ## Historiske 1.2.x-prøver
 

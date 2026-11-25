@@ -32,10 +32,15 @@ Kilde `47df9da`, CI45671660337: 22 native tester og tre bygg. Strenge
 C++-kontroller består separat. USB-pakken beholder de uendrede, fysisk
 testede RC2-grunnlagsbildene. Runtime AI bruker samme backend og API-nøkkel.
 
-**Åpent:** Firmware-nedlasting til SD har en brukerrapportert skrivefeil,
-som etter ønske ikke er undersøkt eller rettet her. Eldre appspesifikke
-24 ms-feil er ikke generelt friskmeldt. Direkte OTA/recovery er ikke fysisk
-gjentestet med denne RC7-utgaven. PC-resultater beviser ikke fysisk ytelse.
+**Fersk fysisk GitHub → SD-prøve:** Brukeren lastet ned hele RC7-filen via
+vanlig meny. Hashkontroll, SD-skriving, tilbakeavlesing og begge signerte
+katalogkopier bestod; brukeren bekrefter at alt fungerte. Ingen installasjon
+eller omstart ble utløst. Den gamle skrivefeilen ble ikke gjenskapt, og ingen
+ny kode eller firmware ble nødvendig. Se [SD-rapporten](../M5Stack-device/PHYSICAL_SD_2026-11-25.md).
+
+Eldre appspesifikke 24 ms-feil er ikke generelt friskmeldt. Direkte OTA/recovery
+er ikke fysisk gjentestet med denne RC7-utgaven. PC-resultater beviser ikke
+fysisk ytelse.
 
 Katalogen har åtte signerte installasjonsvalg. Tidligere RC3 er tatt ut av
 den aktive listen på grunn av en dokumentert fysisk callback-feil, men alle

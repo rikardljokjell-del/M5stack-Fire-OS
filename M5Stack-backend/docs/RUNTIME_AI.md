@@ -99,9 +99,11 @@ Hold **A** inne for hjem, og åpne den andre appen fra **Apps**.
 En reell forespørsel bruker den eksisterende OpenAI-nøkkelen og koster penger.
 Før faktiske knappetrykk er resultatene bare offline-/simulatorbevis.
 
-**Avgrensninger:** Den rapporterte firmware-SD-skrivefeilen er fortsatt et
-eget, utsatt gjøremål. Denne leveransen løser heller ikke automatisk eldre
-appspesifikke tidsoverskridelser; disse må vurderes på faktisk app og enhet.
+**Avgrensninger:** En senere vanlig GitHub → SD-prøve på RC7 bestod
+nedlasting, skriving og tilbakekontroll; brukeren bekreftet at alt fungerte.
+Den gamle skrivefeilen ble ikke gjenskapt, og ingen ny firmware var nødvendig.
+Dette friskmelder ikke automatisk eldre appspesifikke tidsoverskridelser;
+disse må vurderes på faktisk app og enhet.
 
 ## Stabil appinstallasjon og start
 

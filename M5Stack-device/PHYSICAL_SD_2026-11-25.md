@@ -197,3 +197,38 @@ SDK, task-størrelser, sertifikatverifisering og rollback ble ikke svekket.
 Faktisk kartlagt PSRAM var 4 194 303 byte, selv om nyere FIRE-spesifikasjon
 oppgir mer fysisk PSRAM. Hele filen/katalogen må få plass med 512 KiB reserve;
 for liten eller fragmentert PSRAM gir trygg avvisning før SD åpnes.
+
+## Ny vanlig brukerprøve på fire-os-1.3.0-rc7
+
+Etter brukerens nye oppdrag ble den ordinære menyflyten GitHub → RC7 →
+«Last ned til SD» prøvd på den rene, publiserte RC7-produksjonsutgaven.
+Dette var ingen privat testfirmware. En passiv serieavlesning sendte ingen
+kommandoer, endret ikke reset-linjene og registrerte ingen reset.
+
+Den valgte CI-filen var 2 683 760 byte, SHA256
+`cfa80f5238d05c6db446fa8ba5f174212883224264926df68a3827ca08311fd1`.
+FIRE hentet hele filen, kontrollerte den signerte hashen og logget
+`network_running=0` før SD-fasen. Deretter fullførte produksjonsmanageren
+lukking/gjenåpning, filstørrelse/SHA256, begge signerte katalogkopier og
+publisering: `FIRE GitHub SD verified bytes=2683760`.
+Den signerte katalogen var 4 894 byte. Kortet rapporterte 1 971 351 552 byte
+totalt, 16 142 336 byte brukt og 2 824 620 byte nødvendig arbeidsplass.
+
+Fra bekreftet nedlastingsstart til kontrollert lagring gikk ca. 100,9 s;
+SD-fasen inkludert tilbakeavlesing/kataloger tok ca. 66,1 s. Ingen TLS-/SD-
+feil, panic eller watchdog ble registrert. Intern minimumsheap falt fra
+67 532 til 5 040 byte under forsøket; dette er en knapp målt margin, ikke
+bevis for årsaken til den historiske EIO-feilen. Livstidsmaksima ble beholdt.
+
+Brukeren bekreftet «SD kontrollert / nedlasting fullført» og «Alt funket fint nå».
+Dette ene ferske forsøket gjenskapte ikke den meldte feilen. Ingen kode ble
+endret, ingen installasjon/OTA/omstart ble bestilt, og COM3 ble lukket etter
+fangsten. A45/RC9 og B46/RC7 ble ikke skrevet av denne SD-operasjonen;
+oppstartsmetadata ble ikke lest på nytt. Direkte OTA og separat installasjon
+fra den nye SD-filen ble ikke repetert. De historiske EIO/FatFS-avgrensningene
+over gjelder fortsatt.
+
+Privat bevis: `M5Stack-backend/workspace/device-physical/2026-11-25/rc7-firmware-download-repro/sanitized-result.json`,
+SHA256 `8eef0f710773d27cfa7dfbb5555be39c01de61eda6577e5e1560bb7d194d0588`.
+Råloggen ligger kun i samme ignorerte mappe, SHA256
+`51e9ddb52491a5ee9b2e20c6a319e33617437cc14891a47f981cdfe5cf775f8f`.

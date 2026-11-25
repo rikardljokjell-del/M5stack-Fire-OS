@@ -6,12 +6,15 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Åpne gjøremål
 
-- [ ] **GitHub-firmware til SD: skrivefeil etter nedlasting.** Brukeren meldte
-  25. november 2026, etter RC9-leveransen, at nedlastingen ble etterfulgt av
-  feilmeldingen «SD-skriving feilet». Feilen er åpen; årsak og gjeldende
-  enhetsstatus er ikke undersøkt på nytt. Tidligere beståtte tester nedenfor
-  er avgrensede resultater og betyr ikke at brukerflyten er feilfri.
-  **Kun notert etter brukerens ønske. Ingen feilsøking eller retting nå.**
+- [x] **Aktuell GitHub → SD-flyt på fire-os-1.3.0-rc7 er fysisk verifisert.**
+  Etter brukerens nye ønske om retting ble normal Settings-flyt prøvd med
+  passiv logging. Hele filen på 2 683 760 byte ble lastet ned, hashkontrollert,
+  skrevet til SD og lest tilbake, inkludert begge signerte katalogkopier.
+  Brukeren bekreftet «SD kontrollert / nedlasting fullført» og at alt fungerte.
+  Ingen installasjon, omstart, formatering eller firmwareendring ble gjort.
+  Den tidligere skrivefeilen ble ikke gjenskapt; dens isolerte rotårsak er
+  derfor fortsatt ukjent. Én vellykket prøve er ikke en garanti mot alle
+  fremtidige kort-/nettfeil. Se [den fysiske SD-rapporten](M5Stack-device/PHYSICAL_SD_2026-11-25.md).
 
 ## Status nå
 
@@ -46,7 +49,7 @@ kostnader gjenstår i sluttprøven. Tidligere kilde-/firmwarefeil er bevart i
 historikken og er ikke generelt friskmeldt.
 
 Se [Runtime AI og teststeg](M5Stack-backend/docs/RUNTIME_AI.md). Tidligere
-appspesifikke 24 ms-feil er ikke friskmeldt. SD-skrivefeilen over er utsatt.
+appspesifikke 24 ms-feil er ikke friskmeldt. Den aktuelle GitHub → SD-prøven er nå bestått, se øverst.
 
 
 ### FIRE App SDK – under implementering
@@ -59,7 +62,7 @@ grafikk-/fontdata, UI-kit, temaer og kontrakt ligger i
 Eksisterende Lua-apper og hardwarehash skal bevares; SDK krever eksplisitt
 ny kapabilitet. Simulator, Studio-preview og eksisterende AI-review utvides
 samordnet. Innhold og tidlige PC-tester er ikke fysisk SDK-verifikasjon.
-Den registrerte firmware-SD-skrivefeilen over undersøkes ikke i dette arbeidet.
+Den tidligere firmware-SD-feilen ble senere prøvd på nytt, med bestått RC7-flyt, se øverst.
 
 Siste backendkjøring ga 957 beståtte tester og én feil i to avledede
 grensesnittfiler med gammel SDK-hash. Filene er regenerert og den berørte
