@@ -23,4 +23,11 @@
 - Preserve tested packages and logs locally. Commit source, tests, documentation and configuration examples, not installed dependencies or runtime data.
 - Keep `STATUS.md` truthful about mock versus live OpenAI verification and physical device support.
 
+## Firmware version history
+- Preserve every firmware version already published on GitHub. Never delete old version files to make room for a new release or to fit the current catalog limit.
+- Published versioned `.bin`, USB `.zip`, checksum files and original signed catalogs are immutable. Give changed firmware a new version and filename.
+- Before updating `firmware/index.json`, retain its exact signed bytes as the previous version's `*-catalog.json` if that archive does not already exist.
+- Current catalog notes and documentation may move forward. Verification reports may add new factual results while retaining earlier evidence and limitations.
+- The signed catalog currently permits eight entries. Add bounded archive discovery before exceeding that limit; preserve older binaries and catalogs throughout.
+
 See `STATUS.md` for current delivery status and `M5Stack-backend/README.md` for details.

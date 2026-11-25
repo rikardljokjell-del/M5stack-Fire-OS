@@ -1,0 +1,146 @@
+{
+  "schema": 1,
+  "version": "fire-os-1.2.0-rc8",
+  "candidate": true,
+  "physical_verified": false,
+  "physical_sd_subset_verified": false,
+  "physical_ota_subset_verified": false,
+  "production_verified": false,
+  "repository": "rikardljokjell-del/M5stack-Fire-OS",
+  "source_commit": "02b3905beb48841df9915fe93b6c2037636faa7b",
+  "ci": {
+    "firmware_run_id": 45569401808,
+    "firmware_job_id": 139052038947,
+    "artifact_id": 15001777345,
+    "artifact_zip_sha256": "0287a1a4973b4a9275e5dbaf38a9f31dd211e73724021353af9053ff2bd352c8",
+    "tests": 16,
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "distribution_note": "Normal from this CI. Physically verified RC2 bootloader/table/recovery retained with separate component provenance."
+  },
+  "firmware": {
+    "name": "fire-os-1.2.0-rc8.bin",
+    "size": 2427040,
+    "sha256": "c4d9cd362517ba7cf35a0350629b46edb46f385a4d698944c0d18fccbf8a1e05"
+  },
+  "migration": {
+    "name": "fire-os-1.2.0-rc8-usb.zip",
+    "size": 2648735,
+    "sha256": "7abaf96bc7b6a25d4dc493022b0f25d7e8c56ac258d533095c07e61767f3bb26",
+    "manifest_sha256": "92109367f886f3c5af99e80a0941e6a89e7073541e513c36a38fe6442352076f",
+    "catalog_sha256": "a1c4b41fe8e6e0c11c66a982f9af7383028fecec2f37b3db1bc46ef2e2cda838",
+    "files": [
+      "migration.json",
+      "migration.sig",
+      "bootloader.bin",
+      "partitions.bin",
+      "normal.bin",
+      "recovery.bin",
+      "catalog-v2.json",
+      "release-public.pem"
+    ]
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "c4d9cd362517ba7cf35a0350629b46edb46f385a4d698944c0d18fccbf8a1e05",
+      "size": 2427040
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "component_provenance": {
+    "bootloader": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 27760,
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "retained_rc2_component": true
+    },
+    "partitions": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 3072,
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "retained_rc2_component": true
+    },
+    "normal": {
+      "source_commit": "02b3905beb48841df9915fe93b6c2037636faa7b",
+      "ci_run": 45569401808,
+      "size": 2427040,
+      "sha256": "c4d9cd362517ba7cf35a0350629b46edb46f385a4d698944c0d18fccbf8a1e05",
+      "retained_rc2_component": false
+    },
+    "recovery": {
+      "source_commit": "7efbae95fa0a54aeb3e1d6a615390810b69279b4",
+      "ci_run": 45431615060,
+      "size": 1578112,
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "retained_rc2_component": true
+    }
+  },
+  "ota": {
+    "algorithm": "ecdsa-p256-sha256",
+    "key_id": "fire-release-2026",
+    "layout": "fire-ab-recovery-v1",
+    "rollback_enabled": true,
+    "factory_reset_gpio": 39,
+    "factory_reset_hold_seconds": 3,
+    "data_factory_reset": []
+  },
+  "changes": [
+    "Separate Download to SD option does not install, reboot or write any OTA partition",
+    "Complete signed firmware buffered within actual PSRAM largest-block and reserve bounds",
+    "Exact network size and hash verified; all socket/TLS objects destroyed before opening SD",
+    "SD file readback and signed per-binary plus legacy recovery catalogs verified before preserving-backup publication",
+    "Same-version installation clearly labelled Reinstall; direct GitHub update remains default"
+  ],
+  "firmware_history": {
+    "existing_version_files_preserved": 26,
+    "all_existing_bytes_unchanged": true,
+    "previous_catalog_archived": "fire-os-1.2.0-rc7-catalog.json",
+    "previous_catalog_sha256": "d1f80f8f4ee0cacecc69f58505d08a1129422c8a54d33e806e20129a3e7efc0b",
+    "signed_catalog_entries": 6,
+    "legacy_1_1_preserved": true
+  },
+  "verification_history": [
+    {
+      "stage": "CI and signed package checks passed",
+      "physical_status": "pending"
+    }
+  ],
+  "not_verified": [
+    "RC8 physical GitHub-to-PSRAM-to-SD download/readback and unchanged boot/partition checks pending",
+    "RC8 normal production boot and fresh installed-app inventory pending",
+    "Root cause of historical RC6 FatFS write crash not established",
+    "User Home Assistant, public Cloudflare/WSS, audio/AI/Lua RUN and human button/power/recovery acceptance"
+  ]
+}

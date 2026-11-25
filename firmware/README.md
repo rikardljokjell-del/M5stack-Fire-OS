@@ -1,6 +1,40 @@
 # FIRE OS firmware
 
-Aktuell **testkandidat: fire-os-1.2.0-rc7**. Velg
+Aktuell **testkandidat: fire-os-1.2.0-rc8**. Etter versjonsvalg under
+**Settings → Firmware → Oppdater fra GitHub** kan du velge:
+
+- **Installer direkte fra GitHub**: oppdaterer inaktiv OS-slot og starter om.
+- **Last ned til SD**: lagrer og kontrollerer filen uten installering eller omstart.
+- **Tilbake**.
+
+Samme kjørende versjon vises som **Reinstaller** ved direkte installasjon.
+SD-valget henter hele den signerte filen til PSRAM, kontrollerer lengde/hash
+og avslutter socket/TLS helt før SD åpnes. SD-filen leses tilbake; både egen
+signert katalog ved filen og global katalog for eksisterende recovery bevares.
+For lite sammenhengende arbeidsminne gir en trygg avvisning før SD-skriving.
+Ingen OTA-slot eller oppstartsmetadata endres av bare nedlasting til SD.
+
+[CI 45569401808](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45569401808)
+på kilde [02b3905](https://github.com/rikardljokjell-del/M5stack-Fire-OS/commit/02b3905beb48841df9915fe93b6c2037636faa7b)
+bestod **16 tester og tre bygg**. Signert pakke er kontrollert; fysisk SD-test pågår.
+
+| Gjeldende RC8-fil | Bruk |
+| --- | --- |
+| [Normal firmware](fire-os-1.2.0-rc8.bin) | Direkte oppdatering eller SD-kopi fra enheten |
+| [USB-arkiv](fire-os-1.2.0-rc8-usb.zip) | Førstegangsmigrering på en annen enhet |
+| [Kontrollsummer](fire-os-1.2.0-rc8-SHA256SUMS.txt) | Eksakte filhashes |
+| [Utgivelsesbevis](fire-os-1.2.0-rc8-evidence.json) | CI, komponentkilder og faktisk teststatus |
+
+Normal RC8 er ny; fysisk testet RC2-bootloader, partisjonstabell og recovery
+beholdes uendret med separat kildeopphav. Alle eldre utgivelsesfiler beholdes.
+
+## Historisk RC7
+
+RC7 beholdes med [original signert katalog](fire-os-1.2.0-rc7-catalog.json).
+Denne versjonen støttet bare direkte GitHub-installasjon. Følgende er
+tidligere kontroll og bruk av den:
+
+RC7: velg
 **Settings → Firmware → Oppdater fra GitHub → utgave → Installer direkte fra GitHub**
 og bekreft med B. Oppdateringen bruker ikke SD-kort eller backend.
 GitHub-valget har bare installering og tilbake; SD-nedlasting er fjernet.
@@ -112,3 +146,16 @@ Auto-forbindelse hvert minutt. RC3/RC4 var private USB-mellomtester.
 `fire-os-1.1.bin` og [legacy-index-v1.json](legacy-index-v1.json) beholdes for
 Studio-historikk. Den usignerte gamle utgaven er ikke en oppdatering for den
 nye recovery-layouten. Private signeringsnøkler følger aldri med.
+
+## Versjonene beholdes
+
+Alle publiserte firmwareversjoner blir liggende på GitHub. Nye utgaver får
+egne filnavn; gamle binærfiler, USB-arkiver, kontrollsummer og originale
+signerte kataloger slettes eller overskrives ikke. Før hovedkatalogen endres,
+bevares den tidligere signerte katalogen med versjonsnavn. Nye testresultater
+supplerer leveransebeviset med historikken beholdt.
+
+Hovedkatalogen har foreløpig en grense på åtte signerte oppføringer. Før den
+grensen nås, må arkivvisningen utvides; eldre filer skal ikke slettes for å
+omgå grensen. Legacy 1.1 beholdes som historikk. RC3/RC4 var private
+mellomtester og har ikke vært publiserte GitHub-utgivelser.
