@@ -13,6 +13,7 @@ til huset før du har valgt det i Home Assistant.
 | Installerte selvstendige apper | På FIRE | Nei |
 | AI-samtale, tale og lage Lua-apper | FIRE eller nettleser → PC-backend → OpenAI | Ja |
 | FIRE Studio og appbibliotek | Nettleser → PC-backend | Ja |
+| Runtime AI i Lua-apper | FIRE → samme PC-backend → OpenAI | Ja |
 
 FIRE trenger **2,4 GHz Wi-Fi** med internett for ekstern bruk. Et mobilhotspot
 kan gi dette; velg 2,4 GHz eller kompatibilitetsmodus i hotspotinnstillingene.
@@ -209,3 +210,11 @@ Test i denne rekkefølgen etter oppsett:
 Bruk [den korte fysiske testveiledningen](docs/PHYSICAL_CHECK.md).
 Se også [faktisk leveransestatus](STATUS.md) og [kontrollpunktene](ACCEPTANCE.md).
 Lokale tester og vellykket kompilering erstatter ikke de fysiske testene.
+
+## Runtime AI i appene
+
+Bruk samme backend og eksisterende OpenAI-nøkkel. **AUTO** i AI Developer lar
+byggeren vurdere AI der det gir nytte; **OFF** utelater nye AI-funksjoner.
+Backendens Runtime AI-innstillinger har eget modellvalg, global/per-app-bryter
+og separat forbruk. Valgfrie forbruksgrenser er av som standard.
+Se [korte bruks- og teststeg](M5Stack-backend/docs/RUNTIME_AI.md).

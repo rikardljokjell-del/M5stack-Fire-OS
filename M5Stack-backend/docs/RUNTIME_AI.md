@@ -5,11 +5,15 @@ den samme backenden og OpenAI-nøkkelen som AI Developer. Ingen ny konto, server
 eller Home Assistant-konfigurasjon er nødvendig.
 
 **Status 25. november 2026:** Backend og firmware er implementert. Native CI
-består 21 tester og alle tre bygg. Backendens fullkjøring ga 1013 beståtte
+består 22 tester og alle tre bygg. Backendens fullkjøring ga 1013 beståtte
 tester og fire utdaterte kostforventninger; forventningene er rettet og de
-berørte kontrollene består. Windows-backenden er aktivert med bevarte innstillinger og nøkler. Eksakt RC3
-er installert i B og helsegodkjent; RC9 i A er beholdt. Faktiske
-knappestyrte AI-resultater og opplevd respons gjenstår i sluttprøven.
+berørte kontrollene består. Windows-backenden er aktivert med bevarte innstillinger og nøkler. Eksakt fire-os-1.3.0-rc7
+er installert i B46 og helsegodkjent; RC9 i A45 er beholdt. RC7 sender den
+verifiserte kildehashen i alle startkvitteringer, etter et konkret avslag i
+RC6. Begge manuelle testapper har faktisk
+kildebundet start- og helsekvittering. Oppdragsappen kjørte 112,97 s på samme
+boot/run/pakke uten registrert feil; analyseappen var running/healthy etter
+57,82 s. Faktiske knappestyrte AI-resultater og opplevd respons prøves til slutt.
 PC-resultater alene bekrefter ikke Runtime AI under fysisk appkjøring.
 
 ## Bruk
@@ -78,17 +82,19 @@ kontrakt, pakkedata og enhetens genererte konstanter er identiske.
 
 ## To korte praktiske sluttprøver
 
-De manuelle testappene **AI Analyse test** og **AI Oppdrag test** er
+De manuelle testappene **AI Analyse test** og **AI Oppdrag GC test** er
 eksempler for integrasjonstesting, ikke bevis på AI-genereringens kvalitet.
 De skal installeres og åpnes gjennom den vanlige, bekreftede appflyten.
 
-1. Åpne analyseappen og la den samle minst 16 gyldige måleprøver. Trykk **B**
+1. Åpne **AI Analyse test** og vent til kortet viser **16 av 16 prøver**. Trykk **B**
    for vurdering. Se at målinger og AI-vurdering er atskilt, og at knapper
    fortsatt svarer mens forespørselen arbeider.
-2. Åpne oppdragsappen. Trykk **B** for et nytt AI-generert oppdrag. Kontroller
+2. Åpne **AI Oppdrag GC test**. Trykk **B** for et nytt AI-generert oppdrag. Kontroller
    at et strukturert resultat vises og at lokal spilling fortsatt fungerer.
 3. Kontroller Runtime AI-forbruket under appen og i forbruksoversikten.
    Ingen idle- eller per-frame-kall skal belastes.
+
+Hold **A** inne for hjem, og åpne den andre appen fra **Apps**.
 
 En reell forespørsel bruker den eksisterende OpenAI-nøkkelen og koster penger.
 Før faktiske knappetrykk er resultatene bare offline-/simulatorbevis.
@@ -96,3 +102,22 @@ Før faktiske knappetrykk er resultatene bare offline-/simulatorbevis.
 **Avgrensninger:** Den rapporterte firmware-SD-skrivefeilen er fortsatt et
 eget, utsatt gjøremål. Denne leveransen løser heller ikke automatisk eldre
 appspesifikke tidsoverskridelser; disse må vurderes på faktisk app og enhet.
+
+## Stabil appinstallasjon og start
+
+En fysisk prøve avdekket at innstillingslageret hadde 503 av 504 tilgjengelige
+oppføringer i bruk. Lua-pakken lå på SD, men koblingen som startkommandoen
+brukte ble ikke lagret. Tidligere kode kontrollerte ikke dette før den meldte
+«installert». RC5 lagrer og leser nå tilbake pakkeidentiteten sammen med appen
+i dagens installasjonsløp. Eldre apper har kontrollert kompatibilitet.
+
+Nye pakke- og kjørekvitteringer fyller ikke dette lageret videre. Bare gamle,
+kjente kjørekvitteringer fra tidligere oppstart fjernes; brukerinnstillinger,
+nøkler og appdata slettes ikke. Fysisk RC5-oppstart bekreftet 14 slike
+oppryddinger og 0 ved neste vanlige omstart. Installasjon og faktisk appstart
+kontrolleres fortsatt med enhetens egne kvitteringer.
+
+Tydelige installasjons-/kommandofeil beholdes som feilrapporter uten å stemple
+Lua-koden som defekt. Faktiske Lua-, init-, sandbox- og tidsbudsjettfeil
+beholder sperrene. Tidligere RC3-tidsoverskridelse er ikke slettet eller
+friskmeldt som følge av denne lagringsrettingen.

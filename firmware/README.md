@@ -1,40 +1,59 @@
 # FIRE OS firmware
 
-## Aktuell testkandidat: fire-os-1.3.0-rc3
+## Aktuell testkandidat: fire-os-1.3.0-rc7
 
-RC3 legger til FIRE App SDK, asynkron Runtime AI, rettet ferdigdialog og
-installasjonskvittering, samt tydeligere appstatus og nedlastingsprogresjon.
-Eksakt CI-fil er installert på Rikards FIRE i B, sekvens38 VALID/CRC.
-RC9 er beholdt i A, sekvens37 VALID/CRC. Hele B er tilbakekontrollert;
-45,1s helsekontroll og 20,1s vanlig omstart ga ingen panic/watchdog.
-Dette er en testkandidat, ikke generell produksjonsgodkjenning av alle apper.
+RC7 inneholder FIRE App SDK og asynkron Runtime AI over den eksisterende
+backenden. Appstart sender nå faktisk verifisert kildehash; installasjonen
+kontrollerer pakkeidentiteten på SD før den melder suksess. SDK bruker
+Generational GC med uendrede tids-, minne-, instruksjons- og I/O-grenser.
+Jobbpris og appens samlede utviklingspris er skilt i backend, og ukjent
+forbruk vises som ukjent eller med tydelig empirisk anslag.
 
-**Fersk fysisk begrensning:** Den lille «AI Oppdrag test»-appen ble installert,
-men stoppet etter152 frames/11,485s med update-callback24,278ms over
-24ms-grensen. Ingen AI-kall var utløst. Runtime AI er derfor fortsatt ikke
-fysisk sluttgodkjent; en konkret generell tegneoptimalisering undersøkes.
+Eksakt CI-fil er installert i B46 VALID/CRC, med RC9 i A45 beholdt.
+Flash-MD5 og SHA256-tilbakeavlesning av hele normalbildet består; full OTA-slot
+med FF-utfylling er ikke kontrollert på nytt. Helse 45,055 s og vanlig
+omstart 20,206 s ga ingen panic/abort/watchdog. Dette er en testkandidat.
 
-- [Normal firmware](fire-os-1.3.0-rc3.bin)
-- [Signert USB-arkiv](fire-os-1.3.0-rc3-usb.zip) – åtte signerte kjernefiler
-  pluss ni SDK-lisens-/varselfiler, signatur/hash/bilde/layout kontrollert
-- [Kontrollsummer](fire-os-1.3.0-rc3-SHA256SUMS.txt),
-  [bevis](fire-os-1.3.0-rc3-evidence.json),
-  [font- og bildekreditering](fire-os-1.3.0-rc3-NOTICES.txt)
-- [Runtime AI og praktiske teststeg](../M5Stack-backend/docs/RUNTIME_AI.md)
+Vanlig, kildebundet oppstart av den samme manuelle oppdragsappen består.
+Den var fortsatt running/healthy på samme boot/run/pakke etter 112,97 s uten
+registrert appfeil. Brukeren bekrefter at spillet vises og A/C virker.
+Første update var 12,139 ms; dette er ikke en måling av alle senere frames.
+Ekte knappestyrte AI-resultater og full opplevd brukerflyt gjenstår i sluttprøven.
 
-Normalbildet kommer fra `7e157e8`, CI45650130638: 21 tester og tre bygg.
-USB-pakken beholder de uendrede, fysisk testede RC2-grunnlagsbildene.
-Runtime AI bruker samme backend og nøkkel; AI-modellen får ingen enhetsnøkkel.
-Faktiske knappestyrte AI-resultater og opplevd respons gjenstår i sluttprøven.
+- [Normal firmware](fire-os-1.3.0-rc7.bin)
+- [Signert USB-arkiv](fire-os-1.3.0-rc7-usb.zip): åtte signerte kjernefiler
+  og ni SDK-lisens-/varselfiler
+- [Kontrollsummer](fire-os-1.3.0-rc7-SHA256SUMS.txt),
+  [utgivelsesbevis](fire-os-1.3.0-rc7-evidence.json),
+  [font- og bildekreditering](fire-os-1.3.0-rc7-NOTICES.txt)
+- [Runtime AI og korte teststeg](../M5Stack-backend/docs/RUNTIME_AI.md)
 
-**Åpen feil:** Brukeren rapporterte SD-skrivefeil etter firmware-nedlasting.
-Feilen er etter ønske kun notert og er ikke rettet i RC3. Eldre appspesifikke
-24ms-feil er heller ikke friskmeldt. Direkte OTA og recovery er ikke fysisk
-gjentestet med RC3. Alle tidligere publiserte versjonsfiler er bytebevart.
+Kilde `47df9da`, CI45671660337: 22 native tester og tre bygg. Strenge
+C++-kontroller består separat. USB-pakken beholder de uendrede, fysisk
+testede RC2-grunnlagsbildene. Runtime AI bruker samme backend og API-nøkkel.
 
-Katalogen har nå åtte signerte oppføringer, i tillegg til legacy1.1 i
-backendoversikten. Før en niende signert utgivelse kreves bounded
-arkivoppdagelse; eldre artefakter skal ikke slettes for å få plass.
+**Åpent:** Firmware-nedlasting til SD har en brukerrapportert skrivefeil,
+som etter ønske ikke er undersøkt eller rettet her. Eldre appspesifikke
+24 ms-feil er ikke generelt friskmeldt. Direkte OTA/recovery er ikke fysisk
+gjentestet med denne RC7-utgaven. PC-resultater beviser ikke fysisk ytelse.
+
+Katalogen har åtte signerte installasjonsvalg. Tidligere RC3 er tatt ut av
+den aktive listen på grunn av en dokumentert fysisk callback-feil, men alle
+dens originale versjonsfiler og signerte katalog beholdes nedenfor. Ingen
+publiserte firmwarefiler er slettet eller overskrevet. Flere fremtidige
+utgaver vil kreve avgrenset arkivoppdagelse før kataloggrensen utvides.
+
+## Historisk 1.3.0-RC3
+
+RC3 er bevart byteidentisk: [binær](fire-os-1.3.0-rc3.bin),
+[USB-pakke](fire-os-1.3.0-rc3-usb.zip),
+[original signert katalog](fire-os-1.3.0-rc3-catalog.json),
+[kontrollsummer](fire-os-1.3.0-rc3-SHA256SUMS.txt),
+[opprinnelig bevis](fire-os-1.3.0-rc3-evidence.json) og
+[lisensinformasjon](fire-os-1.3.0-rc3-NOTICES.txt).
+Den manuelle oppdragsappen traff24ms-grensen etter152frames. Senere funn og
+rettinger står i [den løpende fysiske rapporten](../M5Stack-backend/docs/FIRE_APP_SDK_EVALUATION.md);
+det opprinnelige utgivelsesbeviset er ikke omskrevet.
 
 ## Historisk RC9
 

@@ -25,17 +25,25 @@ eventuelt med empirisk anslag; maksimumsreserve vises ikke som forbruk.
 
 Byggeflyten beholder den beste validerte rettingskandidaten. Ferdigdialog,
 installasjonskvittering, nedlastingsprogresjon og korte statuslinjer er rettet
-i firmwarekilden. RC3 fra `7e157e8` har bestått 21 native tester, tre CI-bygg
-og signert pakkekontroll. Backend: 1013 PASS / fire gamle kostasserts;
-rettede forventninger og berørte kost-/jobbtester består. Ingen ekstra
-fullkjøring hevdes. Windows-backenden er aktivert med bevarte innstillinger/nøkler. Eksakt RC3
-er fysisk installert og helsegodkjent i B38; RC9A37 er reserve. Faktiske
-appstart-/Runtime AI-resultater og opplevd respons gjenstår i sluttprøven.
+i firmwarekilden. Backend: 1013 PASS / fire gamle kostasserts; rettede
+forventninger og berørte kost-/jobbtester består. Windows-backenden er
+aktivert med bevarte innstillinger/nøkler. Kostnadsvisningen er også kontrollert
+i det faktiske Windows-programmet.
 
-Fersk fysisk prøve: begge manuelle testapper installeres korrekt.
-Oppdragsappen stoppet etter152 frames/11,485s på24,278ms update over24ms.
-Ingen AI-kall var sendt. Det undersøkes en avgrenset generell tegneoptimalisering;
-Runtime AI er fortsatt ikke fysisk sluttgodkjent.
+RC5 rettet en fysisk bekreftet full innstillingslagring som kunne gi falsk
+«installert»-kvittering. Samme app startet deretter faktisk, men traff fortsatt
+24 ms-grensen ved frame 152. RC6 bruker en avgrenset SDK-GC-endring med samme
+minne-, instruksjons- og tidsgrenser; 21 native tester og tre bygg består.
+Eksakt RC7 er fysisk helsegodkjent i B46, med RC9 A45 beholdt. RC7 sender
+faktisk verifisert kildehash i alle startkvitteringer, etter et konkret
+backendavslag i RC6. Ingen sikkerhetskontroll er svekket.
+
+Samme manuelle oppdragsapp startet med ekte, kildebundet started/healthy og
+kjørte 112,97 s på samme boot/run/pakke uten registrert appfeil. Brukeren
+bekrefter synlig spill og fungerende A/C. Første update var 12,139 ms; alle
+senere frametider er ikke målt. Faktiske B-utløste Runtime AI-resultater og
+kostnader gjenstår i sluttprøven. Tidligere kilde-/firmwarefeil er bevart i
+historikken og er ikke generelt friskmeldt.
 
 Se [Runtime AI og teststeg](M5Stack-backend/docs/RUNTIME_AI.md). Tidligere
 appspesifikke 24 ms-feil er ikke friskmeldt. SD-skrivefeilen over er utsatt.

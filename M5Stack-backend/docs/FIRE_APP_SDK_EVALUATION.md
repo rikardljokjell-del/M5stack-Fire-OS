@@ -589,3 +589,94 @@ Runtime AI calls are separate final checks, not implied by this paragraph.
 No runtime quotas or existing SDK/hardware hashes were increased. The reported
 firmware SD-write issue remains deferred. Earlier Prikkjakt/Vater callback
 timeouts are not declared fixed by these results.
+
+## Runtime AI follow-up: RC4–RC6
+
+RC4 exposed a real deployment defect: NVS had 503/504 usable entries occupied,
+installation acknowledged success although the package-to-path mapping was
+not stored. The package was present in a subsequent SD inventory. RC5 writes
+and reads back a bounded identity sidecar in the existing atomic package
+install flow, avoids new legacy index/receipt writes, and prunes only known
+old boot receipts. Physical cleanup was 14 entries, then zero after reboot.
+A normal reinstall then reached actual Lua execution. Explicit deployment
+errors retain failed receipts while no longer poisoning otherwise untested
+Lua source; genuine runtime failures remain blocked.
+
+The byte-identical manual quest source failed on RC3 at update 24,278 us,
+frame 152, and on RC5 at 24,654 us, frame 152. Neither involved Runtime AI.
+These real source/firmware cases remain recorded and blocked. Repetition
+suggested collector work, but did not phase-measure or prove that cause.
+
+RC6 source `40931488435ac94773079950114a861a39491bdb` selects Lua 5.4
+Generational GC for SDK after successful init, inside the existing 250 ms
+init guard. Legacy behavior and every update/button/memory/instruction/I/O
+limit remain unchanged. Native CI passed 21 tests and three builds, including
+retained GUI state, hard memory limits and legacy collector regression.
+The one-line PC collector mirror failed the actual quest rapid profile due
+to different host diagnostics allocation; it was reverted without changing
+app quotas or guards. The original PC policy passes all 14 quest profiles.
+No exact host/device collector or timing parity is claimed.
+
+Exact RC6 normal image: 2,683,648 bytes, SHA256
+`c2d875d33b0d371b03e949df4af3c433636c775ba78be7ab64883c577526cbf3`.
+Physical flash MD5 and exact-image-length SHA readback passed; B44 is
+VALID/CRC and RC9 A43 is retained. Health 45.118 s and ordinary reboot
+20.386 s had no panic, abort or watchdog. This is boot/image evidence.
+
+The normal quest install completed, but run `run-2003a23577e24a31a153`
+expired without accepted start binding. Existing inbound event records
+identify the actual cause: `evt-1c56d-8` was rejected with
+`Running source checksum mismatch`, followed by a healthy receipt rejected
+because the app had not been bound. The firmware start producer omitted the
+top-level source hash already verified locally. A passive 15 s capture
+showed the UI loop alive without reset/panic/watchdog. Its 60,499 us maximum
+callback can be a valid init callback and is not update-time failure evidence.
+The missing source field is being corrected in RC7; backend identity checks
+are retained. No Runtime AI request or paid call has occurred in these tests.
+
+## RC7 source receipt correction
+
+Source `47df9da3cfc5fef6b0546d5af3631380deb15dbf` changes only the
+start-receipt producer/call sites, version and focused regression tests.
+All three start paths pass the actual locally verified source checksum;
+backend source/run binding is unchanged. Both existing analysis and quest
+E2E tests now explicitly reject missing and wrong source without consuming
+the pending run, then accept the correct source. Valid start-phase 60,499 us
+diagnostics are accepted without confusing init and update limits.
+
+CI45671660337/job139408261414 passed22 native tests and all three builds;
+strict run45671660464 passed. The artifact was downloaded once and checked
+against GitHub size/digest,13-member CRC, bounded paths and symlink rules.
+Normal image:2,683,760 bytes, SHA256
+`cfa80f5238d05c6db446fa8ba5f174212883224264926df68a3827ca08311fd1`.
+IRAM spare1,128 bytes and static data/BSS63,796 bytes are unchanged.
+
+The signed RC7 USB ZIP contains8 signed core files and9 SDK notice/license
+files; unchanged RC2 bootloader/table/recovery provenance is retained.
+ZIP2,750,291 bytes, SHA256
+`310141ff5d0eec3d24927ea726684af2e6333e7e4f47ef7eda0415f65598c223`.
+Fresh extraction passed signature/hash/image/layout validation without COM.
+Physical RC7 MD5 and exact-length SHA readback passed. B46 is VALID/CRC;
+RC9 A45 is retained. Health45.055s and ordinary reboot20.206s contained
+no panic/abort/watchdog; COM is closed. The full-slot suffix was not rechecked.
+Evidence SHA256 `109189e350e91058d4db617dab3abe9c646823bbde612728dd423f165f104964`.
+Ordinary source-bound app-start results and actual Runtime AI remain pending
+at this entry.
+
+Ordinary RC7 run of the same GC quest package received actual source-bound
+app_started and app_healthy. At112.97s after actual start it remained
+running/healthy on the same boot/run/package with no registered app failure.
+The first update receipt measured12,139us at frame1; this is not maximum
+all-frame timing evidence. The user reports visible game and working A/C;
+the delayed reply is not assigned to an invented historical boot.
+A normal stop completed before the analysis start. Runtime AI requests for
+the quest remain zero before the user's final B-triggered check.
+
+The analysis app then received its own actual source-bound started/healthy,
+with first update15,306us. It remained running/healthy57.819s after actual
+start on the same boot/run/package, and is left open for the user's B test.
+Both normal starts reused existing SD packages without reinstall. The seven
+original app IDs are all present in the already-received current-boot/epoch
+inventory (12 total including additional apps). This is identity preservation;
+user-edited package/version fields are not claimed unchanged. Actual AI
+requests/results/cost and visible16/16 samples remain user-triggered checks.

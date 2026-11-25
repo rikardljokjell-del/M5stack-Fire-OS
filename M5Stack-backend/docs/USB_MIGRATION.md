@@ -1,19 +1,27 @@
 # Engangs USB-migrering til FIRE med recovery
 
-Dette er et separat Windows-verktøy. Backend, AI, webUI og Lua-apper kan ikke
-starte det. Fysisk USB-migrering og etterfølgende RC5-oppstart er gjennomført
-av device-agenten; se den kanoniske
-[fysiske rapporten](../../M5Stack-device/PHYSICAL_USB_2026-11-24.md).
-Pakkekontrollen nedenfor er separat og åpner ingen serieport. Kildekode og
-grønne PC-tester alene er ikke fysisk verifikasjon.
+**Rikards FIRE er allerede migrert og kjører ren fire-os-1.3.0-rc7 i B46
+VALID/CRC. RC9 er bevart som reserve i A45. Ingen ny USB-migrering trengs.**
+Eksakt CI-bilde er kontrollert med flash-MD5 og SHA256-tilbakeavlesning,
+helsegodkjenning og vanlig omstart. Se den kanoniske
+[SDK-/Runtime AI-rapporten](FIRE_APP_SDK_EVALUATION.md).
 
-**Rikards FIRE er allerede USB-migrert og kjører ren, helsegodkjent RC9.**
-Device-agenten har bekreftet signert nedlasting til SD uten installering eller
-omstart, etterfulgt av separat SD-installering og vanlig ren RC9-omstart.
-Se den kanoniske rapporten for det avgrensede fysiske prøveomfanget. Eldre
-RC6/RC8-testfeil beholdes som historikk og tilskrives ikke SD-maskinvaren. Stegene
-nedenfor er en generell veiledning for en annen FIRE som trenger førstegangs-
-migrering; de er ikke en ny migreringsoppgave for den ferdig oppdaterte enheten.
+Den nye signerte pakken inneholder åtte nødvendige kjernefiler og ni
+SDK-lisens-/varselfiler. Signatur, hash, bilde og layout er kontrollert i en
+ny utpakking. Bootloader, partisjonstabell og recovery er de uendrede,
+fysisk testede RC2-grunnlagsfilene.
+
+Stegene nedenfor gjelder førstegangsmigrering på en annen FIRE.
+Windows-backend, AI, webUI og Lua-apper kan ikke starte USB-verktøyet.
+Pakkekontroll uten COM er ikke fysisk flashing. Vanlige oppdateringer går
+fra Settings → Firmware direkte til GitHub. Den meldte firmware-SD-skrivefeilen
+er fortsatt utsatt og ikke rettet i SDK/Runtime AI-leveransen.
+
+## Historiske 1.2.x-prøver
+
+Førstegangsmigreringen og de tidligere RC5/RC7/RC9-prøvene er dokumentert i
+[den opprinnelige fysiske rapporten](../../M5Stack-device/PHYSICAL_USB_2026-11-24.md).
+Disse er historiske prøver av 1.2.x og er ikke nye Runtime AI-bevis.
 
 ## Historisk RC7-flyt: direkte oppdatering fra GitHub
 
@@ -21,7 +29,7 @@ Følgende menyflyt er implementert i bygget og publisert RC7. Produksjonsfilen e
 hentet og installert fysisk av enheten; prøveomfanget fremgår av device-rapporten.
 Flyten erstatter ikke førstegangsmigreringen nedenfor. Historisk
 RC5- og RC7-verifikasjon er bevart nederst. Aktuelle USB-eksempler bruker den
-kontrollerte, signerte RC9-pakken; menyen fra RC8 har i tillegg valgfri SD-nedlasting.
+kontrollerte, signerte 1.3.0-rc7-pakken; menyen fra RC8 har i tillegg valgfri SD-nedlasting.
 
 1. Åpne **Settings → Firmware → Oppdater fra GitHub**.
 2. Velg **RC7**, deretter **Installer**. Det andre valget er **Tilbake**.
@@ -68,7 +76,7 @@ RC9-kilden er fryst som `b77c579bec4b4986680f9f3be82a4afbe76f59e8`.
 Den beholder RC8-menyflyten, men frigjør overflødige tekstbuffere og beholder
 nødvendig katalog i worker-eid PSRAM. Endelig RC9-bygg og signert pakke er
 publisert, og den nyutpakkede pakken har bestått uavhengig kontroll uten
-serieport. Eksemplene nedenfor bruker RC9. Device-agenten har nå bekreftet
+serieport. De historiske prøvene brukte RC9; de generelle kommandoeksemplene nedenfor bruker 1.3.0-rc7. Device-agenten har nå bekreftet
 lagring og tilbakeavlesning av eksakt publisert RC9 på SD. Tidligere RC8-binær
 og tilhørende katalog var intakte; begge komplette OS-plasser og alle metadata
 var uendret ved lagring, uten installering eller omstart. En separat
@@ -124,21 +132,24 @@ du skal slå av for å tvinge fram migrering.
 ## 1. Kontroller pakken uten enhet
 
 Åpne PowerShell i `M5Stack-backend`. Den ferdige pakken ligger for eksempel i
-`workspace\migration\fire-os-1.2.0-rc9` og inneholder:
+`workspace\migration\fire-os-1.3.0-rc7` og inneholder:
 
 - `migration.json` og `migration.sig` (signert plan for alle fire bildene).
 - `bootloader.bin`, `partitions.bin`, `normal.bin`, `recovery.bin`.
 - `catalog-v2.json` og `release-public.pem`.
 
-USB-pakkens utgivelsessti er `firmware/fire-os-1.2.0-rc9-usb.zip` i repoet.
-Pakk ut alle åtte filene til mappen over før kontroll. En separat publisert
+USB-pakken publiseres som `firmware/fire-os-1.3.0-rc7-usb.zip` i repoet.
+Den lokale kontrollerte kopien ligger i
+`workspace/releases/fire-os-1.3.0-rc7-usb.zip`.
+Pakk ut alle 17 filer, inkludert de ni SDK-lisens-/varselfilene, til mappen
+over før kontroll. De åtte kjernefilene er listet ovenfor. En separat publisert
 `fire-os-1.2.0-rc9.bin` erstatter ikke hele USB-pakken. Den kan også ligge som
 en valgfri ekstrakopi i den lokale arbeidsmappen; den finnes ikke i USB-ZIP-en
 og kreves ikke av migreringsverktøyet. Lokal `component-provenance.json` er også
 en ekstra revisjonsfil, ikke en av de åtte nødvendige filene i USB-ZIP-en.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.2.0-rc9
+.\.venv\Scripts\python.exe scripts\migrate_fire.py check --bundle workspace\migration\fire-os-1.3.0-rc7
 ```
 
 Standardkommandoen åpner **ingen serieport** og skriver ingenting til FIRE.
@@ -162,7 +173,7 @@ tilhører FIRE, for eksempel COM3; verktøyet gjetter aldri en port.
 ## 3. Kun forhåndskontroll av tilkoblet FIRE
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.2.0-rc9 --port COM3
+.\.venv\Scripts\python.exe scripts\migrate_fire.py preflight --bundle workspace\migration\fire-os-1.3.0-rc7 --port COM3
 ```
 
 Enheten går midlertidig til ROM-nedlastingsmodus for kontroll, og startes tilbake
@@ -176,7 +187,7 @@ brukes enhetens dokumenterte USB-bootprosedyre; ingen sikkerhetsdialog omgås.
 Kjør først når riktig signert pakke og riktig serieport er kontrollert:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.2.0-rc9 --port COM3 --confirm MIGRATE-FIRE
+.\.venv\Scripts\python.exe scripts\migrate_fire.py migrate --bundle workspace\migration\fire-os-1.3.0-rc7 --port COM3 --confirm MIGRATE-FIRE
 ```
 
 Før skriving gjør verktøyet dette i rekkefølge:
