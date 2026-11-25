@@ -401,6 +401,57 @@ Native CI and a new guarded physical matrix are still required before
 approval. Scope is limited to this core integration and acceptance: no new
 paid generation cohorts, general historical importer, or sample-app repairs.
 
+The coordinated snapshot `2e079b3bc1f8162c0f6029959e810438f9f43006`
+subsequently passed 21 native/release tests and all three builds in run
+45618043257, job 139218470052. The reconstructed old instruction-counter
+case reproduced the carry-over; the current per-callback reset passed.
+The independently downloaded artifact is 27,216,750 bytes, SHA256
+`19fe56627471d66d40fc7d970273a4bbfba714654457a3a1a5039e6d0d335f10`.
+Its exact normal image is 2,654,624 bytes, SHA256
+`2da71ae5e57579514e6a20a6155b91ab1690307269ada267a915ff572705e9f5`.
+Static RAM is 63,796 bytes; aligned IRAM end remains 0x4009fb98, leaving
+1,128 bytes. These are compile-time facts, not free-heap or timing claims.
+
+The existing Windows backend was activated once with the current 83310c
+contract/V4 policy after repeated idle checks. Its raw settings and combined
+credential fingerprints are unchanged. One listener remains; health/UI and
+preview script return 200, unauthenticated preview 401. Current SDK schema
+validation reached credential-scope denial before creating records; the old
+experimental hash was rejected. No AI, install or RUN was invoked.
+The first launcher shell attempt was blocked before process creation; the
+subsequent existing launcher started the one effective new process. No
+execution-policy, model-profile or saved setting was changed.
+
+The private SDKQA5 image (2,678,304 bytes, SHA256
+`18a3e71806e1abe0f8f9410fc82454b7fd89a1fd56b79339103da8868853c123`)
+adds fixed diagnostic probes only. Its 11 private files and 149 remaining
+device files were independently checked against that snapshot, and the
+catalog was signed/verified locally. It is not a public release or the clean
+normal image.
+
+SDKQA5 completed ten positive baseline phases. Each SDK frame had one
+completed OS prefill and no generic OS background fill. All initial matching
+clears reused the prepared pixels; no actual app-clear fill occurred in
+those phases. Gallery1 still failed its first update at a guard checkpoint
+17,115 microseconds after callback start. Native calls used 12,324
+microseconds, including 7,907 Host microseconds for four rounded panels and
+2,686 for ten styled texts. Subsequent throw/catch took 142,662 microseconds;
+the final 161,070-microsecond callback report is not pure drawing or VM time.
+No canvas was captured, and later phases did not run.
+
+The device returned to retained RC9 A/app0 sequence29 VALID/CRC, then rebooted
+normally. The coordinator independently verified both metadata CRCs and all
+three raw-log hashes. Return observation was 45.206 seconds, maximum loop
+gap 89,996 microseconds; ordinary reboot observation was 20.116 seconds.
+No panic/watchdog was recorded; COM3 closed. Inactive B28 contains the
+consumed private image, not a clean SDK delivery.
+
+The next bounded candidate delegates multi-row spans to the existing pinned
+M5GFX fillRect implementation, retaining raw single-row glyph/asset spans.
+M5GFX already uses a bounded internal source row for this PSRAM storage type.
+No new framebuffer/cache, layout, API, allocator or quota change is planned;
+the speedup remains unverified until the native tests and physical matrix run.
+
 ## Compile-time footprint
 
 Exact production CI linker maps provide this compile-time comparison:

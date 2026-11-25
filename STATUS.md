@@ -37,7 +37,7 @@ Koordinatoren har prøvd faktisk Studio-forhåndsvisning med virtuelle A/B/C,
 nullstilling og tidsfremdrift. Dette er PC-verifikasjon. De private
 SDK-prøvene på FIRE stoppet ved den uendrede 12 ms callbackgrensen; ren SDK-
 firmware er derfor ikke godkjent eller offentlig publisert. Enheten er
-ført tilbake til RC9 i A/app0, sekvens 27 VALID/CRC, med COM3 lukket.
+ført tilbake til RC9 i A/app0, sekvens 29 VALID/CRC, med COM3 lukket.
 Arbeidet er avgrenset til ferdigstilling av SDK-fundament, ytelse og fysisk
 kontroll; nye funksjoner og betalte appforsøk er stanset. Den første
 AI-kohorten ga ingen godkjente leveranser; dette skjules ikke av grønne

@@ -48,8 +48,9 @@ class Surface {
   }
 
   void fillRect(int32_t x,int32_t y,int32_t w,int32_t h,uint16_t color) {
-    // M5GFX supports negative dimensions; retain its exact behavior via fallback.
-    if (!supported_ || w<=0 || h<=0) {
+    // Let M5GFX reuse its source row for multi-row fills; raw writes are only
+    // for single-row spans. Unsupported layouts/negative dimensions still delegate.
+    if (!supported_ || w<=0 || h<=0 || h>1) {
       canvas_.fillRect(x,y,w,h,color);return;
     }
     // Preserve fillRect/fillSprite's current-color side effect even if clipped

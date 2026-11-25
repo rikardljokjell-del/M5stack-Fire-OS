@@ -49,7 +49,11 @@ void rectangle(int x,int y,int w,int h,uint16_t color) {
   const unsigned fallbackBefore=actual.fallbackCalls;
   expected.fillRect(x,y,w,h,color);fire_canvas_fill::Surface<Canvas> surface(actual);
   surface.fillRect(x,y,w,h,color);equal();
-  if(w>0 && h>0) assert(actual.fallbackCalls==fallbackBefore);
+  const bool delegated=w<=0 || h!=1;
+  assert(actual.fallbackCalls==fallbackBefore+(delegated?1:0));
+  if(delegated) {
+    assert(actual.last[0]==x && actual.last[1]==y && actual.last[2]==w && actual.last[3]==h && actual.lastColor==color);
+  }
 }
 void allColors() {
   alignas(4) std::array<uint8_t,96> want{},got{};
@@ -64,7 +68,8 @@ void allColors() {
 void rectangles() {
   const int regions[][4]={{0,0,320,240},{1,1,317,237},{319,239,1,1},{-8,-7,15,13},
     {-1024,12,1024,1},{318,20,1024,5},{12,238,5,100},{INT_MIN,0,INT_MAX,1},{INT_MAX,INT_MAX,INT_MAX,INT_MAX},
-    {2,3,1,19},{3,3,2,19},{0,239,319,1},{319,0,1,240},{500,500,1,1},{0,0,0,0},{9,10,-7,-5}};
+    {2,3,1,19},{3,3,2,19},{0,239,319,1},{319,0,1,240},{500,500,1,1},
+    {500,500,3,2},{1,239,3,4},{0,0,0,0},{9,10,-7,-5}};
   const uint16_t colors[]={0,65535,2113,0x1234,0x0801,0xf800,0x07e0,0x001f,0x00ff,0xff00};
   for(int offset:{0,2}) for(bool swap:{false,true}) for(auto color:colors) for(const auto& region:regions) {
     reset(offset,swap);rectangle(region[0],region[1],region[2],region[3],color);
@@ -81,7 +86,7 @@ void rectangles() {
   }
 }
 void fallback() {
-  for(int mode=0;mode<12;++mode) {
+  for(int height:{1,13}) for(int mode=0;mode<12;++mode) {
     reset();
     for(auto* canvas:{&expected,&actual}) switch(mode) {
       case 0:canvas->rotation=1;break;case 1:canvas->depth=8;break;
@@ -91,9 +96,9 @@ void fallback() {
       case 8:canvas->clipX=-1;break;case 9:canvas->clipW=321;break;
       case 10:canvas->clipH=0;break;case 11:canvas->clipY=INT_MAX;break;
     }
-    expected.fillRect(-3,5,11,13,0x0812);fire_canvas_fill::Surface<Canvas> surface(actual);
-    surface.fillRect(-3,5,11,13,0x0812);equal();assert(actual.fallbackCalls==1);
-    assert(actual.last[0]==-3 && actual.last[1]==5 && actual.last[2]==11 && actual.last[3]==13 && actual.lastColor==0x0812);
+    expected.fillRect(-3,5,11,height,0x0812);fire_canvas_fill::Surface<Canvas> surface(actual);
+    surface.fillRect(-3,5,11,height,0x0812);equal();assert(actual.fallbackCalls==1);
+    assert(actual.last[0]==-3 && actual.last[1]==5 && actual.last[2]==11 && actual.last[3]==height && actual.lastColor==0x0812);
   }
 }
 void sharedAssetsAndFonts() {
