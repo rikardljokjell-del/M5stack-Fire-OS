@@ -66,7 +66,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.5.0-rc1";
+constexpr char kFirmwareVersion[] = "fire-os-1.5.0-rc2";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -3080,9 +3080,7 @@ bool FireOS::luaPrivateAppPath(const char* relative, String& result,
     return false;
   }
   const String path(relative);
-  if (path.length() > 96 || path.startsWith("/") || path.indexOf('\\') >= 0 ||
-      path.indexOf(':') >= 0 || path.indexOf('\0') >= 0 ||
-      path.indexOf("..") >= 0) {
+  if (!fire_data_paths::privateRelative(path.c_str(),path.length())) {
     setLuaError(error, "invalid_path");
     return false;
   }

@@ -2,6 +2,14 @@
 #include <stddef.h>
 #include <string.h>
 namespace fire_data_paths {
+// Arduino String::indexOf('\0') searches with strchr, which finds the normal
+// trailing terminator too. Only bytes inside the supplied string are content.
+inline bool privateRelative(const char* path,size_t length) {
+  if (!path || length>96 || memchr(path,'\0',length) || (length && path[0]=='/')) return false;
+  for (size_t i=0;i<length;++i)
+    if (path[i]=='\\' || path[i]==':' || (path[i]=='.' && i+1<length && path[i+1]=='.')) return false;
+  return true;
+}
 inline char lower(char c) {return c>='A' && c<='Z'?static_cast<char>(c-'A'+'a'):c;}
 inline bool generated(const char* text,size_t length) {
   if (length<8 || lower(text[0])!='d' || lower(text[1])!='s' || text[2]!='-') return false;

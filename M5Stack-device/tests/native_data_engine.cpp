@@ -82,6 +82,21 @@ int main() {
   assert(!fire_data_deadline::expired(100,UINT32_MAX-100,0,5000,false,false));
   puts("PASS data sync and model deadlines bounded independently with local progress and wraparound");
   using fire_data_paths::safeMutation;
+  const std::string settings="settings.json";
+  // Exact pinned Arduino WString indexOf(char) behavior: strchr finds the
+  // trailing NUL. A std::string::find stub would miss this device-only bug.
+  assert(strchr(settings.c_str(),'\0')==settings.c_str()+settings.length());
+  assert(fire_data_paths::privateRelative(settings.c_str(),settings.length()));
+  assert(fire_data_paths::privateRelative("",0)); // existing appdata listing root
+  const char embedded[]="settings.json\0suffix";
+  assert(!fire_data_paths::privateRelative(embedded,sizeof(embedded)-1));
+  for (const char* path:{"../settings.json","a/../b","/settings.json","a\\b","C:settings.json","notes..json"})
+    assert(!fire_data_paths::privateRelative(path,strlen(path)));
+  assert(!fire_data_paths::privateRelative(nullptr,0));
+  assert(!fire_data_paths::privateRelative(std::string(97,'a').c_str(),97));
+  for (const char* path:{"DATASETS/DS-A-B-C/data","DATAS~1/DS-A-B-C/data"})
+    assert(!safeMutation(path)); // existing FAT-alias mutation guard remains active
+  puts("PASS Arduino NUL terminator semantics bounded private paths and FAT mutation protection");
   for (const char* path:{"notes.txt","datasets/user-notes/test.csv","datasets/measurement old/data","measurements/æøå.txt"}) assert(safeMutation(path));
   for (const char* path:{"datasets/ds-a-b-c/data","DATASETS/DS-A-B-C/MANIFEST.JSON","datasets/DS-1234-5678-9/events.jsonl",
       "DATASETS/DS-123~1/DATA","DATAS~1/ds-a-b-c/data","datasets//ds-a-b-c/data","./datasets/ds-a-b-c/data",
