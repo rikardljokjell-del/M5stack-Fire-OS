@@ -515,13 +515,16 @@ static void micAdapterTests() {
     FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(true);r.setServiceMask(services);assert(r.begin(h));
     const std::string source=std::string("function init() end function update(dt) ")+body+" end";
     const bool ok=r.loadSource(reinterpret_cast<const uint8_t*>(source.data()),source.size()) && r.update(16);
+    if (ok!=expected) fprintf(stderr,"mic adapter expected=%d actual=%d body=%s error=%s\n",expected,ok,body,r.lastError().c_str());
     assert(ok==expected);r.stop();assert(r.memoryUsed()==0);
   };
   micRequests=0;
   check("local id=fire.mic.record('record.wav',10000,16000) if id~=73 or fire.mic.level()~=0.25 then fire.display.clear(-1) end "
         "local t=fire.jobs.result(id) if not t.ok or t.path~='record.wav' or t.sample_rate~=16000 or t.size_bytes~=320044 then fire.display.clear(-1) end",mask,true);
   assert(micRequests==1);
-  check("fire.mic.record('../outside',10000,16000)",mask,false);
+  check("local id,e=fire.mic.record('../outside',10000,16000) if id~=nil or e~='permission_denied' then fire.display.clear(-1) end",mask,true);
+  check("local id,e=fire.mic.record('DATASETS/DS-A-B-C/data',10000,16000) if id~=nil or e~='permission_denied' then fire.display.clear(-1) end",mask,true);
+  assert(micRequests==1);
   check("fire.mic.record('record.wav',10001,16000)",mask,false);
   check("fire.mic.record('record.wav',100,12000)",mask,false);
   check("if fire.mic~=nil then fire.display.clear(-1) end",mask&~32u,true);
