@@ -345,6 +345,12 @@ static bool aiResult(void*,uint16_t id,FireLuaRuntime::JobSnapshot* snapshot) {
   snapshot->resultKind=FireLuaRuntime::JobSnapshot::RuntimeAi;snapshot->text=String(aiResponse);return true;
 }
 static void runtimeAiTests() {
+  // The restricted production VM deliberately has no global assert(). Keep
+  // checks fixture-local, using the existing rejected-color error on failure.
+  const auto load=[](FireLuaRuntime& vm,const char* source) {
+    const std::string fixture=std::string("local function assert(v) if not v then fire.display.clear(-1) end return v end ")+source;
+    return vm.loadSource(reinterpret_cast<const uint8_t*>(fixture.data()),fixture.size());
+  };
   const auto aiHostCallbacks=[]() {
     auto h=host();h.aiRequest=aiHost;h.jobPoll=aiPoll;h.jobResult=aiResult;
     h.jobClose=[](void*,uint16_t id) {++aiCloses;return id==7;};
@@ -353,11 +359,16 @@ static void runtimeAiTests() {
   for(bool sdk:{false,true}) for(uint32_t mask:{3u,33u,1048577u}) {
     FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(sdk);r.setServiceMask(mask);assert(r.begin(aiHostCallbacks()));
     const char* source="function init() end function update(dt) assert(fire.ai==nil) end";
-    assert(r.loadSource(reinterpret_cast<const uint8_t*>(source),strlen(source)) && r.update(16));r.stop();
+    const bool updated=load(r,source) && r.update(16);
+    if(!updated) fprintf(stderr,"AI dependency gate SDK=%d mask=%u: %s\n",sdk,mask,r.lastError().c_str());
+    assert(updated);r.stop();
+  }
+  {
+    FireLuaRuntime initVm;initVm.setHardwareApi(true);initVm.setAppSdk(true);initVm.setServiceMask(1u|32u|(1u<<20));assert(initVm.begin(aiHostCallbacks()));
+    const char* initDenied="function init() local id,e=fire.ai.request('a','{}','{}');assert(id==nil and e=='stale_run') end function update(dt) end";
+    assert(load(initVm,initDenied) && aiRequests==0);initVm.stop();
   }
   FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(true);r.setServiceMask(1u|32u|(1u<<20));assert(r.begin(aiHostCallbacks()));
-  const char* initDenied="function init() local id,e=fire.ai.request('a','{}','{}');assert(id==nil and e=='stale_run') end function update(dt) end";
-  assert(r.loadSource(reinterpret_cast<const uint8_t*>(initDenied),strlen(initDenied)) && aiRequests==0);
   const char* source=R"AI(local step,id=0,nil
 function init() end
 function update(dt)
@@ -370,14 +381,14 @@ function update(dt)
  end
  step=step+1
 end)AI";
-  aiState=0;aiDelay=0;assert(r.loadSource(reinterpret_cast<const uint8_t*>(source),strlen(source)) && r.update(16));
+  aiState=0;aiDelay=0;assert(load(r,source) && r.update(16));
   aiResponse="{\"v\":[";for(unsigned i=0;i<16;++i) {if(i) aiResponse+=",";aiResponse+="{\"a\":1,\"b\":2,\"c\":3,\"d\":4}";}aiResponse+="]}";
   aiState=1;assert(aiResponse.size()<=512 && r.update(16));assert(aiRequests==1 && aiCloses==1 && aiCancels==0);r.stop();
   const auto check=[&](const char* body,const std::string& response,bool expected) {
     FireLuaRuntime vm;vm.setHardwareApi(true);vm.setAppSdk(true);vm.setServiceMask(1u|32u|(1u<<20));
     assert(vm.begin(aiHostCallbacks()));aiResponse=response;aiState=1;
     const std::string app=std::string("function init() end function update(dt) ")+body+" end";
-    assert(vm.loadSource(reinterpret_cast<const uint8_t*>(app.data()),app.size()));
+    assert(load(vm,app.c_str()));
     assert(vm.update(16)==expected);vm.stop();assert(vm.memoryUsed()==0);
   };
   check("assert(fire.jobs.result(7).error_code=='invalid_result')","{\"x\":1,\"x\":2}",true);
