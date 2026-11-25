@@ -34,3 +34,41 @@ Visningen er kontrollert med de faktiske font-, ikon- og tegnehjelperne på PC.
 Dette er ikke en fysisk HA-prøve eller en måling av ytelse på ESP32.
 Endelig bygg, fysisk oppstart og brukerens visuelle prøve dokumenteres i
 [statusrapporten](../../STATUS.md).
+
+## Bygg og kildekontroll
+
+Kilde `708affb05809ce70e4a9c07a92beb9ca65d5ef7b` bestod 22 native tester og
+alle tre firmware-/recoverybygg i CI45680009752. Strenge C++-kontroller
+bestod separat i CI45680009653. PC-kontroll brukte faktiske felles
+bitmapfonter, ikoner og tegnehjelpere for seks representative skjermer.
+Skriving utenfor skjermens 320 × 240 piksler ble kontrollert.
+
+Normalbildet er 2 369 616 byte, 314 144 byte mindre enn RC7. Statisk
+RAM-bruk er fortsatt 63 796 byte og IRAM-marginen 1 128 byte. Dette er
+byggmålinger; de beviser ikke faktisk fri heap eller knapperespons.
+SDK-data, kontrakter og aktive Lua-apper er uendret av denne UI-rettingen.
+
+Den signerte USB-pakken beholder fysisk testet RC2-bootloader,
+partisjonstabell og recovery, med åtte signerte kjernefiler og ni
+SDK-lisens-/varselfiler. En ny utpakking har bestått signatur-, hash-,
+bilde- og layoutkontroll.
+
+## Fysisk installasjon
+
+Eksakt CI-fil er tilbakekontrollert med flash-MD5 og SHA256. Ny UI ligger i
+A47 VALID/CRC; den fungerende RC7-kopien er beholdt urørt i B46 VALID/CRC.
+Helsekontroll på 45,2 sekunder og én vanlig omstart på 35,11 sekunder hadde
+ingen panic, abort eller watchdog. Ingen innstillinger eller appdata ble
+nullstilt, og COM ble lukket etter kontrollen.
+
+Normalbildets SHA256 er
+`25d67435be610a7047a1a7afb2fabf48a9da1e7414a5e97b4924d16a08ca05ce`.
+Dette er kontroll av bildet og oppstarten. Det er ikke en full frametidsmåling,
+prøve av HA-styring eller en gjentatt OTA/SD-installasjon. Brukerens praktiske
+utseende-/navigasjonsprøve står fortsatt åpen.
+
+Backend mottok deretter en fersk 1.4-oppstart med uendrede SDK-/Runtime
+AI-kontrakter og komplett SD-inventar for gjeldende oppstart. Alle sju
+opprinnelige app-ID-er er bevart; totalt tolv apper inkludert tillegg.
+Dette er identitetskontroll, ikke påstand om uendrede brukerredigerte versjoner.
+Ingen appkommandoer, betalte AI-kall eller HA-styring ble utløst av kontrollen.

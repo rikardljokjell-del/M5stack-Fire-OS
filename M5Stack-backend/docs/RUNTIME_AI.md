@@ -7,8 +7,8 @@ eller Home Assistant-konfigurasjon er nødvendig.
 **Status 25. november 2026:** Backend og firmware er implementert. Native CI
 består 22 tester og alle tre bygg. Backendens fullkjøring ga 1013 beståtte
 tester og fire utdaterte kostforventninger; forventningene er rettet og de
-berørte kontrollene består. Windows-backenden er aktivert med bevarte innstillinger og nøkler. Eksakt fire-os-1.3.0-rc7
-er installert i B46 og helsegodkjent; RC9 i A45 er beholdt. RC7 sender den
+berørte kontrollene består. Windows-backenden er aktivert med bevarte innstillinger og nøkler. De følgende Runtime AI-integrasjonsprøvene gjelder RC7. Enheten er senere
+oppgradert til UI-versjon 1.4; se [fysisk UI-status](FIRE_OS_UI.md). RC7 sender den
 verifiserte kildehashen i alle startkvitteringer, etter et konkret avslag i
 RC6. Begge manuelle testapper har faktisk
 kildebundet start- og helsekvittering. Oppdragsappen kjørte 112,97 s på samme

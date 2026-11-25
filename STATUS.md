@@ -24,10 +24,13 @@ Ny hovedmeny med fire appkort per side og uendret A/C/B-navigasjon er
 implementert. OS-menyer, ikoner, status-/knapperad og dialoger får en felles
 stil. Home har nye kontrollkort, tydelig datastatus og oppdatert mobiloppsett.
 Ingen endring av Home-rettigheter, MQTT, Lua/SDK eller Runtime AI-kontrakter.
-Kilde-/visuell kontroll pågår; ny firmware er ennå ikke fysisk installert.
+22 native tester, alle tre bygg og strenge C++-kontroller består. Eksakt
+1.4.0-rc1 er fysisk tilbakekontrollert og helsegodkjent i A47; fungerende
+RC7 B46 er urørt reserve. Vanlig omstart bestod uten panic/watchdog.
+Brukerens utseende-/A/B/C-prøve pågår; HA-styring er ikke bekreftet av dette.
 Se [kort UI-veiledning](M5Stack-backend/docs/FIRE_OS_UI.md).
 
-### Runtime AI, kostnader og appflyt – sluttintegrasjon
+### Runtime AI, kostnader og appflyt – tidligere RC7-prøve
 
 Runtime AI er implementert som en valgfri, asynkron SDK-tjeneste over samme
 backend og transport, med global/per-app-aktivering, eget modellvalg og

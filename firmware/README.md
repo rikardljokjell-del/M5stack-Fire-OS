@@ -1,6 +1,47 @@
 # FIRE OS firmware
 
-## Aktuell testkandidat: fire-os-1.3.0-rc7
+## Aktuell testkandidat: fire-os-1.4.0-rc1
+
+Ny visuell utforming for FIRE OS og Home:
+
+- Hovedmeny med fire apper per side, tydelig valg og sidetall.
+- A/C flytter valget, B åpner. Globale langtaster og egne appknapper beholdes.
+- Nye app-/menyikoner, felles font-/fargestil, lesbare lister og dialoger.
+- Home med tydelige måle-/kontrollkort, bedre innstillinger og datastatus.
+- Lagret apprekkefølge, Home/Camper, rettigheter og eksisterende apper beholdes.
+
+Ren CI-firmware er faktisk installert i A47 VALID/CRC; fungerende RC7 er
+beholdt urørt i B46. Flash-MD5 og SHA256-tilbakeavlesing av hele normalbildet
+består. Helsekontroll45,2s og vanlig omstart35,11s ga ingen panic/abort/watchdog.
+COM er lukket. Brukerens prøve av utseende og A/B/C pågår; dette er fortsatt
+en testkandidat, ikke en påstand om fysisk HA-styring.
+
+[Normal firmware](fire-os-1.4.0-rc1.bin) ·
+[signert USB-pakke](fire-os-1.4.0-rc1-usb.zip) ·
+[kontrollsummer](fire-os-1.4.0-rc1-SHA256SUMS.txt) ·
+[utgivelsesbevis](fire-os-1.4.0-rc1-evidence.json) ·
+[lisensinformasjon](fire-os-1.4.0-rc1-NOTICES.txt).
+
+Se [kort UI-veiledning og kontrollstatus](../M5Stack-backend/docs/FIRE_OS_UI.md).
+CI45680009752 på kilde `708affb` bestod 22 native tester og tre bygg, med
+separate strenge C++-kontroller. Normalbildet er 314 144 byte mindre enn RC7;
+statisk RAM og IRAM-margin er uendret. Dette beviser ikke runtime-heap eller
+opplevd respons. USB-pakken beholder fysisk verifisert RC2-grunnlag og alle
+ni SDK-lisens-/varselfiler i tillegg til åtte signerte kjernefiler.
+
+Aktiv signert katalog holder fortsatt grensen på åtte valg. Eldste 1.2-RC1
+ligger nå i [arkivet med original katalog](fire-os-1.2.0-rc1-catalog.json),
+[binær](fire-os-1.2.0-rc1.bin), [USB-pakke](fire-os-1.2.0-rc1-usb.zip),
+[kontrollsummer](fire-os-1.2.0-rc1-SHA256SUMS.txt) og
+[bevis](fire-os-1.2.0-rc1-evidence.json). Ingen publiserte versjonsfiler er
+slettet eller omskrevet; RC7 beholdes også som et aktivt installasjonsvalg.
+
+Live Home Assistant-styring er ikke godkjent av en skjerm-/oppstartsprøve.
+Eldre appspesifikke Lua-tidsfeil og brukerutløst Runtime AI-test har uendret
+avgrensning. GitHub → SD er fysisk bekreftet på RC7; denne testen er ikke
+automatisk gjentatt på 1.4-kandidaten.
+
+## Historisk fire-os-1.3.0-rc7
 
 RC7 inneholder FIRE App SDK og asynkron Runtime AI over den eksisterende
 backenden. Appstart sender nå faktisk verifisert kildehash; installasjonen

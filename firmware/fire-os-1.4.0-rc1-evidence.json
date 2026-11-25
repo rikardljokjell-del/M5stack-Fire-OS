@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "version": "fire-os-1.4.0-rc1",
+  "candidate": true,
+  "production_verified": false,
+  "source_commit": "708affb05809ce70e4a9c07a92beb9ca65d5ef7b",
+  "ci": {
+    "run": 45680009752,
+    "job": 139437731442,
+    "artifact": 15053527984,
+    "native_tests": 22,
+    "builds": [
+      "m5stack-fire-ble",
+      "fire-recovery",
+      "fire-recovery-bootloader"
+    ],
+    "strict_native_run": 45680009653
+  },
+  "firmware": {
+    "name": "fire-os-1.4.0-rc1.bin",
+    "size": 2369616,
+    "sha256": "25d67435be610a7047a1a7afb2fabf48a9da1e7414a5e97b4924d16a08ca05ce"
+  },
+  "migration": {
+    "name": "fire-os-1.4.0-rc1-usb.zip",
+    "size": 2513035,
+    "sha256": "b2cb14c6c2baacca1100b142c0976930e41ebaffc91be2a04e982538cc25c7d8",
+    "manifest_sha256": "db04cec8afb5d15a307c1ade6ec9fc1b35389cf529498a952399463731958ee7",
+    "files": [
+      "APP_SDK_NOTICES.txt",
+      "app-sdk-licenses/1-bit-pack.txt",
+      "app-sdk-licenses/atkinson-OFL.txt",
+      "app-sdk-licenses/legacy-font.txt",
+      "app-sdk-licenses/lucide.txt",
+      "app-sdk-licenses/pixel-OFL.txt",
+      "app-sdk-licenses/pixel-platformer.txt",
+      "app-sdk-licenses/tiny-dungeon.txt",
+      "app-sdk-licenses/tiny-town.txt",
+      "bootloader.bin",
+      "catalog-v2.json",
+      "migration.json",
+      "migration.sig",
+      "normal.bin",
+      "partitions.bin",
+      "recovery.bin",
+      "release-public.pem"
+    ],
+    "required_signed_core_files": 8,
+    "license_notice_files": 9
+  },
+  "images": [
+    {
+      "max_size": 28672,
+      "name": "bootloader.bin",
+      "offset": 4096,
+      "role": "bootloader",
+      "sha256": "8ba4fc406ecb04ee55a11ee2b59c485c4dd9e2bd94a802f4f919466332567f64",
+      "size": 27760
+    },
+    {
+      "max_size": 4096,
+      "name": "partitions.bin",
+      "offset": 32768,
+      "role": "partitions",
+      "sha256": "66f473bf47827c01ff3fc4af089c45b070b67a056df78cba704d3390535cd120",
+      "size": 3072
+    },
+    {
+      "max_size": 6553600,
+      "name": "normal.bin",
+      "offset": 65536,
+      "role": "normal",
+      "sha256": "25d67435be610a7047a1a7afb2fabf48a9da1e7414a5e97b4924d16a08ca05ce",
+      "size": 2369616
+    },
+    {
+      "max_size": 3145728,
+      "name": "recovery.bin",
+      "offset": 13172736,
+      "role": "recovery",
+      "sha256": "040b2c66a800fb4456a3aac2b7436af19fc4c53a6565b45ec63146229f55c1d5",
+      "size": 1578112
+    }
+  ],
+  "foundation": "Unchanged physically verified RC2 bootloader/table/recovery from RC9 bundle",
+  "changes": [
+    "Four main-menu app tiles per page with immediate A/C selection and B open",
+    "Shared flash fonts/icons, high-contrast palette, updated OS lists/dialogs/status/footer",
+    "Home overview/detail/settings/empty and freshness/availability states; restyled mobile setup page"
+  ],
+  "unchanged": [
+    "Home network, configuration, validators, permissions, commands, buttons and persistence byte-identical between begin and draw",
+    "Home setup JavaScript byte-identical",
+    "SDK/hardware/Runtime AI contracts, quotas, transport, installer and OTA safety unchanged",
+    "Original app order/visibility/shortcuts preserved"
+  ],
+  "compile_footprint": {
+    "static_ram_bytes": 63796,
+    "iram_spare_bytes": 1128,
+    "previous_rc7_normal_bytes": 2683760,
+    "normal_bytes_reduction": 314144,
+    "runtime_heap_or_native_timing_proven": false
+  },
+  "pc_visual_verification": {
+    "actual_shared_fonts_icons_and_drawing_helpers": true,
+    "representative_screens": 6,
+    "bounded_surface_writes": true,
+    "new_device_framebuffers": 0,
+    "physical_home_assistant_verified": false
+  },
+  "physical_usb": {
+    "verified": true,
+    "active": "A/app0 sequence47 VALID/CRC",
+    "fallback": "RC7 B/app1 sequence46 VALID/CRC",
+    "flash_md5_verified": true,
+    "exact_normal_length_sha256_readback": true,
+    "full_slot_ff_suffix_rechecked": false,
+    "health_seconds": 45.2,
+    "ordinary_reboot_seconds": 35.11,
+    "panic": 0,
+    "abort": 0,
+    "watchdog": 0,
+    "com_closed": true,
+    "local_evidence_sha256": "0892d019eeea38f17ebbaa1064611f17670dc7daa1a29f66fe68e1d26e6749d5",
+    "health_loop_max_us": 109325,
+    "normal_reboot_loop_max_us": 182626,
+    "these_are_not_measured_button_latencies": true,
+    "backend_observation_sha256": "a1de1e847c8314c7e3e648843c6946961a939f12edab1d6f6a94ca4e104df5d8"
+  },
+  "user_visual_acceptance": false,
+  "all_old_versioned_artifacts_preserved": true,
+  "limitations": [
+    "Physical navigation and user appearance/responsiveness checks pending",
+    "Live Home Assistant control is not established by UI preview or boot tests",
+    "Older Lua-app-specific callback failures are not declared fixed"
+  ],
+  "guide": "M5Stack-backend/docs/FIRE_OS_UI.md",
+  "backend_physical_observation": {
+    "firmware": "fire-os-1.4.0-rc1",
+    "new_boot": true,
+    "sdk_contract_unchanged": true,
+    "runtime_ai_contract_unchanged": true,
+    "storage_ready": true,
+    "current_boot_epoch_inventory_complete": true,
+    "present_count": 12,
+    "original_app_ids_preserved": 7,
+    "versions_unchanged_claimed": false,
+    "app_commands_or_agent_ai_calls": 0
+  }
+}

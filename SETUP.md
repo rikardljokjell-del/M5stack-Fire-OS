@@ -37,6 +37,12 @@ Du kan lukke nettleseren mens en jobb går. Åpne samme jobb igjen etterpå.
 Velg **Fortsett samme jobb** for å fortsette; en ny byggejobb er en ny handling.
 Innstillinger og bibliotek er felles med Windows-programmet.
 
+### Ny FIRE OS- og Home-utforming
+
+FIRE OS 1.4 viser fire apper per hovedmenyside. A/C flytter valget og B åpner;
+lang A går hjem. Home har nye kort og innstillinger med samme HA-tilgang som
+før. Se [kort UI-veiledning](M5Stack-backend/docs/FIRE_OS_UI.md).
+
 ### FIRE App SDK og forhåndsvisning
 
 SDK-et følger med den nye SDK-firmwaren og gir nye apper ferdige fonter,
