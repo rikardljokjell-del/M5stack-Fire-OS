@@ -42,7 +42,7 @@ end
 local function ratio(v,lo,hi) if hi<=lo then return 0 end; return clamp((n(v)-lo)/(hi-lo),0,1) end
 local function pad(v) local s=tostring(floor(max(0,n(v)))); if v<10 then return "0"..s end; return s end
 
-function ui.set_theme(name) T=themes[name] or themes.modern_dark; return T end
+function ui.set_theme(name) T=themes[name] or themes.modern_dark; d.set_background(T.bg); return T end
 function ui.theme(name) return themes[name] or T end
 function ui.background(color) d.clear(color or T.bg) end
 function ui.label(x,y,value,options)

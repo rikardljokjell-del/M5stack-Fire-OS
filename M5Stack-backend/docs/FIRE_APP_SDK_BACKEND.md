@@ -23,7 +23,7 @@ layoutretning, fontmetrikker og maksimalt tolv ressursbeskrivelser. Hele katalog
 bitmapdataene og UI-modulen sendes ikke i prompten. Ved feil beholdes eksisterende
 avgrenset reparasjonsflyt og kildebundet feilhistorikk.
 
-`fire-sdk-generation-v3` erstatter de generelle legacyinstruksene i SDK-kall med
+`fire-sdk-generation-v4` erstatter de generelle legacyinstruksene i SDK-kall med
 én konsistent versjonsstyrt policy. Valgte komponenter får kanonisk hjelp og
 options, ekte temapalett og korte kjørbare Lua-eksempler. Norske sammensatte
 appnavn som «bilspill», «værapp» og «måleinstrument» samt engelske aliaser velges
@@ -60,6 +60,13 @@ av UI, fonter, assets og SDK-metadata. Kilde- eller datamismatch avvises før vi
 eller AI-bruk. Filnavn er korte for Windows; full hash valideres som identitet.
 
 ## Grenser og avgrensninger
+
+SDKs `display.set_background(color)` konfigurerer neste OS-forberedte frame;
+startverdien er svart. `ui.set_theme` gjør dette i `init` og ved temavalg før neste
+oppdatering. Bare første identiske `clear` på en fortsatt urørt frame kan bruke
+OS-fyllingen; alle kall belastes fortsatt. Senere `clear`, annen farge og sletting
+etter tegning beholder ekte slettesemantikk. Bakgrunnen følger capture, raster og
+bildededuplisering. Gamle 0.1/0.2-pakker beholder svart OS-bakgrunn og gamle porter.
 
 SDK bruker kontraktens 64 totale I/O-kall, 2048 I/O-bytes og 256 tekstbytes per
 callback, inkludert måling. Grid har 384 kumulative celler og 32768 piksler.

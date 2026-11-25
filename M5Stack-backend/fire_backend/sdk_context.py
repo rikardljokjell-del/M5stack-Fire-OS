@@ -5,11 +5,11 @@ import re
 
 from .app_sdk import SDK_VERSION, SDK_CONTRACT, available, classify
 
-VERSION='fire-sdk-generation-v3'
+VERSION='fire-sdk-generation-v4'
 MARKER='\nFIRE SDK request contract:\n'
 
 POLICY='''
-FIRE App SDK development and acceptance policy, version3:
+FIRE App SDK development and acceptance policy, version4:
 Build exactly the confirmed app with sensible defaults. Preserve working code
 during correction; fix concrete defects rather than redesigning or adding scope.
 Use the real fire.ui kit, shared fonts and selected canonical assets for standard
@@ -23,6 +23,11 @@ Minimal valid lifecycle (replace the screen with the complete requested app):
 function init() fire.ui.set_theme("modern_dark") end
 function update(dt_ms) fire.ui.screen("APP") end
 The OS clears its OFFSCREEN sprite before EVERY update and presents it afterwards.
+Set the UI theme in init as above: it configures the next OS-prepared background.
+Theme/background configuration in on_button applies to the next update; a change
+inside update applies to the following frame. set_background never draws.
+Only the first pristine matching clear may reuse the actual OS prefill; later or
+different clears really erase. Keep one complete scene and avoid redundant fills.
 Draw the COMPLETE scene every update, including menu/pause/wait/end; init-only
 graphics vanish. Never alternate blank/drawn frames or split one visible scene
 across updates. Clear at most once before drawing. No app-owned present/flush.
@@ -107,6 +112,9 @@ def normalize(context,*,capabilities=None,summary='',base_manifest=None):
     """Replace known old policy blocks; all common safety rules live in POLICY."""
     sdk=available(capabilities) if capabilities is not None else from_context(context)
     if not sdk:return context
+    # A retained/resumed SDK context may carry an older consolidated policy.
+    if context.lstrip().startswith('FIRE App SDK development and acceptance policy, version') and MARKER in context:
+        context=context[context.index(MARKER):]
     from .rendering import VISUAL_POLICY
     from .app_quality import APP_QUALITY_POLICY
     from .build_strategy import POLICY as DEVELOPMENT_POLICY

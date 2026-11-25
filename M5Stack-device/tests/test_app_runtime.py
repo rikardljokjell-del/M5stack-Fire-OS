@@ -50,3 +50,30 @@ class AppRuntimeTests(unittest.TestCase):
             print(checked.stdout, end="")  # Sanitized host VM/raster observations for CI review.
             self.assertIn("PASS production Lua32 SDK", checked.stdout)
             self.assertIn("PASS canonical SDK gallery six pages", checked.stdout)
+            self.assertIn("PASS SDK background next-frame", checked.stdout)
+            self.assertIn("PASS per-callback reset instruction counter", checked.stdout)
+            # Reconstruct ONLY the previous instruction-counter semantics by
+            # removing the new one-line beginCallback reset. Reuse all Lua/test
+            # objects: one targeted runtime compile/link, no duplicate Lua build.
+            runtime_source = root / "src/fire_lua_runtime.cpp"
+            source = runtime_source.read_text(encoding="utf-8")
+            marker = "void FireLuaRuntime::beginCallback(CallbackPhase phase, uint32_t budgetMs) {\n  instructions_ = 0;"
+            self.assertEqual(source.count(marker), 1)
+            old = Path(directory) / "runtime_old_counter.cpp"
+            old.write_text(source.replace(marker, marker.rsplit("\n", 1)[0], 1), encoding="utf-8")
+            old_object = Path(directory) / "runtime_old_counter.o"
+            built = subprocess.run(prefix + common + ["-std=c++17", "-c", str(old), "-o", str(old_object)],
+                                   capture_output=True, text=True, timeout=90)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            runtime_index = sources.index(runtime_source)
+            old_objects = list(objects)
+            old_objects[runtime_index] = str(old_object)
+            old_executable = Path(directory) / ("old_counter.exe" if os.name == "nt" else "old_counter")
+            linked = subprocess.run(prefix + old_objects + ["-o", str(old_executable), "-lm"],
+                                    capture_output=True, text=True, timeout=90)
+            self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
+            baseline = subprocess.run([str(old_executable), "--old-instruction-counter"],
+                                      capture_output=True, text=True, timeout=90)
+            self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+            self.assertIn("PASS OLD-SEMANTICS reproduced carry", baseline.stdout)
+            print(baseline.stdout, end="")

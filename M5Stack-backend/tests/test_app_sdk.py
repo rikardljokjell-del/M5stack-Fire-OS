@@ -46,7 +46,9 @@ def test_gallery_pages_are_distinct_complete_frames_and_allow_more_than_24_calls
     for page in range(6):
         r=simulate(app((DATA/'gallery.lua').read_text(encoding='utf-8'), button_sequence=['C']*page, interval_ms=250))
         hashes.append(render_frame(r['visual_frames'][-1]).pixel_sha256)
-        if page==0: assert r['max_callback_operations']>24 and r['max_callback_display_work']>120000
+        if page==0:
+            assert r['max_callback_operations']>24 and r['elided_clears']>0
+            assert r['max_callback_display_work']+76800>120000  # old redundant full clear is now reused
     assert len(set(hashes))==6
 
 

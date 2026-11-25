@@ -27,13 +27,19 @@ ny kapabilitet. Simulator, Studio-preview og eksisterende AI-review utvides
 samordnet. Innhold og tidlige PC-tester er ikke fysisk SDK-verifikasjon.
 Den registrerte firmware-SD-skrivefeilen over undersøkes ikke i dette arbeidet.
 
-Backendens reviderte SDK-integrasjon har bestått 835 regresjonstester, og
-koordinatoren har prøvd faktisk Studio-forhåndsvisning med virtuelle A/B/C,
+Siste backendkjøring ga 957 beståtte tester og én feil i to avledede
+grensesnittfiler med gammel SDK-hash. Filene er regenerert og den berørte
+kontrakttesten består. Bakgrunnsforberedelse og simulator har i tillegg
+bestått 182 berørte og 68 avsluttende målrettede tester, med identiske
+piksler for alle seks gallerisider og fire representative appkilder.
+Den samordnede native endringen avventer nytt CI-bygg og fysisk måling.
+Koordinatoren har prøvd faktisk Studio-forhåndsvisning med virtuelle A/B/C,
 nullstilling og tidsfremdrift. Dette er PC-verifikasjon. De private
 SDK-prøvene på FIRE stoppet ved den uendrede 12 ms callbackgrensen; ren SDK-
 firmware er derfor ikke godkjent eller offentlig publisert. Enheten er
-ført tilbake til RC9 i A/app0, sekvens 25 VALID/CRC, med COM3 lukket.
-Native tegneytelse og AI-generering forbedres og måles videre. Den første
+ført tilbake til RC9 i A/app0, sekvens 27 VALID/CRC, med COM3 lukket.
+Arbeidet er avgrenset til ferdigstilling av SDK-fundament, ytelse og fysisk
+kontroll; nye funksjoner og betalte appforsøk er stanset. Den første
 AI-kohorten ga ingen godkjente leveranser; dette skjules ikke av grønne
 adaptertester. Se [den løpende SDK-evalueringen](M5Stack-backend/docs/FIRE_APP_SDK_EVALUATION.md).
 

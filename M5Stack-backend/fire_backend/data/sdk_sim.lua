@@ -1,5 +1,5 @@
 -- Trusted SDK validation adapter. No Python objects or general loader enters app env.
-return function(display, fonts, assets, emit, charge)
+return function(display, fonts, assets, emit, charge, configure_background)
  local floor,min,max,ceil=math.floor,math.min,math.max,math.ceil
  local function whole(v,lo,hi)
   if type(v)~="number" or v~=v or v%1~=0 or v<lo or v>hi then error("SDK integer outside bounds") end
@@ -7,6 +7,9 @@ return function(display, fonts, assets, emit, charge)
  end
  local function xy(x,y) whole(x,-1024,1024);whole(y,-1024,1024) end
  local function color(c) return whole(c,0,65535) end
+ display.set_background=function(c)
+  color(c);charge("set_background",1);configure_background(c)
+ end
  local function boolean(v,default) if v==nil then return default end;if type(v)~="boolean" then error("SDK boolean required") end;return v end
  local function area(x,y,w,h) return max(0,min(320,x+w)-max(0,x))*max(0,min(240,y+h)-max(0,y)) end
  local function rectangle(x,y,w,h)

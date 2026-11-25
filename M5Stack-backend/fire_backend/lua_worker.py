@@ -81,6 +81,9 @@ local compile, hook = load, debug.sethook
 local count, total, elapsed = 0, 0, 0
 local callback_ops, callback_work, peak_ops, peak_work = 0,0,0,0
 local callback_phase, clear_count, visible_ops, background = "",0,0,0
+local next_background,frame_background=0,0
+local frame_active,frame_dirty,frame_clear_consumed=false,false,false
+local elided_clears,real_clears=0,0
 local text_bytes, peak_text_bytes = 0,0
 local grid_pixels, peak_grid_pixels = 0,0
 local grid_cells,peak_grid_cells,rgb_calls,peak_rgb_calls=0,0,0,0
@@ -168,13 +171,14 @@ local function whole(v, lo, hi)
   if math.floor(v)~=v then error("API argument must be an integer") end
 end
 local function record(name, ...)
-  if name~="rgb" and name~="grid" then capture(name,...) end
   if sdk_enabled and hardware then
     if name=="rgb" then hardware.charge_base("rgb.set",1) else hardware.charge_sdk(name,name=="text" and #select(3,...) or 1) end
   end
+  if name~="rgb" and name~="grid" then capture(name,...) end
   total = total + 1
   callback_ops=callback_ops+1
   local a,b,c,d=...
+  local clear_elided=false
   if name=="rgb" then
     rgb_calls=rgb_calls+1;peak_rgb_calls=math.max(peak_rgb_calls,rgb_calls)
     if native_guard and rgb_calls>1 then error("Native host RGB budget exceeded: at most ONE rgb.set per callback; each call synchronously transmits the whole strip. Queue changes across updates.") end
@@ -187,18 +191,25 @@ local function record(name, ...)
   if name=="clear" then
     clear_count=clear_count+1
     peak_clears=math.max(peak_clears,clear_count)
-    if profile and (clear_count>1 or visible_ops>0) then
+    if profile and not sdk_enabled and (clear_count>1 or visible_ops>0) then
       error("Visual frame: clear at most once BEFORE drawing; never erase a completed scene")
+    end
+    if sdk_enabled then
+      clear_elided=frame_active and not frame_dirty and not frame_clear_consumed and a==frame_background
+      frame_clear_consumed=true
+      if clear_elided then elided_clears=elided_clears+1
+      else real_clears=real_clears+1;frame_dirty=true end
     end
     background=a
     visible_ops=0
   elseif name~="rgb" then
+    if sdk_enabled then frame_dirty=true end
     local ink = name=="grid" and select(7,...) or name=="pixel" and c or (name=="text" or name=="circle" or name=="fill_circle") and d or select(5,...)
     local empty=name=="rect" and (c==0 or d==0)
     if not empty and ink~=background and (name~="text" or #c>0) then visible_ops=visible_ops+1 end
   end
   local work=0
-  if name=="clear" then work=76800
+  if name=="clear" then work=clear_elided and 0 or 76800
   elseif name=="rect" then work=2*(c+d)
   elseif name=="fill_rect" then work=c*d
   elseif name=="line" then work=math.max(math.abs(c-a),math.abs(d-b))+1
@@ -324,6 +335,7 @@ if sdk_enabled then
     peak_ops=math.max(peak_ops,callback_ops);peak_work=math.max(peak_work,callback_work)
     if callback_ops>64 or total>operation_limit then error("SDK display operation budget exceeded") end
     if callback_phase=="on_button" then error("Visual frame: SDK drawing belongs in update") end
+    frame_dirty=true
     if ink~=nil and ink~=background and work>0 then visible_ops=visible_ops+1 end
     capture(name,...)
     if trace_count<240 then trace_count=trace_count+1;local before=diagnostic_begin();trace[trace_count]={name,...};diagnostic_end(before) end
@@ -333,8 +345,10 @@ if sdk_enabled then
       text_bytes=text_bytes+bytes;peak_text_bytes=math.max(peak_text_bytes,text_bytes)
       if text_bytes>256 then error("SDK cumulative text and measurement budget exceeded") end
     end
-    if name=="measure_text" then total=total+1;if total>operation_limit then error("API operation budget exceeded") end end
-  end)
+    if name=="measure_text" or name=="set_background" then
+      total=total+1;if total>operation_limit then error("API operation budget exceeded") end
+    end
+  end,function(color) next_background=color end)
 end
 local fire = {}
 for service in string.gmatch(services,"[a-z0-9_]+") do
@@ -370,7 +384,7 @@ local function call(fn, ...)
   grid_pixels=0
   grid_cells,rgb_calls=0,0
   if hardware then hardware.begin_callback() end
-  clear_count,visible_ops,background=0,0,0
+  clear_count,visible_ops,background=0,0,(sdk_enabled and callback_phase=="update") and frame_background or 0
   hook(quota,"",1000)
   fn(...)
   hook()
@@ -476,10 +490,14 @@ for frame=1,frames do
   if suspend_update then os_suspended=os_suspended+1
   else
     callback_phase="update"
+    -- Model the OS's actual prefill/ownership acknowledgement, not a Lua call.
+    frame_background=sdk_enabled and next_background or 0
+    frame_active=sdk_enabled;frame_dirty=false;frame_clear_consumed=false
     if visual_index<=#capture_times and elapsed>=capture_times[visual_index] then
-      local before=diagnostic_begin();visual_current={at_ms=elapsed,frame=frame,button=visual_button,input_count=visual_inputs,ops={}};diagnostic_end(before)
+      local before=diagnostic_begin();visual_current={at_ms=elapsed,frame=frame,button=visual_button,input_count=visual_inputs,frame_background=frame_background,ops={}};diagnostic_end(before)
     end
     call(env.update,dt)
+    frame_active=false
     frames_run=frames_run+1
     if visual_current then
       local before=diagnostic_begin();visual_frames[#visual_frames+1]=visual_current;visual_current=nil;diagnostic_end(before)
@@ -493,6 +511,7 @@ for frame=1,frames do
   if profile and elapsed>=memory_ms then break end
 end
 return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,max_callback_operations=peak_ops,max_callback_display_work=peak_work,
+        elided_clears=elided_clears,real_clears=real_clears,next_background=next_background,
         min_update_draws=min_update_draws or 0,update_count=update_count,max_callback_clears=peak_clears,max_callback_text_bytes=peak_text_bytes,
         rgb_feedback=rgb_summary(),hardware_metrics=hardware and hardware.metrics() or nil,app_memory_peak=app_memory_peak,diagnostic_memory_bytes=math.ceil(diagnostic_bytes),
         os_reserved_callbacks_suppressed=os_suppressed,os_updates_suspended=os_suspended,os_exited=os_exited,os_navigation=os_navigation,
@@ -570,6 +589,7 @@ def simulate(request):
     return {"ok": True, "syntax": "passed", "api_validation": "passed",
             "frames": result["frames"], "elapsed_ms": result["elapsed_ms"],
             "api_operations": result["api_operations"], "trace": trace,
+            "elided_clears":result["elided_clears"],"real_clears":result["real_clears"],"next_background":result["next_background"],
             "max_callback_operations":result["max_callback_operations"],"max_callback_display_work":result["max_callback_display_work"],
             "min_update_draws":result["min_update_draws"],"update_count":result["update_count"],"max_callback_clears":result["max_callback_clears"],
             "max_callback_text_bytes":result["max_callback_text_bytes"],"resources_used":resources_used,

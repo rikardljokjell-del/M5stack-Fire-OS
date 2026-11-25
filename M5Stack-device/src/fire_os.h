@@ -5,6 +5,7 @@
 #include <SPI.h>
 #include <esp_ota_ops.h>
 #include "fire_lua_runtime.h"
+#include "fire_app_frame.h"
 #include "fire_backend_client.h"
 #include "fire_firmware_storage.h"
 #include "fire_github_firmware.h"
@@ -458,6 +459,7 @@ class FireOS {
   bool luaSpeakerPlaying_ = false;
 
   FireLuaRuntime* luaRuntime_ = nullptr;
+  fire_app_frame::State luaSdkFrame_;
   bool luaRuntimeReady_ = false;
   bool luaAppActive_ = false;
   String luaAppPath_;
@@ -881,6 +883,9 @@ class FireOS {
                    const String& launchPackageId = String());
   void stopLuaApp(const String& reason = String());
   void updateLuaApp();
+  bool runningSdkLuaApp() const;
+  bool fullLuaCanvas() const;
+  static void luaDisplayPaint(void* context);
   void handleLuaErrorButton(uint8_t index);
   void requestLuaRepair();
   void requestLuaRepairStatus();

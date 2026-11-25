@@ -396,18 +396,19 @@
     "timer": "Draw HH:MM:SS from non-negative milliseconds. App owns elapsed time and state; ui.timer does not start or advance a timer.",
     "clock": "Draw hour:minute with optional :second. x/y is the top-left of the text alignment box.",
     "sprite": "Draw a canonical asset ID or animation ID alien.walk/coin.spin/flag.wave. milliseconds drives animation; scale is integer. App owns position and simulation.",
-    "theme": "Return current app-private palette or a named palette: bg,panel,fg,muted,accent,good,bad,border. Other color field names do not exist.",
-    "set_theme": "Select an existing named theme for this app. Shared native bitmap data remain unchanged.",
+    "theme": "Return the app-private palette. If changing bg directly, call fire.display.set_background(new_bg) in init/event before rendering that background.",
+    "set_theme": "Choose palette and configure next OS background. Call in init for the first UI frame or on_button before the next update. It does not draw.",
     "layout": "Return x,y,w,h composition coordinates for a 1-based slot. instrument returns center x,y and radius-sized slots; this is geometry, not an interactive screen.",
     "ring": "value is fraction 0..1. x/y is center and r radius. Label is optional; thickness must be 1..r.",
     "progress": "value is fraction 0..1. Draw only; app updates value.",
     "gauge": "value uses minimum..maximum; x/y is center and r radius. Draw only; app owns measurement.",
     "line_chart": "Draw at most 64 numeric values as one bounded polyline plus panel. Minimum and maximum set vertical scale.",
     "bar_chart": "Draw at most 16 numeric values, scaled from zero to maximum.",
-    "screen": "Clear current frame and draw title/subtitle. Call before scene content, every update. It never presents or schedules frames.",
+    "screen": "Clear current frame and draw title/subtitle, first in every update. Call ui.set_theme in init so its background is already prepared by OS. Never presents or schedules frames.",
     "card": "Draw label, value and optional detail/icon. Keep short text inside the card; x/y is top-left.",
     "burst": "Append at most 16 bounded particles; use a persistent app table and call only when an event occurs.",
-    "particles": "Advance/draw at most 16 particles; dt is milliseconds. Call every update while particles are active."
+    "particles": "Advance/draw at most 16 particles; dt is milliseconds. Call every update while particles are active.",
+    "background": "Clear the CURRENT frame immediately; it does not configure later frames. Configure the same theme/custom background before update to reuse OS prefill."
   },
   "ui_options": {
     "label": {

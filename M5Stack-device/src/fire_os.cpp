@@ -5716,6 +5716,7 @@ void FireOS::updateAiAudioOutput() {
 
 bool FireOS::startLuaApp(const String& path, const String& name,
                          const String& launchPackageId) {
+  luaSdkFrame_.invalidate();
   if (!luaRuntime_) {
     luaAppError_ = "Lua runtime unavailable";
     return false;
@@ -5798,11 +5799,16 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaAppError_ = "SD card unavailable";
     return false;
   }
+  // Recreate API tables when switching SDK versus legacy, even if a caller
+  // requests another valid app without first stopping the old VM.
+  if (luaRuntimeReady_ && luaRuntime_->appSdkEnabled()!=appSdk)
+    stopLuaApp("os_navigation");
   if (!luaRuntimeReady_) {
     FireLuaRuntime::Host luaHost;
     luaHost.context = this;
     luaHost.appSdkUiSource = FireSdkData::kUiSource;
     luaHost.appSdkUiBytes = sizeof(FireSdkData::kUiSource)-1;
+    luaHost.displayPaint = luaDisplayPaint;
     luaHost.displayClear = luaDisplayClear;
     luaHost.displayCircle = luaDisplayCircle;
     luaHost.displayRect = luaDisplayRect;
@@ -5979,6 +5985,7 @@ bool FireOS::startLuaApp(const String& path, const String& name,
 }
 
 void FireOS::stopLuaApp(const String& reason) {
+  luaSdkFrame_.invalidate();
   const String stoppedRunId = luaRunId_;
   const String stoppedAppId = luaAppId_;
   const String stoppedAppName = luaAppName_;
@@ -7456,12 +7463,27 @@ void FireOS::handleBackendMessage(const String& message) {
   }
 }
 
+bool FireOS::runningSdkLuaApp() const {
+  return luaAppActive_ && luaRuntime_ && luaRuntime_->running() && luaRuntime_->appSdkEnabled();
+}
+
+bool FireOS::fullLuaCanvas() const {
+  if (!uiCanvas || !ui.getBuffer()) return false;
+  int32_t x,y,w,h;ui.getClipRect(&x,&y,&w,&h);
+  return ui.width()==320 && ui.height()==240 && ui.getRotation()==0 &&
+    unsigned(ui.getColorDepth())==16 && ui.bufferLength()==153600 &&
+    !(reinterpret_cast<uintptr_t>(ui.getBuffer())&1u) && x==0 && y==0 && w==320 && h==240;
+}
+
+void FireOS::luaDisplayPaint(void* context) {
+  auto* os=static_cast<FireOS*>(context);
+  if (os) os->luaSdkFrame_.paint();
+}
+
 void FireOS::luaDisplayClear(void* context, int color) {
   auto* os = static_cast<FireOS*>(context);
-  if (os) {
-    fire_canvas_fill::Surface<M5Canvas> surface(ui);
-    surface.fillRect(0,0,ui.width(),ui.height(),static_cast<uint16_t>(color));
-  }
+  if (os) os->luaSdkFrame_.clear(ui,static_cast<uint16_t>(color),
+    os->luaRuntime_ && os->luaRuntime_->appSdkEnabled(),os->fullLuaCanvas());
 }
 
 void FireOS::luaDisplayCircle(void* context, int x, int y, int radius,
@@ -9215,7 +9237,11 @@ void FireOS::draw() {
       !buildNoticeActive_) {
     return;
   }
-  ui.fillSprite(kBg);
+  // An active SDK view prepares its whole canvas in drawLuaApp. Do not
+  // first paint another full background here; legacy/non-app paths stay as-is.
+  const bool sdkAppView=screen_==Screen::LuaApp ||
+    (screen_==Screen::QuickSettings && previousScreen_==Screen::LuaApp);
+  if (!(sdkAppView && runningSdkLuaApp() && fullLuaCanvas())) ui.fillSprite(kBg);
   if (screen_ == Screen::QuickSettings) {
     drawScreen(previousScreen_);
     drawQuickSettings();
@@ -10614,12 +10640,20 @@ void FireOS::drawAiApi() {
 }
 
 void FireOS::drawLuaApp() {
-  ui.fillSprite(TFT_BLACK);
+  luaSdkFrame_.invalidate();
+  const bool sdk=runningSdkLuaApp();
+  const uint16_t background=sdk?luaRuntime_->frameBackground():uint16_t(TFT_BLACK);
+  ui.fillSprite(background);
+  // Acknowledge ONLY a completed full fill, never callback entry. The frame
+  // remains owned by this UI call until update returns, before any OS overlay.
+  if (sdk && fullLuaCanvas()) luaSdkFrame_.acknowledgePrefill(background);
   if (luaAppActive_) {
     // The Lua callback renders directly into the same sprite as the OS.
     // This keeps the app full-screen without a second framebuffer.
     updateLuaApp();
   }
+  luaSdkFrame_.invalidate();
+  if (sdk && !luaAppActive_ && luaAppError_.length()>0) ui.fillSprite(TFT_BLACK);
   if (!luaAppActive_ && luaAppError_.length() > 0) {
     ui.setTextDatum(MC_DATUM);
     drawText(160, 28, "APP ERROR", kOrange, 2, TFT_BLACK);

@@ -343,6 +343,64 @@ later cleanup. No clean SDK installation or physical visual approval is
 claimed. A bounded fill optimization using the existing canvas is the next
 code change; no VM allocation policy or resource quota is increased.
 
+## Fourth physical probe: parity passed, fill speed did not improve
+
+The `a2fb5d2` snapshot passed 20 native/release tests and all three firmware
+builds in CI run 45607776172. Its exact normal image is 2,653,824 bytes,
+SHA256 `ec4496891f1250b159f589a7f80227b7e115285af3cf677b124b95be146cc669`.
+Static RAM remained 63,796 bytes and the aligned linked IRAM margin 1,128.
+The coordinator checked the artifact ZIP digest and extracted files.
+
+SDKQA4 compared original and raw16 full-canvas filling in 12 physical samples,
+outside Lua callbacks. Whole-buffer SHA, every decoded pixel, drawing color
+and layout agreed. For black, original fills took 10,042..11,294 microseconds
+and raw16 took 11,398..11,411. For color 2113, original took 9,891..10,803 and
+raw16 took 11,410..11,521. The new loop did not improve full-screen filling;
+pixel parity alone did not establish a performance fix.
+
+Four Lua baseline phases completed. The first clear(0) callback then reached
+12,656 microseconds, including 12,377 in the Host, and the unchanged guard
+stopped the run. No gallery, later app phase or canvas capture was obtained.
+The retained RC9 returned as A/app0 sequence 27 VALID/CRC, independently
+checked with the raw log hashes. Its 45.092-second return observation had
+a 126,945-microsecond loop gap; a 20.063-second ordinary reboot followed.
+No panic/watchdog was observed and COM3 closed. Inactive B26 contains the
+consumed private probe; no clean SDK firmware is installed yet.
+
+Code inspection then identified two OS background fills before the app's
+own clear. The coordinated next design is one SDK OS-prefill with an explicit
+per-app background preference. Only an initial matching clear on a privately
+acknowledged, untouched frame may reuse those pixels. All logical I/O charges
+and actual 12 ms callback guards remain. Later/different clears retain real
+erase behavior; no app drawing is queued or moved outside its callback.
+
+The unreleased SDK contract was revised from experimental `e6972ef5...`
+to `83310c217698dd968f3773842f7f3fa05bc73b487a7c7f1cffefa33acec40667`,
+adding `display.set_background`. The version remains fire-app-sdk-1.0, while
+its explicit contract gate changes. Historical draft packages/images above
+remain immutable evidence and are not silently accepted by the live current
+Manifest. Legacy 0.1/0.2, the hardware hash and existing user apps are preserved.
+The coordinated implementation now includes the native one-shot prefill
+acknowledgement, next-frame configuration, all paint invalidators and the
+matching simulator/capture/raster behavior. The existing 12 ms, 200,000
+instructions, 128 KiB app memory and I/O quotas are unchanged. Instruction
+accounting now resets at each callback; a reconstructed old-counter unit
+case verifies the previous carry-over separately in native CI.
+
+Backend verification passed 182 affected checks and 68 final focused tests.
+The single final full run reported 957 passes and one derived-schema sync
+failure in 312.72 seconds. Only the two JSON schema exports were regenerated
+from the unchanged models; the contract test subsequently passed 1/1.
+This is not represented as a fresh all-green full-suite run. Six canonical
+gallery pages and four representative historical app sources have exact
+decoded PNG pixel parity. The gallery has zero actual app-clear fills with
+its explicitly prepared backgrounds. Historical sources/packages remain
+immutable and are not accepted by the live current Manifest.
+
+Native CI and a new guarded physical matrix are still required before
+approval. Scope is limited to this core integration and acceptance: no new
+paid generation cohorts, general historical importer, or sample-app repairs.
+
 ## Compile-time footprint
 
 Exact production CI linker maps provide this compile-time comparison:

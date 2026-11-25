@@ -51,13 +51,13 @@ def test_selected_input_example_is_valid_lua_with_actual_navigation_behavior():
     assert any(op[0]=='text_style' and op[3]=='2' for op in result['visual_frames'][0]['ops'])
 
 
-def test_v3_required_lifecycle_boilerplate_executes_with_real_sdk():
+def test_v4_required_lifecycle_boilerplate_executes_with_real_sdk():
     from fire_backend.lua_worker import simulate
     source='function init() fire.ui.set_theme("modern_dark") end\nfunction update(dt_ms) fire.ui.screen("APP") end'
     assert source in POLICY
     result=simulate(dict(main_lua=source,required_services=['display'],api_version=SDK_VERSION,
         api_contract=SDK_CONTRACT,max_memory=131072,max_runtime_ms=1000,profile='idle'))
-    assert result['ok'] and VERSION.endswith('v3')
+    assert result['ok'] and VERSION.endswith('v4')
 
 
 def raw_context():
@@ -68,7 +68,9 @@ def raw_context():
 def test_sdk_replaces_legacy_instructions_and_selects_only_relevant_api_details():
     original=raw_context();caps=preview_capabilities()
     context=normalize(original,capabilities=caps,summary='Lag en stoppeklokke.')
-    assert len(context)<len(original)*.6
+    # The canonical prefill semantics add factual API text, once, to the old
+    # comparison. Still reject duplicated policy/full unrelated API expansion.
+    assert len(context)<len(original)*.65
     for legacy in ('at most 128 total','No app sprite','120000','<=12 display','fixed textSize1'):
         assert legacy not in context
     assert context.count(POLICY)==1 and from_context(context)

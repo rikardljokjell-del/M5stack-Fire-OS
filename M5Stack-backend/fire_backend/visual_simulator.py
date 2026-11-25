@@ -94,7 +94,7 @@ class RenderedFrame:
 
 
 class RasterRenderer:
-    """One software framebuffer; a new black frame for every captured update."""
+    """One software framebuffer; a fresh OS-prepared frame for each update."""
     def __init__(self):
         self.image = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
         self.draw = ImageDraw.Draw(self.image)
@@ -266,6 +266,8 @@ class RasterRenderer:
                 if len(points)>1:self.draw.line(points,fill=color)
 
     def render(self, frame):
+        frame_background=frame.get('frame_background',0)
+        self.draw.rectangle((0,0,WIDTH-1,HEIGHT-1),fill=rgb565(frame_background))
         ops = frame.get('ops')
         if not isinstance(ops, list) or len(ops) > 64 or len(json.dumps(ops)) > 24000:
             raise ValueError('Visual frame exceeds bound')
@@ -279,6 +281,7 @@ class RasterRenderer:
             raise ValueError('Rendered PNG exceeds bound')
         histogram = self.image.getcolors(WIDTH * HEIGHT) or []
         metrics = {'width': WIDTH, 'height': HEIGHT, 'draw_commands': len(ops),
+                   'frame_background':frame_background,
                    'unique_colors': len(histogram), 'content_bbox': self.image.getbbox(),
                    'font_data_exact': self.font_exact, 'native_raster_exact': False,
                    'legacy_font_settings_verified': False if self.legacy_text_used else None,

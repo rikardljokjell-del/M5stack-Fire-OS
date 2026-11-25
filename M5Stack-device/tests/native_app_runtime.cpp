@@ -1,6 +1,7 @@
 #include "fire_lua_runtime.h"
 #include "fire_app_sdk_data.h"
 #include "fire_app_bitmap.h"
+#include "fire_app_frame.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -51,8 +52,12 @@ static bool run(const std::string& update,bool sdk=true,std::string* error=nullp
 // They do not establish physical rendering speed or M5GFX pixel parity.
 struct Canvas {
   std::array<uint16_t,320*240> pixels{};
+  uint16_t current=0;
   uint32_t spans=0,painted=0;
+  void setColor(uint16_t c) {current=c;}
+  void fillSprite(uint16_t c) {setColor(c);fillRect(0,0,320,240,c);}
   void fillRect(int x,int y,int w,int h,uint16_t color) {
+    current=color;
     const auto r=fire_app_graphics::clippedRect(x,y,w,h);
     if(r.w && r.h) {++spans;painted+=uint32_t(r.w)*uint32_t(r.h);}
     for (int py=r.y;py<r.y+r.h;++py)
@@ -70,7 +75,14 @@ struct Canvas {
   }
 };
 static Canvas canvas;
-static void renderedClear(void*,int c) {canvas.fillRect(0,0,320,240,uint16_t(c));}
+static fire_app_frame::State renderedFrame;
+static unsigned framePaintCalls=0,frameClearCalls=0,frameElisions=0;
+static void renderedPaint(void*) {++framePaintCalls;renderedFrame.paint();}
+static void renderedClear(void*,int c) {
+  ++frameClearCalls;const auto spans=canvas.spans;
+  renderedFrame.clear(canvas,uint16_t(c),true,true);
+  if(canvas.spans==spans) ++frameElisions;
+}
 static bool renderedText(void*,int x,int y,const char* value,size_t length,int color,const char* id,int align,int width) {
   const auto* f=fire_app_bitmap::find(FireSdkData::kFonts,FireSdkData::kFontCount,id);
   return f && fire_app_bitmap::text(canvas,*f,x,y,value,length,uint16_t(color),align,width);
@@ -109,7 +121,7 @@ static void renderedFillCircle(void*,int x,int y,int r,int c) {
     if(row*row+col*col<=r*r) canvas.fillRect(x+col,y+row,1,1,uint16_t(c));
 }
 static FireLuaRuntime::Host renderHost() {
-  auto h=host();h.displayClear=renderedClear;h.displayTextStyle=renderedText;
+  auto h=host();h.displayPaint=renderedPaint;h.displayClear=renderedClear;h.displayTextStyle=renderedText;
   h.displayAsset=renderedAsset;h.displayRoundRect=renderedRounded;
   h.displayPolyline=renderedPoints;h.displayTriangle=renderedTriangle;
   h.displayArc=renderedArc;h.displayGradient=renderedGradient;
@@ -131,9 +143,11 @@ static void fixture(const char* directory,const char* filename,const char* butto
   const size_t loadedBytes=runtime.memoryUsed();
   size_t sampledBytes=loadedBytes;unsigned frames=0;uint32_t maxSpans=0,maxPainted=0;
   const auto update=[&](unsigned dt) {
-    canvas.pixels.fill(0); // Same clear-before-every-update lifecycle as FIRE OS.
+    renderedFrame.invalidate();canvas.fillSprite(runtime.frameBackground());
+    renderedFrame.acknowledgePrefill(runtime.frameBackground()); // ONLY after actual OS fill.
     canvas.spans=canvas.painted=0; // App paints only; OS clear is excluded.
-    fixtureCheck(runtime.update(dt),filename,runtime);++frames;
+    const bool ok=runtime.update(dt);renderedFrame.invalidate();
+    fixtureCheck(ok,filename,runtime);++frames;
     sampledBytes=max(sampledBytes,runtime.memoryUsed());
     maxSpans=max(maxSpans,canvas.spans);maxPainted=max(maxPainted,canvas.painted);
     unsigned contrasting=0;for(auto pixel:canvas.pixels) if(pixel!=canvas.pixels[0]) ++contrasting;
@@ -162,10 +176,87 @@ static void uiLoadMeasurement(bool sdk) {
   runtime.stop();assert(runtime.memoryUsed()==0);
 }
 
+static void prepareFrame(FireLuaRuntime& runtime) {
+  renderedFrame.invalidate();canvas.fillSprite(runtime.frameBackground());
+  renderedFrame.acknowledgePrefill(runtime.frameBackground());
+  framePaintCalls=frameClearCalls=frameElisions=0;
+}
+static void backgroundTests() {
+  FireLuaRuntime runtime;runtime.setHardwareApi(true);runtime.setAppSdk(true);runtime.setServiceMask(3);
+  assert(runtime.begin(renderHost()) && runtime.frameBackground()==0);
+  const char* source="function init() fire.display.set_background(2113) end "
+    "function update(dt) fire.display.set_background(7);fire.buttons.pressed('A');fire.display.measure_text('x');fire.display.clear(2113) end "
+    "function on_button(b,a) fire.display.set_background(65535) end";
+  assert(runtime.loadSource(reinterpret_cast<const uint8_t*>(source),strlen(source)) && runtime.frameBackground()==2113);
+  prepareFrame(runtime);assert(runtime.update(16));renderedFrame.invalidate();
+  assert(runtime.frameBackground()==7 && framePaintCalls==0 && frameClearCalls==1 && frameElisions==1);
+  assert(canvas.current==2113);for(auto pixel:canvas.pixels) assert(pixel==2113);
+  // New preference cannot retroactively acknowledge a different current frame.
+  prepareFrame(runtime);assert(runtime.update(16));renderedFrame.invalidate();assert(frameElisions==0);
+  assert(runtime.button("B","pressed") && runtime.frameBackground()==65535);
+  const char* empty="function init() end function update(dt) end";
+  assert(runtime.loadSource(reinterpret_cast<const uint8_t*>(empty),strlen(empty)) && runtime.frameBackground()==0);
+  const char* bad="function init() fire.display.set_background(99);fire.display.clear(-1) end function update(dt) end";
+  assert(!runtime.loadSource(reinterpret_cast<const uint8_t*>(bad),strlen(bad)) && runtime.frameBackground()==0);
+  runtime.stop();assert(runtime.frameBackground()==0);
+  runtime.setAppSdk(false);assert(runtime.begin(host()));
+  assert(runtime.loadSource(reinterpret_cast<const uint8_t*>(empty),strlen(empty)) && runtime.frameBackground()==0);
+  runtime.stop();
+  runtime.setAppSdk(true);runtime.setServiceMask(2);assert(runtime.begin(host()));
+  const char* denied="function init() end function update(dt) if fire.display~=nil or fire.ui~=nil then fire.display.clear(-1) end end";
+  assert(runtime.loadSource(reinterpret_cast<const uint8_t*>(denied),strlen(denied)) && runtime.update(16));
+  runtime.stop();runtime.setServiceMask(3);
+  assert(run("if fire.display.set_background~=nil then fire.display.clear(-1) end",false));
+  assert(!run("fire.display.set_background(0)",false));
+  assert(run("fire.display.set_background(65535.0)"));
+  for(const char* value:{"'7'","-1","65536","0.5","nil"}) assert(!run(std::string("fire.display.set_background(")+value+")"));
+  std::string error;assert(!run("for i=1,65 do fire.display.set_background(0) end",true,&error));assert(error.find("budget")!=std::string::npos);
+
+  const std::string paint[]={"circle(10,10,2,1)","rect(10,10,2,2,1)","line(1,1,2,2,1)","text(0,0,'x',1)",
+    "fill_rect(0,0,1,1,1)","fill_circle(10,10,1,1)","pixel(0,0,1)","grid(0,0,1,1,1,1,{0},{1})",
+    "text_style(0,0,'',1)",std::string("asset(-1024,-1024,'")+FireSdkData::kAssets[0].id+"')",
+    "round_rect(0,0,2,2,0,1,true)","triangle(0,0,1,0,0,1,1,true)","polyline({0,0,1,1},1)",
+    "polygon({0,0,1,0,0,1},1,true)","gradient_rect(-1024,-1024,1,1,0,1)","arc(0,0,1,0,0,1,1)"};
+  for(const auto& command:paint) {
+    runtime.setAppSdk(true);assert(runtime.begin(renderHost()));
+    const std::string app="function init() end function update(dt) fire.display."+command+";fire.display.clear(0) end";
+    assert(runtime.loadSource(reinterpret_cast<const uint8_t*>(app.data()),app.size()));prepareFrame(runtime);
+    assert(runtime.update(16));renderedFrame.invalidate();
+    assert(framePaintCalls==1 && frameClearCalls==1 && frameElisions==0);
+    for(auto pixel:canvas.pixels) assert(pixel==0);
+    runtime.stop();
+  }
+  runtime.setAppSdk(true);assert(runtime.begin(renderHost()));
+  const char* many="function init() end function update(dt) for i=1,65 do fire.display.clear(0) end end";
+  assert(runtime.loadSource(reinterpret_cast<const uint8_t*>(many),strlen(many)));prepareFrame(runtime);
+  assert(!runtime.update(16));renderedFrame.invalidate();
+  assert(frameClearCalls==64 && frameElisions==1 && strstr(runtime.lastError().c_str(),"budget"));runtime.stop();
+  puts("PASS SDK background next-frame preference lifecycle,16paint invalidators and unchanged IO quotas");
+}
+
+static void instructionResetTest(bool oldSemantics) {
+  FireLuaRuntime runtime;runtime.setHardwareApi(true);runtime.setAppSdk(false);
+  assert(runtime.begin(host()));
+  const char* app="function init() local s=0 for i=1,1024 do s=s+i end end "
+    "function update(dt) local s=0 for i=1,1024 do s=s+i end end function on_button(b,a) end";
+  assert(runtime.loadSource(reinterpret_cast<const uint8_t*>(app),strlen(app)));
+  const auto initInstructions=runtime.instructionCount();assert(initInstructions>=1000);
+  assert(runtime.button("B","pressed"));const auto afterInitButton=runtime.instructionCount();
+  assert(runtime.update(16));const auto updateInstructions=runtime.instructionCount();assert(updateInstructions>=1000);
+  assert(runtime.button("B","pressed"));const auto afterUpdateButton=runtime.instructionCount();
+  if(oldSemantics) assert(afterInitButton>=1000 && afterUpdateButton>=updateInstructions);
+  else assert(afterInitButton==0 && afterUpdateButton==0);
+  printf("PASS %s instruction counter init=%u button_after_init=%u update=%u button_after_update=%u (actual Lua32 fakeclock)\n",
+    oldSemantics?"OLD-SEMANTICS reproduced carry":"per-callback reset",initInstructions,afterInitButton,updateInstructions,afterUpdateButton);
+  runtime.stop();
+}
+
 int main(int argc,char** argv) {
+  if(argc==2 && !strcmp(argv[1],"--old-instruction-counter")) {instructionResetTest(true);return 0;}
   static_assert(sizeof(lua_Integer)==4 && sizeof(lua_Number)==4,"match ESP32 Lua numeric profile");
   assert(!strcmp(FireLuaRuntime::hardwareApiContract(),"0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40"));
   assert(!strcmp(FireLuaRuntime::appSdkContract(),FireSdkData::kContract));
+  instructionResetTest(false);backgroundTests();
   uiLoadMeasurement(false);uiLoadMeasurement(true);
   assert(run("fire.ui.screen('FIRE');fire.ui.card(10,60,300,100,'Status',42)"));
   assert(run("fire.display.polyline({math.floor(1.2),2,3,4},65535)"));

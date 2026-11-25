@@ -8,7 +8,7 @@ struct Asset { const char* id; uint16_t width,height; const uint16_t* palette; u
 struct Glyph { uint32_t codepoint; uint8_t width,height,advance; int8_t xOffset,yOffset; const uint32_t* rows; };
 struct Font { const char* id; uint8_t lineHeight,ascent,descent; const Glyph* glyphs; uint16_t glyphCount; };
 inline constexpr char kVersion[] = "fire-app-sdk-1.0";
-inline constexpr char kContract[] = "e6972ef535053a898babec4b532be7418941d6adc00c5fd477828bb0b9940e57";
+inline constexpr char kContract[] = "83310c217698dd968f3773842f7f3fa05bc73b487a7c7f1cffefa33acec40667";
 inline constexpr uint16_t assetPalette0[] = {0,65535};
 inline constexpr uint8_t assetRuns0[] = {32,0,2,1,21,0,4,1,20,0,4,1,20,0,4,1,20,0,4,1,19,0,6,1,18,0,2,1,2,0,2,1,18,0,2,1,2,0,2,1,17,0,3,1,2,0,2,1,17,0,3,1,2,0,3,1,12,0,6,1,4,0,2,1,5,0,5,1,2,0,5,1,5,0,2,1,4,0,6,1,12,0,3,1,2,0,3,1,16,0,3,1,2,0,2,1,18,0,2,1,2,0,2,1,18,0,2,1,2,0,2,1,18,0,6,1,19,0,4,1,20,0,4,1,20,0,4,1,20,0,4,1,21,0,2,1,32,0};
 inline constexpr uint16_t assetPalette1[] = {0,65535};
@@ -3197,7 +3197,7 @@ end
 local function ratio(v,lo,hi) if hi<=lo then return 0 end; return clamp((n(v)-lo)/(hi-lo),0,1) end
 local function pad(v) local s=tostring(floor(max(0,n(v)))); if v<10 then return "0"..s end; return s end
 
-function ui.set_theme(name) T=themes[name] or themes.modern_dark; return T end
+function ui.set_theme(name) T=themes[name] or themes.modern_dark; d.set_background(T.bg); return T end
 function ui.theme(name) return themes[name] or T end
 function ui.background(color) d.clear(color or T.bg) end
 function ui.label(x,y,value,options)

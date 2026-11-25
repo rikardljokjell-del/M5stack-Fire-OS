@@ -46,7 +46,7 @@ def save_screenshots(candidates, store, build_id, source_hash):
     if (folder/'index.json').exists() and json.loads((folder/'index.json').read_text(encoding='utf-8')).get('source_sha256')!=source_hash:
         raise ValueError('Preview source-key collision')
     for item in ordered:
-        ops_key = hashlib.sha256(canonical(item['ops'])).hexdigest()
+        ops_key = hashlib.sha256(canonical([item.get('frame_background',0),item['ops']])).hexdigest()
         if ops_key in seen_ops:
             continue
         seen_ops.add(ops_key)
@@ -60,7 +60,7 @@ def save_screenshots(candidates, store, build_id, source_hash):
             path.write_bytes(image.png)
         elif hashlib.sha256(path.read_bytes()).hexdigest() != image.png_sha256:
             raise ValueError('Stored visual evidence checksum mismatch')
-        frames.append({k: item[k] for k in ('profile', 'scenario', 'at_ms', 'frame', 'button', 'input_count') if k in item} |
+        frames.append({k: item[k] for k in ('profile', 'scenario', 'at_ms', 'frame', 'button', 'input_count','frame_background') if k in item} |
                       {'image_id': image.png_sha256, 'png_sha256': image.png_sha256,
                        'pixel_sha256': image.pixel_sha256, 'size_bytes': len(image.png),
                        'source_sha256': source_hash, 'sdk_data_sha256':fingerprint, 'metrics': image.metrics})

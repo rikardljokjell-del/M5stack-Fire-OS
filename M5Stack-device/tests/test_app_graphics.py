@@ -3,6 +3,10 @@ import test_native_guards as support
 
 
 class AppGraphicsTests(unittest.TestCase):
+    def test_native_frame_preparation(self):
+        output = support.NativeGuardTests.run_native(self, "native_app_frame.cpp")
+        self.assertIn("PASS frame prefill one-shot", output)
+
     def test_native_canvas_fill(self):
         output = support.NativeGuardTests.run_native(self, "native_canvas_fill.cpp")
         self.assertIn("PASS canvas raw16 all65536 colors", output)

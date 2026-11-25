@@ -57,6 +57,7 @@ class FireLuaRuntime {
     void* context = nullptr;
     const char* appSdkUiSource = nullptr; // trusted embedded source, never app/SD input
     size_t appSdkUiBytes = 0;
+    void (*displayPaint)(void*) = nullptr; // SDK paint invalidates UI-owned prefill
     void (*displayClear)(void*, int) = nullptr;
     void (*displayCircle)(void*, int, int, int, int) = nullptr;
     void (*displayRect)(void*, int, int, int, int, int) = nullptr;
@@ -136,6 +137,8 @@ class FireLuaRuntime {
   bool begin(const Host& host);
   void setHardwareApi(bool enabled) { hardwareApi_ = enabled; }
   void setAppSdk(bool enabled) { appSdk_ = enabled; }
+  bool appSdkEnabled() const { return appSdk_; }
+  uint16_t frameBackground() const { return appSdk_ ? frameBackground_ : 0; }
   void setServiceMask(uint32_t mask) { serviceMask_ = mask; }
   void setMaxRuntimeMs(uint32_t maxRuntimeMs);
   bool loadSource(const uint8_t* source, size_t length);
@@ -182,6 +185,7 @@ class FireLuaRuntime {
   size_t peakMemoryUsed_ = 0;
   bool hardwareApi_ = false;
   bool appSdk_ = false;
+  uint16_t frameBackground_ = 0; // Preference for NEXT OS-prepared frame, per VM.
   uint32_t serviceMask_ = 0x1FU;
   uint16_t ioCalls_ = 0;
   uint16_t ioBytes_ = 0;
@@ -200,6 +204,10 @@ class FireLuaRuntime {
   static void removeUnsafeGlobals(lua_State* state);
   static bool checkColor(lua_State* state, int index);
   static int displayClear(lua_State* state);
+  static int displaySetBackground(lua_State* state);
+  void paintDisplay() {
+    if (appSdk_ && host_.displayPaint) host_.displayPaint(host_.context);
+  }
   static int displayCircle(lua_State* state);
   static int displayRect(lua_State* state);
   static int displayLine(lua_State* state);

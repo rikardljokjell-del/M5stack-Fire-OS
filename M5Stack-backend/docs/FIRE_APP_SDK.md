@@ -17,9 +17,23 @@ contract; their data fingerprint still invalidates stale preview evidence.
 ## Screen and sandbox
 
 Render the complete 320×240 scene on every update. The OS owns the existing
-offscreen framebuffer, presentation and long A/B/C gestures. UI functions do
-not present or schedule frames. `ui.screen` and `ui.background` explicitly
-clear within that same update; never clear after drawing the scene.
+offscreen framebuffer, preparation, presentation and long A/B/C gestures.
+Call `ui.set_theme` in `init` so the OS can prepare that background before
+the first update. Theme changes in `on_button` apply before the next update.
+The raw SDK default background is black until explicitly configured.
+UI functions do not present or schedule frames. `ui.screen` and
+`ui.background` clear the current frame; call them before drawing content.
+
+`fire.display.set_background(color)` configures the NEXT OS-prepared frame;
+it does not draw or change the current drawing color. It costs one I/O call
+and one logical I/O byte. For custom palette backgrounds, configure the same
+RGB565 color explicitly in init/event after changing `ui.theme().bg`.
+Configuration during update affects the next frame, not the current one.
+The first matching clear can reuse the OS-filled pixels only while the
+prepared SDK frame is still untouched. Calls still consume their full I/O
+quota. Later/different clears and clear after painting retain real immediate
+erase semantics and actual callback time. No app drawing is queued or charged
+outside its callback; the existing 12 ms wall guard remains in force.
 No require, arbitrary loading, filesystem or Python callbacks are exposed.
 Calling UI requires display permission. Module initialization and native calls
 use the existing memory, instruction, text, I/O and time budgets.
@@ -49,8 +63,9 @@ Do not use init-only graphics, partial redraws or automatic app-close timers.
 
 ## Native graphics and UI
 
-The nine new display methods are `text_style`, `measure_text`, `asset`,
-`round_rect`, `triangle`, `polyline`, `polygon`, `gradient_rect` and `arc`.
+The ten SDK display methods are `text_style`, `measure_text`, `asset`,
+`round_rect`, `triangle`, `polyline`, `polygon`, `gradient_rect`, `arc` and
+the non-drawing `set_background` configuration method.
 Exact arguments, optional defaults, bounds and raster semantics are in the
 canonical registry. They use RGB565 and the same shared bitmap/palette data.
 PC raster is a preview, not proof of hardware timing or perfect legacy parity.
