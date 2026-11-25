@@ -2,6 +2,10 @@
 
 Et modulært Arduino/PlatformIO-startprosjekt for M5Stack FIRE med M5Unified/M5GFX.
 
+FIRE App SDK er under utvikling som en bakoverkompatibel Lua-profil.
+Se [device-integrasjonen](APP_SDK_NATIVE_CONTRACT.md) for byggfunn og
+gjenstående fysisk verifikasjon. SDK-koden er foreløpig ikke installert på enheten.
+
 ## Aktuell testkandidat: 1.2.0-rc9
 
 I **Settings → Firmware → GitHub** velger du «Installer direkte» eller

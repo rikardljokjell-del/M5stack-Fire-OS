@@ -55,6 +55,8 @@ class FireLuaRuntime {
 
   struct Host {
     void* context = nullptr;
+    const char* appSdkUiSource = nullptr; // trusted embedded source, never app/SD input
+    size_t appSdkUiBytes = 0;
     void (*displayClear)(void*, int) = nullptr;
     void (*displayCircle)(void*, int, int, int, int) = nullptr;
     void (*displayRect)(void*, int, int, int, int, int) = nullptr;
@@ -65,6 +67,14 @@ class FireLuaRuntime {
     void (*displayPixel)(void*, int, int, int) = nullptr;
     void (*displayGrid)(void*, int, int, int, int, int, int,
                         const uint8_t*, size_t, const uint16_t*, size_t) = nullptr;
+    bool (*displayTextStyle)(void*,int,int,const char*,size_t,int,const char*,int,int) = nullptr;
+    bool (*displayMeasureText)(void*,const char*,size_t,const char*,int*,int*) = nullptr;
+    bool (*displayAsset)(void*,int,int,const char*,int,int,bool,bool) = nullptr;
+    void (*displayRoundRect)(void*,int,int,int,int,int,int,bool) = nullptr;
+    void (*displayTriangle)(void*,int,int,int,int,int,int,int,bool) = nullptr;
+    void (*displayPolyline)(void*,const int16_t*,size_t,int,bool,bool) = nullptr;
+    void (*displayGradient)(void*,int,int,int,int,int,int,bool) = nullptr;
+    void (*displayArc)(void*,int,int,int,int,int,int,int) = nullptr;
     bool (*buttonPressed)(void*, const char*) = nullptr;
     void (*rgbSet)(void*, int, int, int, int) = nullptr;
     bool (*imuAccel)(void*, float*, float*, float*) = nullptr;
@@ -125,6 +135,7 @@ class FireLuaRuntime {
 
   bool begin(const Host& host);
   void setHardwareApi(bool enabled) { hardwareApi_ = enabled; }
+  void setAppSdk(bool enabled) { appSdk_ = enabled; }
   void setServiceMask(uint32_t mask) { serviceMask_ = mask; }
   void setMaxRuntimeMs(uint32_t maxRuntimeMs);
   bool loadSource(const uint8_t* source, size_t length);
@@ -136,6 +147,7 @@ class FireLuaRuntime {
   const String& lastError() const { return error_; }
   uint32_t instructionCount() const { return instructions_; }
   size_t memoryUsed() const { return memoryUsed_; }
+  size_t peakMemoryUsed() const { return peakMemoryUsed_; }
   uint32_t elapsedMs() const;
   uint32_t lastCallbackUs() const { return lastCallbackUs_; }
   uint32_t maxCallbackUs() const { return maxCallbackUs_; }
@@ -143,6 +155,8 @@ class FireLuaRuntime {
   size_t sourceBytes() const { return sourceBytes_; }
   static const char* hardwareApiContract();
   static const char* hardwareApiVersion() { return "fire-lua-0.2"; }
+  static const char* appSdkVersion();
+  static const char* appSdkContract();
   const char* lastPhase() const;
 
  private:
@@ -165,11 +179,15 @@ class FireLuaRuntime {
   enum class CallbackPhase : uint8_t { None, Load, Init, Update, OnButton };
   CallbackPhase callbackPhase_ = CallbackPhase::None;
   size_t memoryUsed_ = 0;
+  size_t peakMemoryUsed_ = 0;
   bool hardwareApi_ = false;
+  bool appSdk_ = false;
   uint32_t serviceMask_ = 0x1FU;
   uint16_t ioCalls_ = 0;
   uint16_t ioBytes_ = 0;
   uint16_t textBytes_ = 0;
+  uint16_t sdkGridCells_ = 0;
+  uint32_t sdkGridPixels_ = 0;
 
   static void* allocator(void* user, void* pointer, size_t oldSize,
                          size_t newSize);
@@ -190,6 +208,16 @@ class FireLuaRuntime {
   static int displayFillCircle(lua_State* state);
   static int displayPixel(lua_State* state);
   static int displayGrid(lua_State* state);
+  static int displayTextStyle(lua_State* state);
+  static int displayMeasureText(lua_State* state);
+  static int displayAsset(lua_State* state);
+  static int displayRoundRect(lua_State* state);
+  static int displayTriangle(lua_State* state);
+  static int displayPolyline(lua_State* state);
+  static int displayPolygon(lua_State* state);
+  static int displayGradient(lua_State* state);
+  static int displayArc(lua_State* state);
+  static int displayPoints(lua_State* state,bool polygon);
   static int buttonPressed(lua_State* state);
   static int rgbSet(lua_State* state);
   static int imuAccel(lua_State* state);

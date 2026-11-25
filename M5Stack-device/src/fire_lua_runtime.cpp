@@ -1,4 +1,5 @@
 #include "fire_lua_runtime.h"
+#include "fire_app_sdk_data.h"
 
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -54,11 +55,38 @@ int strictInt(lua_State* state, int index, int minimum, int maximum) {
 const char* checkedString(lua_State* state, int index) {
   return luaL_checklstring(state, index, nullptr);
 }
+
+bool optionalBool(lua_State* state,int index,bool fallback) {
+  if (lua_isnoneornil(state,index)) return fallback;
+  luaL_checktype(state,index,LUA_TBOOLEAN);
+  return lua_toboolean(state,index)!=0;
+}
+
+const char* sdkString(lua_State* state,int index,size_t maximum,size_t* length=nullptr) {
+  luaL_checktype(state,index,LUA_TSTRING);
+  size_t size=0;const char* value=lua_tolstring(state,index,&size);
+  if (size>maximum || memchr(value,0,size)) luaL_argerror(state,index,"invalid SDK string");
+  if (length) *length=size;
+  return value;
+}
+
+const char* sdkFont(lua_State* state,int index) {
+  return lua_isnoneornil(state,index)?"ui16":sdkString(state,index,32);
+}
+
+int sdkInt(lua_State* state,int index,int minimum,int maximum) {
+  // Our safe math.floor/min/max return numbers, so integral floats must work;
+  // numeric strings must not be coerced into coordinates or palette colors.
+  luaL_checktype(state,index,LUA_TNUMBER);
+  return strictInt(state,index,minimum,maximum);
+}
 }  // namespace
 
 const char* FireLuaRuntime::hardwareApiContract() {
   return "0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40";
 }
+const char* FireLuaRuntime::appSdkVersion() {return FireSdkData::kVersion;}
+const char* FireLuaRuntime::appSdkContract() {return FireSdkData::kContract;}
 
 void* FireLuaRuntime::allocator(void* user, void* pointer, size_t oldSize,
                                 size_t newSize) {
@@ -91,6 +119,7 @@ void* FireLuaRuntime::allocator(void* user, void* pointer, size_t oldSize,
     } else {
       runtime->memoryUsed_ -= min(runtime->memoryUsed_, oldSize - newSize);
     }
+    runtime->peakMemoryUsed_ = max(runtime->peakMemoryUsed_,runtime->memoryUsed_);
   }
   return result;
 }
@@ -156,6 +185,17 @@ void FireLuaRuntime::registerApi(lua_State* state) {
       setFunction(state, "fill_circle", displayFillCircle);
       setFunction(state, "pixel", displayPixel);
       setFunction(state, "grid", displayGrid);
+    }
+    if (runtime->appSdk_) {
+      setFunction(state,"text_style",displayTextStyle);
+      setFunction(state,"measure_text",displayMeasureText);
+      setFunction(state,"asset",displayAsset);
+      setFunction(state,"round_rect",displayRoundRect);
+      setFunction(state,"triangle",displayTriangle);
+      setFunction(state,"polyline",displayPolyline);
+      setFunction(state,"polygon",displayPolygon);
+      setFunction(state,"gradient_rect",displayGradient);
+      setFunction(state,"arc",displayArc);
     }
     lua_setfield(state, -2, "display");
   }
@@ -584,6 +624,8 @@ void FireLuaRuntime::beginCallback(CallbackPhase phase, uint32_t budgetMs) {
   ioCalls_ = 0;
   ioBytes_ = 0;
   textBytes_ = 0;
+  sdkGridCells_ = 0;
+  sdkGridPixels_ = 0;
 }
 
 bool FireLuaRuntime::finishCallback() {
@@ -627,6 +669,18 @@ bool FireLuaRuntime::loadSource(const uint8_t* source, size_t length) {
   if (length > kMaxSourceBytes) return fail("source_size");
   sourceBytes_ = length;
   clearState();
+  if (appSdk_ && serviceAllowed(this,kServiceDisplay)) {
+    if (!host_.appSdkUiSource || !host_.appSdkUiBytes) return fail("SDK UI unavailable");
+    beginCallback(CallbackPhase::Load,250);
+    lua_getglobal(lua_,"fire");
+    const int loaded=luaL_loadbufferx(lua_,host_.appSdkUiSource,host_.appSdkUiBytes,"fire.ui","t");
+    if (loaded!=LUA_OK || lua_pcall(lua_,0,1,0)!=LUA_OK) {
+      finishCallback();return fail(String("SDK UI: ")+lua_tostring(lua_,-1));
+    }
+    if (!lua_istable(lua_,-1)) return fail("SDK UI must return a table");
+    lua_setfield(lua_,-2,"ui");lua_pop(lua_,1);
+    if (!finishCallback()) return false;
+  }
   beginCallback(CallbackPhase::Load, 1000);
   const int loadResult = luaL_loadbufferx(
       lua_, reinterpret_cast<const char*>(source), length, "main.lua", "t");
@@ -684,6 +738,7 @@ void FireLuaRuntime::stop() {
     lua_ = nullptr;
   }
   memoryUsed_ = 0;
+  peakMemoryUsed_ = 0;
   instructions_ = 0;
   startedAt_ = 0;
   maxRuntimeMs_ = kDefaultRuntimeMs;
@@ -864,6 +919,10 @@ int FireLuaRuntime::displayGrid(lua_State* state) {
   luaL_checktype(state, 7, LUA_TTABLE);
   luaL_checktype(state, 8, LUA_TTABLE);
   const size_t cellCount = static_cast<size_t>(columns) * rows;
+  const uint32_t pixels=uint32_t(cellCount)*cellWidth*cellHeight;
+  if (runtime->appSdk_ && (runtime->sdkGridCells_+cellCount>384 ||
+                          runtime->sdkGridPixels_+pixels>32768))
+    return luaL_error(state,"SDK grid callback budget exceeded");
   if (cellCount > 384 || !runtime->chargeIo(1, false))
     return luaL_error(state, "display grid budget exceeded");
   uint8_t cells[384] = {};
@@ -887,10 +946,114 @@ int FireLuaRuntime::displayGrid(lua_State* state) {
       return luaL_error(state, "invalid cell index");
     cells[index] = static_cast<uint8_t>(value);
   }
+  if (runtime->appSdk_) {
+    runtime->sdkGridCells_+=uint16_t(cellCount);
+    runtime->sdkGridPixels_+=pixels;
+  }
   if (runtime->host_.displayGrid)
     runtime->host_.displayGrid(runtime->host_.context, x, y, cellWidth,
                                cellHeight, columns, rows, cells, cellCount,
                                palette, paletteCount);
+  return 0;
+}
+
+int FireLuaRuntime::displayTextStyle(lua_State* state) {
+  auto* runtime=self(state);
+  const int x=sdkInt(state,1,-1024,1024),y=sdkInt(state,2,-1024,1024);
+  size_t length=0;const char* text=sdkString(state,3,80,&length);
+  const int color=sdkInt(state,4,0,65535);
+  const char* font=sdkFont(state,5);
+  const char* align=lua_isnoneornil(state,6)?"left":sdkString(state,6,6);
+  const int alignment=!strcmp(align,"left")?0:!strcmp(align,"center")?1:!strcmp(align,"right")?2:-1;
+  if (alignment<0) return luaL_argerror(state,6,"unknown text alignment");
+  const int width=lua_isnoneornil(state,7)?320:sdkInt(state,7,1,1024);
+  if (!runtime->chargeIo(length,true)) return luaL_error(state,"display io budget exceeded");
+  if (!runtime->host_.displayTextStyle || !runtime->host_.displayTextStyle(runtime->host_.context,
+      x,y,text,length,color,font,alignment,width)) return luaL_error(state,"unknown font or invalid UTF-8 text");
+  return 0;
+}
+
+int FireLuaRuntime::displayMeasureText(lua_State* state) {
+  auto* runtime=self(state);size_t length=0;
+  const char* text=sdkString(state,1,80,&length);const char* font=sdkFont(state,2);
+  if (!runtime->chargeIo(length,true)) return luaL_error(state,"display io budget exceeded");
+  int width=0,height=0;
+  if (!runtime->host_.displayMeasureText || !runtime->host_.displayMeasureText(runtime->host_.context,
+      text,length,font,&width,&height)) return luaL_error(state,"unknown font or invalid UTF-8 text");
+  lua_pushinteger(state,width);lua_pushinteger(state,height);return 2;
+}
+
+int FireLuaRuntime::displayAsset(lua_State* state) {
+  auto* runtime=self(state);
+  const int x=sdkInt(state,1,-1024,1024),y=sdkInt(state,2,-1024,1024);
+  size_t length=0;const char* id=sdkString(state,3,96,&length);
+  const int scale=lua_isnoneornil(state,4)?1:sdkInt(state,4,1,4);
+  const int tint=lua_isnoneornil(state,5)?-1:sdkInt(state,5,0,65535);
+  const bool flipX=optionalBool(state,6,false),flipY=optionalBool(state,7,false);
+  if (!runtime->chargeIo(length)) return luaL_error(state,"display io budget exceeded");
+  if (!runtime->host_.displayAsset || !runtime->host_.displayAsset(runtime->host_.context,
+      x,y,id,scale,tint,flipX,flipY)) return luaL_error(state,"unknown or invalid SDK asset");
+  return 0;
+}
+
+int FireLuaRuntime::displayRoundRect(lua_State* state) {
+  auto* runtime=self(state);
+  const int x=sdkInt(state,1,-1024,1024),y=sdkInt(state,2,-1024,1024);
+  const int w=sdkInt(state,3,1,1024),h=sdkInt(state,4,1,1024);
+  const int radius=sdkInt(state,5,0,min(160,min(w,h)/2));
+  const int color=sdkInt(state,6,0,65535);const bool filled=optionalBool(state,7,false);
+  if (!runtime->chargeIo(1)) return luaL_error(state,"display io budget exceeded");
+  if (runtime->host_.displayRoundRect) runtime->host_.displayRoundRect(runtime->host_.context,x,y,w,h,radius,color,filled);
+  return 0;
+}
+
+int FireLuaRuntime::displayTriangle(lua_State* state) {
+  auto* runtime=self(state);
+  int values[6];for (int i=0;i<6;++i) values[i]=sdkInt(state,i+1,-1024,1024);
+  const int color=sdkInt(state,7,0,65535);const bool filled=optionalBool(state,8,false);
+  if (!runtime->chargeIo(1)) return luaL_error(state,"display io budget exceeded");
+  if (runtime->host_.displayTriangle) runtime->host_.displayTriangle(runtime->host_.context,
+      values[0],values[1],values[2],values[3],values[4],values[5],color,filled);
+  return 0;
+}
+
+int FireLuaRuntime::displayPoints(lua_State* state,bool polygon) {
+  auto* runtime=self(state);luaL_checktype(state,1,LUA_TTABLE);
+  const size_t length=lua_rawlen(state,1),count=length/2;
+  if ((length&1) || count<(polygon?3u:2u) || count>(polygon?16u:64u))
+    return luaL_argerror(state,1,"invalid point count");
+  int16_t points[128];
+  for (size_t i=0;i<length;++i) {
+    lua_rawgeti(state,1,static_cast<lua_Integer>(i+1));
+    points[i]=static_cast<int16_t>(sdkInt(state,-1,-1024,1024));lua_pop(state,1);
+  }
+  const int color=sdkInt(state,2,0,65535);const bool flag=optionalBool(state,3,false);
+  if (!runtime->chargeIo(count*4)) return luaL_error(state,"display io budget exceeded");
+  if (runtime->host_.displayPolyline) runtime->host_.displayPolyline(runtime->host_.context,
+      points,count,color,polygon||flag,polygon&&flag);
+  return 0;
+}
+int FireLuaRuntime::displayPolyline(lua_State* state) {return displayPoints(state,false);}
+int FireLuaRuntime::displayPolygon(lua_State* state) {return displayPoints(state,true);}
+
+int FireLuaRuntime::displayGradient(lua_State* state) {
+  auto* runtime=self(state);
+  const int x=sdkInt(state,1,-1024,1024),y=sdkInt(state,2,-1024,1024);
+  const int w=sdkInt(state,3,1,1024),h=sdkInt(state,4,1,1024);
+  const int a=sdkInt(state,5,0,65535),b=sdkInt(state,6,0,65535);
+  const bool vertical=optionalBool(state,7,true);
+  if (!runtime->chargeIo(1)) return luaL_error(state,"display io budget exceeded");
+  if (runtime->host_.displayGradient) runtime->host_.displayGradient(runtime->host_.context,x,y,w,h,a,b,vertical);
+  return 0;
+}
+
+int FireLuaRuntime::displayArc(lua_State* state) {
+  auto* runtime=self(state);
+  const int x=sdkInt(state,1,-1024,1024),y=sdkInt(state,2,-1024,1024);
+  const int r=sdkInt(state,3,1,160),start=sdkInt(state,4,0,360),end=sdkInt(state,5,start,360);
+  const int color=sdkInt(state,6,0,65535),thickness=lua_isnoneornil(state,7)?1:sdkInt(state,7,1,r);
+  if (!runtime->chargeIo(1)) return luaL_error(state,"display io budget exceeded");
+  if (runtime->host_.displayArc) runtime->host_.displayArc(runtime->host_.context,x,y,r,start,end,color,thickness);
   return 0;
 }
 

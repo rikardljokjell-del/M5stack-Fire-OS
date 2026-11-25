@@ -1000,6 +1000,14 @@ class FireOS {
                              int cellHeight, int columns, int rows,
                              const uint8_t* cells, size_t cellCount,
                              const uint16_t* palette, size_t paletteCount);
+  static bool luaDisplayTextStyle(void*,int,int,const char*,size_t,int,const char*,int,int);
+  static bool luaDisplayMeasureText(void*,const char*,size_t,const char*,int*,int*);
+  static bool luaDisplayAsset(void*,int,int,const char*,int,int,bool,bool);
+  static void luaDisplayRoundRect(void*,int,int,int,int,int,int,bool);
+  static void luaDisplayTriangle(void*,int,int,int,int,int,int,int,bool);
+  static void luaDisplayPolyline(void*,const int16_t*,size_t,int,bool,bool);
+  static void luaDisplayGradient(void*,int,int,int,int,int,int,bool);
+  static void luaDisplayArc(void*,int,int,int,int,int,int,int);
   static bool luaButtonPressed(void* context, const char* button);
   static void luaRgbSet(void* context, int index, int red, int green,
                         int blue);

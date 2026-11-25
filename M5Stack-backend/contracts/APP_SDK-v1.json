@@ -1,0 +1,255 @@
+{
+  "api_contract": "e6972ef535053a898babec4b532be7418941d6adc00c5fd477828bb0b9940e57",
+  "registry": {
+    "api_version": "fire-app-sdk-1.0",
+    "base_api": "fire-lua-0.2",
+    "hardware_contract_unchanged": true,
+    "capability_field": "app_sdk",
+    "display": {
+      "width": 320,
+      "height": 240,
+      "format": "RGB565",
+      "methods": {
+        "text_style": {
+          "args": [
+            "x",
+            "y",
+            "text",
+            "color",
+            "font?=ui16",
+            "align?=left",
+            "max_width?=320"
+          ],
+          "returns": "void"
+        },
+        "measure_text": {
+          "args": [
+            "text",
+            "font?=ui16"
+          ],
+          "returns": [
+            "advance_width",
+            "line_height"
+          ]
+        },
+        "asset": {
+          "args": [
+            "x",
+            "y",
+            "id",
+            "scale?=1",
+            "tint?=nil",
+            "flip_x?=false",
+            "flip_y?=false"
+          ],
+          "returns": "void"
+        },
+        "round_rect": {
+          "args": [
+            "x",
+            "y",
+            "width",
+            "height",
+            "radius",
+            "color",
+            "filled?=false"
+          ],
+          "returns": "void"
+        },
+        "triangle": {
+          "args": [
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+            "x3",
+            "y3",
+            "color",
+            "filled?=false"
+          ],
+          "returns": "void"
+        },
+        "polyline": {
+          "args": [
+            "flat_points",
+            "color",
+            "closed?=false"
+          ],
+          "returns": "void"
+        },
+        "polygon": {
+          "args": [
+            "flat_points",
+            "color",
+            "filled?=false"
+          ],
+          "returns": "void"
+        },
+        "gradient_rect": {
+          "args": [
+            "x",
+            "y",
+            "width",
+            "height",
+            "color1",
+            "color2",
+            "vertical?=true"
+          ],
+          "returns": "void"
+        },
+        "arc": {
+          "args": [
+            "x",
+            "y",
+            "radius",
+            "start_degrees",
+            "end_degrees",
+            "color",
+            "thickness?=1"
+          ],
+          "returns": "void"
+        }
+      },
+      "coordinates": {
+        "type": "integer",
+        "min": -1024,
+        "max": 1024
+      },
+      "dimensions": {
+        "min": 1,
+        "max": 1024
+      },
+      "color": {
+        "min": 0,
+        "max": 65535
+      },
+      "polyline_points": [
+        2,
+        64
+      ],
+      "polygon_points": [
+        3,
+        16
+      ],
+      "radius": [
+        0,
+        160
+      ],
+      "arc_radius": [
+        1,
+        160
+      ],
+      "arc_degrees": [
+        0,
+        360
+      ],
+      "arc_step_degrees": 3,
+      "arc_direction": "clockwise, zero faces right; end>=start; equal endpoints empty; 0..360 full ring",
+      "text": "UTF8 <=80 bytes; reject invalid/NUL; unsupported scalar -> question mark; transparent shared bitmap; x/y top-left box; align within max_width; clip overflow without wrapping",
+      "font_ids": [
+        "ui12",
+        "ui12b",
+        "ui16",
+        "title20",
+        "digits28",
+        "pixel8",
+        "legacy6x8"
+      ],
+      "asset": "palette-rle-u8-count-index; index0 transparent; integer scale1..4; tint only for tintable assets; mirrored source before scaling",
+      "round_rect_radius": "<=floor(min(width,height)/2)",
+      "polygon_fill": "even-odd, pixel-center, half-open edges",
+      "clipping": "canvas 0..319,0..239; legacy bounds unchanged",
+      "text_max_width": [
+        1,
+        1024
+      ],
+      "arc_thickness": "integer 1..radius",
+      "asset_id_lookup": "canonical id only; metadata aliases are search hints, never runtime identifiers",
+      "gradient_interpolation": "separate RGB565 channels: floor((from*(span-at)+to*at+floor(span/2))/span); span=dimension-1; endpoints included; dimension1 uses color1",
+      "arc_vertex_rounding": "x+round_away_from_zero(cos(degrees*pi/180)*r), y+round_away_from_zero(sin(degrees*pi/180)*r), using3-degree segments"
+    },
+    "ui_methods": [
+      "set_theme",
+      "theme",
+      "background",
+      "label",
+      "title",
+      "screen",
+      "icon",
+      "panel",
+      "card",
+      "button",
+      "buttons",
+      "tabs",
+      "menu",
+      "toggle",
+      "checkbox",
+      "selector",
+      "dialog",
+      "toast",
+      "progress",
+      "loading",
+      "ring",
+      "gauge",
+      "battery",
+      "signal",
+      "line_chart",
+      "bar_chart",
+      "clock",
+      "timer",
+      "hud",
+      "game_menu",
+      "pause",
+      "game_over",
+      "sprite",
+      "collides",
+      "lerp",
+      "ease_out",
+      "animate",
+      "burst",
+      "particles",
+      "layout",
+      "table",
+      "empty",
+      "error",
+      "compass",
+      "radar",
+      "navigate",
+      "countdown"
+    ],
+    "themes": [
+      "modern_dark",
+      "modern_light",
+      "minimal",
+      "professional_instrument",
+      "industrial",
+      "retro_arcade",
+      "pixel_art",
+      "sci_fi",
+      "adventure",
+      "nature",
+      "neon",
+      "classic_console"
+    ],
+    "asset_catalog_version": "1",
+    "budgets": {
+      "lua_memory_bytes": 131072,
+      "callback_ms": 12,
+      "callback_instructions": 200000,
+      "io_calls_per_callback": 64,
+      "io_bytes_per_callback": 2048,
+      "text_bytes_per_callback": 256,
+      "text_and_measure_charge": "UTF8 bytes to I/O and cumulative text budgets",
+      "points_charge_bytes_per_point": 4,
+      "asset_charge": "ID UTF8 bytes",
+      "other_geometry_charge_bytes": 1,
+      "generation_legacy_grid_cells_per_callback": 128,
+      "generation_legacy_grid_pixels_per_callback": 32768,
+      "native_legacy_grid_max_cells_per_call": 384,
+      "sdk_grid_cells_per_callback": 384,
+      "sdk_grid_pixels_per_callback": 32768
+    },
+    "environment": "same restricted Lua5.4 app-private environment, no Python callbacks/require/load/filesystem/OS/M5 handles",
+    "render_lifecycle": "OS clears existing offscreen canvas before each update and presents only finished frame; no new framebuffer"
+  }
+}

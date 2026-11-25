@@ -1,0 +1,383 @@
+{
+  "schema": 1,
+  "version": "fire-app-sdk-1.0",
+  "catalog_version": "1",
+  "ui_file": "ui.lua",
+  "fonts_file": "fonts.json",
+  "assets_file": "assets.json",
+  "ui_methods": [
+    "set_theme",
+    "theme",
+    "background",
+    "label",
+    "title",
+    "screen",
+    "icon",
+    "panel",
+    "card",
+    "button",
+    "buttons",
+    "tabs",
+    "menu",
+    "toggle",
+    "checkbox",
+    "selector",
+    "dialog",
+    "toast",
+    "progress",
+    "loading",
+    "ring",
+    "gauge",
+    "battery",
+    "signal",
+    "line_chart",
+    "bar_chart",
+    "clock",
+    "timer",
+    "hud",
+    "game_menu",
+    "pause",
+    "game_over",
+    "sprite",
+    "collides",
+    "lerp",
+    "ease_out",
+    "animate",
+    "burst",
+    "particles",
+    "layout",
+    "table",
+    "empty",
+    "error",
+    "compass",
+    "radar",
+    "navigate",
+    "countdown"
+  ],
+  "themes": [
+    "modern_dark",
+    "modern_light",
+    "minimal",
+    "professional_instrument",
+    "industrial",
+    "retro_arcade",
+    "pixel_art",
+    "sci_fi",
+    "adventure",
+    "nature",
+    "neon",
+    "classic_console"
+  ],
+  "layouts": [
+    "dashboard",
+    "instrument",
+    "sensor_monitor",
+    "graph",
+    "clock",
+    "calculator",
+    "list",
+    "control_panel",
+    "settings",
+    "arcade",
+    "platformer",
+    "racing",
+    "puzzle",
+    "adventure"
+  ],
+  "asset_counts": {
+    "icons": 287,
+    "sprites": 518
+  },
+  "screen": {
+    "width": 320,
+    "height": 240,
+    "format": "RGB565",
+    "lifecycle": "clear-before-every-update"
+  },
+  "sandbox": "existing app-private Lua5.4 environment; no require or filesystem; one UI module per VM",
+  "licenses_directory": "licenses",
+  "contract_file": "contract.json",
+  "ui_signatures": {
+    "set_theme": [
+      "name"
+    ],
+    "theme": [
+      "name"
+    ],
+    "background": [
+      "color"
+    ],
+    "label": [
+      "x",
+      "y",
+      "value",
+      "options"
+    ],
+    "title": [
+      "title",
+      "subtitle"
+    ],
+    "screen": [
+      "title",
+      "subtitle"
+    ],
+    "icon": [
+      "x",
+      "y",
+      "id",
+      "color",
+      "scale"
+    ],
+    "panel": [
+      "x",
+      "y",
+      "w",
+      "h",
+      "options"
+    ],
+    "card": [
+      "x",
+      "y",
+      "w",
+      "h",
+      "label",
+      "value",
+      "options"
+    ],
+    "button": [
+      "x",
+      "y",
+      "w",
+      "label",
+      "focused",
+      "options"
+    ],
+    "buttons": [
+      "a",
+      "b",
+      "c",
+      "focused"
+    ],
+    "tabs": [
+      "labels",
+      "selected",
+      "x",
+      "y",
+      "w"
+    ],
+    "menu": [
+      "items",
+      "selected",
+      "x",
+      "y",
+      "w",
+      "visible"
+    ],
+    "toggle": [
+      "x",
+      "y",
+      "label",
+      "on",
+      "w"
+    ],
+    "checkbox": [
+      "x",
+      "y",
+      "label",
+      "checked"
+    ],
+    "selector": [
+      "x",
+      "y",
+      "w",
+      "label",
+      "value",
+      "focused"
+    ],
+    "dialog": [
+      "title",
+      "message",
+      "confirm",
+      "cancel"
+    ],
+    "toast": [
+      "message",
+      "kind"
+    ],
+    "progress": [
+      "x",
+      "y",
+      "w",
+      "h",
+      "value",
+      "options"
+    ],
+    "loading": [
+      "title",
+      "phase"
+    ],
+    "ring": [
+      "x",
+      "y",
+      "r",
+      "value",
+      "options"
+    ],
+    "gauge": [
+      "x",
+      "y",
+      "r",
+      "value",
+      "minimum",
+      "maximum",
+      "label",
+      "options"
+    ],
+    "battery": [
+      "x",
+      "y",
+      "value",
+      "w",
+      "h"
+    ],
+    "signal": [
+      "x",
+      "y",
+      "value"
+    ],
+    "line_chart": [
+      "x",
+      "y",
+      "w",
+      "h",
+      "values",
+      "minimum",
+      "maximum",
+      "options"
+    ],
+    "bar_chart": [
+      "x",
+      "y",
+      "w",
+      "h",
+      "values",
+      "maximum",
+      "options"
+    ],
+    "clock": [
+      "x",
+      "y",
+      "hour",
+      "minute",
+      "second",
+      "options"
+    ],
+    "timer": [
+      "x",
+      "y",
+      "milliseconds",
+      "options"
+    ],
+    "hud": [
+      "score",
+      "lives",
+      "level"
+    ],
+    "game_menu": [
+      "title",
+      "subtitle",
+      "selected"
+    ],
+    "pause": [],
+    "game_over": [
+      "score",
+      "best"
+    ],
+    "sprite": [
+      "x",
+      "y",
+      "id",
+      "milliseconds",
+      "options"
+    ],
+    "collides": [
+      "ax",
+      "ay",
+      "aw",
+      "ah",
+      "bx",
+      "by",
+      "bw",
+      "bh"
+    ],
+    "lerp": [
+      "a",
+      "b",
+      "t"
+    ],
+    "ease_out": [
+      "t"
+    ],
+    "animate": [
+      "elapsed",
+      "duration",
+      "a",
+      "b"
+    ],
+    "burst": [
+      "particles",
+      "x",
+      "y",
+      "color",
+      "count",
+      "seed"
+    ],
+    "particles": [
+      "particles",
+      "dt"
+    ],
+    "layout": [
+      "name",
+      "index"
+    ],
+    "table": [
+      "x",
+      "y",
+      "w",
+      "rows",
+      "columns",
+      "selected"
+    ],
+    "empty": [
+      "title",
+      "message",
+      "icon"
+    ],
+    "error": [
+      "message"
+    ],
+    "compass": [
+      "x",
+      "y",
+      "r",
+      "heading"
+    ],
+    "radar": [
+      "x",
+      "y",
+      "r",
+      "targets",
+      "milliseconds"
+    ],
+    "navigate": [
+      "index",
+      "button",
+      "count"
+    ],
+    "countdown": [
+      "value",
+      "x",
+      "y"
+    ]
+  }
+}

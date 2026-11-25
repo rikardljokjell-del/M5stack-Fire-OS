@@ -1,6 +1,9 @@
 #include "fire_os.h"
 #include "fire_audio_capture.h"
 #include "fire_json_guard.h"
+#include "fire_app_graphics.h"
+#include "fire_app_bitmap.h"
+#include "fire_app_sdk_data.h"
 
 #include <M5Unified.h>
 #ifdef FIRE_OS_BLE
@@ -52,7 +55,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.2.0-rc9";
+constexpr char kFirmwareVersion[] = "fire-os-1.3.0-rc1";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -5747,10 +5750,12 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   const int manifestMemory =
       jsonIntField(manifest, "max_memory", FireLuaRuntime::kMaxMemoryBytes);
   const int manifestRuntime = jsonIntField(manifest, "max_runtime_ms", -1);
-  const bool hardwareApi = manifestApi == "fire-lua-0.2";
+  const bool appSdk = manifestApi == FireLuaRuntime::appSdkVersion();
+  const bool hardwareApi = appSdk || manifestApi == FireLuaRuntime::hardwareApiVersion();
   if (manifestId != sdBaseName(appFolder) ||
       (manifestApi != "fire-lua-0.1" && !hardwareApi) ||
-      (hardwareApi && manifestContract != FireLuaRuntime::hardwareApiContract()) ||
+      (hardwareApi && manifestContract != (appSdk ? FireLuaRuntime::appSdkContract()
+                                                 : FireLuaRuntime::hardwareApiContract())) ||
       !validSha256Hex(manifestHash) || manifestRuntime < -1 ||
       manifestMemory < 65536 ||
       manifestMemory > static_cast<int>(FireLuaRuntime::kMaxMemoryBytes) ||
@@ -5795,6 +5800,8 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   if (!luaRuntimeReady_) {
     FireLuaRuntime::Host luaHost;
     luaHost.context = this;
+    luaHost.appSdkUiSource = FireSdkData::kUiSource;
+    luaHost.appSdkUiBytes = sizeof(FireSdkData::kUiSource)-1;
     luaHost.displayClear = luaDisplayClear;
     luaHost.displayCircle = luaDisplayCircle;
     luaHost.displayRect = luaDisplayRect;
@@ -5804,6 +5811,14 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaHost.displayFillCircle = luaDisplayFillCircle;
     luaHost.displayPixel = luaDisplayPixel;
     luaHost.displayGrid = luaDisplayGrid;
+    luaHost.displayTextStyle = luaDisplayTextStyle;
+    luaHost.displayMeasureText = luaDisplayMeasureText;
+    luaHost.displayAsset = luaDisplayAsset;
+    luaHost.displayRoundRect = luaDisplayRoundRect;
+    luaHost.displayTriangle = luaDisplayTriangle;
+    luaHost.displayPolyline = luaDisplayPolyline;
+    luaHost.displayGradient = luaDisplayGradient;
+    luaHost.displayArc = luaDisplayArc;
     luaHost.buttonPressed = luaButtonPressed;
     luaHost.rgbSet = luaRgbSet;
     luaHost.imuAccel = luaImuAccel;
@@ -5848,6 +5863,7 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     luaHost.jobClose = luaJobCloseCallback;
     luaHost.jobCancel = luaJobCancelCallback;
     luaRuntime_->setHardwareApi(hardwareApi);
+    luaRuntime_->setAppSdk(appSdk);
     luaRuntime_->setServiceMask(serviceMask);
     luaRuntimeReady_ = luaRuntime_->begin(luaHost);
     if (!luaRuntimeReady_) {
@@ -7494,13 +7510,47 @@ void FireOS::luaDisplayGrid(void* context, int x, int y, int cellWidth,
                             const uint16_t* palette, size_t paletteCount) {
   auto* os = static_cast<FireOS*>(context);
   if (!os || !cells || !palette) return;
-  for (size_t index = 0; index < cellCount; ++index) {
-    const int column = static_cast<int>(index % columns);
-    const int row = static_cast<int>(index / columns);
-    if (row >= rows || cells[index] >= paletteCount) continue;
-    ui.fillRect(x + column * cellWidth, y + row * cellHeight, cellWidth,
-                cellHeight, palette[cells[index]]);
+  fire_app_graphics::indexedGrid(ui,x,y,cellWidth,cellHeight,columns,rows,
+    cells,cellCount,palette,paletteCount);
+}
+
+bool FireOS::luaDisplayTextStyle(void*,int x,int y,const char* text,size_t length,
+                                int color,const char* id,int align,int width) {
+  const auto* font=fire_app_bitmap::find(FireSdkData::kFonts,FireSdkData::kFontCount,id);
+  return font && fire_app_bitmap::text(ui,*font,x,y,text,length,uint16_t(color),align,width);
+}
+bool FireOS::luaDisplayMeasureText(void*,const char* text,size_t length,const char* id,int* w,int* h) {
+  const auto* font=fire_app_bitmap::find(FireSdkData::kFonts,FireSdkData::kFontCount,id);
+  return font && w && h && fire_app_bitmap::measure(*font,text,length,*w,*h);
+}
+bool FireOS::luaDisplayAsset(void*,int x,int y,const char* id,int scale,int tint,bool flipX,bool flipY) {
+  const auto* entry=fire_app_bitmap::find(FireSdkData::kAssets,FireSdkData::kAssetCount,id);
+  return entry && fire_app_bitmap::asset(ui,*entry,x,y,scale,tint,flipX,flipY);
+}
+void FireOS::luaDisplayRoundRect(void*,int x,int y,int w,int h,int r,int color,bool filled) {
+  fire_app_graphics::roundRect(ui,x,y,w,h,r,uint16_t(color),filled);
+}
+void FireOS::luaDisplayTriangle(void* ctx,int x1,int y1,int x2,int y2,int x3,int y3,int color,bool filled) {
+  const int16_t points[]={int16_t(x1),int16_t(y1),int16_t(x2),int16_t(y2),int16_t(x3),int16_t(y3)};
+  luaDisplayPolyline(ctx,points,3,color,true,filled);
+}
+void FireOS::luaDisplayPolyline(void*,const int16_t* values,size_t count,int color,bool closed,bool filled) {
+  if (!values || count<2 || count>64) return;
+  if (filled) {
+    if (count>fire_app_graphics::kMaxPolygonPoints) return;
+    fire_app_graphics::Point points[fire_app_graphics::kMaxPolygonPoints];
+    for (size_t i=0;i<count;++i) points[i]={values[i*2],values[i*2+1]};
+    fire_app_graphics::polygon(ui,points,count,uint16_t(color));
+  } else {
+    for (size_t i=1;i<count;++i) ui.drawLine(values[(i-1)*2],values[(i-1)*2+1],values[i*2],values[i*2+1],color);
+    if (closed) ui.drawLine(values[(count-1)*2],values[(count-1)*2+1],values[0],values[1],color);
   }
+}
+void FireOS::luaDisplayGradient(void*,int x,int y,int w,int h,int a,int b,bool vertical) {
+  fire_app_graphics::gradient(ui,x,y,w,h,uint16_t(a),uint16_t(b),vertical);
+}
+void FireOS::luaDisplayArc(void*,int x,int y,int radius,int start,int end,int color,int thickness) {
+  fire_app_graphics::arc(ui,x,y,radius,start,end,uint16_t(color),thickness);
 }
 
 bool FireOS::luaButtonPressed(void* context, const char* button) {
