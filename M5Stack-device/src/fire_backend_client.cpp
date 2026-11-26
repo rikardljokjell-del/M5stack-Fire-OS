@@ -670,14 +670,14 @@ bool FireBackendClient::appVersions(const String& projectId,
 
 bool FireBackendClient::appDownload(const String& projectId,
                                     const String& packageId,
-                                    const String& appId) {
+                                    const String& appId,const String& stableEventId) {
   if (packageId.length() == 0) return false;
   String fields = ",\"package_id\":\"" + jsonEscape(packageId) + "\"";
   if (projectId.length() > 0)
     fields += ",\"project_id\":\"" + jsonEscape(projectId) + "\"";
   if (appId.length() > 0)
     fields += ",\"app_id\":\"" + jsonEscape(appId) + "\"";
-  return sendEvent("app_download", fields);
+  return sendEvent("app_download",fields,stableEventId);
 }
 
 bool FireBackendClient::appBackendDeletePrepare(
@@ -1046,7 +1046,7 @@ void FireBackendClient::service(bool wifiConnected) {
     // Keep this phase while the existing worker connects or finishes cancel.
     // Do not republish Connecting/dirty the UI on every asynchronous poll.
     const bool ready=usingReverseTransport_ || client->connect(host_.c_str(),port_,1200);
-    const auto progress=fire_backend_policy::progress(ready,client_.connecting(),client_.stopping());
+    const auto progress=fire_backend_policy::progress(ready,client_.connecting(),client_.stopping(),client_.running());
     if (progress==fire_backend_policy::Progress::Waiting) return;
     if (progress==fire_backend_policy::Progress::Failed) {
       transportClient_=nullptr;reconnectAt_=millis()+3000;
@@ -1353,6 +1353,7 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
         sessionId_ = newSession;
         resumeSessionId_ = "";
         sessionStarted_ = true;
+        if (++connectionEpoch_==0) ++connectionEpoch_;
         developmentContext_=String();
         setState(State::Connected, usingReverseTransport_
                                       ? "Backend connected (Reverse TCP)"
@@ -1364,6 +1365,7 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
       if (snapshotSession.length() > 0) {
         sessionId_ = snapshotSession;
         sessionStarted_ = true;
+        if (++connectionEpoch_==0) ++connectionEpoch_;
         setState(State::Connected, usingReverseTransport_
                                       ? "Backend connected (Reverse TCP)"
                                       : "Backend connected (Direct)");

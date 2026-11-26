@@ -147,8 +147,14 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
     if (!reverseClient_) {
       client_.setTimeout(1200);
       if (!client_.connect(host_.c_str(), port_, 1200)) {
-        if (client_.connecting() || client_.stopping()) return;
-        fail("Backend download connection failed");
+        if (fire_backend_policy::progress(false,client_.connecting(),client_.stopping(),client_.running())==fire_backend_policy::Progress::Waiting) return;
+        fire_backend_policy::ConnectFailure failure;
+        String reason="Backend download connection failed";
+        if (client_.lastConnectFailure(failure)) {
+          reason+=" (phase="+String(failure.phase>>8)+",tls="+String(failure.phase&255)+
+              ",err="+String(failure.error)+",ms="+String(failure.elapsedMs)+")";
+        }
+        fail(reason);
         return;
       }
     }

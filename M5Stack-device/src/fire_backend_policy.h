@@ -4,13 +4,20 @@
 // Small, portable operations used by the existing client and settings path.
 namespace fire_backend_policy {
 enum class Progress:uint8_t {Waiting,Failed,Ready};
-inline Progress progress(bool ready,bool connecting,bool stopping) {
-  return ready?Progress::Ready:(connecting || stopping)?Progress::Waiting:Progress::Failed;
+inline Progress progress(bool ready,bool connecting,bool stopping,bool cleanup=false) {
+  return ready?Progress::Ready:(connecting || stopping || cleanup)?Progress::Waiting:Progress::Failed;
 }
 template<class Store> bool saveMode(Store& store,uint8_t& current,uint8_t next) {
   if (next>2 || store.putUChar("backend_mode",next)!=1 || store.getUChar("backend_mode",255)!=next) return false;
   current=next;return true;
 }
+inline bool failureReadable(bool active,bool stopped,bool failed) {return !active && !stopped && failed;}
+struct ConnectFailure {
+  uint32_t phase=0; // upper byte: fixed worker phase; lower byte: TLS state
+  int32_t error=0;
+  uint32_t elapsedMs=0,attempt=0;
+  bool matches(uint32_t current) const {return attempt && attempt==current;}
+};
 struct TlsFailure {
   bool captured=false,socket=false;
   int state=0,error=0;

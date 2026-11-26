@@ -12,6 +12,7 @@
 #include "fire_data_paths.h"
 #include "fire_data_deadline.h"
 #include "fire_ai_workflow.h"
+#include "fire_app_updates.h"
 #include "fire_ui.h"
 #include "fire_ai_menu_ui.h"
 #include "fire_button_capture.h"
@@ -49,6 +50,11 @@
 #endif
 
 namespace {
+String aiJobText(const cJSON* row,const char* key) {
+  const cJSON* value=cJSON_GetObjectItemCaseSensitive(row,key);
+  return cJSON_IsString(value) && value->valuestring?String(value->valuestring):String();
+}
+
 constexpr uint8_t kSdCsPin = 4;
 const char* osMenuIcon(const String& label);
 constexpr char kSdNameCharset[] =
@@ -71,7 +77,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc7";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc8";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -2488,11 +2494,13 @@ void FireOS::publishLuaAppScan() {
 }
 
 void FireOS::syncLuaAppSelections() {
+  updatePrefsOwner_=backendDeviceId_;
   const String saved = preferences.getString("lua_menu", "");
   for (uint8_t index = 0; index < kMaxLuaApps; ++index)
     luaMenuSelected_[index] = false;
   for (uint8_t index = 0; index < luaAppCount_; ++index) {
     luaMenuSelected_[index] = saved.indexOf("|" + luaAppIds_[index] + "|") >= 0;
+    luaUpdateSuppressed_[index]=preferences.getBool(compactPreferenceKey("up_",backendDeviceId_+"|"+luaAppIds_[index]).c_str(),false);
   }
 
 }
@@ -4120,13 +4128,14 @@ void FireOS::rebuildAppManagerItems() {
 }
 
 void FireOS::updateAppManagerBackend() {
-  if (screen_ != Screen::AppsSettings || !backendClient_ ||
-      !backendClient_->sessionReady())
+  if (!backendClient_ || !backendClient_->sessionReady() ||
+      !luaCacheValid_ || !luaCacheComplete_ || appInventoryPending_)
     return;
   if (!backendCatalogRequested_ && !backendCatalogLoading_) {
     backendCatalogRequested_ = backendClient_->appList(0);
     backendCatalogLoading_ = backendCatalogRequested_;
     if (backendCatalogRequested_) {
+      backendCatalogEpoch_=0;backendAppCount_=0;
       backendCatalogNextOffset_ = 0;
       backendCatalogStatus_ = "Loading backend apps...";
       managerStatus_ = backendCatalogStatus_;
@@ -4171,18 +4180,16 @@ void FireOS::parseBackendAppCatalog(const String& message) {
     cursor = message.indexOf('{', end + 1);
   }
   rebuildAppManagerItems();
-  const bool complete = message.indexOf("\"next_offset\":null") >= 0;
-  if (!complete) {
-    const int next = jsonIntField(message, "next_offset", -1);
-    if (next >= 0 && next != backendCatalogNextOffset_ &&
-        backendClient_ && backendClient_->sessionReady()) {
-      backendCatalogNextOffset_ = next;
-      backendCatalogLoading_ = backendClient_->appList(next);
-      return;
-    }
+  cJSON* catalog=cJSON_Parse(message.c_str());
+  const cJSON* nextValue=cJSON_GetObjectItemCaseSensitive(catalog,"next_offset");
+  const bool completed=cJSON_IsNull(nextValue);
+  const int next=cJSON_IsNumber(nextValue)?nextValue->valueint:-1;
+  cJSON_Delete(catalog);
+  if(!completed && next>backendCatalogNextOffset_ && next<kMaxBackendApps && backendClient_ && backendClient_->sessionReady()) {
+    backendCatalogNextOffset_=next;backendCatalogLoading_=backendClient_->appList(next);return;
   }
-  backendCatalogLoading_ = false;
-  backendCatalogRequested_ = true;
+  backendCatalogLoading_=false;backendCatalogRequested_=true;
+  if(completed && backendClient_ && backendClient_->sessionReady()) {backendCatalogEpoch_=backendClient_->connectionEpoch();backendCatalogAt_=millis();}
   backendCatalogStatus_ = "Backend apps: " + String(backendAppCount_);
   managerStatus_ = backendCatalogStatus_;
   redrawRequested_ = true;
@@ -4217,7 +4224,7 @@ void FireOS::prepareAppManagerActions() {
   if (managerSelection_ >= managerItemCount_) return;
   const ManagerItem& item = managerItems_[managerSelection_];
   auto add = [&](uint8_t code, const char* label) {
-    if (appManagerActionCount_ >= 9) return;
+    if (appManagerActionCount_ >= 10) return;
     appManagerActionCodes_[appManagerActionCount_] = code;
     appManagerActionLabels_[appManagerActionCount_++] = label;
   };
@@ -4227,6 +4234,10 @@ void FireOS::prepareAppManagerActions() {
   }
   if (item.kind==1 || item.backend) add(10,"Evolution");
   if (item.backend && item.packageId.length() > 0) add(2, "Download/update");
+  if (item.local && item.kind==1) {
+    bool suppressed=false;for(uint8_t i=0;i<luaAppCount_;++i) if(luaAppIds_[i]==item.appId && updatePrefsOwner_==backendDeviceId_) suppressed=luaUpdateSuppressed_[i];
+    add(11,suppressed?"Spør om oppdatering: Av":"Spør om oppdatering: På");
+  }
   if (item.local) add(3, "Delete local");
   if (item.backend && item.canDeleteBackend) add(4, "Delete backend");
   add(5, "Back");
@@ -4569,9 +4580,10 @@ uint64_t FireOS::buttonView() const {
     case Screen::LuaApp:details=luaFeedbackConfirmation_ | (uint64_t(luaRepairConfirmPending_)<<1);break;
     default:break;
   }
-  return uint64_t(screen_) | (details<<8) | (uint64_t(buildNoticeActive_)<<63);
+  return uint64_t(screen_) | (details<<8) | (uint64_t(appUpdateStage_)<<60) | (uint64_t(buildNoticeActive_)<<63);
 }
 String FireOS::buttonViewIdentity() const {
+  if(appUpdateStage_) return appUpdateCandidate_;
   if(buildNoticeActive_) return buildNoticeId_;
   if(screen_==Screen::Evolution && evolutionUi_.page==FireEvolutionUi::Proposal) return evolutionUi_.proposalId;
   if(screen_==Screen::AiDeveloper) {
@@ -4646,6 +4658,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   const bool debugAudio = screen_ == Screen::Debug && detailIndex_ == 4;
   if (!conversationAudio && !debugAudio && !aiAudioOutputActive_)
     playButtonSound(index, longPress);
+  if(fire_app_updates::active(appUpdateStage_,screen_==Screen::QuickSettings) && !longPress) {handleAppUpdateButton(index);return;}
   if (longPress) {
     if (screen_ == Screen::FileExplorer && index == 1 && !sdPreview_ &&
         !sdNameEditor_ && !sdDeleteConfirm_) {
@@ -4876,7 +4889,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       } else if (mainIndex_ >= kSystemMainCount) {
         const uint8_t appIndex = mainIndex_ - kSystemMainCount;
         if (appIndex < luaAppCount_)
-          startLuaApp(luaAppPaths_[appIndex], luaAppDisplayNames_[appIndex]);
+          requestLuaAppOpen(luaAppPaths_[appIndex],luaAppDisplayNames_[appIndex],luaAppPackageIds_[appIndex]);
       } else {
         open(Screen::AiDeveloper);
       }
@@ -5015,6 +5028,7 @@ void FireOS::open(Screen screen) {
     backendSettingsUi_.page=FireBackendSettingsUi::None;
     aiProjectSelection_ = 0;
     aiProjectOffset_ = 0;
+    aiJobViewing_=aiJobOpenPending_=aiJobNeedsInstall_=false;
     aiVoiceTestMode_ = false;
     aiVoiceTestPlaybackActive_ = false;
     aiProjectId_ = "";
@@ -5120,7 +5134,11 @@ void FireOS::selectMainItem(uint8_t nextIndex) {
 }
 
 void FireOS::back() {
+  if(appUpdateStage_) {appUpdateStage_=0;redrawRequested_=true;return;}
   if (screen_==Screen::AiDeveloper) {backAiDeveloper();return;}
+  if (screen_==Screen::LuaApp && !luaAppActive_ && aiJobViewing_) {
+    screen_=Screen::AiDeveloper;backAiDeveloper();return;
+  }
   if (screen_ == Screen::Home) {
     if (!homeApp_.back()) home();
     redrawRequested_ = true;
@@ -5139,6 +5157,8 @@ void FireOS::back() {
 }
 
 void FireOS::home() {
+  aiJobViewing_=aiJobOpenPending_=false;
+  if(appUpdateStage_) {appUpdateStage_=0;userRunAfterInstall_=String();}
   if (screen_ == Screen::Debug) cleanupDebugTests();
   if (screen_ == Screen::AiDeveloper &&
       (aiAudioCaptureActive_ || aiAudioOutputActive_ ||
@@ -5159,6 +5179,8 @@ void FireOS::goToBootApp() {
 }
 
 void FireOS::openQuickSettings() {
+  appUpdateStage_=0; // reserved long-B opens a usable overlay, never a hidden update modal
+
   if (screen_ == Screen::Debug) cleanupDebugTests();
   if (screen_ == Screen::Bluetooth) closeBluetoothSettings();
   previousScreen_ = screen_;
@@ -5577,6 +5599,13 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     aiWorkflowStarted_ = millis();
   } else if (index == 0 && aiWorkflowState_ == 5) {
     if (backendClient_ && backendClient_->sessionReady() && aiReadyPackageId_.length() > 0) {
+      if (aiJobNeedsInstall_) {
+        if (backendClient_->appDownload(aiProjectId_,aiReadyPackageId_)) {
+          userRunAfterInstall_=aiReadyPackageId_;aiWorkflowState_=4;
+          aiWorkflowText_="Laster ned valgt app";
+        } else aiWorkflowText_="Nedlasting kunne ikke startes";
+        return;
+      }
       if (backendClient_->confirmRun(aiReadyPackageId_)) {
         aiWorkflowText_ = "SENDING RUN";
         aiWorkflowState_ = 6;
@@ -6043,6 +6072,7 @@ void FireOS::updateAiAudioOutput() {
 
 bool FireOS::startLuaApp(const String& path, const String& name,
                          const String& launchPackageId,const String& expectedSourceHash) {
+  aiJobViewing_=aiJobOpenPending_=false;appUpdateStage_=0;
   luaSdkFrame_.invalidate();
   if (!luaRuntime_) {
     luaAppError_ = "Lua runtime unavailable";
@@ -6414,7 +6444,7 @@ void FireOS::stopLuaApp(const String& reason) {
     luaRepairPrepareSent_ = false;
     luaRepairBuildConfirmed_ = false;
     luaRepairConfirmPending_ = false;
-    luaRepairRunAfterInstall_ = false;
+    userRunAfterInstall_=String();
     luaRepairStatus_ = "Ready to repair";
     luaRepairPhase_ = "idle";
     luaRepairMessage_ = "Press B to fix this app";
@@ -6675,9 +6705,12 @@ void FireOS::handleLuaRepairStatus(const String& message) {
       (incomingApp.length() > 0 && luaRepairAppId_.length() > 0 && incomingApp != luaRepairAppId_) ||
       (luaRepairId_.length()==0 && luaRepairRequested_ && incomingApp.length()>0 && incomingApp!=luaErrorAppId_))
     return;
+  const bool opened=aiJobViewing_ && aiJobOpenPending_ && incomingRepair==aiJobRepair_;
+  if (opened) {luaErrorAppId_=incomingApp;aiJobOpenPending_=false;}
   if (incomingApp.length()) luaRepairAppId_=incomingApp;
   const String incomingName=jsonStringField(message,"app_name");
   if (incomingName.length()) luaRepairAppName_=incomingName;
+  if (opened) {luaErrorAppName_=luaRepairAppName_;luaAppError_="Reparasjon av "+luaRepairAppName_;}
   if (aiRepairResumePending_ && luaRepairAppId_.length()) {
     luaErrorAppId_=luaRepairAppId_;luaErrorAppName_=aiRepairResumeName();
     luaAppError_="Reparasjon av "+luaErrorAppName_;aiRepairResumePending_=false;
@@ -6717,7 +6750,7 @@ void FireOS::handleLuaRepairStatus(const String& message) {
     luaRepairConfirmPending_ = false;
     luaRepairBuildConfirmed_ = true;
   } else if (luaRepairStatus_ == "awaiting_confirmation" &&
-             luaRepairProposalId_.length() > 0 && luaRepairRequested_ &&
+             luaRepairProposalId_.length() > 0 && fire_ai_menu::autoConfirmRepair(luaRepairRequested_,aiJobViewing_) &&
              backendClient_ && backendClient_->sessionReady() &&
              (!luaRepairConfirmPending_ ||
               millis() - luaRepairConfirmLastAttemptAt_ >= 3000)) {
@@ -6728,6 +6761,7 @@ void FireOS::handleLuaRepairStatus(const String& message) {
     }
   } else if (luaRepairStatus_ == "ready" &&
              luaRepairReadyPackageId_.length() > 0) {
+    backendCatalogRequested_=false;
     luaErrorAction_ = 1;
     luaRepairMessage_ = luaRepairMessage_.length() > 0
                             ? luaRepairMessage_
@@ -6764,11 +6798,11 @@ void FireOS::startLuaRepairRun() {
     luaRepairMessage_ = "Waiting for backend connection";
     return;
   }
-  if (luaRepairRunAfterInstall_ || (packageManager_ && packageManager_->busy()))
+  if (userRunAfterInstall_.length() || (packageManager_ && packageManager_->busy()))
     return;
   if (backendClient_->appDownload(luaRepairProjectId_,
                                   luaRepairReadyPackageId_, luaErrorAppId_)) {
-    luaRepairRunAfterInstall_ = true;
+    userRunAfterInstall_=luaRepairReadyPackageId_;
     luaRepairStatus_ = "downloading";
     luaRepairPhase_ = "installing";
     luaRepairMessage_ = "Laster ned reparert app";
@@ -6778,6 +6812,10 @@ void FireOS::startLuaRepairRun() {
 }
 
 void FireOS::handleLuaErrorButton(uint8_t index) {
+  if (aiJobViewing_ && aiJobOpenPending_ && index==1) {luaRepairMessage_="Venter på jobbstatus";return;}
+  if (aiJobViewing_ && index==1 && luaRepairStatus_=="awaiting_confirmation") {
+    aiJobViewing_=false;sendAiJobAction("resume");return;
+  }
   const bool repairActive = luaRepairRequested_ || luaRepairId_.length() > 0 ||
                             luaRepairStatus_ == "ready" ||
                             luaRepairStatus_ == "building" ||
@@ -6844,77 +6882,44 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     buildJobCount_ = 0;
     bool activeBuildFound = false;
     uint8_t activeBuildPriority = 0;
-    const int jobsAt = message.indexOf("\"jobs\"");
-    const int jobsArray = jobsAt >= 0 ? message.indexOf('[', jobsAt) : -1;
-    int cursor = jobsArray >= 0 ? jobsArray + 1 : -1;
-    while (cursor >= 0 && buildJobCount_ < 4) {
-      while (cursor < message.length() &&
-             (message[cursor] == ' ' || message[cursor] == '\t' ||
-              message[cursor] == '\r' || message[cursor] == '\n' ||
-              message[cursor] == ','))
-        ++cursor;
-      if (cursor >= message.length() || message[cursor] != '{') break;
-      const int end = jsonObjectEnd(message, cursor);
-      if (end < 0) break;
-      const String item = message.substring(cursor, end + 1);
-      const uint8_t jobIndex = buildJobCount_;
-      buildJobIds_[jobIndex] = jsonStringField(item, "build_id");
-      buildJobRepairIds_[jobIndex]=jsonStringField(item,"repair_id");
-      buildJobNames_[jobIndex] = jsonStringField(item, "app_name");
-      if (!buildJobNames_[jobIndex].length()) buildJobNames_[jobIndex]=jsonStringField(item,"name");
-      buildJobCanDelete_[jobIndex]=jsonBoolField(item,"can_delete",false);
-      buildJobCanPause_[jobIndex]=jsonBoolField(item,"can_pause",false);
-      buildJobCanContext_[jobIndex]=jsonBoolField(item,"can_add_context",false);
-      buildJobStatuses_[jobIndex] = jsonStringField(item, "status");
-      buildJobErrors_[jobIndex] = jsonStringField(item, "error_status");
-      if (buildJobErrors_[jobIndex].length() == 0)
-        buildJobErrors_[jobIndex] = jsonStringField(item, "message");
-      buildJobErrorCodes_[jobIndex] = jsonStringField(item, "error_code");
-      buildJobDiagnostics_[jobIndex] =
-          jsonStringField(item, "diagnostic_message");
-      buildJobCanResume_[jobIndex] =
-          jsonBoolField(item, "can_resume", false);
-      if (item.indexOf("\"can_resume\"") < 0)
-        buildJobCanResume_[jobIndex] =
-            jsonBoolField(item, "can_open", false);
-      buildJobCanRetry_[jobIndex] = jsonBoolField(item, "can_retry", false);
-      const String phase = jsonStringField(item, "phase");
-      String messageText = jsonStringField(item, "display_text");
-      if(!messageText.length()) messageText=jsonStringField(item,"message");
-      const bool finished = buildJobStatuses_[jobIndex] == "ready" ||
-                            buildJobStatuses_[jobIndex] == "failed" ||
-                            buildJobStatuses_[jobIndex] == "cancelled";
-      const bool active = buildJobIds_[jobIndex].length() > 0 &&
-                          !finished &&
-                          (buildJobStatuses_[jobIndex].length() > 0 ||
-                           phase.length() > 0);
-      const uint8_t activePriority =
-          (buildJobStatuses_[jobIndex] == "queued" && phase == "queued")
-              ? 1
-              : 2;
-      if (active && (!activeBuildFound || activePriority > activeBuildPriority)) {
-        activeBuildFound = true;
-        activeBuildPriority = activePriority;
-        aiBuildId_ = buildJobIds_[jobIndex];
-        aiProjectName_=buildJobNames_[jobIndex].length()?buildJobNames_[jobIndex]:String("Appnavn ikke hentet");
-        aiBuildResumeCount_ = jsonIntField(item, "resume_count", -1);
-        buildProgress_ = static_cast<uint8_t>(
-            constrain(buildProgressField(item,aiBuildProgress_), 0, 100));
-        aiBuildProgress_ = buildProgress_;
-        buildPhase_ = phase;
-        buildStatusMessage_ = messageText;
-        aiWorkflowText_ = messageText.length() > 0
-                              ? messageText
-                              : phase.length() > 0 ? phase : "Lager app";
-        aiWorkflowState_ = 4;
-        aiDeveloperMode_ = 2;
-        backgroundBuildActive_ = true;
-        aiBuildResumePending_ = false;
-        aiBuildRetryPending_ = false;
+    cJSON* document=cJSON_Parse(message.c_str());
+    const cJSON* jobs=cJSON_GetObjectItemCaseSensitive(document,"jobs");
+    const bool openingBuild=aiJobOpenPending_ && !aiJobRepair_.length();bool opened=false;
+    for (int row=0;cJSON_IsArray(jobs) && row<cJSON_GetArraySize(jobs) && buildJobCount_<4;++row) {
+      const cJSON* item=cJSON_GetArrayItem(jobs,row);if(!cJSON_IsObject(item)) continue;
+      const uint8_t i=buildJobCount_;
+      buildJobIds_[i]=aiJobText(item,"build_id");buildJobRepairIds_[i]=aiJobText(item,"repair_id");
+      if (!buildJobIds_[i].length() && !buildJobRepairIds_[i].length()) continue;
+      buildJobNames_[i]=aiJobText(item,"app_name");if(!buildJobNames_[i].length()) buildJobNames_[i]=aiJobText(item,"name");
+      buildJobCanOpen_[i]=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item,"can_open"));
+      buildJobCanDelete_[i]=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item,"can_delete"));
+      buildJobCanPause_[i]=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item,"can_pause"));
+      buildJobCanContext_[i]=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item,"can_add_context"));
+      buildJobCanResume_[i]=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item,"can_resume"));
+      buildJobCanRetry_[i]=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item,"can_retry"));
+      buildJobStatuses_[i]=aiJobText(item,"status");buildJobErrors_[i]=aiJobText(item,"error_status");
+      if(!buildJobErrors_[i].length()) buildJobErrors_[i]=aiJobText(item,"message");
+      buildJobErrorCodes_[i]=aiJobText(item,"error_code");buildJobDiagnostics_[i]=aiJobText(item,"diagnostic_message");
+      if (openingBuild && buildJobIds_[i]==aiJobBuild_) {restoreAiJob(item);opened=true;}
+      const String phase=aiJobText(item,"phase");String text=aiJobText(item,"display_text");
+      if(!text.length()) text=aiJobText(item,"message");
+      const bool finished=buildJobStatuses_[i]=="ready" || buildJobStatuses_[i]=="failed" || buildJobStatuses_[i]=="cancelled";
+      const bool selected=!aiJobViewing_ || (!aiJobRepair_.length() && aiJobBuild_==buildJobIds_[i]);
+      const bool active=selected && buildJobIds_[i].length() && !finished && (buildJobStatuses_[i].length() || phase.length());
+      const uint8_t priority=buildJobStatuses_[i]=="queued" && phase=="queued"?1:2;
+      if(active && (!activeBuildFound || priority>activeBuildPriority)) {
+        activeBuildFound=true;activeBuildPriority=priority;aiBuildId_=buildJobIds_[i];
+        aiProjectName_=buildJobNames_[i].length()?buildJobNames_[i]:String("Appnavn ikke hentet");
+        const cJSON* value=cJSON_GetObjectItemCaseSensitive(item,"progress");
+        buildProgress_=cJSON_IsNumber(value)?constrain(value->valueint,0,100):0;aiBuildProgress_=buildProgress_;
+        value=cJSON_GetObjectItemCaseSensitive(item,"resume_count");aiBuildResumeCount_=cJSON_IsNumber(value)?value->valueint:-1;
+        buildPhase_=phase;buildStatusMessage_=text;aiWorkflowText_=text.length()?text:phase.length()?phase:String("Lager app");
+        aiWorkflowState_=4;aiDeveloperMode_=2;backgroundBuildActive_=true;aiBuildResumePending_=aiBuildRetryPending_=false;
       }
-      if (buildJobIds_[jobIndex].length() || buildJobRepairIds_[jobIndex].length()) ++buildJobCount_;
-      cursor = end + 1;
+      ++buildJobCount_;
     }
+    cJSON_Delete(document);
+    if(openingBuild && !opened) {aiJobOpenPending_=false;aiJobCanOpen_=false;aiWorkflowText_="Jobblisten er endret. Velg igjen";}
     if (!activeBuildFound && !buildNoticeActive_) {
       backgroundBuildActive_ = false;
     }
@@ -7026,6 +7031,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
                           ? buildStatusMessage_
                           : buildPhase_;
     if (buildPhase_ == "ready" || status == "ready") {
+      if(aiJobViewing_ && !aiJobRepair_.length()) aiJobNeedsInstall_=true;
       if(readyPackage.length()) {aiReadyPackageId_=readyPackage;aiPackageId_=readyPackage;}
       aiWorkflowState_ = 5;
       backgroundBuildActive_ = false;
@@ -7193,7 +7199,7 @@ void FireOS::updateBackend() {
                               (luaAppActive_ && (luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_)) ||
                               luaAiBindPackageId_.length()>0 ||
                               demandScreen == Screen::AiApi ||
-                              demandScreen == Screen::LuaApp ||
+                              fire_ui_cadence::repairViewDemand(demandScreen==Screen::LuaApp,luaAppActive_) ||
                               demandScreen == Screen::Settings ||
                               demandScreen == Screen::AppsSettings ||
                               demandScreen == Screen::Evolution ||
@@ -7280,6 +7286,7 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   if (!os) return;
   os->backendStatus_ = status;
   if(!connected) {
+    os->backendCatalogEpoch_=0;os->backendCatalogLoading_=false;os->backendCatalogRequested_=false;
     for(LuaHardwareJob& job:os->luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.state==0)
       os->cancelLuaRuntimeAi(job,"not_connected");
     for (LuaHardwareJob& job:os->luaJobs_) if (job.kind==LuaJobKind::Data && job.state==0 && job.started && job.aiRequestId.length())
@@ -7292,6 +7299,7 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
     }
   }
   if (connected) {
+    os->backendCatalogRequested_=false;os->backendCatalogLoading_=false;
     os->buildJobsRequested_ = false;
     os->buildJobsRequestAt_ = 0;
     os->buildJobsRetryCount_ = 0;
@@ -7325,7 +7333,7 @@ void FireOS::packageStatus(void* context, const String& status) {
   if (!os) return;
   os->aiWorkflowText_ = status;
   if (os->screen_ == Screen::AppsSettings) os->managerStatus_ = status;
-  os->aiDeveloperMode_ = 2;
+  os->aiDeveloperMode_ = 2;os->redrawRequested_=true;
   if(os->packageManager_ && os->packageManager_->busy()) {
     os->aiBuildProgress_=os->packageManager_->progress();os->aiWorkflowState_=4;
   }
@@ -7345,9 +7353,18 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
       packageId==identity.package && archiveHash==identity.archive && os->sdBaseName(folder)==identity.app;
     if(!ok) {
       os->invalidateLuaApps();
+      if(packageId==os->appUpdateCandidate_) {os->appUpdateReady_=false;os->appUpdateFailure_=1;if(os->appUpdateStage_==2) os->appUpdateStage_=1;}
+      if(os->userRunAfterInstall_==packageId) os->userRunAfterInstall_=String();
       if(os->backendClient_) os->backendClient_->deviceInstallResult(installId,packageId,false,archiveHash,"metadata_error");
       os->aiWorkflowText_="Installasjonskontroll feilet";os->aiWorkflowState_=0;return;
     }
+  }
+  if(packageId==os->appUpdateCandidate_) {
+    os->appUpdateReady_=ok;os->appUpdateFailure_=!ok;os->appUpdateRequest_=String();
+    // Only an already visible transfer view becomes the explicit Open page.
+    // A minimized completion never steals the current screen or runs code.
+    if(os->appUpdateStage_==2) os->appUpdateStage_=fire_app_updates::completed(os->appUpdateStage_,ok);
+    os->appUpdateSelection_=1;
   }
   const bool selected=os->aiReadyPackageId_.length()?packageId==os->aiReadyPackageId_:packageId==os->aiPackageId_;
   if(selected) {os->aiPackageId_=packageId;os->aiWorkflowText_=ok?"App installert":message;}
@@ -7364,22 +7381,27 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
     // of the asynchronously refreshed menu/inventory snapshot or NVS space.
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
         installId, packageId, true, archiveHash, "installed");
-    if (os->luaRepairRunAfterInstall_ &&
-        packageId == os->luaRepairReadyPackageId_) {
-      os->luaRepairRunAfterInstall_ = false;
-      if (os->backendClient_ && os->backendClient_->confirmRun(packageId)) {
-        os->luaRepairStatus_ = "starting";
-        os->luaRepairPhase_ = "starting";
-        os->luaRepairMessage_ = "Starter reparert app";
+    if (os->userRunAfterInstall_.length() && packageId==os->userRunAfterInstall_) {
+      const bool repair=packageId==os->luaRepairReadyPackageId_;
+      os->userRunAfterInstall_=String();os->aiJobNeedsInstall_=false;
+      const bool sent=os->backendClient_ && os->backendClient_->confirmRun(packageId);
+      if (repair) {
+        if (sent) {os->luaRepairStatus_="starting";os->luaRepairPhase_="starting";}
+        os->luaRepairMessage_=sent?"Starter reparert app":"Kjøring kunne ikke bekreftes";
       } else {
-        os->luaRepairMessage_ = "Run authorization failed";
+        os->aiWorkflowText_=sent?"Starter valgt app":"Velg Kjør igjen";
+        if (sent) os->aiWorkflowState_=6;
       }
     }
-    if(selected) os->aiWorkflowState_ = 5;
+    if(selected && os->aiWorkflowState_!=6) os->aiWorkflowState_ = 5;
   } else {
+    if (os->userRunAfterInstall_==packageId) os->userRunAfterInstall_=String();
+    if(packageId==os->luaRepairReadyPackageId_) {
+      os->luaRepairStatus_="ready";os->luaRepairPhase_="ready";os->luaRepairMessage_=message;os->luaErrorAction_=1;
+    }
     if (os->backendClient_) os->backendClient_->deviceInstallResult(
         installId, packageId, false, archiveHash, message);
-    if(selected) os->aiWorkflowState_ = 0;
+    if(selected) os->aiWorkflowState_=os->aiJobNeedsInstall_?5:0;
   }
 }
 
@@ -7429,6 +7451,13 @@ void FireOS::backendMessage(void* context, const String& message) {
 void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
+  if(appUpdateStage_==2 && appUpdateRequest_.length() && jsonStringField(message,"event_id")==appUpdateRequest_ && (type=="error" || type=="event_ack")) {
+    cJSON* reply=cJSON_Parse(message.c_str());
+    const cJSON* result=cJSON_GetObjectItemCaseSensitive(reply,"result");
+    const bool rejected=type=="error" || cJSON_GetObjectItemCaseSensitive(result,"error");
+    cJSON_Delete(reply);
+    if(rejected) {appUpdateStage_=1;appUpdateFailure_=1;appUpdateSelection_=1;appUpdateRequest_=String();}
+  }
   const bool selectedApp=backendClient_ && backendClient_->selectionAppAck();
   const bool selectedMode=backendClient_ && backendClient_->selectionModeAck();
   const bool selectionFailed=backendClient_ && backendClient_->selectionFailed();
@@ -7436,7 +7465,7 @@ void FireOS::handleBackendMessage(const String& message) {
   // These fields are typed, server-confirmed scope. A socket write is never
   // confirmation, and a delayed reply cannot approve another user's choice.
   if (backendClient_ && (selectedApp || selectionFailed ||
-      (bootstrap && !backendClient_->selectionPending()))) {
+      (bootstrap && !aiJobViewing_ && !backendClient_->selectionPending()))) {
     const String project=backendClient_->confirmedProject();
     if (aiEvolutionGoalProject_!=project) {aiEvolutionGoal_=String();aiEvolutionGoalProject_=String();aiDevelopmentContext_=String();}
     aiProjectId_=project;aiBasePackageId_=backendClient_->confirmedBase();
@@ -7784,6 +7813,7 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "package_ready") {
+    backendCatalogRequested_=false;
     aiPackageId_ = jsonStringField(message, "package_id");
     aiReadyPackageId_=aiPackageId_;
     const String projectId = jsonStringField(message, "project_id");
@@ -8192,7 +8222,7 @@ void FireOS::handleAppsButton(uint8_t index) {
     }
     if (externalAppSelection_ >= externalAppCount_) {
       const uint8_t luaIndex = externalAppSelection_ - externalAppCount_;
-      if (!startLuaApp(luaAppPaths_[luaIndex], luaAppNames_[luaIndex])) {
+      if (!requestLuaAppOpen(luaAppPaths_[luaIndex],luaAppNames_[luaIndex],luaAppPackageIds_[luaIndex])) {
         externalAppMessage_ = luaAppError_;
       }
     } else {
@@ -8295,9 +8325,12 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
         const ManagerItem& item = managerItems_[managerSelection_];
         if (action == 1) {
           if (item.kind == 1)
-            startLuaApp(item.localPath, item.name, item.localPackageId);
+            requestLuaAppOpen(item.localPath,item.name,item.localPackageId);
           else if (item.kind == 0)
             installExternalApp(item.localPath, true, false);
+        } else if (action == 11) {
+          bool suppressed=false;for(uint8_t i=0;i<luaAppCount_;++i) if(luaAppIds_[i]==item.appId && updatePrefsOwner_==backendDeviceId_) suppressed=luaUpdateSuppressed_[i];
+          managerStatus_=saveAppUpdatePreference(item.appId,!suppressed)?"Oppdateringsvalg lagret":"Valget kunne ikke lagres";
         } else if (action == 10) {
           openEvolution();
         } else if (action == 2) {
@@ -9751,6 +9784,7 @@ void FireOS::draw() {
     drawScreen(screen_);
   }
   if (buildNoticeActive_) drawBuildNoticeOverlay();
+  if (fire_app_updates::active(appUpdateStage_,screen_==Screen::QuickSettings)) drawAppUpdatePrompt();
   const int64_t presentStartedUs=esp_timer_get_time();
   if (screen_!=Screen::LuaApp) maxUiRenderUs_=max(maxUiRenderUs_,uint32_t(presentStartedUs-drawStartedUs));
   ui.pushSprite(0, 0);

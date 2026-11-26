@@ -76,6 +76,8 @@ int FireAsyncClient::connect(const char* host, uint16_t port) {
     failureReported_ = true;
     return 0;
   }
+  if (++attempt_==0) ++attempt_;
+  lastFailure_={};
   if (!rxStorage_) {
     rxStorage_ = static_cast<uint8_t*>(heap_caps_malloc(kRxBytes + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     txStorage_ = static_cast<uint8_t*>(heap_caps_malloc(kTxBytes + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -83,6 +85,7 @@ int FireAsyncClient::connect(const char* host, uint16_t port) {
       if (rxStorage_) heap_caps_free(rxStorage_);
       if (txStorage_) heap_caps_free(txStorage_);
       rxStorage_ = txStorage_ = nullptr;
+      lastFailure_={5u<<8,0,0,attempt_};
       state_ = State::Failed;
       return 0;
     }
@@ -100,6 +103,7 @@ int FireAsyncClient::connect(const char* host, uint16_t port) {
   state_ = State::Connecting;
   active_ = true;
   if (xTaskCreate(task, "fire-net", 8192, this, 1, nullptr) != pdPASS) {
+    lastFailure_={6u<<8,0,0,attempt_};
     state_ = State::Failed;
     active_ = false;
   }
@@ -155,6 +159,7 @@ void FireAsyncClient::run() {
   if (workerSecure_ && !ok && !stop_) {
     const auto& failure=tls.failure;
     const uint8_t phase=time(nullptr)<1700000000?1:!failure.captured?4:failure.socket?3:2;
+    lastFailure_={uint32_t(phase)<<8 | uint32_t(failure.state&255),failure.error,millis()-attemptStarted,attempt_};
     const uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
     // One bounded numeric row per failed worker. No identity/cert/payload.
     Serial.printf("FIRE net_fail phase=%u socket=%u tls_state=%d error=%d elapsed_ms=%lu stack=%u heap=%u largest=%u\n",

@@ -54,6 +54,8 @@ static void connectionPolicyTests() {
   using namespace fire_backend_policy;
   for (int poll=0;poll<1000;++poll) assert(progress(false,true,false)==Progress::Waiting);
   assert(progress(false,false,true)==Progress::Waiting);
+  assert(progress(false,false,false,true)==Progress::Waiting); // Failed state, TLS cleanup still owns worker
+  assert(progress(false,false,false,false)==Progress::Failed);
   assert(progress(false,false,false)==Progress::Failed);
   assert(progress(true,false,false)==Progress::Ready);
   struct Store {
@@ -66,6 +68,13 @@ static void connectionPolicyTests() {
   store.fail=true;assert(!saveMode(store,mode,2) && mode==1 && store.reads==1);
   store.fail=false;store.wrong=true;assert(!saveMode(store,mode,2) && mode==1);
   const auto writes=store.writes;assert(!saveMode(store,mode,3) && store.writes==writes);
+  ConnectFailure last{3u<<8|17u,-32512,450,7};
+  assert(last.matches(7) && !last.matches(8)); // stale attempt never attributed to a new connection
+  assert(failureReadable(false,false,true));
+  assert(!failureReadable(true,false,true)); // worker still owns the snapshot
+  assert(!failureReadable(false,true,true)); // explicit stop cancels visibility
+  assert(!failureReadable(false,false,false)); // success/idle is not a failure
+  last={};assert(!last.matches(8)); // actual new attempt resets old evidence
   TlsFailure failure;failure.beforeStop(true,2,0);assert(!failure.captured);
   failure.beforeStop(true,2,-1);failure.beforeStop(false,0,-1);
   assert(failure.captured && failure.socket && failure.state==2 && failure.error==-1);

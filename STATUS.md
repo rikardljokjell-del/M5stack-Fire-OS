@@ -18,6 +18,37 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
+### Pågående: gjenåpning av jobber og appoppdatering
+
+Brukeren mister jobbvinduet etter minimering: ferdig «Digitalt vater» vises bare
+med «Fjern fra listen» under Resume. Backend har allerede `can_open=true`, men
+native-menyen skiller ikke dette fra `can_resume` og mister reparasjons-ID ved
+en tilknyttet byggejobb. En integrert «Åpne jobb»-vei via eksisterende status og
+leveringsrutiner implementeres; den skal ikke starte et nytt betalt bygg.
+
+Den brukerstartede reparasjonen har laget Digitalt vater 0.1.6 som READY-pakke,
+med 34 beståtte PC-profiler. Fysisk callback-timing er ikke bekreftet: brukeren
+kommer ikke videre til pakken. Fire faktiske installforsøk feiler med
+«Backend download connection failed» før HTTP GET sendes. Pakke-ID, størrelse,
+hash og relativ URL er riktige. En ny passiv prøve fanget ikke et nytt forsøk;
+minnepress fra samtidige TLS-forbindelser er en hypotese, ikke fastslått årsak.
+
+Etter brukerens tillegg skal appåpning tilby «Ny versjon finnes. Last ned?» med
+Ja, Nei og Ikke spør igjen når en nyere, testet og kompatibel versjon er kjent.
+Siste valg skal gjelde per app og kunne endres i appinnstillingene. Etter brukerens
+presisering skal appåpning aldri vente på nett, metadata, gjenforsøk eller backend.
+Frakoblet, ukjent eller utdatert hurtigbuffer skal åpne installert app direkte;
+et sent svar skal ikke avbryte en kjørende app. Et kjent oppdateringsvalg skal
+bruke eksisterende hurtigbuffer og installasjons-/kjøregodkjenninger.
+Faktisk lokal og offentlig pakke-GET fra PC returnerte begge HTTP 200, 4 957 byte
+og riktig arkivhash; dette er ikke fysisk installasjon på FIRE. Neste feildetalj
+føres i eksisterende installasjonskvittering fremfor en parallell loggflyt.
+Den nye backend-regresjonen har bestått to faktiske offlineflyter gjennom Builder,
+status, eksplisitt nedlasting, hashbundet installasjonskvittering og normal RUN-port.
+Dette er simulert enhetsprotokoll, ikke fysisk nedlasting. Native-endringene er
+objektkompilert; samlet Linux-kjøring, full firmwarelink og fysisk levering gjenstår.
+Disse endringene er ennå ikke fysisk levert eller verifisert.
+
 ### Backend-sync og sikker nettilgang – 26. november
 
 **Målrettet retting etter adressebyttet:** Brukeren fikk ikke koblet FIRE til den

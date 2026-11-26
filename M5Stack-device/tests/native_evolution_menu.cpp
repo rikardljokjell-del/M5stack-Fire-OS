@@ -1,5 +1,6 @@
 #include "fire_evolution_core.h"
 #include "fire_ai_menu.h"
+#include "fire_app_updates.h"
 #include "fire_ai_menu_ui.h"
 #include <array>
 #include <cassert>
@@ -37,6 +38,29 @@ int main() {
   assert(fire_evolution::acceptedAck("request","batch","request","batch","accepted"));
   fire_evolution::Outbox capacity;for (uint8_t i=0;i<25;++i) assert(capacity.add(i,2560));
   assert(capacity.freeSlot(1537)<0);assert(capacity.freeSlot(1536)>=0);
+  {
+    using namespace fire_app_updates;
+    assert(newer("0.1.9","0.1.10") && !newer("0.1.10","0.1.9"));
+    assert(!newer("1.2.3","1.2.3") && !newer("1.2.3","1.2.4-beta"));
+    auto available=[&](bool online,bool suppressed,uint32_t epoch,uint32_t cached,uint32_t now,const char* app="app-one") {
+      return eligible(online,suppressed,true,epoch,cached,now,1000,"app-one",app,"project-one","installed","ready","0.1.5","0.1.6");
+    };
+    assert(available(true,false,7,7,2000));
+    assert(!available(false,false,7,7,2000)); // offline: caller directly launches original; no network operation in policy
+    assert(!available(true,true,7,7,2000)); // per-app preference
+    assert(!available(true,false,8,7,2000)); // new admission epoch invalidates old metadata
+    assert(!available(true,false,7,7,62000));
+    assert(!available(true,false,7,7,2000,"other-app"));
+    assert(active(1,false) && !active(1,true) && !active(2,true) && !active(3,true)); // Quick Settings owns its A/C/B
+    assert(confirm(1,0,false)==Action::Download); // Ja is download, never Run
+    assert(completed(2,true)==3 && confirm(3,0,false)==Action::Wait);
+    assert(confirm(3,0,true)==Action::RunVerified); // NEW explicit post-install B only
+    assert(confirm(1,1,false)==Action::Installed && confirm(1,2,false)==Action::Suppress);
+    assert(completed(0,true)==0 && confirm(0,0,true)==Action::Wait); // minimized completion cannot steal screen/run
+    assert(completed(2,false)==1);
+    assert(eligible(true,false,true,7,7,10,UINT32_MAX-100,"app","app","project","old","new","1.0.0","1.0.1"));
+    puts("PASS cached update decisions offline stale epoch per-app suppression and separate post-install Run");
+  }
   puts("PASS Evolution bounded aggregates outbox capacity and exact accepted duplicate ACK gate");
 
   using namespace fire_ai_menu;
@@ -50,6 +74,14 @@ int main() {
   assert(!sameJob("","repair-one","linked-build","repair-two"));
   assert(!sameJob("","","",""));
   JobAction menu[5];
+  assert(actions(false,false,true,false,false,menu,true)==3 && menu[0]==JobAction::Open && menu[1]==JobAction::Delete);
+  assert(openRoute(true,"build-ready","repair-ready")==OpenRoute::Repair); // both IDs retained; exact repair query
+  assert(openRoute(true,"build-two","")==OpenRoute::Build);
+  assert(openRoute(false,"build-two","")==OpenRoute::None);
+  assert(!sameJob("build-two","","build-one",""));
+  assert(!autoConfirmRepair(false,true) && !autoConfirmRepair(true,true)); // read-only Open never pays
+  assert(autoConfirmRepair(true,false)); // actual explicit Resume/current proposal path
+
   assert(actions(false,true,true,false,false,menu)==3 && menu[0]==JobAction::Resume && menu[1]==JobAction::Delete && menu[2]==JobAction::Back);
   assert(actions(true,false,false,true,true,menu)==5 && menu[0]==JobAction::Pause && menu[3]==JobAction::Context && menu[4]==JobAction::Back);
   assert(actions(true,false,false,false,true,menu)==4 && menu[0]==JobAction::Cancel && menu[2]==JobAction::Context); // thinking has no invented Pause

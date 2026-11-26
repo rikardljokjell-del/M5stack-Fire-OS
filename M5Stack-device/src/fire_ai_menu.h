@@ -26,14 +26,20 @@ inline bool sameJob(const char* build,const char* repair,const char* receivedBui
   if (build && *build) return receivedBuild && !strcmp(build,receivedBuild);
   return repair && *repair && receivedRepair && !strcmp(repair,receivedRepair);
 }
-enum class JobAction:uint8_t {Resume,Delete,Pause,Cancel,Background,Context,Back};
-inline uint8_t actions(bool work,bool resume,bool remove,bool pause,bool context,JobAction (&out)[5]) {
+inline bool autoConfirmRepair(bool requested,bool readonlyView) {return requested && !readonlyView;}
+enum class OpenRoute:uint8_t {None,Repair,Build};
+inline OpenRoute openRoute(bool available,const char* build,const char* repair) {
+  return !available?OpenRoute::None:repair && *repair?OpenRoute::Repair:build && *build?OpenRoute::Build:OpenRoute::None;
+}
+enum class JobAction:uint8_t {Open,Resume,Delete,Pause,Cancel,Background,Context,Back};
+inline uint8_t actions(bool work,bool resume,bool remove,bool pause,bool context,JobAction (&out)[5],bool open=false) {
   uint8_t n=0;
   if (work) {
     if (pause) out[n++]=JobAction::Pause;
     out[n++]=JobAction::Cancel;out[n++]=JobAction::Background;
     if (context) out[n++]=JobAction::Context;
   } else {
+    if (open) out[n++]=JobAction::Open;
     if (resume) out[n++]=JobAction::Resume;
     if (remove) out[n++]=JobAction::Delete;
   }
@@ -41,6 +47,7 @@ inline uint8_t actions(bool work,bool resume,bool remove,bool pause,bool context
 }
 inline const char* actionLabel(JobAction action) {
   switch(action) {
+    case JobAction::Open:return "Åpne jobb";
     case JobAction::Resume:return "Resume";
     case JobAction::Delete:return "Fjern fra listen";
     case JobAction::Pause:return "Pause";

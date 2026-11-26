@@ -50,6 +50,7 @@ jobs:
           tests/test_jobs.py tests/test_build_strategy.py
           tests/test_app_icons.py
           tests/test_job_controls.py
+          tests/test_job_reopen_delivery.py
           tests/test_session_reconnect.py
           tests/test_reverse_bootstrap.py tests/test_reverse_tcp.py
           tests/test_public_setup.py tests/test_browser_access.py

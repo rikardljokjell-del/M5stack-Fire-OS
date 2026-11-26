@@ -4,6 +4,7 @@
 #include <WiFiClientSecure.h>
 #include <atomic>
 #include "fire_byte_queue.h"
+#include "fire_backend_policy.h"
 
 // Socket/TLS ownership stays on one worker. UI-facing operations only move
 // bounded bytes through single-reader/single-writer queues and never wait.
@@ -28,6 +29,12 @@ class FireAsyncClient : public WiFiClient {
     return tx_.initialized() && active_ && !stop_ && state_ == State::Ready &&
            tx_.free() >= length;
   }
+  bool lastConnectFailure(fire_backend_policy::ConnectFailure& result) const {
+    // active_ is released only after socket destruction. No payload is read
+    // while a worker can write it; a new attempt belongs to this client owner.
+    if (!fire_backend_policy::failureReadable(active_.load(std::memory_order_acquire),stop_.load(),state_.load()==State::Failed)) return false;
+    result=lastFailure_;return result.matches(attempt_);
+  }
   void secure(bool enabled) { secure_.store(enabled); }
   int available() override;
   int read() override;
@@ -48,7 +55,8 @@ class FireAsyncClient : public WiFiClient {
   std::atomic<bool> secure_{true};
   std::atomic<bool> txWriting_{false};
   bool workerSecure_ = true;
-  uint32_t measuredAt_ = 0;
+  uint32_t measuredAt_ = 0,attempt_=0;
+  fire_backend_policy::ConnectFailure lastFailure_;
   char host_[128] = {};
   uint16_t port_ = 443;
   FireByteQueue rx_;

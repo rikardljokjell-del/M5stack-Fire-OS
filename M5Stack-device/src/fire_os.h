@@ -55,6 +55,7 @@ class DateTimeService {
   void applyTimezone() const;
 };
 
+struct cJSON;
 class FireOS {
  public:
   void begin();
@@ -285,8 +286,8 @@ class FireOS {
   bool appManagerActionMenu_ = false;
   uint8_t appManagerActionIndex_ = 0;
   uint8_t appManagerActionCount_ = 0;
-  uint8_t appManagerActionCodes_[9] = {};
-  String appManagerActionLabels_[9];
+  uint8_t appManagerActionCodes_[10] = {};
+  String appManagerActionLabels_[10];
   uint8_t appManagerDevelopConfirm_ = 0;
   bool appManagerDeleteConfirm_ = false;
   uint8_t appManagerDeleteMode_ = 0;  // 1=local, 2=backend
@@ -315,6 +316,18 @@ class FireOS {
   bool backendCatalogLoading_ = false;
   int32_t backendCatalogNextOffset_ = 0;
   String backendCatalogStatus_;
+  uint32_t backendCatalogEpoch_=0,backendCatalogAt_=0;
+  bool luaUpdateSuppressed_[kMaxLuaApps]={};
+  String updatePrefsOwner_;
+  uint8_t appUpdateStage_=0,appUpdateSelection_=1,appUpdateShownSelection_=255;
+  bool appUpdateReady_=false;
+  uint8_t appUpdateFailure_=0;
+  String appUpdateRequest_;
+  String appUpdatePath_,appUpdateApp_,appUpdateInstalled_,appUpdateCandidate_,appUpdateProject_;
+  bool requestLuaAppOpen(const String& path,const String& name,const String& package=String());
+  bool saveAppUpdatePreference(const String& app,bool suppressed);
+  void handleAppUpdateButton(uint8_t index);
+  void drawAppUpdatePrompt();
 
   struct ManagerItem {
     uint8_t kind = 0;  // 0=external, 1=Lua, 2=backend-only
@@ -555,7 +568,7 @@ class FireOS {
   bool luaRepairBuildConfirmed_ = false;
   bool luaRepairConfirmPending_ = false;
   bool luaRepairStatusQueryPending_ = false;
-  bool luaRepairRunAfterInstall_ = false;
+  String userRunAfterInstall_;
   bool luaRepairCancelPending_ = false;
   bool repairCancelSupported_ = false;
   uint32_t luaRepairLastAttemptAt_ = 0;
@@ -616,15 +629,18 @@ class FireOS {
   bool aiBuildCanRetry_ = false;
   int32_t aiBuildResumeCount_ = -1;
   uint8_t buildJobCount_ = 0;
+  bool aiJobCanOpen_=false,aiJobOpenPending_=false,aiJobViewing_=false,aiJobNeedsInstall_=false;
   bool aiWorkReturnRepair_=false,jobControlsSupported_=false,buildJobsNext_=false,aiJobCanResume_=false,aiJobCanDelete_=false,aiJobCanPause_=false,aiJobCanContext_=false;
   uint32_t buildJobsOffset_=0;
   uint8_t aiJobShownSelection_=255;
   String buildJobRepairIds_[4],aiJobBuild_,aiJobRepair_,aiJobName_,aiJobShownId_;
-  bool buildJobCanDelete_[4]={},buildJobCanPause_[4]={},buildJobCanContext_[4]={};
+  bool buildJobCanOpen_[4]={},buildJobCanDelete_[4]={},buildJobCanPause_[4]={},buildJobCanContext_[4]={};
   void openAiJobs(uint32_t offset=0);
   void handleAiJobMenu(uint8_t index);
   void drawAiJobMenu();
   void openAiWork();
+  void openAiJob();
+  void restoreAiJob(const cJSON* row);
   void backAiDeveloper();
   bool sendAiJobAction(const String& action);
   String buildJobIds_[4];

@@ -41,6 +41,22 @@ class NativeGuardTests(unittest.TestCase):
         output=self.run_native("native_evolution_menu.cpp")
         self.assertIn("PASS Evolution bounded aggregates",output)
         self.assertIn("PASS actual AI menu renderer",output)
+        self.assertIn("PASS cached update decisions",output)
+
+    def test_local_app_update_decision_is_cache_only(self):
+        source=(ROOT/"src/fire_os_ai_picker.inc").read_text(encoding="utf-8")
+        decision=source.split("bool FireOS::requestLuaAppOpen(",1)[1].split("void FireOS::handleAppUpdateButton",1)[0]
+        for forbidden in ("appList(","appDownload(","connect(","requestWifi(","scanLuaApps(","SD.","preferences.","delay("):
+            self.assertNotIn(forbidden,decision)
+        self.assertIn("return startLuaApp(path,name,package);",decision)
+        opened=source.split("void FireOS::openAiJob()",1)[1].split("void FireOS::restoreAiJob",1)[0]
+        self.assertIn("luaRepairRequested_=false",opened)
+        self.assertNotIn("confirmBuild(",opened)
+        self.assertNotIn("buildResume(",opened)
+        choices=source.split("void FireOS::handleAppUpdateButton",1)[1].split("void FireOS::drawAppUpdatePrompt",1)[0]
+        download=choices.split("if(action==fire_app_updates::Action::Download)",1)[1]
+        self.assertNotIn("userRunAfterInstall_=",download)
+        self.assertNotIn("confirmRun(",download)
 
     def test_button_capture_and_ui_cadence(self):
         output=self.run_native("native_input.cpp")

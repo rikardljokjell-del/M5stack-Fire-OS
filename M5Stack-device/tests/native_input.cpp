@@ -65,5 +65,8 @@ int main() {
   assert(contentScreen(Screen::Quick,Screen::Main,Screen::Quick)==Screen::Main);
   assert(contentScreen(Screen::Developer,Screen::Main,Screen::Quick)==Screen::Developer);
   assert(networkAllowed(false,false) && !networkAllowed(true,false) && !networkAllowed(false,true) && !networkAllowed(true,true));
+  assert(!repairViewDemand(true,true)); // plain local app never creates network demand
+  assert(repairViewDemand(true,false)); // existing APP ERROR repair view retains metadata/status
+  assert(!repairViewDemand(false,false));
   puts("PASS dirty static redraw and unchanged Developer Lua animation cadence");
 }

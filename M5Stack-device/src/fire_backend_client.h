@@ -68,6 +68,7 @@ class FireBackendClient {
   bool networkIdle() const {
     return !client_.running() && !audioClient_.running() && !audioTransferRunning_;
   }
+  uint32_t connectionEpoch() const {return connectionEpoch_;}
   const String& bootId() const { return bootId_; }
   const String& status() const { return status_; }
 
@@ -80,7 +81,7 @@ class FireBackendClient {
   bool appVersions(const String& projectId, const String& appId = String(),
                   uint32_t offset = 0);
   bool appDownload(const String& projectId, const String& packageId,
-                  const String& appId = String());
+                  const String& appId = String(),const String& stableEventId=String());
   bool appBackendDeletePrepare(const String& projectId, const String& appId,
                                const String& scope,
                                const String& packageId = String());
@@ -181,7 +182,7 @@ class FireBackendClient {
   String developmentContext_;
   bool sessionStarted_ = false;
   FireWsSessionAdmission sessionAdmission_;
-  uint32_t lastServerSeq_ = 0;
+  uint32_t lastServerSeq_ = 0,connectionEpoch_=0;
   uint32_t handshakeStartedAt_ = 0;
   uint8_t bootstrapStages_=0; // at most eight fixed numeric lines per attempt
   uint32_t lastReceiveAt_ = 0;
