@@ -11,6 +11,12 @@ namespace {
 constexpr uint32_t kHeaderTimeoutMs = 5000;
 constexpr uint32_t kDataTimeoutMs = 15000;
 constexpr size_t kChunkSize = 4096;
+struct PackageTaskOps {
+  int currentCore() const {return xPortGetCoreID();}
+  int affinity(TaskHandle_t handle) const {return xTaskGetAffinity(handle);}
+  bool suspended(TaskHandle_t handle) const {return eTaskGetState(handle)==eSuspended;}
+  void destroy(TaskHandle_t handle) const {vTaskDelete(handle);}
+};
 struct PackageHash {
   mbedtls_sha256_context* context;
   int update(const uint8_t* bytes,size_t length) {return mbedtls_sha256_update_ret(context,bytes,length);}
@@ -160,6 +166,13 @@ void FireLuaPackageManager::preconnect() {
       fire_backend_policy::progress(false,client_.connecting(),client_.stopping(),client_.running())==fire_backend_policy::Progress::Failed)
     queuedFailure(connectionFailure());
 }
+void FireLuaPackageManager::reapWorker() {
+  PackageTaskOps ops;
+  if(fire_package_delivery::reapTask(workerTask_,workerOwnerCore_,workerFinished_.load(std::memory_order_acquire),ops)) {
+    workerFinished_.store(false,std::memory_order_relaxed);
+    io_.running.store(false,std::memory_order_release);
+  }
+}
 void FireLuaPackageManager::startWorker() {
   if(buffered_) {
     if (!staging_.readyForSd(client_.running()) || !streamVerified_) {queuedFailure("Verified download staging unavailable");return;}
@@ -168,14 +181,16 @@ void FireLuaPackageManager::startWorker() {
     mbedtls_sha256_init(&sha256_);shaInitialized_=true;mbedtls_sha256_starts_ret(&sha256_,0);
     lastDataAt_=millis();state_=State::Connecting;
   }
-  storageStarted_=true;io_.running=true;
-  if (xTaskCreate(task,"fire-package",16384,this,1,nullptr)!=pdPASS) {
-    io_.running=false;queuedFailure("Package worker allocation failed");
+  storageStarted_=true;workerTask_=nullptr;workerOwnerCore_=xPortGetCoreID();
+  workerFinished_.store(false,std::memory_order_relaxed);io_.running=true;
+  if (xTaskCreatePinnedToCore(task,"fire-package",16384,this,1,&workerTask_,workerOwnerCore_)!=pdPASS) {
+    workerTask_=nullptr;io_.running=false;queuedFailure("Package worker allocation failed");
   }
 }
 
 void FireLuaPackageManager::service(bool wifiConnected,bool allowed,bool busyNetwork,bool socketsQuiet,bool unexpired) {
   io_.wifi=wifiConnected;
+  reapWorker(); // No Receipt/TLS phase can see idle until the owner has freed this task.
   if (io_.poll(status_) && statusCallback_) statusCallback_(callbackContext_,status_);
   const auto action=delivery_.poll(millis(),allowed && wifiConnected && unexpired && !cancelled_.load(),busyNetwork,socketsQuiet,
       io_.running,client_.running(),io_.completed,client_.ready(),streamVerified_);
@@ -199,7 +214,10 @@ void FireLuaPackageManager::task(void* context) {
   auto* self = static_cast<FireLuaPackageManager*>(context);uint32_t began=0;
   while (self->state_ != State::Idle) { self->serviceWorker(WiFi.isConnected()); delay(2); }
   fireMeasureWorker("package",began);
-  self->io_.running.store(false, std::memory_order_release); vTaskDelete(nullptr);
+  self->workerFinished_.store(true,std::memory_order_release);
+  // Same-core UI owner observes Suspended only after this task yielded. No
+  // socket/SD/RAII locals remain, and no path resumes or reuses this worker.
+  for (;;) vTaskSuspend(nullptr);
 }
 void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
   if (state_ == State::Idle) return;

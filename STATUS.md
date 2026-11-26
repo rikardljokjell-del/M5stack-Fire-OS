@@ -90,6 +90,22 @@ ventende kvittering. App Manager bruker lagrede visningsnavn. Ingen minne-,
 stakk-, TLS- eller callbackgrense er økt. Eksakt allokering bak TLS-feilen er
 fortsatt ikke målt; ny samlet CI og fysisk gjentatt levering kreves.
 
+RC13 er siden fysisk installert og prøvd over den offentlige forbindelsen.
+Backendjournalen bekrefter seks COMPLETED-installasjoner av nøyaktig Vater
+0.1.6 med korrekt arkivhash og stabile kvitteringer. Fem lokale Launch/Back-
+runder er observert på FIRE uten appfeil. Dette er lokale åpninger via
+autoriserte COM-knappehandlinger; ingen server-RUN eller ny AI-generering ble startet. Alle seks
+gjenoppkoblingene beholdt samme sesjon og oppstarts-ID. Et ukjent UART-
+STATE-svar under siste runde var ikke bevis for mislykket installasjon;
+serverkvitteringen kom frem. De opprinnelige bevisene er bevart.
+
+Minste observerte internminnemargin var likevel bare 620 byte under prøven.
+RC14 retter derfor levetiden til den eksisterende pakkearbeideren: den parkeres
+på UI-eierens kjerne etter ferdig arbeid, og UI sletter den synkront før
+`running=false` publiseres og neste TLS-fase kan begynne. Samme stakkstørrelse
+og grenser beholdes. Ny fysisk minnemargin og de resterende flytene må
+kontrolleres før produksjonsaksept.
+
 ### Pågående: gjenåpning av jobber og appoppdatering
 
 Brukeren mister jobbvinduet etter minimering: ferdig «Digitalt vater» vises bare

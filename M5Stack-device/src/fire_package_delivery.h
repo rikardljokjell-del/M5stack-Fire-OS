@@ -16,6 +16,17 @@ inline bool admittedScope(bool connected,const char* sid,const char* boot,const 
 }
 inline bool handoffReady(bool preconnected,bool ready) {return !preconnected || ready;}
 
+// Owner-side deletion is synchronous only for a suspended task pinned to the
+// executing owner core. The worker never resumes itself after parking.
+template<class Handle,class Ops>
+bool reapTask(Handle& handle,int ownerCore,bool finished,Ops& ops) {
+  if(!handle || !finished || ops.currentCore()!=ownerCore ||
+      ops.affinity(handle)!=ownerCore || !ops.suspended(handle)) return false;
+  ops.destroy(handle); // Existing stack and TCB are freed BEFORE publication.
+  handle=Handle();
+  return true;
+}
+
 enum class Phase:uint8_t {Idle,Waiting,Quiet,Connecting,Streaming,TlsCleanup,Worker,Cleanup,Receipt};
 enum class Action:uint8_t {None,Connect,Stream,Start,Cancel,Busy,Timeout,Notify};
 struct Gate {

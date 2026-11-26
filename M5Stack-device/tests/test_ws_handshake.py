@@ -64,7 +64,7 @@ void delivery() { fire_package_delivery::Gate gate; gate.begin(1,true); (void)ga
     def test_actual_package_preconnect_handoff(self):
         source=(native.ROOT/"src/fire_lua_package_manager.cpp").read_text(encoding="utf-8")
         spawn=source.split("void FireLuaPackageManager::startWorker()",1)[1].split("void FireLuaPackageManager::service(",1)[0]
-        self.assertLess(spawn.index("readyForSd(client_.running())"),spawn.index("xTaskCreate("))
+        self.assertLess(spawn.index("readyForSd(client_.running())"),spawn.index("xTaskCreatePinnedToCore("))
         staged=source.split("void FireLuaPackageManager::readDownloadBody()",1)[1].split("void FireLuaPackageManager::finishSecureStream",1)[0]
         for forbidden in ("SD.","archive_.", "connect(","delay("):
             self.assertNotIn(forbidden,staged)
@@ -75,7 +75,7 @@ void delivery() { fire_package_delivery::Gate gate; gate.begin(1,true); (void)ga
         self.assertIn("freeStaging()",archive)
         self.assertIn("heap_caps_malloc(expectedSize_,caps)",source)
         self.assertIn("MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT",source)
-        self.assertIn('xTaskCreate(task,"fire-package",16384',spawn)
+        self.assertIn('xTaskCreatePinnedToCore(task,"fire-package",16384',spawn)
         waiting=source.split("void FireLuaPackageManager::preconnect()",1)[1].split("void FireLuaPackageManager::startWorker",1)[0]
         self.assertIn("client_.connect(",waiting)
         self.assertNotIn("xTaskCreate(",waiting)
@@ -85,6 +85,21 @@ void delivery() { fire_package_delivery::Gate gate; gate.begin(1,true); (void)ga
         self.assertIn("handoffReady(",handoff)
         failure=source.split("void FireLuaPackageManager::queuedFailure",1)[1].split("String FireLuaPackageManager::connectionFailure",1)[0]
         self.assertLess(failure.index("client_.stop()"),failure.index("Phase::Cleanup"))
+
+    def test_package_task_memory_reaped_before_receipt(self):
+        source=(native.ROOT/"src/fire_lua_package_manager.cpp").read_text(encoding="utf-8")
+        reap=source.split("void FireLuaPackageManager::reapWorker()",1)[1].split("void FireLuaPackageManager::startWorker",1)[0]
+        self.assertLess(reap.index("reapTask("),reap.index("io_.running.store(false"))
+        service=source.split("void FireLuaPackageManager::service(",1)[1].split("void FireLuaPackageManager::task",1)[0]
+        self.assertLess(service.index("reapWorker()"),service.index("delivery_.poll("))
+        task=source.split("void FireLuaPackageManager::task(",1)[1].split("void FireLuaPackageManager::serviceWorker",1)[0]
+        self.assertIn("workerFinished_.store(true,std::memory_order_release)",task)
+        self.assertIn("for (;;) vTaskSuspend(nullptr)",task)
+        self.assertNotIn("vTaskDelete",task)
+        self.assertNotIn("running.store(false",task)
+        self.assertIn("xTaskGetAffinity(handle)",source)
+        self.assertIn("eTaskGetState(handle)==eSuspended",source)
+        self.assertIn("&workerTask_,workerOwnerCore_",source)
 
     def test_worker_tls_deadline_preserves_tcp_and_trust(self):
         source=(native.ROOT/"src/fire_async_client.cpp").read_text(encoding="utf-8")
@@ -105,6 +120,7 @@ void delivery() { fire_package_delivery::Gate gate; gate.begin(1,true); (void)ga
         self.assertIn("PASS strict WebSocket", output)
         self.assertIn("PASS async connect polling",output)
         self.assertIn("PASS package exclusive worker barriers",output)
+        self.assertIn("PASS same-core suspended package task reaped before idle",output)
         self.assertIn("PASS TLS-before-package allocation ordering",output)
         self.assertIn("PASS actual session/app/mode producers",output)
         rows=[json.loads(line.split(" ",1)[1]) for line in output.splitlines() if line.startswith("SELECTION_JSON ")]

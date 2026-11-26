@@ -82,6 +82,36 @@ static void connectionPolicyTests() {
   TlsFailure tcp;tcp.beforeStop(false,0,-1);assert(tcp.captured && !tcp.socket && tcp.state==0);
   std::puts("PASS async connect polling, single-key Sync persistence and pre-cleanup TLS failure evidence");
 }
+struct ReapOps {
+  int core=1,pin=1;bool parked=false,freed=false,running=true;unsigned queries=0,deletes=0;unsigned* handle=nullptr;
+  int currentCore() {assert(!freed);++queries;return core;}
+  int affinity(unsigned task) {assert(task==7 && !freed);++queries;return pin;}
+  bool suspended(unsigned task) {assert(task==7 && !freed);++queries;return parked;}
+  void destroy(unsigned task) {assert(task==7 && !freed && running && handle && *handle==7);freed=true;++deletes;}
+};
+static void reapTests() {
+  using namespace fire_package_delivery;
+  unsigned handle=0;ReapOps ops;ops.handle=&handle;
+  assert(!reapTask(handle,1,true,ops) && ops.queries==0); // failed create has no task to touch
+  handle=7;assert(!reapTask(handle,1,false,ops) && ops.queries==0);
+  ops.core=0;assert(!reapTask(handle,1,true,ops) && !ops.freed && handle==7);
+  ops.core=1;ops.pin=0;assert(!reapTask(handle,1,true,ops) && !ops.freed);
+  ops.pin=1;assert(!reapTask(handle,1,true,ops) && !ops.freed); // finished but not yet suspended/yielded
+  ops.parked=true;assert(reapTask(handle,1,true,ops) && ops.freed && handle==0 && ops.running);
+  ops.running=false;assert(!reapTask(handle,1,true,ops) && ops.deletes==1); // no handle access/double deletion
+  for(bool allowed:{false,true}) { // cancellation/off/expiry and ordinary completion use the same result barrier
+    Gate gate;gate.phase=Phase::Worker;gate.exclusive=gate.ownsQuiet=true;
+    assert(gate.poll(10,allowed,false,true,true,false,true)==(allowed?Action::None:Action::Cancel));
+    unsigned task=7;ReapOps owner;owner.handle=&task;owner.parked=true;
+    assert(reapTask(task,1,true,owner) && owner.running); // stack freed while caller still publishes busy
+    owner.running=false;
+    assert(gate.poll(11,allowed,false,true,owner.running,false,true)==Action::Notify);
+    assert(!gate.paused() && gate.otherNetworksPaused());
+    gate.clear();assert(!gate.otherNetworksPaused());
+  }
+  puts("PASS same-core suspended package task reaped before idle publication no double delete");
+}
+
 static void deliveryTests() {
   using namespace fire_package_delivery;
   assert(wireId("session-one") && wireId("boot_1") && !wireId("_bad") && !wireId("Upper"));
@@ -162,6 +192,7 @@ static void deliveryTests() {
 }
 
 int main() {
+  reapTests();
   deliveryTests();
   connectionPolicyTests();
   selectionTests();

@@ -4,6 +4,7 @@
 #include <SD.h>
 #include <WiFiClient.h>
 #include <mbedtls/sha256.h>
+#include <freertos/task.h>
 #include "fire_reverse_transport.h"
 #include "fire_async_client.h"
 #include "fire_io_mailbox.h"
@@ -72,6 +73,10 @@ class FireLuaPackageManager {
   void finishSecureStream();
   bool writeStagedArchive(String& reason);
   std::atomic<bool> cancelled_{false};
+  TaskHandle_t workerTask_=nullptr;
+  BaseType_t workerOwnerCore_=-1;
+  std::atomic<bool> workerFinished_{false};
+  void reapWorker();
   void startWorker();
   void preconnect();
   String connectionFailure() const;
