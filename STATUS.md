@@ -125,7 +125,20 @@ henting, tidsavgrenset sidehenting og svarbinding. Lokal appåpning skal fortsat
 være uten nettventing. Målrettede objektkontroller og sju Python/C++11-porter
 er bestått lokalt. HTTP-/SD-/ZIP-delen er byteuendret fra RC10. Statisk
 FireOS øker 32 byte; pakke- og nettverksklientene har uendret objektstørrelse.
-Samlet Linux-kjøring, signering og fysisk nedlastingsprøve gjenstår.
+Samlet Linux-kjøring er bestått: åtte native-porter og 35 firmwaretester,
+samt normalfirmware, recovery og bootloader. Privat RC11-pakke er signert og
+uavhengig signatur-/hash-/layoutkontrollert. IRAM er uendret 130 398 av 131 072
+byte, statisk DRAM er uendret 64 212 byte. Alle 68 eldre firmwarefiler er bevart.
+RC11 er fysisk installert i B60 VALID/CRC etter eksakt 2 760 656-byte
+SHA256-tilbakelesning. RC10 A59 og dens metadatasektor er bevart. Ordinære
+45-/35-sekunders oppstarter bestod med strict TLS og faktisk session-adopsjon,
+uten TLS-feil, panic, WDT eller JSON-avvisning. COM er lukket. Dette er
+installasjons-/oppstartsbevis; faktisk appnedlasting, katalogvisning og
+callback-retting i Digitalt vater 0.1.6 er ennå ikke fysisk bekreftet.
+Én sluttstatus kl. 22:25:32 Oslo bekreftet RC11 med faktisk online socket og
+ferskt komplett inventar med alle 13 app-IDer på sluttboot/epoch510. Vater
+0.1.6 er fortsatt READY med uendret arkivhash; ingen ny RC11-nedlasting var
+registrert. Den lagrede -32512-feilen er historisk RC10. Brukerprøve er forespurt.
 
 ### Backend-sync og sikker nettilgang – 26. november
 
