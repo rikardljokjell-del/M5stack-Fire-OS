@@ -146,8 +146,43 @@ async def test_pool_stays_at_four_idle_channels_and_replaces_a_disconnect(tmp_pa
             await fire.take()
             assert len(fire.prefaces) == 5
         finally:
-            await bridge.close()
+            async with asyncio.timeout(3):
+                await bridge.close()
         assert not bridge.tasks and bridge.status()["state"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_completed_reverse_ready_does_not_swallow_external_cancellation(tmp_path, monkeypatch):
+    """Reproduce 3.11's completed-inner wait_for race without TCP timing."""
+    task = None
+    class Reader:
+        async def readuntil(self, _separator):
+            # With wait_for this runs in its inner task: cancellation is queued
+            # before the completed-read waiter can resume the outer connection.
+            asyncio.get_running_loop().call_soon(task.cancel)
+            return b'{"type":"reverse_ready","version":1,"device_id":"fire-01"}\n'
+        async def read(self, _size):
+            await asyncio.Future()
+    class Writer:
+        closed = False
+        def get_extra_info(self, _name):return None
+        def write(self, _data):pass
+        async def drain(self):pass
+        def close(self):self.closed = True
+        async def wait_closed(self):pass
+    writer = Writer()
+    async def connect(*_args, **_kwargs):return Reader(), writer
+    monkeypatch.setattr(asyncio, 'open_connection', connect)
+    bridge = ReverseTCP(bridge_settings(tmp_path, 19875, 19876))
+    task = asyncio.create_task(bridge._connection(Slot()))
+    try:
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert done, 'Completed reverse_ready swallowed external cancellation'
+        assert task.cancelled() and writer.closed
+    finally:
+        # Bound failure cleanup without cancelling the test's observation wait.
+        if not task.done():task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize("host", ["http://10.5.1.163", "10.5.1.163:8766", "0.0.0.0", "169.254.1.2", "8.8.8.8", "239.1.1.1"])

@@ -121,8 +121,10 @@ class ReverseTCP:
     async def _connection(self, slot):
         fire_writer = backend_writer = None
         try:
-            fire_reader, fire_writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port, limit=AUTH_LIMIT), timeout=3)
+            # Direct awaits preserve external cancellation even when an I/O
+            # future completes concurrently (wait_for has a race on 3.11).
+            async with asyncio.timeout(3):
+                fire_reader, fire_writer = await asyncio.open_connection(self.host, self.port, limit=AUTH_LIMIT)
             connection = fire_writer.get_extra_info("socket")
             if connection:
                 connection.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
@@ -134,7 +136,8 @@ class ReverseTCP:
             fire_writer.write(self._preface())
             await fire_writer.drain()
             try:
-                raw = await asyncio.wait_for(fire_reader.readuntil(b"\n"), timeout=3)
+                async with asyncio.timeout(3):
+                    raw = await fire_reader.readuntil(b"\n")
                 if len(raw) > AUTH_LIMIT:
                     raise ValueError
                 answer = json.loads(raw)
@@ -152,8 +155,8 @@ class ReverseTCP:
             if not first:
                 return
             try:
-                backend_reader, backend_writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.backend_host, self.backend_port), timeout=3)
+                async with asyncio.timeout(3):
+                    backend_reader, backend_writer = await asyncio.open_connection(self.backend_host, self.backend_port)
             except (OSError, TimeoutError):
                 raise BridgeFailure("local_backend_unavailable") from None
             slot.phase = "relaying"
@@ -168,7 +171,8 @@ class ReverseTCP:
             for writer in (fire_writer, backend_writer):
                 if writer:
                     with contextlib.suppress(OSError, TimeoutError, ConnectionError):
-                        await asyncio.wait_for(writer.wait_closed(), timeout=1)
+                        async with asyncio.timeout(1):
+                            await writer.wait_closed()
 
     async def _relay(self, fire_reader, fire_writer, backend_reader, backend_writer, slot):
         async def pump(reader, writer, from_fire):
@@ -191,7 +195,8 @@ class ReverseTCP:
             # Honour half-close for an HTTP response after upload EOF, but do
             # not retain an orphan stream indefinitely after its peer leaves.
             if pending:
-                await asyncio.wait_for(asyncio.gather(*pending), timeout=5)
+                async with asyncio.timeout(5):
+                    await asyncio.gather(*pending)
         finally:
             for task in tasks:
                 task.cancel()
