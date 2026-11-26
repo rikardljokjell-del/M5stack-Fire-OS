@@ -135,6 +135,11 @@ class Jobs:
             self.service.repairs.tasks[repair['id']]=asyncio.create_task(self.service.repairs.run(repair['id']))
             reply.update(status='resumed',message='Fortsetter den bekreftede reparasjonen')
         elif action=='cancel':
+            if build and build.get('evolution_job_id'):
+                job=self.store.get('evolution_jobs',build['evolution_job_id'])
+                await self.service.evolution.control(session.device_id,job['project_id'],'stop',
+                    self.service.evolution.state(session.device_id,job['project_id'])['revision'],
+                    job_id=job['id'],mandate_id=build['evolution_mandate_id'])
             if repair:return await self.service.repairs.cancel(session,event)
             from .models import DeviceEvent
             return await self.service.build_event(session,event.model_copy(update={'event':'build_cancel'}))

@@ -96,6 +96,48 @@ async def test_cancel_retains_unknown_usage_reservation_without_auto_retry(tmp_p
     finally:await b.close()
 
 
+async def test_cancel_evolution_child_stops_parent_revokes_mandate_and_keeps_unknown_usage(tmp_path):
+    from fire_backend.metering import usage_scope
+    from fire_backend.evolution_models import EvolutionConfig
+    from fire_backend.models import SessionStart
+    from test_device_protocol import CAPS
+    from test_repair_target import Peer
+    class Metered(RepairProvider):
+        async def generate(self,*args):
+            scope=usage_scope.get()
+            identifier=b.usage.begin('generate',b.settings.openai_code_model,1000,1000,**scope)
+            try:return await super().generate(*args)
+            except asyncio.CancelledError:
+                b.usage.finish(identifier,None,status='cancelled')
+                raise
+    p=Metered();p.release.clear();b=Backend(configured(tmp_path),p)
+    try:
+        s,peer=await session(b)
+        config=EvolutionConfig(enabled=True,flags={'generate':True},autonomy='auto_build').model_dump()
+        proposal=await b.evolution.prepare(s.device_id,s.project_id,'configure',config,0)
+        await b.evolution.confirm(s.device_id,s.project_id,proposal['id'],0)
+        proposal=await b.evolution.prepare(s.device_id,s.project_id,'generate',{'goal':'Tell med knapp'},1)
+        result=await b.evolution.confirm(s.device_id,s.project_id,proposal['id'],1)
+        await asyncio.wait_for(p.entered.wait(),3)
+        job=b.store.get('evolution_jobs',result['job_id']);build_id=job['build_ids'][0]
+        other=await b.start(SessionStart(device_id='fire-02',target='device',protocol_version='0.2',boot_id='boot-other',capabilities=CAPS),Peer(),'fire-02')
+        with pytest.raises(PermissionError):
+            await dispatch(b,other,event(other,'job_control',build_id=build_id,job_action='cancel'))
+        assert b.store.get('evolution_mandates',result['mandate_id'])['state']=='active'
+        response=await dispatch(b,s,event(s,'job_control',build_id=build_id,job_action='cancel'))
+        assert response['type']=='build_cancelled' and response['build_id']==build_id
+        assert b.store.get('evolution_jobs',job['id'])['state']=='stopped'
+        assert b.store.get('evolution_mandates',result['mandate_id'])['state']=='revoked'
+        assert not b.evolution.active_project(s.project_id) and not b.evolution.in_flight(job['id'])
+        rows=b.usage.records()
+        assert len(rows)==len(p.calls)==1 and rows[0]['status']=='cancelled'
+        assert rows[0]['usage_source']=='reservation' and rows[0]['estimated_usd']>0
+        assert b.evolution.cost(job['id'])['unknown_usage_requests']==1
+        assert not b.store.list('packages') and not b.store.list('commands')
+        with pytest.raises(ValueError):b.evolution.validate_mandate(result['mandate_id'])
+    finally:await b.close()
+
+
 async def test_queued_repair_pause_resume_and_single_child_row(tmp_path):
     p=RepairProvider();p.release.clear();b=Backend(configured(tmp_path),p)
     try:
