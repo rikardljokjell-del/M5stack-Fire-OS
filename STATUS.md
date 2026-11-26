@@ -18,7 +18,7 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-### Evolution og felles AI Developer Settings – implementert, fysisk prøve gjenstår
+### Evolution og felles AI Developer Settings – installert, funksjonsprøve gjenstår
 
 Evolution er implementert som styring rundt eksisterende Builder, Repairs, Jobs,
 Data Engine, Runtime AI, apphistorikk og kostnadsregistrering. Det opprettes
@@ -71,17 +71,29 @@ ressurser, Evolution-status og tilgangskontroller er verifisert. Rå innstilling
 og Vault-fingeravtrykk er uendret; Evolution er fortsatt deaktivert med alle fem
 brytere av. Ingen brukerappkommando ble sendt.
 
-Firmwareinstallasjon, brukerbetjening, live AI-prøve og fysisk Evolution-sløyfe
-er fortsatt utestående. Brukeren er bedt om separat installasjonsgodkjenning.
-Ingen betalte AI-kall, firmwareoppdatering eller ny brukerapphandling er gjort
-i denne oppgaven. Nåværende måleapp/skjerm bevares
-til brukerens utsatte avlesning; oppstartsbeviset nedenfor er ikke godkjent
-måleflyt. Eldre signerte pakker og publiserte firmwarefiler er bevart.
+Etter brukerens uttrykkelige installasjonsgodkjenning er eksakt signert
+**1.6.0-rc2 fysisk installert i A51 VALID/CRC**. Flash-MD5 og full tilbakelesing
+av de 2 665 296 bildebytene matcher CI/SHA256. Forrige fungerende 1.5.0-rc2
+i B50 VALID er beholdt. Lokal helseprøve 45,208 s og vanlig omstart 35,009 s
+bestod uten panic/abort/watchdog; serieporten er lukket. Det ble ikke skrevet
+over SD, NVS, partisjonsoppsett, recovery eller bootloader.
+Sluttoppstartens faktiske HELLO annonserer 1.6.0-rc2 og riktig Evolution-
+kontrakt; SDK, Runtime AI, Data Engine og Hardware API er uendret. Samme
+oppstart har komplett, fersk SD-oversikt med 13 apper. De opprinnelige sju
+app-ID-ene og «Måledata kontroll» er fortsatt present. Enheten er nå offline
+i Auto-idle; åpne AI Developer for å aktivere forbindelsen ved praktisk prøve.
+
+Brukerbetjening, live AI-prøve og fysisk Evolution-sløyfe er fortsatt
+utestående. Ingen betalte AI-kall eller brukerappkommandoer ble utført.
+Den utsatte «Måledata kontroll»-avlesningen ble ikke gjort før den godkjente
+omstarten; appen må åpnes igjen for å avklare manglende dataflyt. Oppstartsbevis
+er ikke godkjent måleflyt. Eldre signerte pakker og publiserte firmwarefiler
+er bevart.
 
 Se [Evolution-veiledningen](M5Stack-backend/docs/EVOLUTION.md) og
 [research/gjenbruksvalg](M5Stack-backend/docs/EVOLUTION_RESEARCH.md).
 
-### FIRE Data Engine – installert 1.5.0-rc2, praktisk appprøve pågår
+### FIRE Data Engine – inkludert i 1.6.0-rc2, måleflyt fortsatt uverifisert
 
 Data Engine er integrert med eksisterende Lua-jobber, SD, transport, Runtime AI
 og AI Developer. Appene kan lagre tidsindekserte opptak og hendelser, behandle
@@ -102,8 +114,9 @@ CI45709316709 på kilde `8ab274f` har 25 native tester og tre bygg PASS;
 strenge C++-kontroller består separat. Statisk RAM er økt med åtte byte,
 og IRAM-marginen er uendret. Eksisterende tids-/minne-/I/O-grenser beholdes.
 
-Eksakt signert RC2 er fysisk tilbakeavlest med MD5/SHA256 og kjører i B50
-VALID/CRC. 1.4.0-rc3 A49 er beholdt. Helseprøve 45,021 s og vanlig omstart
+Ved den forrige Data Engine-leveransen ble eksakt signert 1.5.0-rc2 fysisk
+tilbakeavlest med MD5/SHA256 og installert i B50 VALID/CRC, med 1.4.0-rc3
+A49 som daværende tilbakevei. Helseprøve 45,021 s og vanlig omstart
 35,097 s ga ingen panic/abort/watchdog. Dette bekrefter firmware/oppstart;
 måling → SD → analyse → Improve prøves nå separat med en vanlig Lua-app.
 Ingen betalte AI-kall er utført i denne oppgraderingen så langt.
