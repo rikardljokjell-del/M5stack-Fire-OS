@@ -21,6 +21,7 @@ class WebSocketHandshakeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="fire-cpp11-policy-") as directory:
             source=Path(directory)/"policy.cpp"
             source.write_text("""#include "fire_backend_policy.h"
+#include "fire_package_delivery.h"
 using fire_backend_policy::ConnectFailure;
 constexpr ConnectFailure empty;
 constexpr ConnectFailure failed(768,-1,5800,2);
@@ -28,11 +29,37 @@ static_assert(empty.phase==0 && empty.error==0 && empty.elapsedMs==0 && empty.at
 static_assert(failed.phase==768 && failed.error==-1 && failed.elapsedMs==5800 && failed.attempt==2,"fields");
 static_assert(sizeof(ConnectFailure)==16,"bounded snapshot");
 void assign(ConnectFailure& value) { value={}; value={768,-1,5800,2}; }
+void delivery() { fire_package_delivery::Gate gate; gate.begin(1,true); (void)gate.poll(1,true,false,true,false,false,false); }
 """,encoding="utf-8")
             command=prefix+["-std=c++11","-Wall","-Wextra","-Werror","-pedantic",
                             "-I",str(native.ROOT/"src"),"-c",str(source),"-o",str(Path(directory)/"policy.o")]
             result=subprocess.run(command,capture_output=True,text=True,timeout=90)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_package_install_receipt_ownership(self):
+        manager=(native.ROOT/"src/fire_lua_package_manager.cpp").read_text(encoding="utf-8")
+        self.assertNotIn("completed.exchange(false)",manager)
+        service=manager.split("void FireLuaPackageManager::service(",1)[1].split("void FireLuaPackageManager::task",1)[0]
+        self.assertIn("client_.running(),io_.completed",service)
+        self.assertLess(service.index("resultCallback_("),service.index("receiptFrozen_=true"))
+        self.assertIn("Action::Start) startWorker()",service)
+        os_source=(native.ROOT/"src/fire_os.cpp").read_text(encoding="utf-8")
+        callback=os_source.split("void FireOS::packageResult(",1)[1].split("void FireOS::servicePackageInstall",1)[0]
+        self.assertIn('amendOutcome(false,"metadata_error")',callback)
+        self.assertNotIn("deviceInstallResult(",callback)
+        self.assertNotIn("confirmRun(",callback)
+        delivery=os_source.split("void FireOS::servicePackageInstall",1)[1].split("bool FireOS::handlePackageReceipt",1)[0]
+        self.assertLess(delivery.index("admittedScope("),delivery.index("packageManager_->service("))
+        self.assertIn("backendClient_->networkIdle()",delivery)
+        self.assertIn("homeApp_.networkIdle()",delivery)
+        self.assertIn("packageManager_->receiptEvent()",delivery)
+        self.assertIn("backendCommandUnexpired(packageManager_->installExpiry())",delivery)
+        final=os_source.split("void FireOS::finishPackageReceipt",1)[1].split("void FireOS::firmwareStatus",1)[0]
+        self.assertIn("const bool ok=recorded && packageManager_->outcomeOk();",final)
+        self.assertIn("package==userRunAfterInstall_",final)
+        self.assertIn("if (ok && backendClient_ && backendClient_->confirmRun(package))",final)
+        binding=os_source.split("else if(!luaAiBindSent_",1)[1].split("luaAiBindSent_=",1)[0]
+        self.assertIn("!(packageManager_ && packageManager_->busy())",binding)
 
     def test_worker_tls_deadline_preserves_tcp_and_trust(self):
         source=(native.ROOT/"src/fire_async_client.cpp").read_text(encoding="utf-8")
@@ -52,6 +79,7 @@ void assign(ConnectFailure& value) { value={}; value={768,-1,5800,2}; }
         output = native.NativeGuardTests().run_native("native_ws_handshake.cpp")
         self.assertIn("PASS strict WebSocket", output)
         self.assertIn("PASS async connect polling",output)
+        self.assertIn("PASS package exclusive worker barriers",output)
         self.assertIn("PASS actual session/app/mode producers",output)
         rows=[json.loads(line.split(" ",1)[1]) for line in output.splitlines() if line.startswith("SELECTION_JSON ")]
         self.assertEqual(len(rows),6)

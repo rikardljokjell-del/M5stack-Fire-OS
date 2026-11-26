@@ -7,6 +7,7 @@
 #include "fire_reverse_transport.h"
 #include "fire_async_client.h"
 #include "fire_io_mailbox.h"
+#include "fire_package_delivery.h"
 #include "fire_lua_install_identity.h"
 
 class FireLuaPackageManager {
@@ -22,12 +23,28 @@ class FireLuaPackageManager {
   bool startDownload(const String& host, uint16_t port, const String& token,
                      const String& url, const String& packageId,
                      const String& installId, const String& expectedHash,
-                     uint32_t expectedSize,const String& projectId=String());
-  void service(bool wifiConnected);
-  bool busy() const { return io_.busy(); }
+                     uint32_t expectedSize,const String& projectId,const String& sessionId,const String& bootId,uint32_t expiresAt);
+  void service(bool wifiConnected,bool allowed,bool busyNetwork,bool socketsQuiet,bool unexpired);
+  bool busy() const { return delivery_.active() || io_.busy(); }
+  bool networkPaused() const {return delivery_.paused();}
+  bool receiptReady() const {return delivery_.phase==fire_package_delivery::Phase::Receipt && receiptFrozen_ && io_.completed;}
+  bool receiptDue(uint32_t now) const {return receiptReady() && delivery_.receiptDue(now);}
+  void receiptSent(uint32_t now) {delivery_.receiptSent(now);}
+  const String& receiptEvent() const {return receiptEvent_;}
+  const String& installSession() const {return sessionId_;}
+  const String& installBoot() const {return bootId_;}
+  uint32_t installExpiry() const {return expiresAt_;}
+  const String& installId() const {return installId_;}
+  const String& packageId() const {return packageId_;}
+  const String& outcomeHash() const {return io_.second;}
+  const String& outcomeMessage() const {return io_.message;}
+  bool outcomeOk() const {return io_.ok;}
+  void amendOutcome(bool ok,const String& message) {if (!receiptFrozen_) {io_.ok=ok;io_.message=message;}}
+  void finishReceipt() {io_.completed=false;delivery_.clear();}
+
   bool matchesInstall(const String& packageId, const String& installId,
                       const String& hash, uint32_t size) const {
-    return busy() && packageId_ == packageId && installId_ == installId &&
+    return packageId_ == packageId && installId_ == installId &&
            expectedHash_.equalsIgnoreCase(hash) && expectedSize_ == size;
   }
   const String& status() const { return status_; }
@@ -37,6 +54,14 @@ class FireLuaPackageManager {
  private:
   enum class State : uint8_t { Idle, Connecting, Headers, Downloading, Verify };
   State state_ = State::Idle;
+  fire_package_delivery::Gate delivery_;
+  String sessionId_,bootId_,receiptEvent_;
+  uint32_t expiresAt_=0;
+  bool receiptFrozen_=false;
+  std::atomic<bool> cancelled_{false};
+  void startWorker();
+  bool cancelled() const;
+  void queuedFailure(const String& reason);
   FireIoMailbox io_;
   static void task(void* context);
   void serviceWorker(bool wifiConnected);

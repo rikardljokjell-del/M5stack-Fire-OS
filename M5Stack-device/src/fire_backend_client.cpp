@@ -892,14 +892,14 @@ bool FireBackendClient::appStop() { return sendEvent("app_stop"); }
 bool FireBackendClient::deviceInstallResult(const String& installId,
                                              const String& packageId, bool ok,
                                              const String& archiveHash,
-                                             const String& message) {
+                                             const String& message,const String& stableEventId) {
   return sendEvent("device_install_result", ",\"install_id\":\"" +
                    jsonEscape(installId) + "\",\"package_id\":\"" +
                    jsonEscape(packageId) + "\",\"status\":\"" +
                    (ok ? "ok" : "failed") + "\",\"archive_sha256\":\"" +
                    jsonEscape(archiveHash) + "\",\"message\":\"" +
                    jsonEscape(message.substring(0, 240)) + "\"" +
-                   (!ok && message=="metadata_error"?String(",\"error_code\":\"metadata_error\""):String()));
+                   (!ok && message=="metadata_error"?String(",\"error_code\":\"metadata_error\""):String()),stableEventId);
 }
 
 bool FireBackendClient::appStarted(const String& runId, const String& packageId,

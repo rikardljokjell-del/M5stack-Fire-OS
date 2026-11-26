@@ -84,6 +84,15 @@ ferskt komplett inventar med alle 13 app-IDer og uendrede kontrakter.
 Nedlastingsfeilen er fortsatt åpen: ingen nytt install-/runforsøk er registrert;
 den lagrede tidligere feilmeldingen må ikke tolkes som en ny RC9-feil.
 
+Ny faktisk nedlastingsprøve på RC9 ga tre nye installasjonsfeil med
+`phase=6,tls=0,err=0,ms=0`. Dette er entydig grenen der `xTaskCreate` for
+`fire-net` på 8 KiB feiler før TLS starter; ingen HTTP- eller backendport ble
+avvist. Forsøkene hadde korrekt pakke og godkjent `app_download`. Tidligere
+minnepresshypotese er avgrenset til faktisk worker-opprettelse; nøyaktig ledig
+minne ved feilen er ikke målt. Kontrollert serialisering gjennom eksisterende
+nettverkseierskap og bevaring av installasjonskvitteringen vurderes før endring.
+Ingen CA-, tidsfrist-, kvote- eller sikkerhetsgrense er svekket.
+
 ### Backend-sync og sikker nettilgang – 26. november
 
 **Målrettet retting etter adressebyttet:** Brukeren fikk ikke koblet FIRE til den

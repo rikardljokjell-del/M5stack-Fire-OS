@@ -375,7 +375,7 @@ void FireOS::handleAppUpdateButton(uint8_t index) {
     if(backendClient_ && backendClient_->sessionReady() && WiFi.status()==WL_CONNECTED && backendClient_->connectionEpoch()==backendCatalogEpoch_ && millis()-backendCatalogAt_<=60000)
       for(uint8_t i=0;i<backendAppCount_;++i) if(backendApps_[i].appId==appUpdateApp_ && backendApps_[i].projectId==appUpdateProject_ && backendApps_[i].latestPackageId==appUpdateCandidate_ && backendApps_[i].downloadable) exact=true;
     appUpdateRequest_="update-"+String(esp_random(),HEX)+String(millis(),HEX);
-    if(exact && backendClient_->appDownload(appUpdateProject_,appUpdateCandidate_,appUpdateApp_,appUpdateRequest_)) {
+    if(exact && !(packageManager_ && packageManager_->busy()) && backendClient_->appDownload(appUpdateProject_,appUpdateCandidate_,appUpdateApp_,appUpdateRequest_)) {
       appUpdateReady_=false;appUpdateFailure_=0;appUpdateStage_=2;managerStatus_="Laster ned oppdatering";redrawRequested_=true;return;
     }
     appUpdateFailure_=1;redrawRequested_=true;return; // user may retry or choose the original installed app

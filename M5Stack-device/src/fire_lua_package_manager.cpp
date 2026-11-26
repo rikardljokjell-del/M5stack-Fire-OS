@@ -3,6 +3,7 @@
 
 #include <esp_system.h>
 #include <WiFi.h>
+#include <time.h>
 
 namespace {
 constexpr uint32_t kHeaderTimeoutMs = 5000;
@@ -82,14 +83,20 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
                                           const String& packageId,
                                           const String& installId,
                                           const String& expectedHash,
-                                          uint32_t expectedSize,const String& projectId) {
+                                          uint32_t expectedSize,const String& projectId,const String& sessionId,const String& bootId,uint32_t expiresAt) {
   if (busy() || !fireNetworkEndpointValid(host) || token.length() < 24 || !fireRelativePath(url) ||
       packageId.length() == 0 || packageId.length() > 96 || expectedHash.length() != 64 || expectedSize == 0 || expectedSize > 1048576)
     return false;
-  if(!fire_lua_install::id(projectId.c_str(),true)) return false;
+  if(!fire_lua_install::id(projectId.c_str(),true) || !fire_package_delivery::wireId(sessionId.c_str()) ||
+      !fire_package_delivery::wireId(bootId.c_str()) || !fire_package_delivery::wireId(installId.c_str())) return false;
+  if (matchesInstall(packageId,installId,expectedHash,expectedSize)) return true; // already executed; never replay bytes
+
   for (size_t i = 0; i < packageId.length(); ++i)
     if (!(isalnum(static_cast<unsigned char>(packageId[i])) || packageId[i] == '-' || packageId[i] == '_')) return false;
   for (size_t i = 0; i < expectedHash.length(); ++i) if (!isxdigit(static_cast<unsigned char>(expectedHash[i]))) return false;
+  sessionId_=sessionId;bootId_=bootId;expiresAt_=expiresAt;
+  receiptEvent_="ir-"+String(esp_random(),HEX)+"-"+String(esp_random(),HEX);
+  receiptFrozen_=false;cancelled_=false;io_.completed=false;
   host_ = fireNetworkHost(host);
   secureEndpoint_ = fireNetworkTls(host, port);
   client_.secure(secureEndpoint_);
@@ -108,22 +115,41 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
   contentLength_ = 0;
   headerBuffer_ = "";
   lastDataAt_ = millis();
-  mbedtls_sha256_init(&sha256_);
-  mbedtls_sha256_starts_ret(&sha256_, 0);
-  state_ = State::Connecting;
-  emitStatus("Connecting for download");
-  io_.running = true;
-  if (xTaskCreate(task, "fire-package", 16384, this, 1, nullptr) != pdPASS) {
-    mbedtls_sha256_free(&sha256_); state_ = State::Idle; io_.running = false; return false;
-  }
+  delivery_.begin(millis(),secureEndpoint_);
+  emitStatus("Waiting for download resources");
   return true;
 }
 
-void FireLuaPackageManager::service(bool wifiConnected) {
-  io_.wifi = wifiConnected;
-  if (io_.poll(status_) && statusCallback_) statusCallback_(callbackContext_, status_);
-  if (!io_.running && io_.completed.exchange(false) && resultCallback_)
-    resultCallback_(callbackContext_, io_.ok, io_.first, io_.completionId, io_.second, io_.message);
+bool FireLuaPackageManager::cancelled() const {return cancelled_ || time(nullptr)>=expiresAt_;}
+void FireLuaPackageManager::queuedFailure(const String& reason) {
+  state_=State::Idle;
+  io_.result(false,false,packageId_,String(),reason,installId_);
+  delivery_.phase=fire_package_delivery::Phase::Cleanup;
+  emitStatus(reason);
+}
+void FireLuaPackageManager::startWorker() {
+  mbedtls_sha256_init(&sha256_);
+  mbedtls_sha256_starts_ret(&sha256_,0);
+  lastDataAt_=millis();state_=State::Connecting;io_.running=true;
+  if (xTaskCreate(task,"fire-package",16384,this,1,nullptr)!=pdPASS) {
+    mbedtls_sha256_free(&sha256_);io_.running=false;
+    queuedFailure("Package worker allocation failed");
+  }
+}
+void FireLuaPackageManager::service(bool wifiConnected,bool allowed,bool busyNetwork,bool socketsQuiet,bool unexpired) {
+  io_.wifi=wifiConnected;
+  if (io_.poll(status_) && statusCallback_) statusCallback_(callbackContext_,status_);
+  const auto action=delivery_.poll(millis(),allowed && wifiConnected && unexpired,busyNetwork,socketsQuiet,
+      io_.running,client_.running(),io_.completed);
+  if (action==fire_package_delivery::Action::Start) startWorker();
+  else if (action==fire_package_delivery::Action::Cancel || action==fire_package_delivery::Action::Busy) {
+    cancelled_=true;client_.stop();
+    if (!io_.running && !io_.completed) queuedFailure(action==fire_package_delivery::Action::Busy?"Installer network busy":"Download cancelled or expired");
+  } else if (action==fire_package_delivery::Action::Notify) {
+    // Callback can validate/amend this sole result before its immutable receipt.
+    if (resultCallback_) resultCallback_(callbackContext_,io_.ok,io_.first,io_.completionId,io_.second,io_.message);
+    receiptFrozen_=true;
+  }
 }
 void FireLuaPackageManager::task(void* context) {
   auto* self = static_cast<FireLuaPackageManager*>(context);
@@ -132,6 +158,7 @@ void FireLuaPackageManager::task(void* context) {
 }
 void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
   if (state_ == State::Idle) return;
+  if (cancelled()) {fail("Download cancelled or expired");return;}
   if (reverseClient_ && reverseTransport_ && reverseTransport_->cancelled(reverseClient_)) { fail("Reverse connection cancelled"); return; }
   if (!wifiConnected) {
     fail("Wi-Fi disconnected during download");
@@ -413,6 +440,7 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
       uint8_t buffer[256];
       uint32_t remaining = compressed;
       while (remaining > 0) {
+        if (cancelled()) {output.close();reason="Download cancelled or expired";return false;}
         const size_t amount = archive.read(buffer, min<uint32_t>(sizeof(buffer), remaining));
         if (amount == 0 || output.write(buffer, amount) != amount) {
           output.close();
@@ -494,6 +522,7 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
   if(!fire_lua_install::writeVerified(SD,(staging+"/"+fire_lua_install::kFilename).c_str(),identity)) {
     reason="metadata_error";return false;
   }
+  if (cancelled()) {reason="Download cancelled or expired";return false;}
   bool oldVersionMoved = false;
   bool oldAppDataMoved = false;
   if (SD.exists(previousPath) && !removeTree(previousPath)) {
@@ -523,7 +552,7 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
       oldAppDataMoved = true;
     }
   }
-  if (!SD.rename(staging, finalPath)) {
+  if (cancelled() || !SD.rename(staging, finalPath)) {
     if (oldAppDataMoved) SD.rename(staging + "/appdata", previousPath + "/appdata");
     if (oldVersionMoved) SD.rename(previousPath, finalPath);
     reason = "Cannot activate staged app";

@@ -1027,6 +1027,9 @@ class FireOS {
   String luaDiagnosticsJson(const char* phase) const;
   String audioDiagnosticsJson(const char* phase) const;
   void updateBackend();
+  void servicePackageInstall();
+  bool handlePackageReceipt(const String& message);
+  void finishPackageReceipt(bool recorded);
   void cycleBackendMode();
   void applyBackendMode();
   void handleBackendMessage(const String& message);

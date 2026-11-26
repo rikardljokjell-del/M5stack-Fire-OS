@@ -1,5 +1,6 @@
 #include "fire_ws_handshake.h"
 #include "fire_backend_policy.h"
+#include "fire_package_delivery.h"
 #include "fire_session_selection.h"
 #include "fire_json_guard.h"
 #include <cassert>
@@ -81,7 +82,53 @@ static void connectionPolicyTests() {
   TlsFailure tcp;tcp.beforeStop(false,0,-1);assert(tcp.captured && !tcp.socket && tcp.state==0);
   std::puts("PASS async connect polling, single-key Sync persistence and pre-cleanup TLS failure evidence");
 }
+static void deliveryTests() {
+  using namespace fire_package_delivery;
+  assert(wireId("session-one") && wireId("boot_1") && !wireId("_bad") && !wireId("Upper"));
+  const std::string maxid(64,'a');assert(wireId(maxid.c_str()) && !wireId((maxid+"a").c_str()));
+  assert(sameScope("session-one","boot-one","session-one","boot-one"));
+  assert(!sameScope("session-one","boot-one","session-two","boot-one"));
+  assert(!sameScope("session-one","boot-one","session-one","boot-two"));
+  Gate waiting;waiting.begin(100,true);
+  assert(waiting.poll(100,true,true,false,false,false,false)==Action::None && !waiting.paused());
+  assert(waiting.poll(12100,true,true,false,false,false,false)==Action::Busy && !waiting.paused()); // paid work not cancelled
+  for (bool alreadyQuiet:{false,true}) {
+    Gate wrong;wrong.begin(100,true);
+    if (alreadyQuiet) assert(wrong.poll(100,true,false,false,false,false,false)==Action::None && wrong.phase==Phase::Quiet);
+    const bool auth=admittedScope(true,"session-one","boot-one","session-two","boot-one");
+    assert(!auth && wrong.poll(101,auth,false,true,false,false,false)==Action::Cancel); // no spawn/SD on observed successor
+  }
+  Gate gate;gate.begin(UINT32_MAX-100,true);
+  assert(gate.poll(UINT32_MAX-100,true,false,false,false,false,false)==Action::None && gate.paused());
+  assert(gate.poll(20,true,false,false,false,false,false)==Action::None); // wrap-safe quiet wait
+  assert(gate.poll(30,true,false,true,false,false,false)==Action::Start);
+  assert(gate.poll(31,true,false,true,true,true,false)==Action::None); // one worker only
+  assert(gate.poll(40,true,false,true,false,true,true)==Action::None && gate.paused()); // package ended, TLS cleanup still owns socket
+  assert(gate.poll(50,true,false,true,false,false,true)==Action::Notify && !gate.paused());
+  assert(gate.phase==Phase::Receipt && gate.receiptDue(50));
+  gate.receiptSent(50);assert(!gate.receiptDue(3049) && gate.receiptDue(3050));
+  assert(gate.poll(3050,true,false,true,false,false,true)==Action::None); // held mailbox never re-notifies/re-downloads
+  assert(!recordedAck("ir-one","ir-other","accepted","recorded","pkg-one","pkg-one",false));
+  assert(!recordedAck("ir-one","ir-one","accepted","recorded","pkg-one","pkg-other",false));
+  for (const char* status:{"failed","unknown","rejected"}) assert(!recordedAck("ir-one","ir-one",status,"recorded","pkg-one","pkg-one",false));
+  assert(!recordedAck("ir-one","ir-one","accepted","recorded","pkg-one","pkg-one",true));
+  assert(!recordedAck("ir-one","ir-one","accepted","unknown","pkg-one","pkg-one",false));
+  assert(recordedAck("ir-one","ir-one","accepted","recorded","pkg-one","pkg-one",false));
+  assert(recordedAck("ir-one","ir-one","duplicate","recorded","pkg-one","pkg-one",false)); // lost ACK, same immutable receipt
+  gate.clear();assert(!gate.active() && !gate.receiptDue(4000));
+  Gate spawnFail;spawnFail.begin(10,true);assert(spawnFail.poll(10,true,false,true,false,false,false)==Action::Start);
+  assert(spawnFail.poll(11,true,false,true,false,false,true)==Action::Notify); // actual failed spawn publishes one completed outcome
+  assert(spawnFail.poll(12,true,false,true,false,false,true)==Action::None);
+  Gate off;off.begin(10,true);assert(off.poll(10,true,false,true,false,false,false)==Action::Start);
+  assert(off.poll(11,false,false,true,true,true,false)==Action::Cancel);
+  assert(off.poll(12,false,false,true,false,true,true)==Action::None && off.paused());
+  assert(off.poll(13,false,false,true,false,false,true)==Action::Notify); // cancellation cleanup still required
+  Gate plain;plain.begin(10,false);assert(plain.poll(10,true,false,false,false,false,false)==Action::Start && !plain.paused());
+  puts("PASS package exclusive worker barriers immutable outcome exact ACK and scope no replay");
+}
+
 int main() {
+  deliveryTests();
   connectionPolicyTests();
   selectionTests();
   const char* accept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";

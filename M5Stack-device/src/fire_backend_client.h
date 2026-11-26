@@ -70,6 +70,7 @@ class FireBackendClient {
   }
   uint32_t connectionEpoch() const {return connectionEpoch_;}
   const String& bootId() const { return bootId_; }
+  const String& sessionId() const {return sessionId_;}
   const String& status() const { return status_; }
 
   bool listenStart(const String& turnId);
@@ -130,7 +131,7 @@ class FireBackendClient {
   bool appStop();
   bool deviceInstallResult(const String& installId, const String& packageId,
                            bool ok, const String& archiveHash,
-                           const String& message);
+                           const String& message,const String& stableEventId=String());
   bool appStarted(const String& runId, const String& packageId,
                   const String& sourceHash, const String& diagnostics = String());
   bool appHealthy(const String& runId, const String& packageId,

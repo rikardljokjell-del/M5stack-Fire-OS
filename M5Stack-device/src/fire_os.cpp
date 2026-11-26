@@ -77,7 +77,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc9";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc10";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -1296,6 +1296,7 @@ void FireOS::update() {
     }
   }
   serviceFirmwareAction();
+  servicePackageInstall();
   if (auto* request = setupPortal_.take()) {
     const bool provision = request->operation == FireSetupPortal::Operation::Provision;
     bool ok = wifiSetupActive_ && !portalCloseAt_ && setupPortal_.current(*request) &&
@@ -1324,7 +1325,7 @@ void FireOS::update() {
   if (homeApp_.configured() && screen_ == Screen::Home && wifiMode_ != 2 &&
       WiFi.status() != WL_CONNECTED && !wifiConnectActive_ && wifiSsid_.length())
     requestWifi(true);
-  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2 && !firmwareNetworkPaused_); }
+  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2 && !firmwareNetworkPaused_ && !(packageManager_ && packageManager_->networkPaused())); }
   if (homeApp_.takeSetupRequest()) {
     startWifiSetup(); homeApp_.setupHint(wifiSetupPassword_);
   }
@@ -1335,7 +1336,7 @@ void FireOS::update() {
   serviceDataDevelopHandoff();
   {
   FireUiPhaseTimer timing("reverse_service");
-  reverseTransport_.service(!firmwareNetworkPaused_ && WiFi.status() == WL_CONNECTED &&
+  reverseTransport_.service(!firmwareNetworkPaused_ && !(packageManager_ && packageManager_->networkPaused()) && WiFi.status() == WL_CONNECTED &&
                             backendClient_ && backendClient_->configured());
   }
   { FireUiPhaseTimer timing("time_sync"); updateTimeSync(); }
@@ -1344,7 +1345,6 @@ void FireOS::update() {
   updateAiAudio();
   updateDebugTests();
   updateAiAudioOutput();
-  if (packageManager_) packageManager_->service(WiFi.status() == WL_CONNECTED);
   if (firmwareStorage_)
     firmwareStorage_->service(WiFi.status() == WL_CONNECTED, sdReady_);
   if (githubFirmware_)
@@ -5597,6 +5597,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     aiBuildProgress_ = 0;
     aiWorkflowStarted_ = millis();
   } else if (index == 0 && aiWorkflowState_ == 5) {
+    if (packageManager_ && packageManager_->busy()) {aiWorkflowText_="Venter på installkvittering";return;}
     if (backendClient_ && backendClient_->sessionReady() && aiReadyPackageId_.length() > 0) {
       if (aiJobNeedsInstall_) {
         if (backendClient_->appDownload(aiProjectId_,aiReadyPackageId_)) {
@@ -7052,7 +7053,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
          buildNoticeRunPackageId_.length() && buildNoticeRunPackageId_==readyPackage) {
         const String target=buildNoticeRunPackageId_;
         buildNoticeRunBuildId_=String();buildNoticeRunPackageId_=String();
-        if(backendClient_ && backendClient_->confirmRun(target)) {
+        if(backendClient_ && !(packageManager_ && packageManager_->busy()) && backendClient_->confirmRun(target)) {
           aiWorkflowState_=6;aiWorkflowText_="Starter app";
         } else aiWorkflowText_="App klar – velg Kjør";
       }
@@ -7180,7 +7181,7 @@ void FireOS::applyBackendMode() {
 void FireOS::updateBackend() {
   FireUiPhaseTimer timing("backend_service");
   if (!backendClient_) return;
-  if (firmwareNetworkPaused_) {
+  if (firmwareNetworkPaused_ || (packageManager_ && packageManager_->networkPaused())) {
     if (backendClient_->active()) backendClient_->disconnect();
     return;
   }
@@ -7213,7 +7214,7 @@ void FireOS::updateBackend() {
       (evolution_.pending() && evolutionUi_.connectAt && millis()-evolutionUi_.connectAt<15000);
   // Quick Settings is an overlay, not an exit from its live conversation.
   const Screen demandScreen=fire_ui_cadence::contentScreen(screen_,previousScreen_,Screen::QuickSettings);
-  const bool backendDemand = evolutionDemand || demandScreen == Screen::AiDeveloper ||
+  const bool backendDemand = (packageManager_ && packageManager_->busy()) || evolutionDemand || demandScreen == Screen::AiDeveloper ||
                               (luaAppActive_ && (luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_)) ||
                               luaAiBindPackageId_.length()>0 ||
                               demandScreen == Screen::AiApi ||
@@ -7288,7 +7289,7 @@ void FireOS::updateBackend() {
     if(!luaAppActive_ || !(luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_) || luaPackageId_!=luaAiBindPackageId_ ||
        millis()-luaAiBindAt_>30000) {luaAiBindPackageId_=String();luaAiBindSent_=false;}
     else if(!luaAiBindSent_ && !appInventoryPending_ && !luaScanPending_ &&
-            luaCacheComplete_ && !backendClient_->pendingWrites() && backendClient_->sessionReady())
+            luaCacheComplete_ && !(packageManager_ && packageManager_->busy()) && !backendClient_->pendingWrites() && backendClient_->sessionReady())
       luaAiBindSent_=backendClient_->confirmRun(luaAiBindPackageId_);
   }
   if (luaRepairStatusQueryPending_ && backendClient_->sessionReady()) {
@@ -7362,6 +7363,7 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
                            const String& message) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
+  (void)installId;
   if(ok) {
     const String source=os->packageManager_?os->packageManager_->installedPath():String();
     const String folder=source.substring(0,source.lastIndexOf('/'));
@@ -7371,56 +7373,99 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
       packageId==identity.package && archiveHash==identity.archive && os->sdBaseName(folder)==identity.app;
     if(!ok) {
       os->invalidateLuaApps();
-      if(packageId==os->appUpdateCandidate_) {os->appUpdateReady_=false;os->appUpdateFailure_=1;if(os->appUpdateStage_==2) os->appUpdateStage_=1;}
+      if(packageId==os->appUpdateCandidate_) {os->appUpdateReady_=false;os->appUpdateFailure_=1;}
       if(os->userRunAfterInstall_==packageId) os->userRunAfterInstall_=String();
-      if(os->backendClient_) os->backendClient_->deviceInstallResult(installId,packageId,false,archiveHash,"metadata_error");
-      os->aiWorkflowText_="Installasjonskontroll feilet";os->aiWorkflowState_=0;return;
+      if(os->packageManager_) os->packageManager_->amendOutcome(false,"metadata_error");
     }
   }
-  if(packageId==os->appUpdateCandidate_) {
-    os->appUpdateReady_=ok;os->appUpdateFailure_=!ok;os->appUpdateRequest_=String();
-    // Only an already visible transfer view becomes the explicit Open page.
-    // A minimized completion never steals the current screen or runs code.
-    if(os->appUpdateStage_==2) os->appUpdateStage_=fire_app_updates::completed(os->appUpdateStage_,ok);
-    os->appUpdateSelection_=1;
-  }
+  // Called once after BOTH workers have stopped. The mailbox remains busy
+  // and immutable after this callback until the exact server receipt ACK.
+  if (packageId==os->appUpdateCandidate_) os->appUpdateReady_=false;
   const bool selected=os->aiReadyPackageId_.length()?packageId==os->aiReadyPackageId_:packageId==os->aiPackageId_;
-  if(selected) {os->aiPackageId_=packageId;os->aiWorkflowText_=ok?"App installert":message;}
-  if (os->screen_ == Screen::AppsSettings) {
-    os->managerStatus_ = ok ? "Downloaded to FIRE" : message;
+  if (selected) {os->aiPackageId_=packageId;os->aiWorkflowText_="Bekrefter installasjon";os->aiWorkflowState_=4;}
+  if (os->screen_==Screen::AppsSettings) os->managerStatus_="Bekrefter installasjon";
+  if (ok) {os->invalidateLuaApps();os->scanLuaApps();}
+  else if (os->userRunAfterInstall_==packageId) os->userRunAfterInstall_=String();
+  (void)message;os->redrawRequested_=true;
+}
+
+void FireOS::servicePackageInstall() {
+  if (!packageManager_ || !packageManager_->busy()) return;
+  const bool allowed=wifiMode_!=2 && backendMode_!=2;
+  if (!allowed && userRunAfterInstall_==packageManager_->packageId()) userRunAfterInstall_=String();
+  bool occupied=aiAudioCaptureActive_ || aiAudioOutputActive_ || aiAudioDownloadPending_ || aiVoiceTestPlaybackActive_ ||
+      aiConversationCancelPending_ || aiWorkflowState_==1 || aiWorkflowState_==2 || backgroundBuildActive_ ||
+      (backendClient_ && (backendClient_->audioTransferActive() || backendClient_->selectionPending() || backendClient_->pendingWrites()));
+  for (const LuaHardwareJob& job:luaJobs_) if (job.state==0 && (job.kind==LuaJobKind::RuntimeAi ||
+      (job.kind==LuaJobKind::Data && (job.dataOperation=="process" || job.dataOperation=="develop" || job.dataOperation=="sync")))) occupied=true;
+  const bool unexpired=backendCommandUnexpired(packageManager_->installExpiry()) && backendClient_ &&
+      backendClient_->bootId()==packageManager_->installBoot() && fire_package_delivery::admittedScope(
+          backendClient_->sessionReady(),packageManager_->installSession().c_str(),packageManager_->installBoot().c_str(),
+          backendClient_->sessionId().c_str(),backendClient_->bootId().c_str());
+  const bool quiet=(!backendClient_ || (!backendClient_->active() && backendClient_->networkIdle())) && homeApp_.networkIdle();
+  packageManager_->service(WiFi.status()==WL_CONNECTED,allowed,occupied,quiet,unexpired);
+  if (packageManager_->networkPaused()) {
+    if (backendClient_ && backendClient_->active()) backendClient_->disconnect();
+    homeApp_.service(WiFi.status()==WL_CONNECTED,false);reverseTransport_.service(false);
+    return;
   }
-  if (ok) {
-    // Identity was persisted/read back in the staging folder before activation;
-    // no per-package/per-app NVS entries are added, even when NVS is full.
-    os->invalidateLuaApps();
-    os->scanLuaApps();
-    os->sendAppInventory();
-    // RUN can resolve the worker's verified sidecar immediately, independent
-    // of the asynchronously refreshed menu/inventory snapshot or NVS space.
-    if (os->backendClient_) os->backendClient_->deviceInstallResult(
-        installId, packageId, true, archiveHash, "installed");
-    if (os->userRunAfterInstall_.length() && packageId==os->userRunAfterInstall_) {
-      const bool repair=packageId==os->luaRepairReadyPackageId_;
-      os->userRunAfterInstall_=String();os->aiJobNeedsInstall_=false;
-      const bool sent=os->backendClient_ && os->backendClient_->confirmRun(packageId);
-      if (repair) {
-        if (sent) {os->luaRepairStatus_="starting";os->luaRepairPhase_="starting";}
-        os->luaRepairMessage_=sent?"Starter reparert app":"Kjøring kunne ikke bekreftes";
-      } else {
-        os->aiWorkflowText_=sent?"Starter valgt app":"Velg Kjør igjen";
-        if (sent) os->aiWorkflowState_=6;
-      }
-    }
-    if(selected && os->aiWorkflowState_!=6) os->aiWorkflowState_ = 5;
-  } else {
-    if (os->userRunAfterInstall_==packageId) os->userRunAfterInstall_=String();
-    if(packageId==os->luaRepairReadyPackageId_) {
-      os->luaRepairStatus_="ready";os->luaRepairPhase_="ready";os->luaRepairMessage_=message;os->luaErrorAction_=1;
-    }
-    if (os->backendClient_) os->backendClient_->deviceInstallResult(
-        installId, packageId, false, archiveHash, message);
-    if(selected) os->aiWorkflowState_=os->aiJobNeedsInstall_?5:0;
+  if (!packageManager_->receiptReady()) return;
+  if (!unexpired || (backendClient_->sessionReady() && !fire_package_delivery::sameScope(
+      packageManager_->installSession().c_str(),packageManager_->installBoot().c_str(),
+      backendClient_->sessionId().c_str(),backendClient_->bootId().c_str()))) {
+    finishPackageReceipt(false);return;
   }
+  if (allowed && backendClient_->sessionReady() && packageManager_->receiptDue(millis())) {
+    if (backendClient_->deviceInstallResult(packageManager_->installId(),packageManager_->packageId(),
+        packageManager_->outcomeOk(),packageManager_->outcomeHash(),packageManager_->outcomeMessage(),packageManager_->receiptEvent()))
+      packageManager_->receiptSent(millis());
+  }
+}
+
+bool FireOS::handlePackageReceipt(const String& message) {
+  if (!packageManager_ || !packageManager_->receiptReady() ||
+      jsonStringField(message,"event_id")!=packageManager_->receiptEvent()) return false;
+  const String type=jsonStringField(message,"type");
+  if (type!="event_ack" && type!="error") return false;
+  if (!backendClient_ || !backendClient_->sessionReady() || !backendCommandUnexpired(packageManager_->installExpiry()) ||
+      !fire_package_delivery::sameScope(packageManager_->installSession().c_str(),packageManager_->installBoot().c_str(),
+          backendClient_->sessionId().c_str(),backendClient_->bootId().c_str()) ||
+      jsonStringField(message,"session_id")!=packageManager_->installSession()) return true;
+  cJSON* root=cJSON_Parse(message.c_str());const cJSON* result=cJSON_GetObjectItemCaseSensitive(root,"result");
+  const bool recorded=type=="event_ack" && fire_package_delivery::recordedAck(packageManager_->receiptEvent().c_str(),
+      aiJobText(root,"event_id").c_str(),aiJobText(root,"status").c_str(),aiJobText(result,"status").c_str(),
+      packageManager_->packageId().c_str(),aiJobText(result,"package_id").c_str(),
+      cJSON_GetObjectItemCaseSensitive(result,"error") || cJSON_GetObjectItemCaseSensitive(root,"error"));
+  cJSON_Delete(root);finishPackageReceipt(recorded);return true;
+}
+
+void FireOS::finishPackageReceipt(bool recorded) {
+  if (!packageManager_ || !packageManager_->receiptReady()) return;
+  const String package=packageManager_->packageId();
+  const bool ok=recorded && packageManager_->outcomeOk();
+  const String detail=recorded?packageManager_->outcomeMessage():String("Installasjonsstatus uavklart");
+  packageManager_->finishReceipt(); // one completed slot consumed ONLY here
+  if (package==appUpdateCandidate_) {
+    appUpdateReady_=ok;appUpdateFailure_=!ok;appUpdateRequest_=String();
+    if (appUpdateStage_==2) appUpdateStage_=fire_app_updates::completed(appUpdateStage_,ok);
+    appUpdateSelection_=1;
+  }
+  const bool selected=aiReadyPackageId_.length()?package==aiReadyPackageId_:package==aiPackageId_;
+  if (selected) {aiWorkflowState_=ok || aiJobNeedsInstall_?5:0;aiWorkflowText_=ok?"App installert":detail;}
+  if (screen_==Screen::AppsSettings) managerStatus_=ok?"Downloaded to FIRE":detail;
+  if (package==luaRepairReadyPackageId_) {
+    luaRepairStatus_="ready";luaRepairPhase_="ready";luaRepairMessage_=ok?"Reparert app installert":detail;luaErrorAction_=1;
+  }
+  if (ok) sendAppInventory();
+  if (package==userRunAfterInstall_) {
+    userRunAfterInstall_=String();
+    if (ok && backendClient_ && backendClient_->confirmRun(package)) {
+      luaAiBindPackageId_=String();luaAiBindSent_=false;
+      aiJobNeedsInstall_=false;aiWorkflowState_=6;aiWorkflowText_="Starter valgt app";
+      if (package==luaRepairReadyPackageId_) {luaRepairStatus_="starting";luaRepairPhase_="starting";luaRepairMessage_="Starter reparert app";}
+    }
+  }
+  redrawRequested_=true;
 }
 
 void FireOS::firmwareStatus(void* context, const String& status) {
@@ -7469,6 +7514,7 @@ void FireOS::backendMessage(void* context, const String& message) {
 void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
+  if (handlePackageReceipt(message)) return;
   if(appUpdateStage_==2 && appUpdateRequest_.length() && jsonStringField(message,"event_id")==appUpdateRequest_ && (type=="error" || type=="event_ack")) {
     cJSON* reply=cJSON_Parse(message.c_str());
     const cJSON* result=cJSON_GetObjectItemCaseSensitive(reply,"result");
@@ -7861,6 +7907,7 @@ void FireOS::handleBackendMessage(const String& message) {
       aiWorkflowText_ = "DOWNLOAD EXPIRED";
       return;
     }
+    if (packageManager_ && packageManager_->matchesInstall(packageId,installId,hash,size)) return;
     if (packageManager_ && packageManager_->busy()) {
       // Replay of the SAME command must not turn an in-flight installation
       // into a failed receipt. A different command cannot replace its identity.
@@ -7868,9 +7915,9 @@ void FireOS::handleBackendMessage(const String& message) {
         backendClient_->deviceInstallResult(installId, packageId, false, hash, "installer busy");
       return;
     }
-    const bool accepted = packageManager_ && packageManager_->startDownload(
+    const bool accepted = !firmwareBusy() && packageManager_ && packageManager_->startDownload(
         backendHost_, backendPort_, backendToken_, url, packageId, installId,
-        hash, size,projectId);
+        hash, size,projectId,backendClient_?backendClient_->sessionId():String(),commandBoot,expiresAt);
     if (accepted) {
       aiPackageId_ = packageId;aiInstallId_ = installId;invalidateLuaApps();
     }
@@ -8279,7 +8326,7 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
       } else if (appManagerVersionDownloadable_[appManagerVersionSelection_]) {
         const String packageId =
             appManagerVersionPackageIds_[appManagerVersionSelection_];
-        if (backendClient_ && backendClient_->appDownload(
+        if (!(packageManager_ && packageManager_->busy()) && backendClient_ && backendClient_->appDownload(
                                   appManagerVersionProjectId_, packageId,
                                   appManagerVersionAppId_)) {
           appManagerVersionDialog_ = false;
