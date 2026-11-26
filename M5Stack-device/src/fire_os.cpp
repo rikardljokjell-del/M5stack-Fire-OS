@@ -10761,7 +10761,7 @@ void FireOS::drawAiApi() {
     drawText(24, 78, "1. Join network", kText, 1, kPanel);
     drawText(24, 96, "FIRE-Setup", kCyan, 1, kPanel);
     drawText(24, 120, "2. Password", kText, 1, kPanel);
-    drawText(24, 138, "fire-connect-2026", kCyan, 1, kPanel);
+    drawText(24, 138, wifiSetupPassword_, kCyan, 1, kPanel);
     drawText(24, 166, "3. Scan backend QR", kText, 1, kPanel);
     drawText(24, 184, "PC, port, ID and token", kMuted, 1, kPanel);
     drawFooter("", "Close", "");
