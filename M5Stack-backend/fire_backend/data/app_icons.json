@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "fallback": "icon.code",
+  "rules": [
+    {"icon":"icon.timer","keywords":["stoppeklok","stopwatch","timer","nedtelling","countdown"]},
+    {"icon":"icon.calculator","keywords":["kalkulator","calculator","regnemaskin"]},
+    {"icon":"icon.crosshair","keywords":["prikk","oppdrag","quest","target","jakt"]},
+    {"icon":"icon.gamepad-2","keywords":["spill","game","snake","tetris","racing","plattform"]},
+    {"icon":"icon.battery","keywords":["batteri","battery"]},
+    {"icon":"icon.cloud-sun","keywords":["vaer","weather","forecast"]},
+    {"icon":"icon.clock","keywords":["klokke","clock","alarm"]},
+    {"icon":"icon.thermometer","keywords":["temperatur","temperature","thermo"]},
+    {"icon":"icon.lightbulb","keywords":["lampe","light","lys"]},
+    {"icon":"icon.house","keywords":["hjem","home","camper"]},
+    {"icon":"icon.bluetooth","keywords":["bluetooth"]},
+    {"icon":"icon.wifi","keywords":["wifi","wi fi","nettverk","network"]},
+    {"icon":"icon.radio","keywords":["radio","antenne","beacon"]},
+    {"icon":"icon.mic","keywords":["mikrofon","microphone","opptak","record","voice","tale"]},
+    {"icon":"icon.volume-2","keywords":["lyd","audio","sound","speaker","musikk"]},
+    {"icon":"icon.camera","keywords":["kamera","camera","foto","photo"]},
+    {"icon":"icon.zap","keywords":["strom","power","voltage","spenning","energi","energy"]},
+    {"icon":"icon.cpu","keywords":["elektronikk","electronic","modul","uart","i2c","gpio"]},
+    {"icon":"icon.wrench","keywords":["diagnos","verktoy","tool","repair","reparer"]},
+    {"icon":"icon.calendar-days","keywords":["kalender","calendar","schedule","planlegg"]},
+    {"icon":"icon.map-pin","keywords":["posisjon","location","gps","kart","map"]},
+    {"icon":"icon.compass","keywords":["kompass","compass","retning","direction"]},
+    {"icon":"icon.ruler","keywords":["avstand","distance","lengde","length","ruler"]},
+    {"icon":"icon.file-text","keywords":["notat","note","tekst","text","logg","logger"]},
+    {"icon":"icon.activity","keywords":["dashboard","oversikt","sensor","analyse","analysis","vibrasjon","vibration","signal","maldata","maledata","measure","oscillo"]}
+  ]
+}
