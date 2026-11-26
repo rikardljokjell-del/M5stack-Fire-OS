@@ -55,6 +55,10 @@ int main() {
   assert(!visibleClick(click,43,2,2,true)); // old down/release queued before new proposal was presented
   assert(!visibleClick(click,42,1,1,false)); // exact shown proposal identity changed
   click.context=43;assert(visibleClick(click,43,2,2,true));
+  const uint64_t shownRow=uint64_t(11)|(uint64_t(0)<<40),unseenRow=uint64_t(11)|(uint64_t(1)<<40);
+  assert(!visibleClick(click,43,unseenRow,shownRow,true)); // C moved the row before the next frame
+  assert(!visibleClick(click,44,unseenRow,unseenRow,true)); // old B down cannot approve the newly painted row
+  click.context=44;assert(visibleClick(click,44,unseenRow,unseenRow,true));
   puts("PASS actual button edge replay blackout rapid taps bounce hold wake wrap overflow and unseen confirmation guard");
   using namespace fire_ui_cadence;
   assert(!due(50,0,false,View::Static) && due(1000,0,false,View::Static));

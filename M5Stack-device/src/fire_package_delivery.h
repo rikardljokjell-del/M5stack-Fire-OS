@@ -16,8 +16,8 @@ inline bool admittedScope(bool connected,const char* sid,const char* boot,const 
 }
 inline bool handoffReady(bool preconnected,bool ready) {return !preconnected || ready;}
 
-enum class Phase:uint8_t {Idle,Waiting,Quiet,Connecting,Worker,Cleanup,Receipt};
-enum class Action:uint8_t {None,Connect,Start,Cancel,Busy,Timeout,Notify};
+enum class Phase:uint8_t {Idle,Waiting,Quiet,Connecting,Streaming,TlsCleanup,Worker,Cleanup,Receipt};
+enum class Action:uint8_t {None,Connect,Stream,Start,Cancel,Busy,Timeout,Notify};
 struct Gate {
   Phase phase=Phase::Idle;
   uint32_t startedAt=0,lastReceiptAt=0;
@@ -25,7 +25,7 @@ struct Gate {
   void begin(uint32_t now,bool tls) {phase=Phase::Waiting;startedAt=now;lastReceiptAt=0;exclusive=tls;ownsQuiet=false;sent=false;}
   bool paused() const {return ownsQuiet && phase!=Phase::Receipt && phase!=Phase::Idle;}
   bool active() const {return phase!=Phase::Idle;}
-  Action poll(uint32_t now,bool allowed,bool busy,bool quiet,bool worker,bool network,bool completed,bool ready=false) {
+  Action poll(uint32_t now,bool allowed,bool busy,bool quiet,bool worker,bool network,bool completed,bool ready=false,bool staged=false) {
     if (phase==Phase::Waiting) {
       if (!allowed) return Action::Cancel;
       if (busy) return uint32_t(now-startedAt)>=12000?Action::Busy:Action::None;
@@ -40,8 +40,16 @@ struct Gate {
     if (phase==Phase::Connecting) {
       if (!allowed) return Action::Cancel;
       if (uint32_t(now-startedAt)>=18000) return Action::Timeout;
-      if (ready) {phase=Phase::Worker;return Action::Start;}
+      if (ready) {phase=Phase::Streaming;return Action::Stream;}
       return Action::None;
+    }
+    if (phase==Phase::Streaming) {
+      if (!allowed) return Action::Cancel;
+      if (staged) phase=Phase::TlsCleanup;
+    }
+    if (phase==Phase::TlsCleanup) {
+      if (!allowed) return Action::Cancel;
+      if (!network && staged) {phase=Phase::Worker;return Action::Start;}
     }
     if (phase==Phase::Worker) {
       if (!worker && completed) phase=Phase::Cleanup;

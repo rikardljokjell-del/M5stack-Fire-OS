@@ -8,6 +8,7 @@
 #include "fire_async_client.h"
 #include "fire_io_mailbox.h"
 #include "fire_package_delivery.h"
+#include "fire_firmware_staging.h"
 #include "fire_lua_install_identity.h"
 
 class FireLuaPackageManager {
@@ -25,6 +26,7 @@ class FireLuaPackageManager {
                      const String& installId, const String& expectedHash,
                      uint32_t expectedSize,const String& projectId,const String& sessionId,const String& bootId,uint32_t expiresAt);
   void service(bool wifiConnected,bool allowed,bool busyNetwork,bool socketsQuiet,bool unexpired);
+  void cancel() {cancelled_.store(true,std::memory_order_release);}
   bool busy() const { return delivery_.active() || io_.busy(); }
   bool networkPaused() const {return delivery_.paused();}
   bool receiptReady() const {return delivery_.phase==fire_package_delivery::Phase::Receipt && receiptFrozen_ && io_.completed;}
@@ -58,6 +60,16 @@ class FireLuaPackageManager {
   String sessionId_,bootId_,receiptEvent_;
   uint32_t expiresAt_=0;
   bool receiptFrozen_=false,preconnectedTls_=false;
+  bool buffered_=false,shaInitialized_=false,streamVerified_=false,storageStarted_=false,ownsArchive_=false;
+  uint8_t* stagedBytes_=nullptr;
+  FireFirmwareStaging staging_;
+  bool prepareStaging();
+  void freeStaging();
+  void freeHash();
+  void readDownloadBody();
+  void readLegacyBody();
+  void finishSecureStream();
+  bool writeStagedArchive(String& reason);
   std::atomic<bool> cancelled_{false};
   void startWorker();
   void preconnect();

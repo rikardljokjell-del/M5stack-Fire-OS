@@ -105,11 +105,16 @@ static void deliveryTests() {
   assert(gate.phase==Phase::Connecting);unsigned packageStack=0,networkStack=8192;
   assert(packageStack==0 && networkStack==8192); // TLS buffers are set up without the package's 16KiB stack
   assert(gate.poll(31,true,false,true,false,true,false,false)==Action::None);
-  assert(gate.poll(32,true,false,true,false,true,false,true)==Action::Start);
-  packageStack=16384;assert(packageStack+networkStack==24576); // original stacks, reordered allocation only
-  assert(gate.poll(33,true,false,true,true,true,false,true)==Action::None); // one worker only
-  assert(handoffReady(true,true) && !handoffReady(true,false) && handoffReady(false,false)); // dropped preflight never reconnects in worker
-  assert(gate.poll(40,true,false,true,false,true,true)==Action::None && gate.paused()); // package ended, TLS cleanup still owns socket
+  assert(gate.poll(32,true,false,true,false,true,false,true)==Action::Stream);
+  assert(gate.phase==Phase::Streaming && packageStack==0); // no package stack during HTTP/hash either
+  assert(gate.poll(33,true,false,true,false,true,false,true,false)==Action::None);
+  assert(gate.poll(34,true,false,true,false,true,false,true,true)==Action::None && gate.phase==Phase::TlsCleanup);
+  assert(packageStack==0); // verified PSRAM bytes wait for actual TLS destructors
+  assert(gate.poll(35,true,false,true,false,false,false,false,true)==Action::Start);
+  networkStack=0;packageStack=16384;assert(packageStack+networkStack==16384);
+  assert(gate.poll(36,true,false,true,true,false,false)==Action::None); // one SD/ZIP worker
+  assert(handoffReady(true,true) && !handoffReady(true,false) && handoffReady(false,false));
+  assert(gate.poll(40,true,false,true,false,true,true)==Action::None && gate.paused());
   assert(gate.poll(50,true,false,true,false,false,true)==Action::Notify && !gate.paused());
   assert(gate.phase==Phase::Receipt && gate.receiptDue(50));
   gate.receiptSent(50);assert(!gate.receiptDue(3049) && gate.receiptDue(3050));
@@ -123,7 +128,9 @@ static void deliveryTests() {
   assert(recordedAck("ir-one","ir-one","duplicate","recorded","pkg-one","pkg-one",false)); // lost ACK, same immutable receipt
   gate.clear();assert(!gate.active() && !gate.receiptDue(4000));
   Gate spawnFail;spawnFail.begin(10,true);assert(spawnFail.poll(10,true,false,true,false,false,false)==Action::Connect);
-  assert(spawnFail.poll(11,true,false,true,false,true,false,true)==Action::Start);
+  assert(spawnFail.poll(11,true,false,true,false,true,false,true)==Action::Stream);
+  assert(spawnFail.poll(11,true,false,true,false,true,false,true,true)==Action::None);
+  assert(spawnFail.poll(11,true,false,true,false,false,false,false,true)==Action::Start);
   assert(spawnFail.poll(12,true,false,true,false,true,true)==Action::None && spawnFail.paused()); // stop Ready TLS on allocation failure
   assert(spawnFail.poll(13,true,false,true,false,false,true)==Action::Notify); // actual failed spawn publishes one completed outcome
   assert(spawnFail.poll(14,true,false,true,false,false,true)==Action::None);
@@ -133,7 +140,9 @@ static void deliveryTests() {
   assert(off.poll(12,false,false,true,false,true,true)==Action::None && off.paused());
   assert(off.poll(13,false,false,true,false,false,true)==Action::Notify); // cancellation cleanup still required
   Gate workerOff;workerOff.begin(10,true);assert(workerOff.poll(10,true,false,true,false,false,false)==Action::Connect);
-  assert(workerOff.poll(11,true,false,true,false,true,false,true)==Action::Start);
+  assert(workerOff.poll(11,true,false,true,false,true,false,true)==Action::Stream);
+  assert(workerOff.poll(11,true,false,true,false,true,false,true,true)==Action::None);
+  assert(workerOff.poll(11,true,false,true,false,false,false,false,true)==Action::Start);
   assert(workerOff.poll(12,false,false,true,true,true,false)==Action::Cancel);
   assert(workerOff.poll(13,false,false,true,false,true,true)==Action::None && workerOff.paused());
   assert(workerOff.poll(14,false,false,true,false,false,true)==Action::Notify);
@@ -144,7 +153,7 @@ static void deliveryTests() {
   netFail.phase=Phase::Cleanup; // the same queuedFailure used for failed TLS, no package task
   assert(netFail.poll(12,true,false,true,false,true,true)==Action::None && netFail.paused());
   assert(netFail.poll(13,true,false,true,false,false,true)==Action::Notify);
-  puts("PASS TLS-before-package allocation ordering handoff drop cleanup and original stacks");
+  puts("PASS TLS-before-package allocation ordering PSRAM streaming cleanup no simultaneous stacks");
   puts("PASS package exclusive worker barriers immutable outcome exact ACK and scope no replay");
 }
 

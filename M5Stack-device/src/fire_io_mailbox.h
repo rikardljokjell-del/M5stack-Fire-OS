@@ -13,7 +13,7 @@ struct FireIoMailbox {
   String first, second, message, completionId;
   void status(const String& value) {
     while (lock.test_and_set(std::memory_order_acquire)) delay(1);
-    strlcpy(text, value.c_str(), sizeof(text)); dirty = true;
+    if(strncmp(text,value.c_str(),sizeof(text)-1)!=0) {strlcpy(text, value.c_str(), sizeof(text));dirty=true;}
     lock.clear(std::memory_order_release);
   }
   bool poll(String& value) {

@@ -47,8 +47,20 @@ den skal være av som standard og kan ikke gi egne backend-/bygg-/kjørerettighe
 Hele backend-testpakken har bestått: 1 286 PASS, ett Windows-betinget
 symlink-skip og fire eksisterende bibliotekvarsler på 532,86 s. Alle backend-
 og testkilder var uendret gjennom kjøringen. De målrettede katalog-/leverings-
-kontrollene har i tillegg 55 PASS. Arbeidet er pågående; faktisk COM-betjening,
-gjentatte offentlige nedlastinger og produksjonsaksept gjenstår.
+kontrollene har i tillegg 55 PASS. Separat Linux-CI har 327 PASS og tre
+miljøbetingede skips. Backenden er aktivert én gang med uendrede innstillinger
+og nøkkelfingeravtrykk; FIRE gjenopptok samme økt automatisk. Faktisk offentlig
+kataloglesing ga 14 apper på 0,075 s.
+
+RC12-kandidaten er kildefryst og lokalt objekt-/C++11-kontrollert. Den bruker
+den samme nettverksklienten og SD-/ZIP-installasjonen i atskilte ressursfaser,
+med én avgrenset PSRAM-buffer. Synlig rad og frosset appmål beskytter B-valg,
+forespørsels-IDer beskytter sene svar, og Avbryt trekker tilbake ventende kjøring
+før nettverksopprydding. COM-teststyringen er autentisert, av som standard og
+begrenset til vanlige knappbehandlere og den godkjente testappen på offentlig
+TLS-profil. Større testbuffere ligger i PSRAM; ingen global stakk-/IRAM-grense
+er økt. Samlet firmware-CI, faktisk COM-betjening, gjentatte offentlige
+nedlastinger og produksjonsaksept gjenstår.
 
 ### Pågående: gjenåpning av jobber og appoppdatering
 

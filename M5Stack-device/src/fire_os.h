@@ -22,6 +22,7 @@
 #include "fire_ai_menu.h"
 #include "fire_backend_settings_ui.h"
 #include "fire_buttons.h"
+#include "fire_local_qa.h"
 #include <memory>
 
 class DateTimeService {
@@ -354,6 +355,14 @@ class FireOS {
     String backendBlockReason;
     uint8_t versionCount = 0;
   };
+  ManagerItem managerTarget_;
+  bool managerTargetValid_=false;
+  bool managerTargetCurrent() const;
+  void invalidateManagerTarget();
+  bool applyBackendDeleteResult(const cJSON* result);
+  String appManagerRequest_,appManagerDeleteRequest_;
+  uint32_t appManagerRequestAt_=0,appManagerRequestEpoch_=0;
+  bool appManagerVersionsWaiting_=false;
   ManagerItem managerItems_[kMaxManagerItems];
   uint8_t managerItemCount_ = 0;
   uint8_t managerSelection_ = 0;
@@ -577,6 +586,17 @@ class FireOS {
   bool luaRepairConfirmPending_ = false;
   bool luaRepairStatusQueryPending_ = false;
   String userRunAfterInstall_;
+  String downloadRequest_,downloadProject_,downloadApp_,downloadPackage_,downloadSession_,downloadBoot_;
+  uint32_t downloadRequestedAt_=0;
+  uint8_t downloadPhase_=0; // 1=offer pending, 2=installing, 3=cancelled/failed; never automatic request replay
+  bool requestAppDownload(const String& project,const String& package,const String& app,bool runAfter=false);
+  void cancelAppDownload();
+  void downloadIntentStatus(const String& text);
+  void serviceDownloadIntent();
+  bool handleDownloadIntent(const String& message);
+  bool handleFeedbackAck(const String& message);
+  uint32_t luaFeedbackAt_=0;
+
   bool luaRepairCancelPending_ = false;
   bool repairCancelSupported_ = false;
   uint32_t luaRepairLastAttemptAt_ = 0;
@@ -938,6 +958,20 @@ class FireOS {
   uint64_t buttonView() const;
   String buttonViewIdentity() const;
   void publishButtonView();
+  struct LocalQa;
+  LocalQa* localQa_=nullptr;
+  bool localQaAttempted_=false;
+  void beginLocalQa();
+  void serviceLocalQa();
+  void presentLocalQa();
+  void localQaSnapshot(fire_local_qa::Snapshot& result) const;
+  bool localQaActionAllowed(uint8_t button,bool hold) const;
+  static bool localQaSign(void*,const char*,size_t,char*);
+  static bool localQaVerify(void*,const char*,size_t,const char*);
+  static bool localQaRead(void*,fire_local_qa::Snapshot&);
+  static fire_local_qa::Code localQaAct(void*,const fire_local_qa::Command&,fire_local_qa::Snapshot&);
+  static void localQaStop(void*);
+
   void onButton(uint8_t index, bool longPress);
   void playButtonSound(uint8_t index, bool longPress);
   void open(Screen screen);

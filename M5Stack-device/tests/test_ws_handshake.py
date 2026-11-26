@@ -64,7 +64,17 @@ void delivery() { fire_package_delivery::Gate gate; gate.begin(1,true); (void)ga
     def test_actual_package_preconnect_handoff(self):
         source=(native.ROOT/"src/fire_lua_package_manager.cpp").read_text(encoding="utf-8")
         spawn=source.split("void FireLuaPackageManager::startWorker()",1)[1].split("void FireLuaPackageManager::service(",1)[0]
-        self.assertLess(spawn.index("handoffReady("),spawn.index("xTaskCreate("))
+        self.assertLess(spawn.index("readyForSd(client_.running())"),spawn.index("xTaskCreate("))
+        staged=source.split("void FireLuaPackageManager::readDownloadBody()",1)[1].split("void FireLuaPackageManager::finishSecureStream",1)[0]
+        for forbidden in ("SD.","archive_.", "connect(","delay("):
+            self.assertNotIn(forbidden,staged)
+        self.assertIn("budget=4096",staged)
+        self.assertIn("esp_timer_get_time()-began<2000",staged)
+        archive=source.split("bool FireLuaPackageManager::writeStagedArchive",1)[1].split("void FireLuaPackageManager::finishDownload",1)[0]
+        self.assertIn("readyForSd(client_.running())",archive)
+        self.assertIn("freeStaging()",archive)
+        self.assertIn("heap_caps_malloc(expectedSize_,caps)",source)
+        self.assertIn("MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT",source)
         self.assertIn('xTaskCreate(task,"fire-package",16384',spawn)
         waiting=source.split("void FireLuaPackageManager::preconnect()",1)[1].split("void FireLuaPackageManager::startWorker",1)[0]
         self.assertIn("client_.connect(",waiting)

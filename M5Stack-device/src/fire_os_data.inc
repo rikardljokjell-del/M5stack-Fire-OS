@@ -282,6 +282,9 @@ void FireOS::handleDataResult(const String& message) {
 }
 
 void FireOS::serviceDataDevelopHandoff() {
+  if(luaFeedbackAck_.length() && uint32_t(millis()-luaFeedbackAt_)>=15000) {
+    luaFeedbackAck_=String();luaFeedbackOutcome_="unconfirmed";luaFeedbackConfirmation_=true;redrawRequested_=true;
+  }
   if (luaDevelopContext_.length() && !luaFeedbackConfirmation_ && !luaFeedbackAck_.length()) {
     const String context=luaDevelopContext_,name=luaAppName_;
     // Context and raw synchronization are complete before native stop.

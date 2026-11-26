@@ -4,11 +4,17 @@
 #include <esp_system.h>
 #include <WiFi.h>
 #include <time.h>
+#include <esp_heap_caps.h>
+#include "fire_worker_diagnostics.h"
 
 namespace {
 constexpr uint32_t kHeaderTimeoutMs = 5000;
 constexpr uint32_t kDataTimeoutMs = 15000;
 constexpr size_t kChunkSize = 4096;
+struct PackageHash {
+  mbedtls_sha256_context* context;
+  int update(const uint8_t* bytes,size_t length) {return mbedtls_sha256_update_ret(context,bytes,length);}
+};
 
 uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t length) {
   while (length-- > 0) {
@@ -98,7 +104,7 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
   receiptEvent_="ir-"+String(esp_random(),HEX)+"-"+String(esp_random(),HEX);
   receiptFrozen_=false;preconnectedTls_=false;cancelled_=false;io_.completed=false;
   host_ = fireNetworkHost(host);
-  secureEndpoint_ = fireNetworkTls(host, port);
+  secureEndpoint_ = fireNetworkTls(host, port);buffered_=secureEndpoint_;streamVerified_=storageStarted_=ownsArchive_=false;
   client_.secure(secureEndpoint_);
   port_ = port == 0 ? (secureEndpoint_ ? 443 : 8765) : port;
   token_ = token;
@@ -120,9 +126,21 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
   return true;
 }
 
+void FireLuaPackageManager::freeHash() {if (shaInitialized_) {mbedtls_sha256_free(&sha256_);shaInitialized_=false;}}
+void FireLuaPackageManager::freeStaging() {
+  staging_.attach(nullptr,0);if(stagedBytes_) {heap_caps_free(stagedBytes_);stagedBytes_=nullptr;}
+}
+bool FireLuaPackageManager::prepareStaging() {
+  const uint32_t caps=MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT;
+  if (!FireFirmwareStaging::fits(expectedSize_,1048576,heap_caps_get_free_size(caps),heap_caps_get_largest_free_block(caps),512u*1024u)) return false;
+  stagedBytes_=static_cast<uint8_t*>(heap_caps_malloc(expectedSize_,caps));if(!stagedBytes_) return false;
+  staging_.attach(stagedBytes_,expectedSize_);mbedtls_sha256_init(&sha256_);shaInitialized_=true;
+  if(mbedtls_sha256_starts_ret(&sha256_,0)) {freeHash();freeStaging();return false;}
+  state_=State::Connecting;return true;
+}
 bool FireLuaPackageManager::cancelled() const {return cancelled_ || time(nullptr)>=expiresAt_;}
 void FireLuaPackageManager::queuedFailure(const String& reason) {
-  client_.stop(); // Ready TLS also owns buffers when package-task allocation fails.
+  client_.stop();freeHash();freeStaging(); // No worker owns these on a queued failure.
   state_=State::Idle;
   io_.result(false,false,packageId_,String(),reason,installId_);
   delivery_.phase=fire_package_delivery::Phase::Cleanup;
@@ -143,22 +161,29 @@ void FireLuaPackageManager::preconnect() {
     queuedFailure(connectionFailure());
 }
 void FireLuaPackageManager::startWorker() {
-  preconnectedTls_=secureEndpoint_;
-  if (!fire_package_delivery::handoffReady(preconnectedTls_,client_.ready())) {queuedFailure("Download connection lost before handoff");return;}
-  mbedtls_sha256_init(&sha256_);
-  mbedtls_sha256_starts_ret(&sha256_,0);
-  lastDataAt_=millis();state_=State::Connecting;io_.running=true;
+  if(buffered_) {
+    if (!staging_.readyForSd(client_.running()) || !streamVerified_) {queuedFailure("Verified download staging unavailable");return;}
+    state_=State::Verify;
+  } else {
+    mbedtls_sha256_init(&sha256_);shaInitialized_=true;mbedtls_sha256_starts_ret(&sha256_,0);
+    lastDataAt_=millis();state_=State::Connecting;
+  }
+  storageStarted_=true;io_.running=true;
   if (xTaskCreate(task,"fire-package",16384,this,1,nullptr)!=pdPASS) {
-    mbedtls_sha256_free(&sha256_);io_.running=false;
-    queuedFailure("Package worker allocation failed");
+    io_.running=false;queuedFailure("Package worker allocation failed");
   }
 }
+
 void FireLuaPackageManager::service(bool wifiConnected,bool allowed,bool busyNetwork,bool socketsQuiet,bool unexpired) {
   io_.wifi=wifiConnected;
   if (io_.poll(status_) && statusCallback_) statusCallback_(callbackContext_,status_);
-  const auto action=delivery_.poll(millis(),allowed && wifiConnected && unexpired,busyNetwork,socketsQuiet,
-      io_.running,client_.running(),io_.completed,client_.ready());
-  if (action==fire_package_delivery::Action::Connect) {emitStatus("Connecting for download");preconnect();}
+  const auto action=delivery_.poll(millis(),allowed && wifiConnected && unexpired && !cancelled_.load(),busyNetwork,socketsQuiet,
+      io_.running,client_.running(),io_.completed,client_.ready(),streamVerified_);
+  if (action==fire_package_delivery::Action::Connect) {
+    if (!prepareStaging()) queuedFailure("Not enough PSRAM for download staging");
+    else {emitStatus("Connecting for download");preconnect();}
+  }
+  else if (action==fire_package_delivery::Action::Stream) {preconnectedTls_=true;lastDataAt_=millis();serviceWorker(wifiConnected);}
   else if (action==fire_package_delivery::Action::Start) startWorker();
   else if (action==fire_package_delivery::Action::Cancel || action==fire_package_delivery::Action::Busy || action==fire_package_delivery::Action::Timeout) {
     cancelled_=true;client_.stop();
@@ -168,10 +193,12 @@ void FireLuaPackageManager::service(bool wifiConnected,bool allowed,bool busyNet
     if (resultCallback_) resultCallback_(callbackContext_,io_.ok,io_.first,io_.completionId,io_.second,io_.message);
     receiptFrozen_=true;
   } else if (delivery_.phase==fire_package_delivery::Phase::Connecting) preconnect();
+  else if (delivery_.phase==fire_package_delivery::Phase::Streaming) serviceWorker(wifiConnected);
 }
 void FireLuaPackageManager::task(void* context) {
-  auto* self = static_cast<FireLuaPackageManager*>(context);
+  auto* self = static_cast<FireLuaPackageManager*>(context);uint32_t began=0;
   while (self->state_ != State::Idle) { self->serviceWorker(WiFi.isConnected()); delay(2); }
+  fireMeasureWorker("package",began);
   self->io_.running.store(false, std::memory_order_release); vTaskDelete(nullptr);
 }
 void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
@@ -212,8 +239,11 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
   if (state_ == State::Headers) {
     WiFiClient* client = activeClient();
     size_t headerBudget = 2048;
-    while (client->available() && headerBuffer_.length() < 8192 && headerBudget--)
+    const int64_t headerAt=esp_timer_get_time();
+    while (client->available() && headerBuffer_.length() < 8192 && headerBudget-- && esp_timer_get_time()-headerAt<2000) {
       headerBuffer_ += static_cast<char>(client->read());
+      if (headerBuffer_.endsWith("\r\n\r\n")) break; // Body remains in the binary receive queue.
+    }
     const int end = headerBuffer_.indexOf("\r\n\r\n");
     if (end < 0) {
       if (millis() - lastDataAt_ > kHeaderTimeoutMs) fail("Download headers timeout");
@@ -234,6 +264,7 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
       fail("Package size mismatch");
       return;
     }
+    if (!buffered_) {
     if (!SD.exists("/apps")) SD.mkdir("/apps");
     const String temp = "/apps/.download-" + packageId_ + ".zip";
     if (SD.exists(temp)) SD.remove(temp);
@@ -242,7 +273,14 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
       fail("Cannot stage package on SD");
       return;
     }
+      ownsArchive_=true;
+    }
     const String body = headerBuffer_.substring(end + 4);
+    if (buffered_) {
+      PackageHash hash{&sha256_};
+      if(body.length() && !staging_.append(hash,reinterpret_cast<const uint8_t*>(body.c_str()),body.length())) {fail("Package staging bounds/hash failure");return;}
+      received_=staging_.received();
+    } else {
     for (uint16_t index = 0; index < body.length(); ++index) {
       const uint8_t value = static_cast<uint8_t>(body[index]);
       if (archive_.write(&value, 1) != 1) {
@@ -252,13 +290,39 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
       mbedtls_sha256_update_ret(&sha256_, &value, 1);
       ++received_;
     }
+    }
     headerBuffer_ = "";
     state_ = State::Downloading;
     progress_=contentLength_?min<uint32_t>(100,uint64_t(received_)*100/contentLength_):0;
     emitStatus("Downloading " + String(received_) + "/" + String(contentLength_));
   }
   if (state_ == State::Downloading) {
-    WiFiClient* client = activeClient();
+    readDownloadBody();if(state_==State::Idle) return;
+    progress_=contentLength_?min<uint32_t>(100,uint64_t(received_)*100/contentLength_):0;
+    emitStatus("Downloading " + String(received_) + "/" + String(contentLength_));
+    if (received_ == contentLength_) {
+      if(buffered_) finishSecureStream();
+      else {
+      archive_.flush();
+      archive_.close();
+      if (reverseClient_ && reverseTransport_) {
+        reverseTransport_->release(reverseClient_);
+        reverseClient_ = nullptr;
+      } else {
+        client_.stop();
+      }
+      state_ = State::Verify;
+      emitStatus("Verifying package");
+      }
+    } else if (millis() - lastDataAt_ > kDataTimeoutMs) {
+      fail("Package download timeout");
+    }
+  }
+  if (state_ == State::Verify && (!buffered_ || storageStarted_)) finishDownload();
+}
+
+void FireLuaPackageManager::readLegacyBody() {
+  WiFiClient* client=activeClient();
     uint8_t buffer[kChunkSize];
     size_t budget = 4096;
     while (client->available() && received_ < contentLength_ && budget > 0) {
@@ -273,43 +337,57 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
       budget -= min<size_t>(budget, amount);
       lastDataAt_ = millis();
     }
-    progress_=contentLength_?min<uint32_t>(100,uint64_t(received_)*100/contentLength_):0;
-    emitStatus("Downloading " + String(received_) + "/" + String(contentLength_));
-    if (received_ == contentLength_) {
-      archive_.flush();
-      archive_.close();
-      if (reverseClient_ && reverseTransport_) {
-        reverseTransport_->release(reverseClient_);
-        reverseClient_ = nullptr;
-      } else {
-        client_.stop();
-      }
-      state_ = State::Verify;
-      emitStatus("Verifying package");
-    } else if (millis() - lastDataAt_ > kDataTimeoutMs) {
-      fail("Package download timeout");
-    }
+ }
+void FireLuaPackageManager::readDownloadBody() {
+  if (!buffered_) {readLegacyBody();return;}
+  uint8_t buffer[256];size_t budget=4096;const int64_t began=esp_timer_get_time();PackageHash hash{&sha256_};
+  while(client_.available() && received_<contentLength_ && budget && esp_timer_get_time()-began<2000) {
+    const size_t amount=client_.read(buffer,min<size_t>(sizeof(buffer),min<size_t>(budget,contentLength_-received_)));
+    if(!amount) break;
+    if(!staging_.append(hash,buffer,amount)) {fail("Package staging bounds/hash failure");return;}
+    received_=staging_.received();budget-=amount;lastDataAt_=millis();
   }
-  if (state_ == State::Verify) finishDownload();
+}
+void FireLuaPackageManager::finishSecureStream() {
+  uint8_t digest[32]={};const bool hashed=mbedtls_sha256_finish_ret(&sha256_,digest)==0;freeHash();
+  io_.second=hexDigest(digest,sizeof(digest));
+  if(!staging_.verify(hashed && io_.second.equalsIgnoreCase(expectedHash_))) {fail("Archive SHA256 mismatch");return;}
+  client_.stop();streamVerified_=true;state_=State::Verify;emitStatus("Preparing SD installation");
+}
+
+bool FireLuaPackageManager::writeStagedArchive(String& reason) {
+  if(!staging_.readyForSd(client_.running())) {reason="TLS cleanup not complete";return false;}
+  if(!SD.exists("/apps") && !SD.mkdir("/apps")) {reason="Cannot create app folder";return false;}
+  const String path="/apps/.download-"+packageId_+".zip";
+  if(SD.exists(path) && !SD.remove(path)) {reason="Cannot clear staged archive";return false;}
+  archive_=SD.open(path,FILE_WRITE);if(!archive_) {reason="Cannot stage package on SD";return false;}ownsArchive_=true;
+  for(uint32_t at=0;at<expectedSize_;) {
+    if(cancelled()) {reason="Download cancelled or expired";archive_.close();return false;}
+    const size_t amount=min<uint32_t>(4096,expectedSize_-at);
+    if(archive_.write(stagedBytes_+at,amount)!=amount) {reason="SD write failed";archive_.close();return false;}
+    at+=amount;
+  }
+  archive_.flush();archive_.close();freeStaging();return true;
 }
 
 void FireLuaPackageManager::finishDownload() {
   state_ = State::Idle;
   uint8_t digest[32] = {};
-  mbedtls_sha256_finish_ret(&sha256_, digest);
-  const String archiveHash = hexDigest(digest, sizeof(digest));
+  if(!buffered_) mbedtls_sha256_finish_ret(&sha256_, digest);
+  const String archiveHash = buffered_?io_.second:hexDigest(digest, sizeof(digest));
   const String path = "/apps/.download-" + packageId_ + ".zip";
   String reason;
   bool ok = archiveHash.equalsIgnoreCase(expectedHash_);
+  if (!ok) reason="Archive SHA256 mismatch";
+  if(ok && buffered_) ok=writeStagedArchive(reason);
   if (ok) {
     File archive = SD.open(path, FILE_READ);
-    ok = archive && installArchive(archive, archiveHash, reason);
+    ok = archive && archive.size()==expectedSize_ && installArchive(archive, archiveHash, reason);
     if (archive) archive.close();
-  } else {
-    reason = "Archive SHA256 mismatch";
   }
-  if (SD.exists(path)) SD.remove(path);
-  mbedtls_sha256_free(&sha256_);
+  if (!ok && !reason.length()) reason="Cannot read staged archive";
+  if (SD.exists(path)) SD.remove(path);ownsArchive_=false;
+  freeHash();freeStaging();
   io_.result(false, ok, packageId_, archiveHash, ok ? String("installed") : reason,installId_);
   emitStatus(ok ? "Package installed" : reason);
 }
@@ -323,11 +401,12 @@ void FireLuaPackageManager::fail(const String& reason) {
     client_.stop();
   }
   const String path = "/apps/.download-" + packageId_ + ".zip";
-  if (SD.exists(path)) SD.remove(path);
-  mbedtls_sha256_free(&sha256_);
+  if (ownsArchive_ && SD.exists(path)) SD.remove(path);ownsArchive_=false;
+  freeHash();freeStaging();
   state_ = State::Idle;
   emitStatus(reason);
   io_.result(false, false, packageId_, "", reason,installId_);
+  if(!io_.running) delivery_.phase=fire_package_delivery::Phase::Cleanup;
 }
 
 uint16_t FireLuaPackageManager::read16(File& file) {
@@ -556,7 +635,8 @@ bool FireLuaPackageManager::extractStoredZip(File& archive, String& appId,
       if (SD.exists(newAppData) && !removeTree(newAppData)) {
         // The old version is the recovery copy. Never delete it because a
         // failure while preparing new appdata is being handled.
-        reason = "Cannot prepare appdata";
+        const bool restored=SD.rename(previousPath,finalPath);
+        reason = restored?"Cannot prepare appdata":"Cannot prepare appdata; previous version retained";
         return false;
       }
       if (!SD.rename(oldAppData, newAppData)) {

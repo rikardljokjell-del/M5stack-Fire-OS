@@ -365,7 +365,7 @@ void FireOS::handleAppUpdateButton(uint8_t index) {
     if(index==1 && action==fire_app_updates::Action::RunVerified && backendClient_ && backendClient_->sessionReady() && backendClient_->confirmRun(appUpdateCandidate_)) {appUpdateStage_=0;appUpdateReady_=false;redrawRequested_=true;}
     return;
   }
-  if(appUpdateStage_==2) {if(index==1 && action==fire_app_updates::Action::Minimize) {appUpdateStage_=0;redrawRequested_=true;}return;} // minimize transfer view
+  if(appUpdateStage_==2) {if(index==2) {cancelAppDownload();return;}if(index==1 && action==fire_app_updates::Action::Minimize) {appUpdateStage_=0;redrawRequested_=true;}return;} // minimize transfer view
   if(index!=1) {appUpdateSelection_=(appUpdateSelection_+3+(index==0?-1:1))%3;redrawRequested_=true;return;}
   if(appUpdateSelection_!=appUpdateShownSelection_) {redrawRequested_=true;return;}
   String name=sdBaseName(appUpdatePath_);
@@ -374,8 +374,8 @@ void FireOS::handleAppUpdateButton(uint8_t index) {
     bool exact=false;
     if(backendClient_ && backendClient_->sessionReady() && WiFi.status()==WL_CONNECTED && fire_app_updates::knownEpoch(backendClient_->connectionEpoch(),backendCatalogEpoch_))
       for(uint8_t i=0;i<backendAppCount_;++i) if(backendApps_[i].appId==appUpdateApp_ && backendApps_[i].projectId==appUpdateProject_ && backendApps_[i].latestPackageId==appUpdateCandidate_ && backendApps_[i].downloadable) exact=true;
-    appUpdateRequest_="update-"+String(esp_random(),HEX)+String(millis(),HEX);
-    if(exact && !(packageManager_ && packageManager_->busy()) && backendClient_->appDownload(appUpdateProject_,appUpdateCandidate_,appUpdateApp_,appUpdateRequest_)) {
+    if(exact && requestAppDownload(appUpdateProject_,appUpdateCandidate_,appUpdateApp_)) {
+      appUpdateRequest_=downloadRequest_;
       appUpdateReady_=false;appUpdateFailure_=0;appUpdateStage_=2;managerStatus_="Laster ned oppdatering";redrawRequested_=true;return;
     }
     appUpdateFailure_=1;redrawRequested_=true;return; // user may retry or choose the original installed app
@@ -396,7 +396,7 @@ void FireOS::drawAppUpdatePrompt() {
   if(appUpdateStage_==2) {
     drawText(24,90,"Laster ned oppdatering",kText,1,kPanel);
     drawText(24,114,packageManager_?String(packageManager_->progress())+"%":String(),kMuted,1,kPanel);
-    drawFooter("","Minimer","");return;
+    drawFooter("","Minimer","Avbryt");return;
   }
   String name=appUpdateApp_,versions;
   for(uint8_t i=0;i<luaAppCount_;++i) if(luaAppIds_[i]==appUpdateApp_ && luaAppPackageIds_[i]==appUpdateInstalled_) {name=luaAppDisplayNames_[i];versions=luaAppVersions_[i];}

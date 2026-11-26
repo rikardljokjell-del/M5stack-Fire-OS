@@ -657,7 +657,7 @@ bool FireBackendClient::appList(uint32_t offset,const String& stableEventId) {
 }
 
 bool FireBackendClient::appVersions(const String& projectId,
-                                    const String& appId, uint32_t offset) {
+                                    const String& appId, uint32_t offset,const String& stableEventId) {
   String fields = ",\"offset\":" + String(offset);
   if (projectId.length() > 0)
     fields += ",\"project_id\":\"" + jsonEscape(projectId) + "\"";
@@ -665,7 +665,7 @@ bool FireBackendClient::appVersions(const String& projectId,
     fields += ",\"app_id\":\"" + jsonEscape(appId) + "\"";
   else
     return false;
-  return sendEvent("app_versions", fields);
+  return sendEvent("app_versions", fields,stableEventId);
 }
 
 bool FireBackendClient::appDownload(const String& projectId,
@@ -682,7 +682,7 @@ bool FireBackendClient::appDownload(const String& projectId,
 
 bool FireBackendClient::appBackendDeletePrepare(
     const String& projectId, const String& appId, const String& scope,
-    const String& packageId) {
+    const String& packageId,const String& stableEventId) {
   if ((projectId.length() == 0 && appId.length() == 0) ||
       (scope != "all" && scope != "version") ||
       (scope == "version" && packageId.length() == 0))
@@ -694,13 +694,13 @@ bool FireBackendClient::appBackendDeletePrepare(
     fields += ",\"app_id\":\"" + jsonEscape(appId) + "\"";
   if (packageId.length() > 0)
     fields += ",\"package_id\":\"" + jsonEscape(packageId) + "\"";
-  return sendEvent("app_backend_delete_prepare", fields);
+  return sendEvent("app_backend_delete_prepare", fields,stableEventId);
 }
 
-bool FireBackendClient::appBackendDeleteConfirm(const String& deleteId) {
+bool FireBackendClient::appBackendDeleteConfirm(const String& deleteId,const String& stableEventId) {
   if (deleteId.length() == 0) return false;
   return sendEvent("app_backend_delete_confirm", ",\"delete_id\":\"" +
-                                                   jsonEscape(deleteId) + "\"");
+                                                   jsonEscape(deleteId) + "\"",stableEventId);
 }
 
 bool FireBackendClient::confirmBuild(const String& proposalId,

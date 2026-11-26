@@ -44,6 +44,7 @@
 #include <string.h>
 #include <errno.h>
 #include <mbedtls/sha256.h>
+#include <mbedtls/md.h>
 #include <cJSON.h>
 #ifdef FIRE_OS_BLE
 #include <NimBLEDevice.h>
@@ -77,7 +78,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc11";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc12";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -1295,6 +1296,7 @@ void FireOS::update() {
       redrawRequested_ = true;
     }
   }
+  serviceLocalQa();
   serviceFirmwareAction();
   servicePackageInstall();
   if (auto* request = setupPortal_.take()) {
@@ -2477,11 +2479,8 @@ void FireOS::publishLuaAppScan() {
     luaMenuOffset_ = luaMenuSelection_ > 5 ? luaMenuSelection_ - 5 : 0;
     aiProjectOffset_ = fire_ai_menu::scroll(aiProjectSelection_,aiProjectOffset_);
     if (bootAppPicker_) bootAppOffset_ = bootAppSelection_ > 5 ? bootAppSelection_ - 5 : 0;
-    if (appManagerDeleteConfirm_ && appManagerDeleteMode_ == 1) {
-      appManagerDeleteConfirm_ = false; appManagerDeleteMode_ = 0;
-    }
-    appManagerActionMenu_ = false;
     rebuildAppManagerItems();
+    if (managerTargetValid_ && !managerTargetCurrent()) invalidateManagerTarget();
     redrawRequested_ = true;
   }
   luaCacheValid_ = true;
@@ -4139,7 +4138,7 @@ void FireOS::failBackendCatalog() {
   backendCatalogLoading_=false;backendCatalogRequested_=false;backendCatalogRequest_=String();
   backendCatalogFailures_=min<uint8_t>(2,backendCatalogFailures_+1);backendCatalogAttemptAt_=millis();
   backendCatalogStatus_="Katalog ikke oppdatert";
-  if (screen_==Screen::AppsSettings) managerStatus_=backendCatalogStatus_;
+  if (screen_==Screen::AppsSettings && !managerTargetValid_ && downloadPhase_!=1 && downloadPhase_!=2) managerStatus_=backendCatalogStatus_;
   redrawRequested_=true;
 }
 void FireOS::invalidateBackendCatalog() {
@@ -4153,11 +4152,21 @@ void FireOS::clearBackendCatalog() {
   backendCatalogRequestAt_=backendCatalogAttemptAt_=backendCatalogRequestEpoch_=0;
   backendCatalogFailures_=0;backendCatalogRequest_=String();
   appUpdateStage_=0;appUpdateReady_=false;appUpdateRequest_=String();
+  invalidateManagerTarget();
+  if(downloadPhase_==1 || downloadPhase_==2) cancelAppDownload();
+  userRunAfterInstall_=String();
   appManagerVersionCount_=0;appManagerVersionDialog_=false;
   appManagerActionMenu_=false;appManagerDeleteConfirm_=appManagerDeleteWaiting_=false;appManagerDeleteMode_=0;
   rebuildAppManagerItems();
 }
 void FireOS::updateAppManagerBackend() {
+  if(appManagerVersionsWaiting_ && (uint32_t(millis()-appManagerRequestAt_)>=10000 ||
+      (backendClient_ && backendClient_->sessionReady() && appManagerRequestEpoch_!=backendClient_->connectionEpoch()))) {
+    appManagerVersionsWaiting_=false;appManagerRequest_=String();managerStatus_="Versjoner ikke mottatt. Velg på nytt.";redrawRequested_=true;
+  }
+  if(appManagerDeleteWaiting_ && appManagerDeleteRequest_.length() && uint32_t(millis()-appManagerRequestAt_)>=10000) {
+    appManagerDeleteWaiting_=false;appManagerDeleteRequest_=String();managerStatus_="Sletting ikke bekreftet. Velg på nytt.";redrawRequested_=true;
+  }
   // Only existing online demand reaches this service. App opening never calls it.
   if (!backendClient_ || !backendClient_->sessionReady()) return;
   const uint32_t now=millis();
@@ -4167,7 +4176,7 @@ void FireOS::updateAppManagerBackend() {
   backendCatalogAttemptAt_=now;backendCatalogSeen_=0;backendCatalogOverflow_=false;backendCatalogDirty_=false;
   if (requestBackendCatalogPage(0)) {
     backendCatalogRequested_=true;backendCatalogStatus_="Loading backend apps...";
-    if(screen_==Screen::AppsSettings) managerStatus_=backendCatalogStatus_;
+    if(screen_==Screen::AppsSettings && !managerTargetValid_ && downloadPhase_!=1 && downloadPhase_!=2) managerStatus_=backendCatalogStatus_;
     redrawRequested_=true;
   } else failBackendCatalog();
 }
@@ -4221,11 +4230,16 @@ void FireOS::parseBackendAppCatalog(const String& message) {
   if (backendCatalogDirty_ || (backendCatalogOverflow_ && backendAppCount_<kMaxBackendApps)) backendCatalogRequested_=false;
   rebuildAppManagerItems();
   backendCatalogStatus_="Backend apps: "+String(backendAppCount_);
-  if(screen_==Screen::AppsSettings) managerStatus_=backendCatalogStatus_;
+  if(screen_==Screen::AppsSettings && !managerTargetValid_ && downloadPhase_!=1 && downloadPhase_!=2) managerStatus_=backendCatalogStatus_;
   redrawRequested_=true;
 }
 
 void FireOS::parseBackendAppVersions(const String& message) {
+  if(!appManagerVersionsWaiting_ || screen_!=Screen::AppsSettings || !managerTargetCurrent() ||
+      !backendClient_ || !backendClient_->sessionReady() || appManagerRequestEpoch_!=backendClient_->connectionEpoch() ||
+      jsonStringField(message,"request_event_id")!=appManagerRequest_ ||
+      jsonStringField(message,"project_id")!=managerTarget_.projectId) return;
+  appManagerVersionsWaiting_=false;appManagerRequest_=String();
   appManagerVersionCount_ = 0;
   appManagerVersionProjectId_ = jsonStringField(message, "project_id");
   const int versionsAt = message.indexOf("\"versions\"");
@@ -4252,7 +4266,11 @@ void FireOS::parseBackendAppVersions(const String& message) {
 void FireOS::prepareAppManagerActions() {
   appManagerActionCount_ = 0;
   if (managerSelection_ >= managerItemCount_) return;
-  const ManagerItem& item = managerItems_[managerSelection_];
+  managerTarget_=managerItems_[managerSelection_];managerTargetValid_=true;
+  appManagerDeleteId_=appManagerDeleteName_=appManagerDeletePackageId_=appManagerDeleteProjectId_=appManagerDeleteAppId_=String();
+  appManagerDeleteScope_=0;appManagerDeleteRequest_=String();
+  const ManagerItem& item = managerTarget_;
+  managerStatus_=String();
   auto add = [&](uint8_t code, const char* label) {
     if (appManagerActionCount_ >= 10) return;
     appManagerActionCodes_[appManagerActionCount_] = code;
@@ -4275,15 +4293,49 @@ void FireOS::prepareAppManagerActions() {
 }
 
 void FireOS::requestSelectedAppVersions() {
-  if (managerSelection_ >= managerItemCount_ || !backendClient_) return;
-  const ManagerItem& item = managerItems_[managerSelection_];
-  if (!item.backend) return;
-  appManagerVersionProjectId_ = item.projectId;
-  appManagerVersionAppId_ = item.appId;
-  appManagerVersionDialog_ = false;
-  managerStatus_ = "Loading versions...";
-  if (!backendClient_->appVersions(item.projectId, item.appId, 0))
-    managerStatus_ = "Backend unavailable";
+  if (!managerTargetCurrent() || !backendClient_ || !backendClient_->sessionReady() || !managerTarget_.backend) {
+    managerStatus_="Backend er ikke tilkoblet";return;
+  }
+  appManagerVersionProjectId_=managerTarget_.projectId;appManagerVersionAppId_=managerTarget_.appId;
+  appManagerVersionDialog_=true;appManagerVersionCount_=0;appManagerVersionSelection_=appManagerVersionOffset_=0;
+  appManagerRequest_="ver-"+String(esp_random(),HEX)+"-"+String(esp_random(),HEX);
+  appManagerRequestAt_=millis();appManagerRequestEpoch_=backendClient_->connectionEpoch();
+  appManagerVersionsWaiting_=true;managerStatus_="Henter versjoner";redrawRequested_=true;
+  if(!backendClient_->appVersions(managerTarget_.projectId,managerTarget_.appId,0,appManagerRequest_)) {
+    appManagerVersionsWaiting_=false;appManagerRequest_=String();managerStatus_="Kunne ikke hente versjoner";
+  }
+}
+
+bool FireOS::managerTargetCurrent() const {
+  if(!managerTargetValid_) return false;
+  for(uint8_t i=0;i<managerItemCount_;++i) {
+    const ManagerItem& row=managerItems_[i];
+    if(row.appId==managerTarget_.appId && row.localPath==managerTarget_.localPath &&
+       row.localPackageId==managerTarget_.localPackageId && row.projectId==managerTarget_.projectId &&
+       row.packageId==managerTarget_.packageId && row.kind==managerTarget_.kind) return true;
+  }
+  return false;
+}
+void FireOS::invalidateManagerTarget() {
+  managerTargetValid_=false;appManagerActionMenu_=false;appManagerDeleteConfirm_=false;
+  appManagerDeleteWaiting_=false;appManagerDeleteMode_=0;appManagerDevelopConfirm_=0;
+  appManagerVersionDialog_=appManagerVersionsWaiting_=false;
+  appManagerRequest_=appManagerDeleteRequest_=String();managerStatus_="Appvalget er endret. Velg app på nytt.";
+  redrawRequested_=true;
+}
+
+bool FireOS::applyBackendDeleteResult(const cJSON* result) {
+  if(!managerTargetValid_ || !backendClient_ || backendClient_->connectionEpoch()!=appManagerRequestEpoch_ ||
+      aiJobText(result,"delete_id")!=appManagerDeleteId_ || aiJobText(result,"app_id")!=managerTarget_.appId ||
+      aiJobText(result,"project_id")!=managerTarget_.projectId || aiJobText(result,"status")!="deleted") return false;
+  const cJSON* count=cJSON_GetObjectItemCaseSensitive(result,"remaining_versions");
+  if(cJSON_IsNumber(count) && count->valueint==0) for(uint8_t i=0;i<backendAppCount_;++i) if(backendApps_[i].appId==managerTarget_.appId) {
+    for(uint8_t move=i+1;move<backendAppCount_;++move) backendApps_[move-1]=backendApps_[move];
+    backendApps_[--backendAppCount_]=BackendAppInfo();break;
+  }
+  appManagerDeleteConfirm_=appManagerDeleteWaiting_=false;appManagerDeleteMode_=0;appManagerDeleteRequest_=String();
+  managerTargetValid_=false;managerStatus_="Backend app deleted";rebuildAppManagerItems();
+  backendCatalogLoading_=false;backendCatalogRequest_=String();invalidateBackendCatalog();redrawRequested_=true;return true;
 }
 
 void FireOS::sendAppInventory() {
@@ -4610,7 +4662,33 @@ uint64_t FireOS::buttonView() const {
     case Screen::LuaApp:details=luaFeedbackConfirmation_ | (uint64_t(luaRepairConfirmPending_)<<1);break;
     default:break;
   }
-  return uint64_t(screen_) | (details<<8) | (uint64_t(appUpdateStage_)<<60) | (uint64_t(buildNoticeActive_)<<63);
+  uint16_t row=0;
+  switch(screen_) {
+    case Screen::Main:row=mainIndex_;break;
+    case Screen::Apps:row=externalAppSelection_;break;
+    case Screen::Settings:row=settingsIndex_;break;
+    case Screen::QuickSettings:row=quickIndex_;break;
+    case Screen::AppsSettings:
+      row=appManagerVersionDialog_?appManagerVersionSelection_:appManagerActionMenu_?appManagerActionIndex_:managerSelection_;
+      if(appManagerActionMenu_ && appManagerActionIndex_<appManagerActionCount_) row|=uint16_t(appManagerActionCodes_[appManagerActionIndex_])<<8;
+      break;
+    case Screen::AiDeveloper:row=backendSettingsUi_.page!=FireBackendSettingsUi::None?backendSettingsUi_.selection:aiProjectPickerActive_?aiProjectSelection_:aiWorkflowState_;break;
+    case Screen::Evolution:row=evolutionUi_.selection;break;
+    case Screen::FileExplorer:row=sdActionMenu_?sdActionIndex_:sdSelection_;break;
+    case Screen::Firmware:row=firmwareGithubActionMenu_?firmwareGithubActionIndex_:firmwareGithubDialog_?firmwareGithubSelection_:firmwareSelection_;break;
+    case Screen::Wifi:row=wifiScanDialog_?wifiScanSelection_:wifiSavedDialog_?wifiSavedSelection_:wifiIndex_;break;
+    case Screen::Bluetooth:row=bluetoothScanDialog_?bluetoothScanSelection_:bluetoothSavedDialog_?bluetoothSavedSelection_:bluetoothIndex_;break;
+    case Screen::Boot:row=bootAppPicker_?bootAppSelection_:detailIndex_;break;
+    case Screen::MainMenuSettings:row=luaMenuPicker_?luaMenuSelection_:detailIndex_;break;
+    case Screen::DateTime:row=dateField_;break;
+    case Screen::Power:row=powerIndex_;break;
+    case Screen::PowerActions:row=powerActionIndex_;break;
+    case Screen::Help:row=helpPage_;break;
+    case Screen::LuaApp:row=luaErrorAction_;break;
+    default:row=detailIndex_;break;
+  }
+  if(appUpdateStage_)row=appUpdateSelection_;
+  return uint64_t(screen_) | (details<<8) | (uint64_t(row)<<40) | (uint64_t(appUpdateStage_)<<60) | (uint64_t(buildNoticeActive_)<<63);
 }
 String FireOS::buttonViewIdentity() const {
   if(appUpdateStage_) return appUpdateCandidate_;
@@ -4620,6 +4698,25 @@ String FireOS::buttonViewIdentity() const {
     if(backendSettingsUi_.page==FireBackendSettingsUi::Proposal) return backendSettingsUi_.proposalId;
     if(!aiProjectPickerActive_ && aiWorkflowState_==3) return aiProposalId_;
   }
+  if(screen_==Screen::AppsSettings) {
+    const bool ownsTarget=appManagerActionMenu_ || appManagerDeleteConfirm_ || appManagerVersionDialog_ ||
+      appManagerDevelopConfirm_ || appManagerVersionsWaiting_ || appManagerDeleteWaiting_;
+    const ManagerItem* target=ownsTarget && managerTargetValid_?&managerTarget_:
+      (managerSelection_<managerItemCount_?&managerItems_[managerSelection_]:nullptr);
+    if(!target) return "back";
+    String id=target->appId+"|"+target->projectId+"|"+target->localPath+"|"+target->localPackageId+"|"+target->packageId;
+    if(appManagerVersionDialog_ && appManagerVersionSelection_<appManagerVersionCount_) id+="|"+appManagerVersionPackageIds_[appManagerVersionSelection_];
+    if(appManagerDeleteConfirm_) id+="|"+appManagerDeleteId_;
+    return id;
+  }
+  if(screen_==Screen::Apps && externalAppSelection_>=externalAppCount_ && externalAppSelection_<externalAppCount_+luaAppCount_)
+    return luaAppIds_[externalAppSelection_-externalAppCount_]+"|"+luaAppPackageIds_[externalAppSelection_-externalAppCount_];
+  if(screen_==Screen::Main && mainIndex_>=kSystemMainCount && mainIndex_-kSystemMainCount<luaAppCount_)
+    return luaAppIds_[mainIndex_-kSystemMainCount]+"|"+luaAppPackageIds_[mainIndex_-kSystemMainCount];
+  if(screen_==Screen::AiDeveloper && aiProjectPickerActive_ && aiPickerPage_==fire_ai_menu::Page::Jobs && aiProjectSelection_<buildJobCount_)
+    return buildJobIds_[aiProjectSelection_]+"|"+buildJobRepairIds_[aiProjectSelection_];
+  if(screen_==Screen::AiDeveloper && aiProjectPickerActive_ && (aiPickerPage_==fire_ai_menu::Page::Job || aiPickerPage_==fire_ai_menu::Page::Work))
+    return aiJobBuild_+"|"+aiJobRepair_;
   if(screen_==Screen::LuaApp && luaFeedbackConfirmation_) return luaDevelopContext_;
   return String();
 }
@@ -4629,12 +4726,14 @@ void FireOS::publishButtonView() {
     inputShownView_=view;inputShownIdentity_=identity;if(++inputContext_==0) ++inputContext_;
   }
   fire_button_capture::shown(inputContext_);
+  presentLocalQa();
   if(inputPresentationPending_) {
     maxInputPresentUs_=max(maxInputPresentUs_,static_cast<uint32_t>(esp_timer_get_time())-inputPendingAtUs_);
     inputPresentationPending_=false;
   }
 }
 void FireOS::beginButtonCapture() {
+  beginLocalQa();
   const bool ready=fire_button_capture::begin();
   fire_button_capture::sleeping(displayPowerState_!=0);fire_button_capture::discard();
   inputSyncUs_=static_cast<uint32_t>(esp_timer_get_time());const uint8_t mask=fire_button_capture::mask();
@@ -4727,7 +4826,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
         const String action=index==1?String("confirm"):String("reject");
         const String event="obs-"+luaDevelopContext_+"-"+action;
         if (backendClient_->confirmObservation(luaDevelopContext_,action,event)) {
-          luaFeedbackOutcome_=action;luaFeedbackAck_=event;
+          luaFeedbackOutcome_=action;luaFeedbackAck_=event;luaFeedbackAt_=millis();
         }
       }
     } else if (index==0 && job) cancelLuaDataJob(*job,"cancelled");
@@ -5030,6 +5129,7 @@ void FireOS::open(Screen screen) {
     appScanPending_ = true;
   }
   if (screen == Screen::AppsSettings) {
+    managerTargetValid_=false;appManagerVersionsWaiting_=false;appManagerRequest_=appManagerDeleteRequest_=String();
     appManagerDevelopConfirm_=0;
     externalAppSelection_ = 0;
     externalAppOffset_ = 0;
@@ -5163,7 +5263,7 @@ void FireOS::selectMainItem(uint8_t nextIndex) {
 }
 
 void FireOS::back() {
-  if(appUpdateStage_) {appUpdateStage_=0;redrawRequested_=true;return;}
+  if(appUpdateStage_) {if(appUpdateStage_==2) cancelAppDownload();appUpdateStage_=0;redrawRequested_=true;return;}
   if (screen_==Screen::AiDeveloper) {backAiDeveloper();return;}
   if (screen_==Screen::LuaApp && !luaAppActive_ && aiJobViewing_) {
     screen_=Screen::AiDeveloper;backAiDeveloper();return;
@@ -5174,6 +5274,7 @@ void FireOS::back() {
     return;
   }
   if (screen_ == Screen::Main) return;
+  if (screen_==Screen::AppsSettings) {invalidateManagerTarget();}
   if (screen_ == Screen::Debug) cleanupDebugTests();
   if (screen_ == Screen::AiDeveloper &&
       (aiAudioCaptureActive_ || aiAudioOutputActive_ ||
@@ -5523,6 +5624,7 @@ void FireOS::handleHelpButton(uint8_t index) {
 }
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
+  if((downloadPhase_==1 || downloadPhase_==2) && index==2) {cancelAppDownload();return;}
   if (!aiProjectPickerActive_ && index==1 && !aiVoiceTestMode_ && aiWorkflowState_>=2 && aiWorkflowState_<=5) {openAiWork();return;}
   if (aiProjectPickerActive_) {handleAiPicker(index);return;}
   if (index==0 && aiWorkflowState_==1) return;
@@ -5629,8 +5731,8 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
     if (packageManager_ && packageManager_->busy()) {aiWorkflowText_="Venter på installkvittering";return;}
     if (backendClient_ && backendClient_->sessionReady() && aiReadyPackageId_.length() > 0) {
       if (aiJobNeedsInstall_) {
-        if (backendClient_->appDownload(aiProjectId_,aiReadyPackageId_)) {
-          userRunAfterInstall_=aiReadyPackageId_;aiWorkflowState_=4;
+        if (requestAppDownload(aiProjectId_,aiReadyPackageId_,String(),true)) {
+          aiWorkflowState_=4;
           aiWorkflowText_="Laster ned valgt app";
         } else aiWorkflowText_="Nedlasting kunne ikke startes";
         return;
@@ -6703,6 +6805,11 @@ void FireOS::serviceLuaRepair() {
 }
 
 void FireOS::cancelLuaRepair() {
+  if ((downloadPhase_==1 || downloadPhase_==2) && downloadPackage_==luaRepairReadyPackageId_) {
+    cancelAppDownload();luaRepairStatus_="ready";luaRepairPhase_="ready";return;
+  }
+  // Revoke explicit RUN intent before any callback, close or asynchronous cleanup.
+  if (userRunAfterInstall_==luaRepairReadyPackageId_) userRunAfterInstall_=String();
   if (!repairCancelSupported_) {
     luaRepairMessage_ = "Cancel not supported";
     return;
@@ -6834,20 +6941,18 @@ void FireOS::startLuaRepairRun() {
     luaRepairMessage_ = "Waiting for backend connection";
     return;
   }
-  if (userRunAfterInstall_.length() || (packageManager_ && packageManager_->busy()))
-    return;
-  if (backendClient_->appDownload(luaRepairProjectId_,
-                                  luaRepairReadyPackageId_, luaErrorAppId_)) {
-    userRunAfterInstall_=luaRepairReadyPackageId_;
-    luaRepairStatus_ = "downloading";
-    luaRepairPhase_ = "installing";
-    luaRepairMessage_ = "Laster ned reparert app";
-  } else {
-    luaRepairMessage_ = "Download request failed";
+  if (requestAppDownload(luaRepairProjectId_,luaRepairReadyPackageId_,luaErrorAppId_,true)) {
+    luaRepairStatus_="downloading";luaRepairPhase_="installing";
   }
+
 }
 
 void FireOS::handleLuaErrorButton(uint8_t index) {
+  if((downloadPhase_==1 || downloadPhase_==2) && downloadPackage_==luaRepairReadyPackageId_) {
+    if(index==2) cancelAppDownload();
+    else if(index==0) {home();} // Minimize retains explicit Run intent; Cancel never does.
+    return;
+  }
   if (aiJobViewing_ && aiJobOpenPending_ && index==1) {luaRepairMessage_="Venter på jobbstatus";return;}
   if (aiJobViewing_ && index==1 && luaRepairStatus_=="awaiting_confirmation") {
     aiJobViewing_=false;sendAiJobAction("resume");return;
@@ -7363,8 +7468,10 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
     // The backend reuses the same failed-package repair job on retry, so a
     // lost prepare response can safely be replayed after reconnect.
     os->luaRepairPrepareSent_ = false;
-    os->luaRepairMessage_ = "Backend disconnected - waiting to retry";
+    if(!transfer) os->luaRepairMessage_ = "Backend disconnected - waiting to retry";
   }
+  if(transfer && os->downloadPackage_==os->luaRepairReadyPackageId_ && (os->downloadPhase_==1 || os->downloadPhase_==2))
+    os->luaRepairMessage_="Overfører app";
   if (!connected && os->screen_ == Screen::AppsSettings) {
     os->backendCatalogLoading_ = false;
     os->backendCatalogRequested_ = false;
@@ -7381,6 +7488,8 @@ void FireOS::packageStatus(void* context, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   os->aiWorkflowText_ = status;
+  if(os->packageManager_ && os->packageManager_->packageId()==os->luaRepairReadyPackageId_ &&  (os->downloadPhase_==2 || os->downloadPhase_==3))
+    os->luaRepairMessage_=os->downloadPhase_==3?String("Avbryter appoverføring"):compactStatusText(status);
   if (os->screen_ == Screen::AppsSettings) os->managerStatus_ = status;
   os->aiDeveloperMode_ = 2;os->redrawRequested_=true;
   if(os->packageManager_ && os->packageManager_->busy()) {
@@ -7420,6 +7529,7 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
 }
 
 void FireOS::servicePackageInstall() {
+  serviceDownloadIntent();
   if (!packageManager_ || !packageManager_->busy()) return;
   const bool allowed=wifiMode_!=2 && backendMode_!=2;
   if (!allowed && userRunAfterInstall_==packageManager_->packageId()) userRunAfterInstall_=String();
@@ -7476,6 +7586,7 @@ void FireOS::finishPackageReceipt(bool recorded) {
   if (!packageManager_ || !packageManager_->receiptReady()) return;
   const String package=packageManager_->packageId();
   const bool ok=recorded && packageManager_->outcomeOk();
+  if (downloadPackage_==package && downloadPhase_==2) downloadPhase_=0;
   const String detail=recorded?packageManager_->outcomeMessage():String("Installasjonsstatus uavklart");
   packageManager_->finishReceipt(); // one completed slot consumed ONLY here
   if (package==appUpdateCandidate_) {
@@ -7548,6 +7659,16 @@ void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
   if (handlePackageReceipt(message)) return;
+  if (handleDownloadIntent(message)) return;
+  if (handleFeedbackAck(message)) return;
+  if(type=="error") {
+    const String event=jsonStringField(message,"event_id");
+    if(event.length() && ((appManagerVersionsWaiting_ && event==appManagerRequest_) ||
+        (appManagerDeleteWaiting_ && event==appManagerDeleteRequest_))) {
+      appManagerVersionsWaiting_=appManagerDeleteWaiting_=false;appManagerRequest_=appManagerDeleteRequest_=String();
+      managerStatus_="Apphandlingen ble avvist. Velg på nytt.";return;
+    }
+  }
   if(appUpdateStage_==2 && appUpdateRequest_.length() && jsonStringField(message,"event_id")==appUpdateRequest_ && (type=="error" || type=="event_ack")) {
     cJSON* reply=cJSON_Parse(message.c_str());
     const cJSON* result=cJSON_GetObjectItemCaseSensitive(reply,"result");
@@ -7685,56 +7806,37 @@ void FireOS::handleBackendMessage(const String& message) {
   if (type == "build_progress" || type == "build_job_status" ||
       type == "build_resumed" || type == "build_backgrounded" ||
       type == "build_cancelled" || type == "build_ready_notice" ||
-      type == "build_jobs" || type == "job_control_result" || type == "build_notice_closed" ||
-      type == "event_ack") {
+      type == "build_jobs" || type == "job_control_result" || type == "build_notice_closed") {
     handleBackgroundBuildMessage(message);
     return;
   }
-  if (type == "app_backend_delete_ready") {
-    appManagerDeleteId_ = jsonStringField(message, "delete_id");
-    appManagerDeleteProjectId_ = jsonStringField(message, "project_id");
-    appManagerDeleteAppId_ = jsonStringField(message, "app_id");
-    appManagerDeletePackageId_ = jsonStringField(message, "package_id");
-    appManagerDeleteName_ = jsonStringField(message, "name");
-    const String scope = jsonStringField(message, "delete_scope");
-    appManagerDeleteScope_ = scope == "version" ? 1 : 2;
-    appManagerDeleteMode_ = 2;
-    appManagerDeleteConfirm_ = appManagerDeleteId_.length() > 0;
-    appManagerDeleteWaiting_ = false;
-    appManagerActionMenu_ = false;
-    managerStatus_ = "Confirm backend delete";
-    redrawRequested_ = true;
-    return;
-  }
+  if (type=="app_backend_delete_ready") return; // The exact prepare-ACK owns this dialog.
   if (type == "app_backend_deleted") {
-    const String deletedAppId = jsonStringField(message, "app_id");
-    for (uint8_t index = 0; jsonIntField(message,"remaining_versions",-1)==0 && index < backendAppCount_; ++index) {
-      if (backendApps_[index].appId != deletedAppId) continue;
-      backendApps_[index] = BackendAppInfo();
-      for (uint8_t move = index + 1; move < backendAppCount_; ++move)
-        backendApps_[move - 1] = backendApps_[move];
-      if (backendAppCount_ > 0) --backendAppCount_;
-      break;
-    }
-    appManagerDeleteConfirm_ = false;
-    appManagerDeleteWaiting_ = false;
-    appManagerDeleteMode_ = 0;
-    rebuildAppManagerItems();
-    managerStatus_ = "Backend app deleted";
-    backendCatalogLoading_=false;backendCatalogRequest_=String();invalidateBackendCatalog();
-    redrawRequested_ = true;
-    return;
+    cJSON* result=cJSON_Parse(message.c_str());applyBackendDeleteResult(result);cJSON_Delete(result);return;
   }
   if (type == "event_ack") {
-    const String status = jsonStringField(message, "status");
-    if (luaFeedbackAck_.length() && jsonStringField(message,"event_id")==luaFeedbackAck_) {
-      if (status=="accepted" || status=="duplicate") {luaFeedbackAck_=String();luaFeedbackConfirmation_=false;}
-      else if (status=="rejected") {luaFeedbackAck_=String();luaFeedbackOutcome_=String();}
+    if(appManagerDeleteWaiting_ && appManagerDeleteRequest_.length() && jsonStringField(message,"event_id")==appManagerDeleteRequest_) {
+      cJSON* reply=cJSON_Parse(message.c_str());const cJSON* result=cJSON_GetObjectItemCaseSensitive(reply,"result");
+      const String status=aiJobText(reply,"status");
+      if(appManagerDeleteId_.length()) {
+        const bool applied=(status=="accepted" || status=="duplicate") && applyBackendDeleteResult(result);
+        if(!applied) {appManagerDeleteWaiting_=false;appManagerDeleteRequest_=String();managerStatus_="Sletting ikke bekreftet. Velg på nytt.";}
+        cJSON_Delete(reply);return;
+      }
+      const bool valid=(status=="accepted" || status=="duplicate") && aiJobText(result,"status")=="confirmation_required" &&
+        managerTargetCurrent() && screen_==Screen::AppsSettings && backendClient_ &&
+        backendClient_->connectionEpoch()==appManagerRequestEpoch_ && aiJobText(result,"project_id")==managerTarget_.projectId &&
+        aiJobText(result,"app_id")==managerTarget_.appId && !cJSON_GetObjectItemCaseSensitive(result,"error");
+      if(valid) {
+        appManagerDeleteId_=aiJobText(result,"delete_id");appManagerDeleteProjectId_=aiJobText(result,"project_id");
+        appManagerDeleteAppId_=aiJobText(result,"app_id");appManagerDeletePackageId_=aiJobText(result,"package_id");
+        appManagerDeleteName_=managerTarget_.name;appManagerDeleteScope_=aiJobText(result,"delete_scope")=="version"?1:2;
+        appManagerDeleteMode_=2;appManagerDeleteConfirm_=appManagerDeleteId_.length()>0;appManagerActionMenu_=false;
+        managerStatus_="Bekreft sletting";
+      } else managerStatus_="Sletting kunne ikke forberedes";
+      appManagerDeleteWaiting_=false;appManagerDeleteRequest_=String();cJSON_Delete(reply);return;
     }
-    if (status == "awaiting_device_install")
-      managerStatus_ = "Download queued";
-    else if (status == "confirmation_required")
-      managerStatus_ = "Confirm deletion";
+    if (buildNoticePendingEvent_.length() && jsonStringField(message,"event_id")==buildNoticePendingEvent_) handleBackgroundBuildMessage(message);
     redrawRequested_ = true;
     return;
   }
@@ -7919,6 +8021,7 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "install_request") {
+    const String requestedBy=jsonStringField(message,"request_event_id");
     const String packageId = jsonStringField(message, "package_id");
     const String installId = jsonStringField(message, "install_id");
     const String url = jsonStringField(message, "download_url");
@@ -7941,6 +8044,11 @@ void FireOS::handleBackendMessage(const String& message) {
       return;
     }
     if (packageManager_ && packageManager_->matchesInstall(packageId,installId,hash,size)) return;
+    if (requestedBy.length() && (downloadPhase_!=1 || requestedBy!=downloadRequest_ || packageId!=downloadPackage_ ||
+        projectId!=downloadProject_ || !backendClient_ || backendClient_->sessionId()!=downloadSession_ || commandBoot!=downloadBoot_)) {
+      if (backendClient_) backendClient_->deviceInstallResult(installId,packageId,false,hash,"Download intent cancelled or stale");
+      return;
+    }
     if (packageManager_ && packageManager_->busy()) {
       // Replay of the SAME command must not turn an in-flight installation
       // into a failed receipt. A different command cannot replace its identity.
@@ -7952,8 +8060,10 @@ void FireOS::handleBackendMessage(const String& message) {
         backendHost_, backendPort_, backendToken_, url, packageId, installId,
         hash, size,projectId,backendClient_?backendClient_->sessionId():String(),commandBoot,expiresAt);
     if (accepted) {
+      if (requestedBy.length()) downloadPhase_=2;
       aiPackageId_ = packageId;aiInstallId_ = installId;invalidateLuaApps();
     }
+    if (!accepted && requestedBy.length()) {cancelAppDownload();downloadIntentStatus("Nedlasting avvist");}
     if (!accepted && backendClient_)
       backendClient_->deviceInstallResult(installId, packageId, false,
                                           hash, "download rejected");
@@ -8335,10 +8445,16 @@ void FireOS::handleAppsButton(uint8_t index) {
 
 void FireOS::handleAppsSettingsButton(uint8_t index) {
   if (screen_ == Screen::AppsSettings) {
+    if ((downloadPhase_==1 || downloadPhase_==2) && index==2) {cancelAppDownload();return;}
+    if (appManagerDeleteWaiting_) {if(index==2) {appManagerDeleteWaiting_=false;appManagerDeleteRequest_=String();managerStatus_="Avbrutt";}return;}
+    if (appManagerVersionsWaiting_) {if(index==2) {appManagerVersionsWaiting_=false;appManagerRequest_=String();managerStatus_="Avbrutt";}return;}
+    if ((appManagerActionMenu_ || appManagerDeleteConfirm_ || appManagerDevelopConfirm_ || appManagerVersionDialog_) && !managerTargetCurrent()) {
+      invalidateManagerTarget();return;
+    }
     if (appManagerDevelopConfirm_) {
       const uint8_t action=appManagerDevelopConfirm_;appManagerDevelopConfirm_=0;
-      if (index!=1 || managerSelection_>=managerItemCount_) return;
-      const ManagerItem& item=managerItems_[managerSelection_];
+      if (index!=1 || !managerTargetCurrent()) return;
+      const ManagerItem& item=managerTarget_;
       const String path=item.localPath,name=item.name,package=item.localPackageId;
       if (!startLuaApp(path,name,package)) {managerStatus_=luaAppError_;return;}
       const char* error=nullptr;
@@ -8355,14 +8471,12 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
         appManagerVersionSelection_ =
             (appManagerVersionSelection_ + 1) % itemCount;
       else if (appManagerVersionSelection_ == appManagerVersionCount_) {
-        appManagerVersionDialog_ = false;
+        appManagerVersionDialog_ = false;appManagerRequest_=String();appManagerVersionsWaiting_=false;
       } else if (appManagerVersionDownloadable_[appManagerVersionSelection_]) {
         const String packageId =
             appManagerVersionPackageIds_[appManagerVersionSelection_];
-        if (!(packageManager_ && packageManager_->busy()) && backendClient_ && backendClient_->appDownload(
-                                  appManagerVersionProjectId_, packageId,
-                                  appManagerVersionAppId_)) {
-          appManagerVersionDialog_ = false;
+        if (requestAppDownload(appManagerVersionProjectId_,packageId,appManagerVersionAppId_)) {
+          appManagerVersionDialog_ = false;appManagerRequest_=String();appManagerVersionsWaiting_=false;
           managerStatus_ = "Download requested";
         } else {
           managerStatus_ = "Backend unavailable";
@@ -8373,8 +8487,8 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
       }
       if (appManagerVersionSelection_ < appManagerVersionOffset_)
         appManagerVersionOffset_ = appManagerVersionSelection_;
-      if (appManagerVersionSelection_ >= appManagerVersionOffset_ + 6)
-        appManagerVersionOffset_ = appManagerVersionSelection_ - 5;
+      if (appManagerVersionSelection_ >= appManagerVersionOffset_ + 5)
+        appManagerVersionOffset_ = appManagerVersionSelection_ - 4;
       return;
     }
     if (appManagerDeleteConfirm_) {
@@ -8382,8 +8496,8 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
         appManagerDeleteConfirm_ = false;
         appManagerDeleteMode_ = 0;
       } else if (index == 1 && appManagerDeleteMode_ == 1) {
-        if (managerSelection_ < managerItemCount_) {
-          const ManagerItem& item = managerItems_[managerSelection_];
+        if (managerTargetCurrent()) {
+          const ManagerItem& item = managerTarget_;
           bool deleted = false;
           if (item.kind == 1) deleted = deleteLuaApp(item.localPath);
           else if (item.kind == 0) deleted = deleteExternalApp(item.localPath);
@@ -8396,8 +8510,9 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
           invalidateBackendCatalog();
         }
       } else if (index == 1 && appManagerDeleteMode_ == 2) {
-        if (backendClient_ && backendClient_->appBackendDeleteConfirm(
-                                  appManagerDeleteId_)) {
+        appManagerDeleteRequest_="del-confirm-"+String(esp_random(),HEX);
+        appManagerRequestAt_=millis();appManagerRequestEpoch_=backendClient_?backendClient_->connectionEpoch():0;
+        if (backendClient_ && backendClient_->appBackendDeleteConfirm(appManagerDeleteId_,appManagerDeleteRequest_)) {
           appManagerDeleteConfirm_ = false;
           appManagerDeleteWaiting_ = true;
           managerStatus_ = "Deleting backend history...";
@@ -8419,8 +8534,8 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
         const uint8_t action =
             appManagerActionCodes_[appManagerActionIndex_];
         appManagerActionMenu_ = false;
-        if (managerSelection_ >= managerItemCount_) return;
-        const ManagerItem& item = managerItems_[managerSelection_];
+        if (!managerTargetCurrent()) return;
+        const ManagerItem& item = managerTarget_;
         if (action == 1) {
           if (item.kind == 1)
             requestLuaAppOpen(item.localPath,item.name,item.localPackageId);
@@ -8444,8 +8559,11 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
           appManagerDeleteMode_ = 1;
           appManagerDeleteConfirm_ = true;
         } else if (action == 4) {
+          appManagerDeleteId_=String();
+          appManagerDeleteRequest_="del-"+String(esp_random(),HEX)+"-"+String(esp_random(),HEX);
+          appManagerRequestAt_=millis();appManagerRequestEpoch_=backendClient_?backendClient_->connectionEpoch():0;
           if (backendClient_ && backendClient_->appBackendDeletePrepare(
-                                    item.projectId, item.appId, "all")) {
+                                    item.projectId, item.appId, "all",String(),appManagerDeleteRequest_)) {
             appManagerDeleteWaiting_ = true;
             managerStatus_ = "Preparing backend delete...";
           } else {
@@ -9034,6 +9152,18 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
 
   // Commit all four values together only after every field is valid.
   const bool changed=backendHost_!=nextHost || backendPort_!=nextPort || backendToken_!=nextToken || backendDeviceId_!=nextDevice;
+  const auto persisted=[&](const String& h,uint16_t p,const String& t,const String& d) {
+    const bool wrote=preferences.putString("backend_host",h)==h.length() && preferences.putUShort("backend_port",p)==sizeof(uint16_t) &&
+      preferences.putString("backend_token",t)==t.length() && preferences.putString("backend_device",d)==d.length();
+    return wrote && preferences.getString("backend_host","")==h && preferences.getUShort("backend_port",0)==p &&
+      preferences.getString("backend_token","")==t && preferences.getString("backend_device","")==d;
+  };
+  if(!persisted(nextHost,static_cast<uint16_t>(nextPort),nextToken,nextDevice)) {
+    // Restore the previous scoped values; never publish an unverified new config.
+    preferences.putString("backend_host",backendHost_);preferences.putUShort("backend_port",backendPort_);
+    preferences.putString("backend_token",backendToken_);preferences.putString("backend_device",backendDeviceId_);
+    backendStatus_="Oppsett kunne ikke lagres";redrawRequested_=true;return false;
+  }
   backendHost_ = nextHost;
   backendPort_ = static_cast<uint16_t>(nextPort);
   backendToken_ = nextToken;
@@ -9041,7 +9171,7 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
   if (changed) clearBackendCatalog();
   aiApiKey_ = "";
   preferences.remove("openai_key");
-  saveSettings();
+
   if (backendClient_) {
     reverseTransport_.configure(backendDeviceId_, backendToken_);
     backendClient_->configure(backendHost_, backendPort_, backendToken_,
@@ -10020,7 +10150,7 @@ void FireOS::drawStatusBar(const char* title) {
   const bool backendWorking = !backendConnected && backendClient_ &&
                               backendClient_->configured() && !backendClient_->sessionRejected() &&
                               backendMode_ != 2 && wifiMode_ != 2 &&
-                              (backendClient_->active() || backendBootPending_ ||
+                              ((packageManager_ && packageManager_->networkPaused()) || backendClient_->active() || backendBootPending_ ||
                                (backendMode_ == 1 &&
                                 WiFi.status() == WL_CONNECTED));
   drawBackendIcon(232, 5, backendConnected ? 2 : backendWorking ? 1 : 0);
@@ -10145,7 +10275,8 @@ void FireOS::drawSettings() {
   drawStatusBar("Settings");
   drawText(16, 37, "System settings", kMuted, 1);
   String backend = "Backend: ";
-  if (backendClient_ && backendClient_->sessionReady()) {
+  if (packageManager_ && packageManager_->networkPaused()) backend+="Overfører app";
+  else if (backendClient_ && backendClient_->sessionReady()) {
     backend += "connected";
   } else if (!backendClient_ || !backendClient_->configured()) {
     backend += "not configured";
@@ -10944,6 +11075,7 @@ void FireOS::drawLuaApp() {
           if (!fire_app_bitmap::codepoint(luaDevelopInstruction_.c_str(),length,offset,codepoint)) {offset=length;break;}
         drawText(20,65+line*16,luaDevelopInstruction_.substring(start,offset),kText,1,kPanel);
       }
+      if(luaFeedbackOutcome_=="unconfirmed") drawText(20,199,"Ikke bekreftet. Prøv igjen.",kOrange,1,kPanel);
       drawFooter("Avbryt",luaFeedbackAck_.length()?"Sender":"Bekreft","Avvis");
     } else {
       drawPanel(16,164,288,44);
@@ -10991,7 +11123,7 @@ void FireOS::drawLuaApp() {
             ? "Backend: not configured"
             : backendClient_->sessionReady()
                   ? "Backend: connected"
-                  : backendClient_->active() ? "Backend: connecting"
+                  : packageManager_ && packageManager_->networkPaused()?"Overfører app":backendClient_->active() ? "Backend: connecting"
                                              : "Backend: disconnected";
     drawText(160, 152, backendLabel,
              backendClient_ && backendClient_->sessionReady()
@@ -11104,13 +11236,18 @@ void FireOS::drawAppsSettings() {
 
 void FireOS::drawAppsSettingsBackend() {
   drawStatusBar("App Manager");
+  const auto statusLine=[&]() {drawText(16,203,compactStatusText(managerStatus_),kOrange,1,kBg);};
+  if(appManagerVersionsWaiting_ || appManagerDeleteWaiting_ || downloadPhase_==1 || downloadPhase_==2) {
+    drawPanel(12,48,296,146);drawText(24,64,managerTargetValid_?managerTarget_.name:String("Appoverføring"),kText,1,kPanel);
+    drawText(24,100,"Vennligst vent",kText,2,kPanel);statusLine();drawFooter("","Vent","Avbryt");return;
+  }
   if (appManagerDevelopConfirm_) {
     drawPanel(12,48,296,150);
     drawText(24,62,"Start appen først?",kText,2,kPanel);
     drawText(24,98,"Appen startes før grunnlaget hentes.",kText,1,kPanel);
     drawText(24,124,"Dette kjører appens vanlige funksjoner.",kMuted,1,kPanel);
-    if (managerSelection_<managerItemCount_) drawText(24,154,managerItems_[managerSelection_].name,kText,1,kPanel);
-    drawFooter("Avbryt","Start app","Avbryt");return;
+    if (managerTargetValid_) drawText(24,154,managerTarget_.name,kText,1,kPanel);
+    statusLine();drawFooter("Avbryt","Start app","Avbryt");return;
   }
   if (appManagerVersionDialog_) {
     drawAppManagerVersions();
@@ -11121,34 +11258,31 @@ void FireOS::drawAppsSettingsBackend() {
     drawText(32, 68, appManagerDeleteMode_ == 2 ? "Delete backend?"
                                                 : "Delete local?",
              kText, 2, kPanel);
-    String name = appManagerDeleteName_;
-    if (name.length() == 0 && managerSelection_ < managerItemCount_)
-      name = managerItems_[managerSelection_].name;
+    String name = appManagerDeleteMode_==1?managerTarget_.name:appManagerDeleteName_;
+    if(!name.length() && managerTargetValid_) name=managerTarget_.name;
 
     drawText(32, 101, name, kText, 1, kPanel);
     drawText(32, 128, appManagerDeleteMode_ == 2
                           ? "ALL backend versions"
                           : "Only local SD files",
              kOrange, 1, kPanel);
-    drawFooter("Cancel", "Confirm", "Cancel");
+    statusLine();drawFooter("Cancel", "Confirm", "Cancel");
     return;
   }
   if (appManagerActionMenu_) {
     drawPanel(8, 32, 304, 182);
-    String name = managerSelection_ < managerItemCount_
-                      ? managerItems_[managerSelection_].name
-                      : String();
+    String name = managerTargetValid_?managerTarget_.name:String();
 
     drawText(24, 40, name, kText, 1, kPanel);
-    const uint8_t first=appManagerActionIndex_<6?0:appManagerActionIndex_-5;
-    for (uint8_t row = 0; row < 6 && first+row<appManagerActionCount_; ++row) {
+    const uint8_t first=appManagerActionIndex_<5?0:appManagerActionIndex_-4;
+    for (uint8_t row = 0; row < 5 && first+row<appManagerActionCount_; ++row) {
       const uint8_t item=first+row;
       const String label = appManagerActionLabels_[item];
       fire_canvas_fill::Surface<M5Canvas> surface(ui);
       FireUI::menuRow(surface, 62 + row * 25, label.c_str(), "",
                       item == appManagerActionIndex_, osMenuIcon(label));
     }
-    drawFooter("A  UP", "B  SELECT", "DOWN  C");
+    statusLine();drawFooter("A  UP", "B  SELECT", "DOWN  C");
     return;
   }
 
@@ -11182,7 +11316,7 @@ void FireOS::drawAppManagerVersions() {
   drawPanel(8, 31, 304, 181);
   drawText(18, 39, "Choose version", kText, 2, kPanel);
   const uint8_t itemCount = appManagerVersionCount_ + 1;
-  const uint8_t visible = min<uint8_t>(6, itemCount - appManagerVersionOffset_);
+  const uint8_t visible = min<uint8_t>(5, itemCount - appManagerVersionOffset_);
   for (uint8_t row = 0; row < visible; ++row) {
     const uint8_t item = appManagerVersionOffset_ + row;
     const bool selected = item == appManagerVersionSelection_;
@@ -11200,6 +11334,7 @@ void FireOS::drawAppManagerVersions() {
                selected ? FireUI::Selected : kPanel);
     }
   }
+  drawText(16,203,compactStatusText(managerStatus_),kOrange,1,kBg);
   drawFooter("A  UP", "B  DOWNLOAD", "DOWN  C");
 }
 
@@ -11282,6 +11417,8 @@ void FireOS::drawQuickSettings() {
     backendValue = "Off";
   } else if (wifiMode_ == 2) {
     backendValue = "Wi-Fi Off";
+  } else if (packageManager_ && packageManager_->networkPaused()) {
+    backendValue="Overfører app";
   } else if (backendClient_ && backendClient_->sessionReady()) {
     backendValue = "Connected (" + backendModeLabel + ")";
   } else if (backendClient_ && backendClient_->sessionRejected()) {
@@ -11832,4 +11969,6 @@ void FireOS::drawText(int32_t x, int32_t y, const String& text, uint16_t color,
 
 #include "fire_os_evolution.inc"
 #include "fire_os_ai_picker.inc"
+#include "fire_os_download.inc"
+#include "fire_os_local_qa.inc"
 #include "fire_os_backend_settings.inc"
