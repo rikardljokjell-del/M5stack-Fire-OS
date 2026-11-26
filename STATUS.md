@@ -69,6 +69,20 @@ hovedskjermen. Én lesende backendkontroll kl. 20:38:01 Oslo viste null aktive
 jobber og Vater-bygg/reparasjon READY; ingen nytt nedlastingsforsøk var gjort.
 En avgrenset native-retting av aktiv-/ferdigindikatoren pågår. Bekreftet READY
 skal vise «Done», mens feil, pause og ukjent status ikke skal fremstilles som arbeid.
+RC9-rettingen har bestått kjørbare tilstands- og pixelgrenser for den faktiske
+tegnehjelperen og full normal/recovery/bootloader-bygging i Linux. Minimering og
+ferdigvarsel tvinger ikke lenger arbeidsflagget på. En autoritativ READY-pakke
+gir grønn «Done» i seks sekunder; nye aktive eller feilende jobber rydder forrige
+ferdigmarkering. Historiske jobbsider kan ikke rydde en annen aktuell jobb.
+Teksten bruker y20–26 under datoen og over skillelinjen. RC9 er privat signert
+og kontrollert. RC9 er fysisk installert i B58 og godkjent VALID/CRC;
+RC8 A57 er bevart. Eksakt bildekontroll og de vanlige helse-/normaloppstartene
+er bestått uten registrerte TLS-feil, panic eller WDT. COM er lukket. Selve
+LCD-markeringen ved en ny ferdig jobb er ennå ikke brukerbekreftet.
+Én sluttstatus kl. 20:55:29 Oslo bekreftet RC9 online med faktisk socket,
+ferskt komplett inventar med alle 13 app-IDer og uendrede kontrakter.
+Nedlastingsfeilen er fortsatt åpen: ingen nytt install-/runforsøk er registrert;
+den lagrede tidligere feilmeldingen må ikke tolkes som en ny RC9-feil.
 
 ### Backend-sync og sikker nettilgang – 26. november
 
