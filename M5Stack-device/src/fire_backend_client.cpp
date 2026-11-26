@@ -57,25 +57,7 @@ String hardwareServiceCapabilities() {
   return ",\"services\":["+services+"],\"service_methods\":{"+methods+"},\"service_modes\":"+modes;
 }
 
-String jsonEscape(const String& input) {
-  String output;
-  output.reserve(input.length() + 8);
-  for (size_t index = 0; index < input.length(); ++index) {
-    const char value = input[index];
-    if (value == '\\' || value == '"') output += '\\';
-    if (value == '\n') {
-      output += "\\n";
-    } else if (value == '\r') {
-      output += "\\r";
-    } else if (static_cast<uint8_t>(value)<32) {
-      const char hex[]="0123456789abcdef";output+="\\u00";
-      output+=hex[(static_cast<uint8_t>(value)>>4)&15];output+=hex[static_cast<uint8_t>(value)&15];
-    } else {
-      output += value;
-    }
-  }
-  return output;
-}
+String jsonEscape(const String& input) {return fire_session::escape(input);}
 
 String jsonStringField(const String& json, const char* key) {
   const String marker = String("\"") + key + "\"";
@@ -128,9 +110,8 @@ void FireBackendClient::configure(const String& host, uint16_t port,
   if (deviceId.length() > 0) deviceId_ = deviceId;
   if (firmwareVersion.length() > 0) firmwareVersion_ = firmwareVersion;
   resumeSessionId_ = "";
-  conversationMode_ = "";
-  pendingAppMode_ = "";
-  pendingBasePackageId_ = "";
+  confirmedProject_=confirmedBase_=confirmedMode_=confirmedAppMode_=String();
+  selection_.clear();selectionReply_=0;
   lastServerSeq_ = 0;
   bootId_ = "boot-" + String(static_cast<uint32_t>(esp_random()), HEX) +
             String(millis(), HEX);
@@ -138,32 +119,69 @@ void FireBackendClient::configure(const String& host, uint16_t port,
 }
 
 void FireBackendClient::setConversationMode(const String& mode) {
-  if (mode != "chat" && mode != "develop") return;
-  conversationMode_ = mode;
-  if (mode == "chat") {
-    pendingAppMode_ = "";
-    pendingBasePackageId_ = "";
-  }
-  if (sessionReady())
-    sendEvent("mode_select", ",\"conversation_mode\":\"" + jsonEscape(mode) + "\"");
+  if (mode!="chat" && mode!="develop") return;
+  // Existing frozen Data Engine context applies its own mode/proposal on the
+  // server. A later mode_select would cancel that just-restored proposal.
+  if (developmentContext_.length() && mode=="develop") return;
+  selection_.queueMode(mode,bootId_+"-"+eventId("mode"));
 }
 
-void FireBackendClient::setAppMode(const String& mode,
-                                   const String& basePackageId) {
-  if (mode != "new" && mode != "update") return;
-  pendingAppMode_ = mode;
-  pendingBasePackageId_ = basePackageId;
-  if (sessionReady()) {
-    String fields = ",\"app_mode\":\"" + jsonEscape(mode) + "\"";
-    if (mode == "update" && projectId_.length() > 0)
-      fields += ",\"project_id\":\"" + jsonEscape(projectId_) + "\"";
-    if (mode == "update" && basePackageId.length() > 0)
-      fields += ",\"base_package_id\":\"" + jsonEscape(basePackageId) + "\"";
-    if (sendEvent("app_select", fields)) {
-      pendingAppMode_ = "";
-      pendingBasePackageId_ = "";
-    }
+void FireBackendClient::setAppMode(const String& mode,const String& basePackageId) {
+  if (mode!="new" && mode!="update") return;
+  selection_.queueApp(mode,projectId_,basePackageId,bootId_+"-"+eventId("app"));
+}
+
+void FireBackendClient::serviceSelection() {
+  if (!sessionReady() || developmentContext_.length()) return;
+  if (selection_.sendApp()) {
+    const String fields=fire_session::appFields(selection_.appMode,selection_.project,selection_.base);
+    selection_.appSent=true;
+    if (!sendEvent("app_select",fields,selection_.appEvent)) {selection_.lost();disconnect();}
+  } else if (selection_.sendMode()) {
+    selection_.modeSent=true;
+    if (!sendEvent("mode_select",fire_session::modeFields(selection_.mode),selection_.modeEvent)) {selection_.lost();disconnect();}
   }
+}
+
+void FireBackendClient::observeSession(const String& type,const String& message) {
+  selectionReply_=0;
+  const bool bootstrap=type=="session_started" || type=="session_snapshot";
+  if (!bootstrap && type!="app_selected" && type!="conversation_mode" && type!="event_ack" && type!="error") return;
+  cJSON* document=cJSON_Parse(message.c_str());
+  if (!cJSON_IsObject(document)) {cJSON_Delete(document);return;}
+  const auto text=[](const cJSON* object,const char* key) -> String {
+    const cJSON* value=cJSON_GetObjectItemCaseSensitive(object,key);
+    return cJSON_IsString(value) && value->valuestring && strlen(value->valuestring)<=128?String(value->valuestring):String();
+  };
+  const auto scope=[&](const cJSON* object) {
+    const cJSON* project=cJSON_GetObjectItemCaseSensitive(object,"project_id");
+    const cJSON* base=cJSON_GetObjectItemCaseSensitive(object,"base_package_id");
+    if (project) confirmedProject_=text(object,"project_id");
+    if (base) confirmedBase_=text(object,"base_package_id");
+    const String mode=text(object,"conversation_mode"),app=text(object,"app_mode");
+    if (mode=="chat" || mode=="develop") confirmedMode_=mode;
+    if (app=="new" || app=="update") confirmedAppMode_=app;
+  };
+  const String event=text(document,"event_id");
+  if (bootstrap || type=="app_selected" || type=="conversation_mode") scope(document);
+  if (type=="app_selected" && selection_.appAck(event)) selectionReply_|=1;
+  if (type=="conversation_mode" && selection_.modeAck(event)) selectionReply_|=2;
+  if (bootstrap) {
+    const cJSON* receipts=cJSON_GetObjectItemCaseSensitive(document,"selection_ack");
+    if (selection_.appAck(text(receipts,"app_select"))) selectionReply_|=1;
+    if (selection_.modeAck(text(receipts,"mode_select"))) selectionReply_|=2;
+  } else if (type=="event_ack") {
+    const cJSON* result=cJSON_GetObjectItemCaseSensitive(document,"result");
+    if (cJSON_GetObjectItemCaseSensitive(result,"error")) {
+      if (selection_.rejected(event)) selectionReply_|=4;
+    } else {
+      const bool app=selection_.appAck(event),mode=selection_.modeAck(event);
+      if (app || mode) scope(result);
+      if (app) selectionReply_|=1;
+      if (mode) selectionReply_|=2;
+    }
+  } else if (type=="error" && selection_.rejected(event)) selectionReply_|=4;
+  cJSON_Delete(document);
 }
 
 void FireBackendClient::setRuntimeAiMode(const String& mode,bool publish) {
@@ -186,6 +204,7 @@ void FireBackendClient::setState(State state, const String& status) {
 }
 
 void FireBackendClient::disconnect() {
+  selection_.lost();
   cancelAudioTransfer();
   // Cancellation includes DNS/TCP/TLS that has not connected yet.
   client_.stop();
@@ -605,6 +624,7 @@ bool FireBackendClient::sendEvent(const String& event, const String& fields,
 }
 
 bool FireBackendClient::listenStart(const String& turnId) {
+  if (selection_.pending()) return false;
   return sendEvent("listen_start", ",\"turn_id\":\"" + jsonEscape(turnId) + "\"");
 }
 
@@ -684,6 +704,7 @@ bool FireBackendClient::appBackendDeleteConfirm(const String& deleteId) {
 
 bool FireBackendClient::confirmBuild(const String& proposalId,
                                      const String& repairId) {
+  if (selection_.pending()) return false;
   String fields = ",\"proposal_id\":\"" + jsonEscape(proposalId) + "\"";
   if (repairId.length() > 0)
     fields += ",\"repair_id\":\"" + jsonEscape(repairId) + "\"";
@@ -691,6 +712,7 @@ bool FireBackendClient::confirmBuild(const String& proposalId,
 }
 
 bool FireBackendClient::confirmRun(const String& packageId) {
+  if (selection_.pending()) return false;
   return sendEvent("run_confirm", ",\"package_id\":\"" +
                    jsonEscape(packageId) + "\"");
 }
@@ -1046,7 +1068,8 @@ void FireBackendClient::service(bool wifiConnected) {
                   token_ + "\r\n\r\n";
     if (client->print(request) != request.length()) { disconnect(); return; }
     handshakeBuffer_ = "";
-    handshakeStartedAt_ = millis();
+    handshakeStartedAt_ = millis();bootstrapStages_=0;
+    bootstrapDiagnostic(0,usingReverseTransport_?1:0);
     setState(State::Handshake, "Authenticating backend");
   }
   if (state_ == State::Handshake) {
@@ -1061,8 +1084,11 @@ void FireBackendClient::service(bool wifiConnected) {
   if (state_ == State::Connected) {
     readFrames();
     if (state_!=State::Connected) return;
+    serviceSelection();
+    if (state_!=State::Connected) return;
     const uint32_t now = millis();
     if (fireWsSessionExpired(sessionStarted_,now,handshakeStartedAt_)) {
+      bootstrapDiagnostic(6,receivePayloadBytes_,receiveLength_);
       disconnect();
       setState(State::Offline,"Backend session timeout");
       return;
@@ -1091,6 +1117,7 @@ void FireBackendClient::handleHandshake() {
     setState(State::Offline, "Backend handshake rejected");
     return;
   }
+  bootstrapDiagnostic(1);
   sessionStarted_ = false;
   lastReceiveAt_ = millis();
   handshakeStartedAt_=lastReceiveAt_; // fresh application-session stage; never refreshed by PONG
@@ -1110,30 +1137,20 @@ void FireBackendClient::handleHandshake() {
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    eventId("evt") + "\",\"device_id\":\"" +
                    jsonEscape(deviceId_) + "\",\"event\":\"session_start\"" +
-                   (resumeSessionId_.length() > 0
-                        ? ",\"resume_session_id\":\"" + jsonEscape(resumeSessionId_) + "\""
-                        : String()) +
-                   (projectId_.length() > 0
-                        ? ",\"project_id\":\"" + jsonEscape(projectId_) + "\""
-                        : String()) +
-                   (developmentContext_.length()>0?",\"development_context_id\":\""+jsonEscape(developmentContext_)+"\"":String())+
-                   (conversationMode_.length() > 0
-                        ? ",\"conversation_mode\":\"" + jsonEscape(conversationMode_) + "\""
-                        : String()) +
-                   (pendingAppMode_.length() > 0
-                        ? ",\"app_mode\":\"" + jsonEscape(pendingAppMode_) + "\"" +
-                              (pendingAppMode_ == "update" && pendingBasePackageId_.length() > 0
-                                   ? ",\"base_package_id\":\"" + jsonEscape(pendingBasePackageId_) + "\""
-                                   : String())
-                        : String()) +
+                   fire_session::startFields(resumeSessionId_,developmentContext_) +
                    fields + "}";
-  if (sendFrame(0x1, reinterpret_cast<const uint8_t*>(payload.c_str()),
-                payload.length())) {
-    // Explicit app selection is one-shot. Reconnect must resume, not select a
-    // new app again.
-    pendingAppMode_ = "";
-    pendingBasePackageId_ = "";
-  }
+  // Pending choices are separate normal events, consumed only on server ACK.
+  sendFrame(0x1,reinterpret_cast<const uint8_t*>(payload.c_str()),payload.length());
+}
+
+void FireBackendClient::bootstrapDiagnostic(uint8_t stage,uint32_t first,uint32_t second) {
+  const uint8_t bit=static_cast<uint8_t>(1u<<stage);
+  if (bootstrapStages_&bit) return;
+  bootstrapStages_|=bit;
+  // Numeric stage/elapsed/progress only: no identity, endpoint or payload.
+  Serial.printf("FIRE bootstrap stage=%u elapsed_ms=%lu a=%lu b=%lu\n",
+      unsigned(stage),static_cast<unsigned long>(millis()-handshakeStartedAt_),
+      static_cast<unsigned long>(first),static_cast<unsigned long>(second));
 }
 
 void FireBackendClient::readFrames() {
@@ -1169,6 +1186,7 @@ void FireBackendClient::readFrames() {
             return;
           }
           receiveOpcode_ = header & 0x0F;
+          if (!sessionStarted_) bootstrapDiagnostic(2,receiveOpcode_);
           if (receiveOpcode_ == 0x0 && fragmentOpcode_ == 0) {
             disconnect();
             setState(State::Offline, "Unexpected WebSocket continuation");
@@ -1292,6 +1310,7 @@ void FireBackendClient::readFrames() {
 void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
                                     size_t length) {
   lastReceiveAt_ = millis();
+  if (!sessionStarted_) bootstrapDiagnostic(3,opcode,length);
   if (opcode == 0x8) {
     disconnect();
     setState(State::Offline, "Backend closed connection");
@@ -1301,12 +1320,14 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
     lastPongAt_ = millis();
   } else if (opcode == 0x1 && messageCallback_) {
     if (!fireJsonSafe(reinterpret_cast<const char*>(data), length, kMaxFrameBytes)) {
+      if (!sessionStarted_) bootstrapDiagnostic(7,length);
       Serial.printf("FIRE backend rejected_json bytes=%u max_bytes=%u max_tokens=1024\n",unsigned(length),unsigned(kMaxFrameBytes));
       disconnect(); setState(State::Offline, "Invalid backend message"); return;
     }
     String message;
     message.reserve(length);
     for (size_t index = 0; index < length; ++index) message += static_cast<char>(data[index]);
+    selectionReply_=0;
     const String type = jsonStringField(message, "type");
     if (!sessionStarted_ && type=="error") {
       cJSON* envelope=cJSON_Parse(message.c_str());
@@ -1324,11 +1345,15 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
     const uint32_t seq = jsonUintField(message, "seq");
     const String startedSession=type=="session_started"?jsonStringField(message,"session_id"):String();
     if (type=="session_started" && fireWsNewSession(startedSession.c_str(),sessionId_.c_str(),resumeSessionId_.c_str())) lastServerSeq_=0;
-    if (seq > 0 && lastServerSeq_ > 0 && seq <= lastServerSeq_) return;
+    if (seq > 0 && lastServerSeq_ > 0 && seq <= lastServerSeq_) {
+      if (!sessionStarted_) bootstrapDiagnostic(4,seq,lastServerSeq_);
+      return;
+    }
     if (seq > 0) lastServerSeq_ = seq;
     if (type == "session_started") {
       const String newSession = jsonStringField(message, "session_id");
       if (newSession.length() > 0) {
+        bootstrapDiagnostic(5,seq,newSession!=resumeSessionId_?1:0);
         sessionId_ = newSession;
         resumeSessionId_ = "";
         sessionStarted_ = true;
@@ -1348,6 +1373,7 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
                                       : "Backend connected (Direct)");
       }
     }
+    observeSession(type,message);
     const int64_t callbackStartedUs = esp_timer_get_time();
     messageCallback_(callbackContext_, message);
     const int64_t callbackUs = esp_timer_get_time() - callbackStartedUs;

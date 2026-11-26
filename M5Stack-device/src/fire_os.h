@@ -591,7 +591,7 @@ class FireOS {
   void drawAiPicker();
   bool aiRepairResumeAvailable() const;
   String aiRepairResumeName() const;
-  void selectAiProject(fire_ai_menu::Kind kind,uint8_t index=0);
+  bool selectAiProject(fire_ai_menu::Kind kind,uint8_t index=0);
   String luaRepairAppId_,luaRepairAppName_;
   bool aiRepairResumePending_ = false;
   FireBackendSettingsUi backendSettingsUi_;

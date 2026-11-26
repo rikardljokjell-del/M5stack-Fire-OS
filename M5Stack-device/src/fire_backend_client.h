@@ -7,6 +7,7 @@
 #include "fire_reverse_transport.h"
 #include "fire_async_client.h"
 #include "fire_ws_handshake.h"
+#include "fire_session_selection.h"
 
 class FireBackendClient {
  public:
@@ -16,11 +17,21 @@ class FireBackendClient {
   void configure(const String& host, uint16_t port, const String& token,
                  const String& deviceId, const String& firmwareVersion);
   void setProjectId(const String& projectId) { projectId_ = projectId; }
+  bool beginSelection() { selectionReply_=0;return selection_.begin(); }
+  bool selectionPending() const { return selection_.pending(); }
+  bool selectionUnclear() const { return selection_.unclear(); }
+  bool selectionAppAck() const { return selectionReply_&1; }
+  bool selectionModeAck() const { return selectionReply_&2; }
+  bool selectionFailed() const { return selectionReply_&4; }
+  const String& confirmedProject() const { return confirmedProject_; }
+  const String& confirmedBase() const { return confirmedBase_; }
+  const String& confirmedMode() const { return confirmedMode_; }
+  const String& confirmedAppMode() const { return confirmedAppMode_; }
   void setConversationMode(const String& mode);
   void setRuntimeAiMode(const String& mode,bool publish=true);
   void setAppMode(const String& mode, const String& basePackageId = String());
   void setDevelopmentContext(const String& context) {
-    developmentContext_=context;pendingAppMode_=String();pendingBasePackageId_=String();projectId_=String();
+    developmentContext_=context;selection_.clear();projectId_=String();
   }
   void setCallbacks(void* context, MessageCallback message,
                     StateCallback state);
@@ -163,15 +174,16 @@ class FireBackendClient {
   String bootId_;
   String sessionId_;
   String resumeSessionId_;
-  String conversationMode_;
+  String confirmedProject_,confirmedBase_,confirmedMode_,confirmedAppMode_;
+  fire_session::Selection<String> selection_;
+  uint8_t selectionReply_=0;
   String runtimeAiMode_ = "auto";
-  String pendingAppMode_;
-  String pendingBasePackageId_;
   String developmentContext_;
   bool sessionStarted_ = false;
   FireWsSessionAdmission sessionAdmission_;
   uint32_t lastServerSeq_ = 0;
   uint32_t handshakeStartedAt_ = 0;
+  uint8_t bootstrapStages_=0; // at most eight fixed numeric lines per attempt
   uint32_t lastReceiveAt_ = 0;
   uint32_t lastPingAt_ = 0;
   uint32_t lastPongAt_ = 0;
@@ -232,6 +244,9 @@ class FireBackendClient {
   void setState(State state, const String& status);
   void resetReceiveFrame();
   void handleHandshake();
+  void serviceSelection();
+  void observeSession(const String& type,const String& message);
+  void bootstrapDiagnostic(uint8_t stage,uint32_t first=0,uint32_t second=0);
   void readFrames();
   void handleFrame(uint8_t opcode, const uint8_t* data, size_t length);
   WiFiClient* activeClient() {

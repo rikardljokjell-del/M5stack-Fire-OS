@@ -1,8 +1,56 @@
 #include "fire_ws_handshake.h"
+#include "fire_session_selection.h"
+#include "fire_json_guard.h"
 #include <cassert>
 #include <string>
 #include <cstdio>
+static void selectionTests() {
+  using Text=std::string;
+  fire_session::Selection<Text> pending;
+  assert(pending.begin());
+  pending.queueMode("develop","boot-mode1");
+  pending.queueApp("new","stale-project","stale-package","boot-app1");
+  const Text admission="{\"event\":\"session_start\""+fire_session::startFields(Text("old-session"),Text())+"}";
+  assert(admission=="{\"event\":\"session_start\",\"resume_session_id\":\"old-session\"}");
+  assert(pending.sendApp() && !pending.sendMode());
+  assert(!pending.appAck("boot-app1") && !pending.modeAck("boot-mode1"));
+  const Text create="{\"event\":\"app_select\""+fire_session::appFields(pending.appMode,pending.project,pending.base)+"}";
+  assert(create=="{\"event\":\"app_select\",\"app_mode\":\"new\"}");
+  pending.appSent=true;
+  assert(pending.pending() && !pending.sendApp() && !pending.begin());
+  pending.lost(); // socket lost after write, before app_selected
+  assert(pending.unclear() && !pending.sendApp() && !pending.sendMode());
+  assert(!pending.appAck("another-event") && pending.pending());
+  // Matching selection_ack from a successor is a receipt, never a replay.
+  assert(pending.appAck("boot-app1") && !pending.unclear() && pending.sendMode());
+  pending.modeSent=true;pending.lost();
+  assert(!pending.sendMode() && !pending.modeAck("wrong"));
+  assert(pending.modeAck("boot-mode1") && !pending.pending());
+  assert(pending.begin());
+  pending.queueApp("update","project-two","package-two","boot-app2");
+  pending.queueMode("develop","boot-mode2");
+  const Text update="{\"event\":\"app_select\""+fire_session::appFields(pending.appMode,pending.project,pending.base)+"}";
+  pending.appSent=true;
+  assert(!pending.rejected("unrelated-error") && pending.pending());
+  assert(pending.rejected("boot-app2") && !pending.pending()); // busy: scope was never optimistic
+  pending.queueMode("chat","boot-mode3");pending.modeSent=true;
+  assert(!pending.begin());pending.lost();assert(pending.begin()); // explicit choice after unresolved result
+  assert(!pending.pending());
+  const Text context="{\"event\":\"session_start\""+fire_session::startFields(Text("old-session"),Text("context-exact"))+"}";
+  const Text mode="{\"event\":\"mode_select\""+fire_session::modeFields(Text("chat"))+"}";
+  const Text quoted="{\"event\":\"app_select\""+fire_session::appFields(Text("update"),Text("a\"\\\n\r\t"),Text("p"))+"}";
+  assert(fireJsonSafe(quoted.data(),quoted.size(),8192));
+  assert(fire_session::escape(Text("\xc3\xa5"))=="\xc3\xa5");
+  std::printf("SELECTION_JSON %s\n",admission.c_str());
+  std::printf("SELECTION_JSON %s\n",create.c_str());
+  std::printf("SELECTION_JSON %s\n",update.c_str());
+  std::printf("SELECTION_JSON %s\n",context.c_str());
+  std::printf("SELECTION_JSON %s\n",mode.c_str());
+  std::printf("SELECTION_JSON %s\n",quoted.c_str());
+  std::puts("PASS actual session/app/mode producers and lost receipt without replay");
+}
 int main() {
+  selectionTests();
   const char* accept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
   const std::string valid = std::string("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Accept: ") + accept + "\r\n\r\n";
   assert(fireWsAccepted(valid.data(), valid.size(), accept));

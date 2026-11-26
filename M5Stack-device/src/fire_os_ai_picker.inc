@@ -8,33 +8,40 @@ String FireOS::aiRepairResumeName() const {
   for (uint8_t i=0;i<luaAppCount_;++i) if (luaAppIds_[i]==luaRepairAppId_) return luaAppDisplayNames_[i].length()?luaAppDisplayNames_[i]:luaAppNames_[i];
   return "Appnavn ikke hentet";
 }
-void FireOS::selectAiProject(fire_ai_menu::Kind kind,uint8_t index) {
+bool FireOS::selectAiProject(fire_ai_menu::Kind kind,uint8_t index) {
   using fire_ai_menu::Kind;
+  if (kind==Kind::App && index>=luaAppCount_) return false;
+  if (kind!=Kind::Voice && backendClient_ && !backendClient_->beginSelection()) {
+    aiWorkflowText_="Venter på appvalg";redrawRequested_=true;return false;
+  }
   aiVoiceTestMode_=kind==Kind::Voice;aiConversationMode_=(kind==Kind::Chat || aiVoiceTestMode_)?1:0;
   aiProjectId_=String();aiBasePackageId_=String();aiProposalProjectId_=String();aiProposalJobId_=String();aiProposalAppName_=String();
   aiEvolutionGoal_=String();aiEvolutionGoalProject_=String();aiDevelopmentContext_=String();aiEvolutionNewPending_=false;
   aiProjectName_=kind==Kind::Chat?"Chat":aiVoiceTestMode_?"Voice test":"New app";
   if (kind==Kind::App) {
-    if (index>=luaAppCount_) return;
     const String source=luaAppPaths_[index];const int slash=source.lastIndexOf('/');
     const String folder=slash>0?source.substring(0,slash):source,app=sdBaseName(folder);
     fire_lua_install::Identity identity;
     const auto result=fire_lua_install::read(SD,(folder+"/"+fire_lua_install::kFilename).c_str(),identity);
     if (result==fire_lua_install::Read::Invalid || (result==fire_lua_install::Read::Valid && app!=identity.app)) {
-      aiWorkflowText_="metadata_error";return;
+      aiWorkflowText_="metadata_error";return false;
     }
     aiProjectId_=result==fire_lua_install::Read::Valid?(identity.project[0]?String(identity.project):app):preferences.getString(compactPreferenceKey("pr_",app).c_str(),app);
     aiProjectName_=luaAppDisplayNames_[index].length()?luaAppDisplayNames_[index]:luaAppNames_[index];
     aiBasePackageId_=luaAppPackageIds_[index];
   }
-  if (backendClient_) {
+  if (backendClient_ && !aiVoiceTestMode_) {
     backendClient_->setProjectId(aiProjectId_);
-    backendClient_->setConversationMode(aiConversationMode_?"chat":"develop");
+    // app_select itself confirms develop mode and restores this app's history.
+    // A subsequent redundant mode_select would clear that restored history.
     if (kind==Kind::NewApp) backendClient_->setAppMode("new");
     else if (kind==Kind::App) backendClient_->setAppMode("update",aiBasePackageId_);
+    else backendClient_->setConversationMode("chat");
   }
   aiProjectPickerActive_=false;aiDeveloperMode_=0;aiWorkflowState_=0;aiAssistantText_=String();
   aiWorkflowText_=aiVoiceTestMode_?"VOICE TEST - PRESS B TO RECORD":kind==Kind::App?"EDIT "+aiProjectName_:kind==Kind::Chat?"Chat er klar":"NEW APP";
+  if (!aiVoiceTestMode_ && backendClient_ && backendClient_->selectionPending()) aiWorkflowText_="Venter på appvalg";
+  return true;
 }
 void FireOS::handleAiPicker(uint8_t index) {
   if (backendSettingsUi_.page!=FireBackendSettingsUi::None) {handleBackendSettingsButton(index);return;}
@@ -57,8 +64,10 @@ void FireOS::handleAiPicker(uint8_t index) {
     } else if (item.kind==Kind::Evolution) {
       if (aiProjectId_.length()) openEvolution(true);
       else if (backendClient_ && backendClient_->sessionReady()) {
-        selectAiProject(Kind::NewApp);aiProjectPickerActive_=true;
-        aiEvolutionNewPending_=true;aiEvolutionNewAt_=millis();aiWorkflowText_="Venter på appidentitet";
+        if (selectAiProject(Kind::NewApp)) {
+          aiProjectPickerActive_=true;aiEvolutionNewPending_=true;
+          aiEvolutionNewAt_=millis();aiWorkflowText_="Venter på appidentitet";
+        }
       } else aiWorkflowText_="Koble til backend først";
     } else if (item.kind==Kind::Settings) {
       aiPickerPage_=Page::Settings;aiProjectSelection_=aiProjectOffset_=0;

@@ -70,7 +70,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc4";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc5";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -5610,6 +5610,10 @@ bool FireOS::startAiRecording() {
   return false;
 #else
   const bool localVoiceTest = aiVoiceTestMode_;
+  if (!localVoiceTest && backendClient_ && backendClient_->selectionPending()) {
+    aiAudioError_=backendClient_->selectionUnclear()?"Valg uavklart. Velg app igjen":"Venter på appvalg";
+    return false;
+  }
   if ((!localVoiceTest &&
        (!backendClient_ || !backendClient_->sessionReady())) ||
       !M5.Mic.isEnabled() || aiAudioCaptureActive_) {
@@ -7417,19 +7421,34 @@ void FireOS::backendMessage(void* context, const String& message) {
 void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
-  if (type=="app_selected") {
-    aiProposalProjectId_=String();aiProposalJobId_=String();aiProposalAppName_=String();
-    const String project=jsonStringField(message,"project_id");
-    if (project.length()) {
-      if (aiEvolutionGoalProject_!=project) {aiEvolutionGoal_=String();aiEvolutionGoalProject_=String();aiDevelopmentContext_=String();}
-      aiProjectId_=project;aiBasePackageId_=jsonStringField(message,"base_package_id");
-      if (backendClient_) backendClient_->setProjectId(project);
-      if (aiEvolutionNewPending_ && jsonStringField(message,"app_mode")=="new") {
-        aiEvolutionNewPending_=false;openEvolution(true);
-      }
+  const bool selectedApp=backendClient_ && backendClient_->selectionAppAck();
+  const bool selectedMode=backendClient_ && backendClient_->selectionModeAck();
+  const bool selectionFailed=backendClient_ && backendClient_->selectionFailed();
+  const bool bootstrap=type=="session_started" || type=="session_snapshot";
+  // These fields are typed, server-confirmed scope. A socket write is never
+  // confirmation, and a delayed reply cannot approve another user's choice.
+  if (backendClient_ && (selectedApp || selectionFailed ||
+      (bootstrap && !backendClient_->selectionPending()))) {
+    const String project=backendClient_->confirmedProject();
+    if (aiEvolutionGoalProject_!=project) {aiEvolutionGoal_=String();aiEvolutionGoalProject_=String();aiDevelopmentContext_=String();}
+    aiProjectId_=project;aiBasePackageId_=backendClient_->confirmedBase();
+    backendClient_->setProjectId(project);
+    if (selectedApp) {aiProposalProjectId_=String();aiProposalJobId_=String();aiProposalAppName_=String();}
+    if (selectedApp && aiEvolutionNewPending_ && backendClient_->confirmedAppMode()=="new" && project.length()) {
+      aiEvolutionNewPending_=false;openEvolution(true);
     }
+  }
+  if (backendClient_ && (selectedMode || selectedApp || selectionFailed || bootstrap || type=="conversation_mode")) {
+    const String mode=backendClient_->confirmedMode();
+    if (mode=="chat") aiConversationMode_=1;
+    else if (mode=="develop") aiConversationMode_=0;
+  }
+  if (selectionFailed) {
+    aiEvolutionNewPending_=false;aiWorkflowText_="Valg avvist. Velg app igjen";
     return;
   }
+  if (selectedApp || selectedMode) aiWorkflowText_=backendClient_->selectionPending()?"Venter på modus":"Valg bekreftet";
+  if (type=="app_selected" || type=="conversation_mode") return;
   if(type=="runtime_ai_result") {handleRuntimeAiResult(message);return;}
   if(type=="evolution_snapshot" || type=="evolution_proposal" || type=="evolution_telemetry_ack") {handleEvolutionMessage(message);return;}
   if(type=="backend_settings_snapshot" || type=="backend_settings_proposal") {handleBackendSettings(message);return;}
@@ -7440,12 +7459,6 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if(type=="data_result" || type=="app_develop_ready") {handleDataResult(message);return;}
   if(type=="session_started" || type=="session_snapshot") {
-    const String project=jsonStringField(message,"project_id");
-    if (aiEvolutionNewPending_ && project.length() && jsonStringField(message,"app_mode")=="new") {
-      aiProjectId_=project;aiEvolutionNewPending_=false;
-      if (backendClient_) backendClient_->setProjectId(project);
-      openEvolution(true);
-    }
     const String mode=jsonStringField(message,"runtime_ai_mode");
     if(mode=="auto" || mode=="off") {
       const bool selected=mode=="auto";if(aiRuntimeAuto_!=selected) preferences.putBool("runtime_ai_auto",selected);
@@ -7468,10 +7481,10 @@ void FireOS::handleBackendMessage(const String& message) {
       requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
-    const String mode = jsonStringField(message, "conversation_mode");
+    const String mode = backendClient_?backendClient_->confirmedMode():String();
     if (mode == "chat") aiConversationMode_ = 1;
     else if (mode == "develop") aiConversationMode_ = 0;
-    aiWorkflowText_ = "CONNECTED";
+    aiWorkflowText_ = backendClient_ && backendClient_->selectionPending()?(backendClient_->selectionUnclear()?"Valg uavklart. Velg app igjen":"Venter på appvalg"):"CONNECTED";
     return;
   }
   if (type == "session_snapshot") {
@@ -7484,7 +7497,7 @@ void FireOS::handleBackendMessage(const String& message) {
       requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
-    const String mode = jsonStringField(message, "conversation_mode");
+    const String mode = backendClient_?backendClient_->confirmedMode():String();
     if (mode == "chat") aiConversationMode_ = 1;
     else if (mode == "develop") aiConversationMode_ = 0;
     const String proposal = jsonStringField(message, "proposal_id");
@@ -7513,6 +7526,7 @@ void FireOS::handleBackendMessage(const String& message) {
     aiWorkflowText_ = display.length()?display:
       (restoredState=="ready_to_run" || restoredState=="installed")?String("App klar til kjøring"):
       (restoredState=="building" || restoredState=="testing")?compactStatusText(jsonStringField(message,"phase")):String("Tilkoblet");
+    if (backendClient_ && backendClient_->selectionPending()) aiWorkflowText_=backendClient_->selectionUnclear()?"Valg uavklart. Velg app igjen":"Venter på appvalg";
     return;
   }
   if (type == "app_inventory_request") {
