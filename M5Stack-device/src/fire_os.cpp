@@ -1,5 +1,6 @@
 #include "fire_app_icons.h"
 #include "fire_os.h"
+#include "fire_backend_policy.h"
 #include "fire_audio_capture.h"
 #include "fire_json_guard.h"
 #include "fire_app_graphics.h"
@@ -70,7 +71,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc5";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc6";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -7124,6 +7125,13 @@ void FireOS::updateLuaApp() {
   if (luaAppActive_) flushLuaRgb();
 }
 
+void FireOS::cycleBackendMode() {
+  if (!fire_backend_policy::saveMode(preferences,backendMode_,static_cast<uint8_t>((backendMode_+1)%3))) {
+    backendStatus_="Valget kunne ikke bekreftes";redrawRequested_=true;return;
+  }
+  applyBackendMode();
+}
+
 void FireOS::applyBackendMode() {
   if (backendMode_ == 2) {
     backendBootPending_ = false;
@@ -8153,9 +8161,7 @@ void FireOS::handleAiApiButton(uint8_t index) {
   } else if (index == 2) {
     detailIndex_ = (detailIndex_ + 1) % kCount;
   } else if (detailIndex_ == 0) {
-    backendMode_ = (backendMode_ + 1) % 3;
-    saveSettings();
-    applyBackendMode();
+    cycleBackendMode();
   } else if (detailIndex_ == 1) {
     startAiApiSetup();
   } else if (detailIndex_ == 3) {
@@ -9413,9 +9419,7 @@ void FireOS::handleQuickButton(uint8_t index) {
         saveSettings();
         break;
       case 4:
-        backendMode_ = (backendMode_ + 1) % 3;
-        saveSettings();
-        applyBackendMode();
+        cycleBackendMode();
         break;
       case 5:
         open(Screen::FileExplorer);

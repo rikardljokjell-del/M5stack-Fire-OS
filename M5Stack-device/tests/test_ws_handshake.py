@@ -6,6 +6,7 @@ class WebSocketHandshakeTests(unittest.TestCase):
     def test_actual_upgrade_validator(self):
         output = native.NativeGuardTests().run_native("native_ws_handshake.cpp")
         self.assertIn("PASS strict WebSocket", output)
+        self.assertIn("PASS async connect polling",output)
         self.assertIn("PASS actual session/app/mode producers",output)
         rows=[json.loads(line.split(" ",1)[1]) for line in output.splitlines() if line.startswith("SELECTION_JSON ")]
         self.assertEqual(len(rows),6)

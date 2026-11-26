@@ -20,6 +20,15 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ### Backend-sync og sikker nettilgang – 26. november
 
+**Aktuell blokkering etter adressebyttet:** Brukeren får ikke koblet FIRE til den
+offentlige backenden, heller ikke etter Backend-sync Off/On, og opplever tregere
+statusendring. Fjernbruk er derfor ikke godkjent. Passiv diagnostikk viser gjentatt
+`start_ssl_client=-1` før WebSocket-oppstart, uten nok informasjon til å fastslå
+underårsaken. Ett separat vindu målte 2,739 sekunder i tegning/knappbehandling.
+En konkret gjentatt Connecting-status i klienten undersøkes sammen med denne
+forsinkelsen. Offentlig HTTPS-helse fra PC virker med sertifikatkontroll.
+Ingen sertifikat-/autentiseringsgrense er svekket som feilsøkingstiltak.
+
 Brukerens RC4-avslag er gjenskapt. Kvitteringer viser at en utløpt samtale ble erstattet av
 en ny, mens senere FIRE-forsøk fortsatt sendte forgjengerens ID. Den nye
 samtalen blokkerte da gjenopptakelsen. Disse fem requestene er rekonstruert

@@ -1,4 +1,5 @@
 #include "fire_backend_client.h"
+#include "fire_backend_policy.h"
 
 #include <base64.h>
 #include <esp_system.h>
@@ -1034,27 +1035,22 @@ void FireBackendClient::service(bool wifiConnected) {
   if (state_ == State::Offline) {
     if (millis() < reconnectAt_) return;
     reconnectAt_ = millis() + 3000;
-    WiFiClient* client = nullptr;
     if (!secureEndpoint_ && reverseTransport_) transportClient_ = reverseTransport_->acquire();
-    if (transportClient_) {
-      client = transportClient_;
-      usingReverseTransport_ = true;
-    } else {
-      client = &client_;
-    }
+    usingReverseTransport_=transportClient_!=nullptr;
     setState(State::Connecting,
              usingReverseTransport_ ? "Connecting via Reverse TCP"
                                      : "Connecting to backend");
-    // A failed backend must never stall the UI for the platform TCP default
-    // timeout.  Retry is deliberately throttled by reconnectAt_.
-    if (!usingReverseTransport_) {
-      client->setTimeout(1200);
-    }
-    if (!usingReverseTransport_ && !client->connect(host_.c_str(), port_, 1200)) {
-      if (client_.connecting() || client_.stopping()) { state_ = State::Offline; reconnectAt_ = 0; return; }
-      transportClient_ = nullptr;
-      setState(State::Offline, "Backend connection failed");
-      return;
+  }
+  if (state_ == State::Connecting) {
+    WiFiClient* client=activeClient();
+    // Keep this phase while the existing worker connects or finishes cancel.
+    // Do not republish Connecting/dirty the UI on every asynchronous poll.
+    const bool ready=usingReverseTransport_ || client->connect(host_.c_str(),port_,1200);
+    const auto progress=fire_backend_policy::progress(ready,client_.connecting(),client_.stopping());
+    if (progress==fire_backend_policy::Progress::Waiting) return;
+    if (progress==fire_backend_policy::Progress::Failed) {
+      transportClient_=nullptr;reconnectAt_=millis()+3000;
+      setState(State::Offline,"Backend connection failed");return;
     }
     uint8_t randomKey[16];
     for (uint8_t& value : randomKey) value = static_cast<uint8_t>(esp_random());

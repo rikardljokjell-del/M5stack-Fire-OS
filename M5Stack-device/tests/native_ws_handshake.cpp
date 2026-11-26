@@ -1,4 +1,5 @@
 #include "fire_ws_handshake.h"
+#include "fire_backend_policy.h"
 #include "fire_session_selection.h"
 #include "fire_json_guard.h"
 #include <cassert>
@@ -49,7 +50,30 @@ static void selectionTests() {
   std::printf("SELECTION_JSON %s\n",quoted.c_str());
   std::puts("PASS actual session/app/mode producers and lost receipt without replay");
 }
+static void connectionPolicyTests() {
+  using namespace fire_backend_policy;
+  for (int poll=0;poll<1000;++poll) assert(progress(false,true,false)==Progress::Waiting);
+  assert(progress(false,false,true)==Progress::Waiting);
+  assert(progress(false,false,false)==Progress::Failed);
+  assert(progress(true,false,false)==Progress::Ready);
+  struct Store {
+    unsigned writes=0,reads=0;uint8_t saved=0;bool fail=false,wrong=false;
+    size_t putUChar(const char* key,uint8_t mode) {assert(std::string(key)=="backend_mode");++writes;if(fail)return 0;saved=mode;return 1;}
+    uint8_t getUChar(const char* key,uint8_t) {assert(std::string(key)=="backend_mode");++reads;return wrong?255:saved;}
+  } store;
+  uint8_t mode=0;
+  assert(saveMode(store,mode,1) && mode==1 && store.writes==1 && store.reads==1);
+  store.fail=true;assert(!saveMode(store,mode,2) && mode==1 && store.reads==1);
+  store.fail=false;store.wrong=true;assert(!saveMode(store,mode,2) && mode==1);
+  const auto writes=store.writes;assert(!saveMode(store,mode,3) && store.writes==writes);
+  TlsFailure failure;failure.beforeStop(true,2,0);assert(!failure.captured);
+  failure.beforeStop(true,2,-1);failure.beforeStop(false,0,-1);
+  assert(failure.captured && failure.socket && failure.state==2 && failure.error==-1);
+  TlsFailure tcp;tcp.beforeStop(false,0,-1);assert(tcp.captured && !tcp.socket && tcp.state==0);
+  std::puts("PASS async connect polling, single-key Sync persistence and pre-cleanup TLS failure evidence");
+}
 int main() {
+  connectionPolicyTests();
   selectionTests();
   const char* accept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
   const std::string valid = std::string("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Accept: ") + accept + "\r\n\r\n";

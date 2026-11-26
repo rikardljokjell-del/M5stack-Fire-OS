@@ -1,4 +1,5 @@
 #include "fire_async_client.h"
+#include "fire_backend_policy.h"
 #include <esp_heap_caps.h>
 #include <time.h>
 #include "fire_worker_diagnostics.h"
@@ -9,6 +10,13 @@ namespace {
 class SharedBundleTls : public WiFiClientSecure {
  public:
   void useSharedBundle() { _use_ca_bundle = true; }
+  void stop() override {
+    // The pinned base connect() sets _lastError, then dispatches this virtual
+    // stop BEFORE its cleanup zeros the socket and mbedTLS context.
+    if (sslclient) failure.beforeStop(sslclient->socket>=0,sslclient->ssl_ctx.state,_lastError);
+    WiFiClientSecure::stop();
+  }
+  fire_backend_policy::TlsFailure failure;
 };
 constexpr size_t kRxBytes = 8192;
 constexpr size_t kTxBytes = 16384;
@@ -122,6 +130,7 @@ void FireAsyncClient::run() {
   SharedBundleTls tls;
   WiFiClient* socket = workerSecure_ ? static_cast<WiFiClient*>(&tls) : &plain;
   bool ok = false;
+  const uint32_t attemptStarted=millis();
   if (workerSecure_) {
     if (time(nullptr) < 1700000000) {
       configTime(0, 0, "pool.ntp.org", "time.google.com");
@@ -135,6 +144,16 @@ void FireAsyncClient::run() {
   } else {
     plain.setTimeout(1);
     if (!stop_) ok = plain.connect(host_, port_, 1200);
+  }
+  if (workerSecure_ && !ok && !stop_) {
+    const auto& failure=tls.failure;
+    const uint8_t phase=time(nullptr)<1700000000?1:!failure.captured?4:failure.socket?3:2;
+    const uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
+    // One bounded numeric row per failed worker. No identity/cert/payload.
+    Serial.printf("FIRE net_fail phase=%u socket=%u tls_state=%d error=%d elapsed_ms=%lu stack=%u heap=%u largest=%u\n",
+        unsigned(phase),failure.socket?1u:0u,failure.state,failure.error,
+        static_cast<unsigned long>(millis()-attemptStarted),uxTaskGetStackHighWaterMark(nullptr),
+        heap_caps_get_free_size(caps),heap_caps_get_largest_free_block(caps));
   }
   if (ok && !stop_) {
     state_ = State::Ready;

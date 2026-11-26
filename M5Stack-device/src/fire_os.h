@@ -1010,6 +1010,7 @@ class FireOS {
   String luaDiagnosticsJson(const char* phase) const;
   String audioDiagnosticsJson(const char* phase) const;
   void updateBackend();
+  void cycleBackendMode();
   void applyBackendMode();
   void handleBackendMessage(const String& message);
   void handleBackgroundBuildMessage(const String& message);
