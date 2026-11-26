@@ -76,6 +76,8 @@ class AppLifecycle(AppManager):
             return False,'Appen bygges i bakgrunnen.'
         if self.repairs.active_project(project['id']):
             return False,'Appen repareres i bakgrunnen. Vent til reparasjonen er ferdig før sletting.'
+        if hasattr(self,'evolution') and self.evolution.active_project(project['id']):
+            return False,'Evolution arbeider med appen. Stopp jobben før sletting.'
         device_id = project.get("owner_device_id")
         active=[s for s in self.sessions.values() if not s.stopped and s.project_id==project["id"] and s.id!=ignore_session_id]
         if any(s.desktop_device_id for s in active):
@@ -180,9 +182,10 @@ class AppLifecycle(AppManager):
             presence = self.app_presence(device, self.project_app_id(project))
             allowed, reason = self.backend_delete_check(project)
             device_allowed,device_reason=self.manager_delete_check(session,project) if session else (False,reason)
-            downloadable,download_reason=self.app_download_check(versions[0],session.capabilities if session else device.get("capabilities"))
+            recommended=next((p for p in versions if p['id']==project.get('latest_package')),versions[0])
+            downloadable,download_reason=self.app_download_check(recommended,session.capabilities if session else device.get("capabilities"))
             apps.append({"app_id": self.project_app_id(project), "project_id": project["id"], "name": project["name"],
-                         "latest_package_id": versions[0]["id"], "latest_version": versions[0]["manifest"]["version"],
+                         "latest_package_id": recommended["id"], "latest_version": recommended["manifest"]["version"],
                          "base_package_id": self.update_base(project, device)["id"], "version_count": len(versions),
                          "device_presence": presence.get("state", "unknown"),
                          "can_delete_backend": allowed, "delete_block_reason": reason,

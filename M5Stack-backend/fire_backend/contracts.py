@@ -43,12 +43,20 @@ def schemas():
 
     event["properties"]["event_id"] = nonnull("event_id")
     conditions = []
+    from .evolution_contract import REGISTRY as EVOLUTION
+    for name,spec in EVOLUTION['events'].items():
+        required=spec['required']
+        fields={field:nonnull(field) for field in required}
+        if spec.get('operations'):fields['operation']={'enum':spec['operations']}
+        if spec.get('views'):fields['view']={'enum':spec['views']}
+        conditions.append({'if':{'properties':{'event':{'const':name}}},'then':{'required':required,'properties':fields}})
     for name in ('runtime_ai_request','runtime_ai_cancel','data_request','data_cancel','app_develop_request'):
         fields=['request_id','app_id','package_id','source_sha256','run_id']
         if name=='runtime_ai_request':fields+=['instructions','data_json','schema_json','timeout_ms']
         if name=='data_request':fields+=['operation']
         if name=='app_develop_request':fields+=['mode']
         conditions.append({'if':{'properties':{'event':{'const':name}}},'then':{'required':fields,'properties':{f:nonnull(f) for f in fields}}})
+        if name=='data_request':conditions[-1]['then']['properties']['operation']={'enum':['process','develop','sync']}
     conditions.append({'if':{'properties':{'event':{'const':'app_observation_confirm'}}},
         'then':{'required':['context_id','observation_action'],'properties':{f:nonnull(f) for f in ('context_id','observation_action')}}})
     conditions.append({'if':{'properties':{'event':{'const':'mode_select'}}},'then':{'anyOf':[{'required':[f],'properties':{f:nonnull(f)}} for f in ('conversation_mode','runtime_ai_mode')]}})

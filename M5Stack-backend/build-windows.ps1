@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $python)) { throw 'Kjør start.ps1 én gang for å opprette Python-miljøet.' }
+& $python -c "import sys; sys.exit(0 if (3,11) <= sys.version_info[:2] < (3,15) else 1)"
+if ($LASTEXITCODE -ne 0) { throw 'Windows-utgaven med Evolution krever Python 3.11–3.14 for GEPA. Vanlig backend kan brukes uten Evolution-ekstraen.' }
 & $python -m pip install -r requirements-windows-build.txt
 if ($LASTEXITCODE -ne 0) { throw 'Kunne ikke installere pakkebyggeren.' }
 & $python -m PyInstaller --noconfirm FIREBackend.spec

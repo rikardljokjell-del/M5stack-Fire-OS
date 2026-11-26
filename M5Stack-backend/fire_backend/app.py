@@ -29,6 +29,7 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
     @asynccontextmanager
     async def lifespan(app):
         service = Backend(settings, provider)
+        service.backend_settings.config_store=config_store
         service.audio = AudioManager(service)
         service.reverse_tcp = ReverseTCP(settings)
         await service.reverse_tcp.start()
@@ -153,6 +154,9 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
                 or request.client.host not in {"127.0.0.1", "::1", "testclient"}
                 or request.headers.get("origin")):
             raise HTTPException(403, "Local desktop only")
+
+    from .evolution_http import install as install_evolution
+    install_evolution(app,backend,desktop_auth,'/desktop')
 
     @app.get("/desktop/status", dependencies=[Depends(desktop_auth)])
     async def desktop_status(service: Backend = Depends(backend)):
@@ -470,6 +474,7 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
         package = scoped_package(service, item_id, identity)
         from .quality import require_deliverable
         require_deliverable(package)
+        service.evolution.require_delivery(package)
         if service.store.get("builds", package["build_id"])["status"] != "ready":
             raise Conflict("Package build has not passed")
         from .builds import verify_archive

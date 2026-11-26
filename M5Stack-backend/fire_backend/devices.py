@@ -54,6 +54,7 @@ class DeviceLifecycle:
     def verify_package(self, session, package_id):
         from .builds import verify_archive
         package = self.store.get("packages", package_id)
+        if hasattr(self,'evolution'):self.evolution.require_delivery(package)
         if package["project_id"] != session.project_id or self.store.get("builds", package["build_id"])["status"] != "ready":
             raise ValueError("Package is not a successful build for this project")
         verify_archive(self.store.path("packages", package_id, ".zip"), package["manifest"], package["archive_sha256"])
@@ -71,6 +72,7 @@ class DeviceLifecycle:
     async def offer_install(self, session, package):
         from .quality import require_deliverable
         require_deliverable(self.store.get("packages", package["id"]))
+        if hasattr(self,'evolution'):self.evolution.require_delivery(package)
         device = self.device_record(session)
         presence = self.app_presence(device, package["manifest"]["id"])
         if (not session.install_permitted or presence.get("last_absent_counter", 0) > session.app_revision):

@@ -1,2 +1,4 @@
-# Build tool only; runtime is bundled and does not install Python on the user's PC.
+# Build tool and optional Evolution core; dependencies are bundled for the user's PC.
 pyinstaller==6.22.3
+# Evolution uses only the dependency-free GEPA core (no model/agent extras).
+gepa==0.1.4; python_version < '3.15'

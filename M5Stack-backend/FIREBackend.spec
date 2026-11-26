@@ -1,13 +1,16 @@
 # Reproducible Windows directory bundle; keep _internal beside FIREBackend.exe.
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from importlib.util import find_spec
 
 data = collect_data_files('fire_backend')
 for dependency in ('openai', 'lupa', 'pydantic'):
     data += copy_metadata(dependency)
+if find_spec('gepa') is not None:
+    data += copy_metadata('gepa')
 
 a = Analysis(['fire_backend/desktop_entry.py'], pathex=['.'], binaries=[], datas=data,
              hiddenimports=collect_submodules('uvicorn') + ['lupa.lua54', 'websockets.asyncio.client'],
-             hookspath=[], runtime_hooks=[], excludes=['pytest', 'IPython', 'notebook'])
+             hookspath=[], runtime_hooks=[], excludes=['pytest', 'hypothesis', 'IPython', 'notebook'])
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='FIREBackend', debug=False,
           bootloader_ignore_signals=False, strip=False, upx=False, console=False,

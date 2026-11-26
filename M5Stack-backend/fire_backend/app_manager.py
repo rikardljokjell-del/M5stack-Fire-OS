@@ -11,6 +11,7 @@ class AppManager:
         from .quality import require_deliverable
         try:
             require_deliverable(package)
+            if hasattr(self,'evolution'):self.evolution.require_delivery(package)
             if capabilities:
                 manifest=package["manifest"]
                 from .api_registry import package_compatibility

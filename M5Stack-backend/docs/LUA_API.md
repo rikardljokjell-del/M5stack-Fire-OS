@@ -177,3 +177,10 @@ fresh basis, cache the last result, and retain useful local/offline behavior.
 Use short app-specific labels, enums/numbers and button pages; never dump JSON,
 Markdown or unsupported symbols on the LCD. Mark AI assessment separately from
 measurements. See [Runtime AI usage](RUNTIME_AI.md).
+
+
+## Evolution is an OS control feature
+
+Evolution adds no Lua functions, package permissions or SDK/hardware hash changes. Its optional OS capability and authenticated controls follow [EVOLUTION-v1](../contracts/EVOLUTION-v1.json) and the [Evolution guide](EVOLUTION.md). Ordinary Lua apps retain the existing Builder, sandbox, test, install and run gates. Telemetry is opt-in, source/run bound, and distinguishes captured boot from upload boot; an unbound observation is never physical runtime proof. Analysis/reflection and simulator improvements are not proof of a physical repair.
+
+The candidate implementation is tested offline. It does not activate Evolution, change saved production settings, run apps or establish physical support merely by loading this code.

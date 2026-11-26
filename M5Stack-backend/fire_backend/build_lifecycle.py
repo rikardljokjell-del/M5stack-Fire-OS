@@ -13,9 +13,11 @@ from .storage import new_id
 
 class BuildLifecycle:
     def build_entry(self,build_id):
+        if not build_id:return None
         entry=self.device_builds.get(build_id)
         if entry:return entry
-        return next((item for item in self.repairs.workers.values() if item['build']['id']==build_id),None)
+        entries=[*self.repairs.workers.values(),*getattr(getattr(self,'evolution',None),'workers',{}).values()]
+        return next((item for item in entries if item.get('build',{}).get('id')==build_id),None)
 
     def owned_build(self,session,build_id):
         if session.target!='device' or session.protocol_version!='0.2':raise PermissionError('Device build action required')
@@ -37,7 +39,10 @@ class BuildLifecycle:
         if failed:failed['diagnostic_message']=failed['diagnostic_message'][:240]
         if failed:message=failed['error_status']
         if package:
-            try:require_deliverable(package);available=True
+            try:
+                require_deliverable(package)
+                if hasattr(self,'evolution'):self.evolution.require_delivery(package)
+                available=True
             except ValueError:message=TEXT['test_failed']
         return {'build_id':build['id'],'project_id':project['id'],'app_id':project.get('app_id'),
                 'operation':build.get('operation','new'),'repair_id':build.get('repair_job_id'),

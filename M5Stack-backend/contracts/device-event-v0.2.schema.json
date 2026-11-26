@@ -25,6 +25,17 @@
     "Capabilities": {
       "additionalProperties": false,
       "properties": {
+        "evolution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvolutionCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "service_methods": {
           "anyOf": [
             {
@@ -608,6 +619,27 @@
       "title": "DeviceDiagnostics",
       "type": "object"
     },
+    "EvolutionCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "fire-evolution-1.0",
+          "title": "Version",
+          "type": "string"
+        },
+        "contract": {
+          "const": "f22026c0594d8ae5c855bb4bb6cd5acc37d3286aee19de604657c0e0b8afac99",
+          "title": "Contract",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "contract"
+      ],
+      "title": "EvolutionCapability",
+      "type": "object"
+    },
     "HardwareResources": {
       "additionalProperties": false,
       "properties": {
@@ -712,6 +744,144 @@
   },
   "additionalProperties": false,
   "properties": {
+    "expected_revision": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Revision"
+    },
+    "evolution_json": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evolution Json"
+    },
+    "telemetry_json": {
+      "anyOf": [
+        {
+          "maxLength": 1536,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Telemetry Json"
+    },
+    "settings_json": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Settings Json"
+    },
+    "role": {
+      "anyOf": [
+        {
+          "enum": [
+            "dialog_model",
+            "code_model",
+            "review_model",
+            "transcribe_model",
+            "speech_model",
+            "runtime_model"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Role"
+    },
+    "evolution_action": {
+      "anyOf": [
+        {
+          "enum": [
+            "pause",
+            "resume",
+            "stop",
+            "revoke"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evolution Action"
+    },
+    "evolution_job_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evolution Job Id"
+    },
+    "evolution_mandate_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evolution Mandate Id"
+    },
+    "view": {
+      "anyOf": [
+        {
+          "enum": [
+            "summary",
+            "settings",
+            "findings",
+            "history",
+            "compare",
+            "models",
+            "usage",
+            "limits"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "View"
+    },
     "observation_action": {
       "anyOf": [
         {
@@ -734,7 +904,15 @@
           "enum": [
             "process",
             "develop",
-            "sync"
+            "sync",
+            "configure",
+            "generate",
+            "repair",
+            "optimize",
+            "expand",
+            "evolve",
+            "strategy_app",
+            "strategy_owner"
           ],
           "type": "string"
         },
@@ -918,7 +1096,15 @@
         "data_request",
         "data_cancel",
         "app_develop_request",
-        "app_observation_confirm"
+        "app_observation_confirm",
+        "evolution_status",
+        "evolution_prepare",
+        "evolution_confirm",
+        "evolution_control",
+        "evolution_telemetry",
+        "backend_settings_status",
+        "backend_settings_prepare",
+        "backend_settings_confirm"
       ],
       "title": "Event",
       "type": "string"
@@ -1552,6 +1738,291 @@
       "if": {
         "properties": {
           "event": {
+            "const": "evolution_status"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "view": {
+            "enum": [
+              "summary",
+              "settings",
+              "findings",
+              "history",
+              "compare"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "evolution_prepare"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "operation",
+          "expected_revision",
+          "evolution_json"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "configure",
+              "generate",
+              "repair",
+              "optimize",
+              "expand",
+              "evolve",
+              "strategy_app",
+              "strategy_owner"
+            ]
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "evolution_json": {
+            "maxLength": 2048,
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "evolution_confirm"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "proposal_id",
+          "expected_revision"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "proposal_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "evolution_control"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "evolution_action",
+          "expected_revision"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "evolution_action": {
+            "enum": [
+              "pause",
+              "resume",
+              "stop",
+              "revoke"
+            ],
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "evolution_telemetry"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "app_id",
+          "package_id",
+          "source_sha256",
+          "telemetry_json"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "app_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "package_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "telemetry_json": {
+            "maxLength": 1536,
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "backend_settings_status"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "view": {
+            "enum": [
+              "summary",
+              "models",
+              "usage",
+              "limits"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "backend_settings_prepare"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "expected_revision",
+          "settings_json"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settings_json": {
+            "maxLength": 2048,
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "backend_settings_confirm"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id",
+          "proposal_id",
+          "expected_revision"
+        ],
+        "properties": {
+          "request_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "proposal_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
             "const": "runtime_ai_request"
           }
         }
@@ -1692,8 +2163,7 @@
               "process",
               "develop",
               "sync"
-            ],
-            "type": "string"
+            ]
           }
         }
       }

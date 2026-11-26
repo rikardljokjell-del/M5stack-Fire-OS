@@ -1,0 +1,10 @@
+FIRE Evolution optional dependency
+
+GEPA 0.1.4 (https://github.com/gepa-ai/gepa), MIT.
+The complete GEPA license is included in evolution-LICENSE-gepa.txt.
+GEPA is used unmodified through a restricted FIRE adapter.
+No LiteLLM, DSPy, tracking service or cloud-agent extras are required.
+
+Hypothesis 6.170.17 is a test-only dependency, MPL-2.0.
+It is not part of the FIRE device or the Windows production runtime.
+See https://github.com/HypothesisWorks/hypothesis/blob/master/LICENSE.txt.

@@ -707,6 +707,8 @@ class DesktopUI:
         self.edit_app_button.pack(side="left", padx=8)
         ttk.Button(actions, text="Reparer valgt app", command=self.repair_saved).pack(side="left", padx=(0,8))
         ttk.Button(actions,text="Feil og rettinger",command=self.show_app_quality).pack(side="left")
+        from .evolution_ui import open_window as open_evolution
+        ttk.Button(actions,text='Evolution',command=lambda:open_evolution(self)).pack(side='left',padx=6)
         ttk.Button(page,text='Runtime AI på/av for valgt app',command=self.toggle_app_runtime_ai).pack(anchor='w',pady=(0,7))
         deletion=ttk.Frame(page);deletion.pack(anchor="w",pady=(0,8))
         self.delete_app_button=ttk.Button(deletion,text="Slett alle versjoner …",command=self.delete_saved)
@@ -725,6 +727,7 @@ class DesktopUI:
         self.version_choices={f"{a['version']} · {a['mode']}":a["package_id"] for a in versions}
         self.version_box.configure(values=list(self.version_choices))
         saved=self.version_selection.get(selected[0]) if selected else None
+        saved=saved or next((a["package_id"] for a in versions if a.get("recommended")),None)
         self.selected_version.set(next((label for label,pkg in self.version_choices.items() if pkg==saved),next(iter(self.version_choices),"")))
         app=self.selected_app()
         if app:

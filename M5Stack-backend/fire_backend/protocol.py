@@ -129,6 +129,8 @@ async def handle(service, session, event):
     name = event.event
     if name=='runtime_ai_request':return await service.runtime_ai.request(session,event)
     if name=='runtime_ai_cancel':return await service.runtime_ai.cancel_event(session,event)
+    if name.startswith('backend_settings_'):return await service.backend_settings.event(session,event)
+    if name.startswith('evolution_'):return await service.evolution.event(session,event)
     if name in {'data_request','app_develop_request'}:return await service.data_engine.request(session,event)
     if name=='data_cancel':return await service.data_engine.cancel_event(session,event)
     if name=='app_observation_confirm':return await service.data_engine.confirm_observation(session,event)
@@ -215,6 +217,7 @@ async def handle(service, session, event):
         if name in {'app_stopped','app_failed'}:
             await service.runtime_ai.cancel_run(session,event.run_id)
             await service.data_engine.cancel_run(session,event.run_id)
+        if name=='app_failed':await service.evolution.receipt_finding(session,event)
         return result
     if name in {"audio_playback_started", "audio_playback_finished", "audio_playback_failed"}:
         if event.turn_id in session.retired_turns:

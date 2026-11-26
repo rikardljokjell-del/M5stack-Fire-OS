@@ -550,3 +550,20 @@ BLE `ble-ad-jsonl-v1` keeps the full payload_hex; optional integer adv_length
 marks the advertising/scan-response boundary within those same bytes. Legacy
 records without that field remain accepted. A received combined62-byte payload
 is not automatically a valid31-byte advertising replay.
+
+
+## Optional Evolution and native backend settings
+
+The optional `capabilities.evolution` must match the exact version/contract in [EVOLUTION-v1](../contracts/EVOLUTION-v1.json). Existing Lua SDK, hardware, Runtime AI and Data Engine contracts remain unchanged. The extension is OS-only; Lua cannot submit these controls.
+
+`evolution_status/prepare/confirm/control/telemetry` reuse the authenticated session, durable event deduplication and ordinary Builder. Settings use `backend_settings_status/prepare/confirm` over the same transport and existing DesktopStore/model catalog/UsageLedger. Status never spends money. Confirm checks the current revision/proposal and records the actual confirmation event. A changed model, source, context, permission or evaluation invalidates a mandate before another paid request. Manual builds retain current-proposal `build_confirm`; physical install/run remain separate and require real receipts.
+
+Pause prevents the next action while allowing an already sent response to be journalled. Stop can cancel it; an unknown result cannot be automatically repurchased on reconnect/Resume. A known monetary admission failure can be resumed explicitly after a settings change. Disable all monetary limits does not disable output/resource/iteration/security limits or OpenAI account quotas. Provider cost, unknown usage, empirical estimates and internal reservations remain distinct.
+
+All five Evolution features and telemetry default off. A candidate must pass ordinary local tests/review and independent frozen comparison before delivery. Non-improving versions remain archived without becoming the recommended basis. Owner-wide strategies require an explicitly approved, source-bound trial on at least three apps, then a separate adoption confirmation; trials do not install/run or replace those apps' recommended versions.
+
+A `permission_required` snapshot provides `permission_request={operation,prepare:{permission_job_id},permissions,display_text}`. Native OS may offer “Vurder tillatelser”, echo only that prepared reference through ordinary `evolution_prepare`, show the resulting exact scope/model/permission proposal, and require a separate confirmation. Only then is the old mandate superseded. The same stored candidate is revalidated/reviewed, without purchasing identical source again or reusing its former verdict.
+
+`settings_json` is revision-checked and whitelisted; it never contains keys, credentials, endpoints or arbitrary configuration. Model choices and monetary bounds come from the backend. AUTO/OFF updates both global Runtime AI authorization and developer inclusion while preserving per-app OFF. Active model calls retain their selection; model changes report busy instead of pretending to save. Money-only disable affects the next admission, never silently restarts an Evolution job. Read views show active backend settings, even when unrelated PC settings are saved pending an explicit apply.
+
+This describes candidate source/offline verification. Production activation and fresh physical capability/receipt evidence remain separate delivery gates.

@@ -43,7 +43,7 @@ class PreviewInput(BaseModel):
 
 
 def busy(service):
-    return bool(service.device_builds or service.build_lock.locked() or service.repairs.tasks or service.active_downloads or service.runtime_ai.tasks or service.data_engine.tasks
+    return bool(getattr(getattr(service,'evolution',None),'tasks',{}) or service.device_builds or service.build_lock.locked() or service.repairs.tasks or service.active_downloads or service.runtime_ai.tasks or service.data_engine.tasks
                 or getattr(service,'preview_service',None) and service.preview_service.lock.locked()
                 or any(s.lock.locked() or any(t and not t.done() for t in
                        (s.task, s.operation_task, s.input_task, s.speech_task)) for s in service.sessions.values()))
@@ -76,6 +76,9 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
 
     async def signed_in(request: Request):
         return await auth.require(request)
+
+    from .evolution_http import install as install_evolution
+    install_evolution(app,backend,signed_in,'/web')
 
     def store():
         if config_store is None:
@@ -345,6 +348,7 @@ def install_browser(app, settings, config_store=None, restart_callback=None):
     async def download(package_id: str, service=Depends(backend)):
         p = service.store.get("packages", package_id)
         require_deliverable(p)
+        service.evolution.require_delivery(p)
         if service.store.get("builds", p["build_id"])["status"] != "ready":
             raise Conflict("Package build has not passed")
         from .builds import verify_archive

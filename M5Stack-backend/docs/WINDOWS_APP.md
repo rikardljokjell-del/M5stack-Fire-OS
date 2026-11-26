@@ -123,6 +123,10 @@ Se [ende-til-ende-status og gjeldende begrensninger](E2E_STATUS.md).
 
 Kjør `build-windows.ps1 -Shortcut` fra backendmappen. Skriptet bruker den eksisterende
 venv-en og en versjonslåst PyInstaller. Resultatet legges i ignorert `dist/`.
+Evolution-utgaven bruker Python 3.11–3.14 og tar med den låste GEPA-kjernen,
+pakkemetadata og full lisens. Hypothesis er bare en testavhengighet og tas
+ikke med i produksjonspakken. Vanlig Python-backend kan installeres uten
+Evolution-ekstraen; full funksjon krever `pip install -e .[evolution]`.
 `start-ui.ps1` bruker den installerte Python-versjonen når den finnes, og pakken
 ellers. Skrivebordsikonet på utviklingsmaskinen bruker alltid pythonw.exe.
 

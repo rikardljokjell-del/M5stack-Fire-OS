@@ -87,6 +87,7 @@ class Session:
     hardware_preview: bool = False
     resumed_from_build_id: str | None = None
     development_context_id: str | None = None
+    evolution_job_id: str | None = None
 
 
 class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
@@ -122,6 +123,14 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         self.repairs=Repairs(self)
         from .jobs import Jobs
         self.jobs=Jobs(self)
+        from .evolution import Evolution
+        self.evolution=Evolution(self)
+        from .backend_settings import BackendSettings
+        self.backend_settings=BackendSettings(self)
+        self.builder.evolution_permissions=self.evolution.candidate_permissions
+        self.builder.evolution_previous=self.evolution.previous_source
+        self.builder.evolution_call=self.evolution.build_provider_call
+        self.builder.evolution_candidate=self.evolution.candidate
         from .firmware import Firmware
         self.firmware=Firmware(self)
         for command in self.store.list("commands"):
@@ -201,6 +210,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                          "updated_at":updated_at,
                          "api_version":manifest.get("api_version","fire-lua-0.1"),
                          "quality": package.get("quality", {}), "validation_suite": package.get("validation",{}).get("suite"),
+                         "recommended":project.get('latest_package')==package['id'] and package.get('evolution_adoption')!='not_adopted',
+                         "evolution_adoption":package.get('evolution_adoption'),
                          "project_id": package["project_id"], "package_id": package["id"], "mode": package["mode"], "device_id": device_id,
                          "cost":costs.get(package['project_id'],{}).get('estimated_usd',0),
                          "runtime_ai_permission":'ai' in manifest['required_services'],
@@ -270,6 +281,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         return {"session_id": session.id, "device_id": session.device_id,
                 "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1","repair_cancel_v1"],
                 "resumed_from_build_id":session.resumed_from_build_id,
+                "evolution_job_id":session.evolution_job_id,
                 "project_id": session.project_id, "state": session.state,
                 "proposal_id": session.proposal_id, "package_id": session.package_id,
                 "build_id": session.build_id, "mode": self.settings.fire_ai_mode,
@@ -346,10 +358,12 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
     def context_for(self, session, dialogue=False, development_snapshot=..., knowledge_snapshot=...):
         from .prompt_context import compact_repair_evidence,dialogue_policy,dumps
         context = "conversation_mode=" + session.conversation_mode + "\n"
+        selection=self.evolution.selection(session) if hasattr(self,'evolution') else None
         from .runtime_contract import generation_context
         context+=generation_context(self.settings,session.capabilities,session.runtime_ai_mode)
         from .hardware_profiles import context_for as hardware_context
-        context+=hardware_context(session.summary or ' '.join(str(h.get('content','')) for h in session.history[-4:]), session.capabilities)
+        if selection is None or 'hardware' in selection:
+            context+=hardware_context(session.summary or ' '.join(str(h.get('content','')) for h in session.history[-4:]), session.capabilities)
         context += ("FIRE OS on M5Stack FIRE. Screen 320x240, A/B/C buttons, ten RGB LEDs, IMU. "
                     "Conversation audio is separate from generated Lua app permissions. "
                     "Lua lifetime follows the device policy: zero means until user exit; positive values are legacy limits. Hardware access follows the negotiated API and advertised services. "
@@ -400,7 +414,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 validate(development_snapshot, project['id'], owner, session.base_package_id)
         elif development_snapshot:
             validate(development_snapshot, project['id'], owner, session.base_package_id)
-        context += prompt(development_snapshot)
+        context += prompt(self.evolution.history_view(development_snapshot,selection) if hasattr(self,'evolution') else development_snapshot)
         context += self.data_engine.prompt_context(session)
         from .knowledge_context import capture as knowledge_capture, validate as knowledge_validate, prompt as knowledge_prompt
         if knowledge_snapshot is ...:
@@ -410,8 +424,9 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 query=session.summary or ' '.join(str(h.get('content','')) for h in session.history[-4:])
                 knowledge_snapshot=knowledge_capture(self.store,owner,query,current_project_id=session.project_id)
         if knowledge_snapshot:knowledge_validate(knowledge_snapshot,owner)
-        context+=knowledge_prompt(knowledge_snapshot)
-        return context
+        if selection is None or 'feedback' in selection:context+=knowledge_prompt(knowledge_snapshot)
+        if hasattr(self,'evolution'):context+=self.evolution.context(session)
+        return self.evolution.optional_examples(context,selection) if hasattr(self,'evolution') else context
 
     async def report_capabilities(self, session):
         if session.target == "device":
@@ -555,7 +570,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
                          "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error", "runtime_ai_mode",
-                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id", "development_context_id"):
+                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id", "development_context_id", "evolution_job_id"):
                 if name in saved:
                     setattr(session, name, saved[name])
             session.sequence = saved.get("sequence", 0)
@@ -749,6 +764,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         self.sessions.pop(session.id, None)
 
     async def close(self):
+        await self.evolution.close()
         await self.data_engine.close()
         await self.runtime_ai.close()
         await self.repairs.close()
@@ -799,6 +815,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         if not text or not text.strip():
             raise ValueError("Text is required")
         async with session.lock:
+            await self.evolution.release_session(session)
             session.proposal_id = None  # any new text invalidates prior authorization
             session.last_error = ""
             session.summary = ""
@@ -926,11 +943,23 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
     async def release_foreground(self, session):
         """A new explicit action may replace speech/dialog, never the build source."""
         self.detach_device_build(session)
+        await self.evolution.release_session(session)
         if session.state not in {State.building,State.testing,State.running,State.starting,State.stopping,State.rollback_pending}:
             from .protocol import cancel_turn
             await cancel_turn(self,session)
 
-    async def confirm_build(self, session, proposal_id):
+    def build_authorization(self, session, proposal_id, evolution_mandate_id=None):
+        """One authorization boundary for explicit confirms and scoped mandates."""
+        if not proposal_id or proposal_id != session.proposal_id:
+            raise Conflict('No matching current build proposal')
+        if evolution_mandate_id is not None:
+            return self.evolution.authorize_build(session, proposal_id, evolution_mandate_id)
+        if session.evolution_job_id:
+            job=self.store.get('evolution_jobs',session.evolution_job_id)
+            return self.evolution.authorize_build(session,proposal_id,job['mandate_id'],explicit=True)
+        return {'kind':'explicit_build_confirm','proposal_id':proposal_id}
+
+    async def confirm_build(self, session, proposal_id, *, evolution_mandate_id=None):
         if session.stopped:raise Conflict('Samtalen er avsluttet.')
         if session.conversation_mode == "chat":
             raise Conflict("Velg Lag/endre app før du bygger en app.")
@@ -955,6 +984,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 or session.state != State.awaiting_build_confirmation
                 or not proposal_id or proposal_id != session.proposal_id):
             raise Conflict("No matching build proposal or builder busy")
+        authorization=self.build_authorization(session,proposal_id,evolution_mandate_id)
+        evolution_mandate_id=authorization.get('mandate_id')
         from .development_context import for_build
         development_snapshot = for_build(self.store, {'project_id': session.project_id},
             session.device_id if session.target == 'device' else session.desktop_device_id,
@@ -965,6 +996,9 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         if knowledge_snapshot is ...:
             knowledge_snapshot=knowledge_capture(self.store,knowledge_owner,session.summary,current_project_id=session.project_id)
         if knowledge_snapshot:knowledge_validate(knowledge_snapshot,knowledge_owner)
+        if evolution_mandate_id:
+            frozen=self.evolution.build_context(evolution_mandate_id,session.project_id)
+            development_snapshot=frozen['development'];knowledge_snapshot=frozen['knowledge']
         # Reserve synchronously before yielding. Consumed confirmations cannot be replayed.
         device_job=session.target=='device'
         if device_job and len(self.device_builds)>=8:raise Conflict('Byggekøen er full. Prøv igjen.')
@@ -973,6 +1007,14 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         build = {"id": build_id, "project_id": session.project_id, "session_id": session.id,
                  "status": "building", "phase": "preparing", "progress": 0,
                  "summary": session.summary, "confirmed_proposal_id": proposal_id, "attempts": 0}
+        build['authorization']=authorization
+        if evolution_mandate_id is not None:
+            build.update(evolution_mandate_id=evolution_mandate_id,
+                         evolution_job_id=authorization['job_id'],
+                         evolution_binding_sha256=authorization['binding_sha256'],
+                         generation_attempt_limit=authorization['generations_per_build'])
+            scoped=self.evolution.scope(self.store.get('evolution_mandates',evolution_mandate_id),session.project_id)
+            build['evolution_generation_protocol_sha256']=scoped['evaluation_context_sha256']
         build.update(owner_device_id=session.device_id if session.target=='device' else session.desktop_device_id,
                      created_at=time.time(),background=session.target!='device' and bool(session.desktop_device_id),
                      operation='repair' if session.repair_context else 'update' if session.app_mode=='update' else 'new',
@@ -1003,6 +1045,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         build['resume_context']['knowledge_context'] = knowledge_snapshot
         session.resumed_from_build_id=None
         corrections=self.settings.fire_max_corrections or None
+        if evolution_mandate_id is not None:corrections=authorization['generations_per_build']-1
         build.update(max_corrections=corrections,max_attempts=(build['attempts']+corrections+1 if corrections is not None else None),notice_pending=True)
         if session.repair_context:
             build.update(repair_context=json.dumps(session.repair_context), repair_of=session.repair_context["package_id"])
@@ -1022,6 +1065,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                     dialog_manager=None,dialog_connection=None,task=None,turn_id=None)
                 build['foreground_session_id']=session.id
             self.store.put("builds", build_id, build)
+            if evolution_mandate_id is not None:self.evolution.note_build(build)
             session.build_id = build_id
             session.proposal_id = None
             session.state = State.building
@@ -1049,6 +1093,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                               'message':build_text('queued'),'eta_seconds':None,'status_text_version':STATUS_TEXT_VERSION}
             await self.emit(session,session.progress)
             await self.repairs.build_progress(build)
+        self.evolution.build_started(build,worker)
         return build
 
     async def build_job(self, session, build):
@@ -1089,6 +1134,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             build.update(phase=phase, progress=percent)
             self.store.put("builds", build["id"], build, critical=phase == "failed")
             await self.repairs.build_progress(build)
+            self.evolution.build_progress(build)
             if phase == "testing":
                 await build_state(State.testing)
             elif phase in {"generating", "validating", "compiling", "packaging"}:
@@ -1122,8 +1168,11 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             if build.get('effective_summary'):
                 build.setdefault('resume_context',{})['summary']=build['effective_summary']
                 session.summary=build['effective_summary']
-            project.update(name=package["manifest"]["name"], app_id=package["manifest"]["id"], latest_package=package["id"],
-                           next_version=project["next_version"] + 1, last_confirmed_summary=build.get('effective_summary',build["summary"]))
+            if build.get('evolution_evaluation_only'):
+                project['next_version']+=1
+            else:
+                project.update(name=package["manifest"]["name"], app_id=package["manifest"]["id"], latest_package=package["id"],
+                               next_version=project["next_version"] + 1, last_confirmed_summary=build.get('effective_summary',build["summary"]))
             self.store.put("projects", project["id"], project)
             if build.get("repair_of"):
                 self.quality.candidate(session.project_id, build["repair_of"], package["id"])
@@ -1140,12 +1189,12 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                                       "manifest": package["manifest"], "archive_sha256": package["archive_sha256"],
                                       "project_id": session.project_id, "size_bytes": package["size_bytes"],
                                       "download_url": f"/packages/{package['id']}/download"})
-            if session.target == "device":
+            if session.target == "device" and not build.get('evolution_job_id'):
                 await self.offer_install(session, package)
-            elif follower():
+            elif follower() and not build.get('evolution_job_id'):
                 await self.offer_install(follower(),package)
             if build.get('owner_device_id'):
-                await self.notify_build_ready(build)
+                if not build.get('evolution_job_id'):await self.notify_build_ready(build)
         except BaseException as error:
             if not isinstance(error, (Exception, asyncio.CancelledError)):
                 raise
@@ -1187,6 +1236,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             if build['id'] in self.device_builds:
                 session.stopped=True;self.persist(session)
                 self.device_builds.pop(build['id'],None)
+            self.evolution.build_ended(build)
 
     async def confirm_run(self, session, package_id):
         if session.conversation_mode == "chat":

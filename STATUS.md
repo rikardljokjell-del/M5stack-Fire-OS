@@ -1,4 +1,4 @@
-# Leveransestatus – 25. november 2026
+# Leveransestatus – 26. november 2026
 
 Samlet arbeid følger [godkjent plan](DELIVERY_PLAN.md). Bruk
 [oppsettsveiledningen](SETUP.md) som inngang. Dette dokumentet skiller kildekode,
@@ -17,6 +17,44 @@ lokale tester og faktisk fysisk verifikasjon.
   fremtidige kort-/nettfeil. Se [den fysiske SD-rapporten](M5Stack-device/PHYSICAL_SD_2026-11-25.md).
 
 ## Status nå
+
+### Evolution og felles AI Developer Settings – implementert, fysisk prøve gjenstår
+
+Evolution er implementert som styring rundt eksisterende Builder, Repairs, Jobs,
+Data Engine, Runtime AI, apphistorikk og kostnadsregistrering. Det opprettes
+ingen ny backend, database eller konkurrerende applivssyklus. Alle fem
+egenskaper er av som standard. Mandater, uavhengig sammenligning, strategiarkiv
+og eksplisitt brukerhukommelse bruker eksisterende filbasert lagring.
+
+FIRE-kandidaten har én appvelger, Resume-valg med appnavn og en samlet Settings
+over Back. Settings henter og endrer backendens faktiske Runtime AI-valg,
+modellroller og bruksgrenser. Disable all limits slår av alle backendens
+kostnadsgrenser, inkludert Evolution; tekniske grenser og installasjons-/
+kjøregodkjenninger beholdes. Innstillinger og nøkler på produksjon er ikke endret.
+
+Én samlet backendregresjon ga **1167 PASS / én feil i en testfixture**, 618,97 s.
+Testen byttet sesjonens eier uten å bytte prosjektets eier; eierkontrollen ble
+beholdt, og fixturen bruker nå vanlig PC-samtale. Etterkontroller ga 13 PASS
+for ruting/fixtur og tre appers vanlige BUILD-bekreftelser, 3 PASS for jobb-/
+appkost uten dobbelttelling, og 32 PASS for omstart, mandatbinding, Pause/Resume
+og overgang tilbake til vanlig manuelt arbeid. Fullsuiten ble ikke gjentatt.
+GEPA-kjernen, låst holdout, replay fra faktisk lagringsformat og tre normale
+Builder-baser/kandidater er prøvd offline; dette er ikke en live AI-rangering.
+
+Firmware **1.6.0-rc2**, kilde `d0fff47c5218cbc30ace0edd53d6edd02b43daee`, har
+[grønn firmware-CI](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45784404031)
+med faktiske native tester og normal/recovery/bootloader-link. Manuelle bygg
+åpnes gjennom kilde-/prosjektbundet eksisterende Developer-forslag, også for
+godkjente prøver på flere apper. BUILD, installasjon og RUN omgås ikke.
+
+Ny backend-/firmwareaktivering, brukerbetjening og fysisk Evolution-sløyfe er
+fortsatt utestående. Ingen betalte AI-kall, firmwareoppdatering eller ny
+brukerapphandling er gjort i denne oppgaven. Nåværende måleapp/skjerm bevares
+til brukerens utsatte avlesning; oppstartsbeviset nedenfor er ikke godkjent
+måleflyt. Eldre signerte pakker og publiserte firmwarefiler er bevart.
+
+Se [Evolution-veiledningen](M5Stack-backend/docs/EVOLUTION.md) og
+[research/gjenbruksvalg](M5Stack-backend/docs/EVOLUTION_RESEARCH.md).
 
 ### FIRE Data Engine – installert 1.5.0-rc2, praktisk appprøve pågår
 

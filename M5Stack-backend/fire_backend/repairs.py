@@ -93,7 +93,7 @@ class Repairs:
               'reported_package_id','failed_package_id','failed_version','base_package_id','base_version',
               'latest_package_id','latest_version','newer_version_available','target_resolution','identity_warnings',
               'build_id','package_id','version','updated_at')
-        return {'repair_id':job['id'],**{k:job[k] for k in keys if k in job},'message':repair_text(job),
+        return {'repair_id':job['id'],**{k:job[k] for k in keys if k in job},'app_name':job.get('name'),'message':repair_text(job),
                 'status_text_version':STATUS_TEXT_VERSION,'physical_verified':False}
 
     async def emit(self,session,job):

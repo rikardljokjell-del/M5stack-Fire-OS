@@ -51,6 +51,7 @@ class DesktopConfig(BaseModel):
     runtime_ai_output_tokens: int = Field(default=1024,ge=16,le=4096)
     cost_profile_version: int = Field(default=COST_PROFILE_VERSION, ge=0)
     cost_limits_enabled: bool = False
+    evolution_cost_limits_enabled: bool = True
     output_limits_enabled: bool = False
     dialog_model: str = ECONOMY_MODELS["dialog_model"]
     code_model: str = ECONOMY_MODELS["code_model"]
@@ -207,6 +208,13 @@ class DesktopStore:
         self.vault.put(self.target("admin"), admin)
         for device_id, token in tokens.items():
             self.vault.put(self.target("device/" + device_id), token)
+        self.save_values(config)
+
+    def save_values(self,config):
+        """Atomically save non-secret settings without rewriting credentials."""
+        config=DesktopConfig.model_validate(config.model_dump())
+        if config.credential_namespace!=self.config.credential_namespace:
+            raise ValueError('Konfigurasjonsprofilen kan ikke byttes.')
         temporary = self.path.with_suffix(".tmp")
         try:
             temporary.write_text(config.model_dump_json(indent=2), encoding="utf-8")
@@ -243,6 +251,7 @@ class DesktopStore:
                         openai_transcribe_model=config.transcribe_model, openai_speech_model=config.speech_model,
                         openai_speech_voice=config.speech_voice, fire_max_workspace_mb=config.max_workspace_mb,
                         fire_cost_limits_enabled=config.cost_limits_enabled,fire_output_limits_enabled=config.output_limits_enabled,
+                        fire_evolution_cost_limits_enabled=config.evolution_cost_limits_enabled,
                         fire_daily_budget_usd=config.daily_budget_usd, fire_build_budget_usd=config.build_budget_usd,
                         fire_request_budget_usd=config.request_budget_usd, fire_max_corrections=config.max_corrections)
         return Settings(_env_file=None, **defaults)

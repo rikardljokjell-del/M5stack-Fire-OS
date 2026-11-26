@@ -7,6 +7,16 @@ Se [oppsett for PC, mobil og HTTPS/WSS](docs/WEB_STUDIO_SETUP.md) og
 Home går direkte til MQTT ved HA; se [Home-oppsettet](home_assistant/README.md).
 Firmwareoversikten er nå kun lesbar GitHub-metadata; FIRE håndterer oppdatering.
 
+**Evolution og innstillinger på FIRE:** [Evolution-veiledningen](docs/EVOLUTION.md)
+beskriver appvise valg for Generate, Repair, Optimize, Expand og Evolve gjennom
+den eksisterende byggeren, med avgrensede mandater og separate godkjenninger.
+Alle valgene er av som standard. AI Developer Settings bruker samme lagrede
+modellvalg og kostnadsgrenser som Windows/Studio. Se [STATUS.md](../STATUS.md)
+for hva som er implementert, offline testet og faktisk fysisk verifisert.
+Windows-distribusjonen inkluderer GEPA-kjernen; kildeinstallasjon kan legge til
+den valgfrie funksjonen med `python -m pip install -e ".[evolution]"` på Python
+3.11–3.14. Vanlig backend krever ikke GEPA.
+
 **Data og videreutvikling:** Den valgfrie [Data Engine](contracts/DATA_ENGINE-v1.json)
 knytter målinger, rålogger, analyser og observasjoner til appversjon og kjøring.
 Velg Forbedre / ny app fra datagrunnlag på FIRE, eller åpne et frosset grunnlag i

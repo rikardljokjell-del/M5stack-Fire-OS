@@ -58,8 +58,7 @@ def test_review_view_preserves_all_profiles_metrics_and_actual_imu_scenes_with_d
 async def test_dialogue_planning_omits_codegen_registry_while_generation_keeps_authoritative_contract(tmp_path):
     b=Backend(configured(tmp_path))
     try:
-        s=await b.start(SessionStart())
-        s.capabilities=preview_capabilities();s.desktop_device_id='fire-01'
+        s=await b.desktop_conversation('fire-01',hardware_preview=True)
         b.quality.record(project_id=s.project_id,message='visual_quality_ok failure',provenance='user_report')
         dialog=b.context_for(s,dialogue=True);generation=b.context_for(s)
         assert 'Authoritative capability policy' in dialog and API_CONTRACT in dialog

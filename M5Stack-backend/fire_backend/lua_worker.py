@@ -90,7 +90,7 @@ def validate_api(source, services, api_version="fire-lua-0.1",service_methods=No
 
 
 HARNESS = r'''
-local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms, native_guard, capture_times, sdk_factory, sdk_fonts, sdk_assets, sdk_ui, ai_limits, data_limits, data_capture = ...
+local source, services, memory_ms, frames, profile, operation_limit, api_version, specs, resources, hardware_factory, app_memory_budget, sequence, interval_ms, native_guard, capture_times, sdk_factory, sdk_fonts, sdk_assets, sdk_ui, ai_limits, data_limits, data_capture, evolution_replay = ...
 local sdk_enabled=sdk_factory~=nil
 local sequence_index, next_input_ms = 1,16
 local compile, hook = load, debug.sethook
@@ -160,6 +160,16 @@ local function capture(name,...)
   diagnostic_end(diagnostic_before)
 end
 local function imu_value()
+  if evolution_replay and #evolution_replay>0 then
+    local selected=nil
+    for i=1,#evolution_replay do
+      if evolution_replay[i].at_ms<=elapsed then selected=evolution_replay[i] else break end
+    end
+    if not selected or elapsed>evolution_replay[#evolution_replay].at_ms or elapsed-selected.at_ms>100 then
+      return nil,"unavailable"
+    end
+    return {x=selected.x,y=selected.y,z=selected.z}
+  end
   if profile=="imu_motion" then
     if elapsed<2000 or elapsed>=6000 then return {x=0,y=0,z=1} end
     local sign=elapsed<4000 and 1 or -1
@@ -538,6 +548,30 @@ return {frames=frames_run,elapsed_ms=elapsed,api_operations=total,trace=trace,ma
 
 def simulate(request):
     source = request["main_lua"]
+    replay = request.get('evolution_replay')
+    replay_samples = []
+    if replay is not None:
+        import math
+        if not isinstance(replay, dict) or len(json.dumps(replay).encode('utf-8')) > 65536:
+            raise ValueError('Invalid bounded evolution replay')
+        if replay.get('evidence') != 'recorded_data_replayed_in_simulator' or replay.get('physical_verified') is not False:
+            raise ValueError('Replay cannot claim physical execution')
+        digest = hashlib.sha256(json.dumps({k:v for k,v in replay.items() if k!='snapshot_sha256'},
+            ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        if digest != replay.get('snapshot_sha256'):
+            raise ValueError('Evolution replay snapshot changed')
+        replay_samples = replay.get('imu_samples')
+        if not isinstance(replay_samples, list) or not 1 <= len(replay_samples) <= 256:
+            raise ValueError('Invalid replay sample count')
+        previous = -1
+        for sample in replay_samples:
+            if not isinstance(sample, dict) or set(sample) != {'at_ms','x','y','z'}:
+                raise ValueError('Invalid replay sample')
+            if type(sample['at_ms']) is not int or not previous < sample['at_ms'] <= 600000:
+                raise ValueError('Invalid replay time order')
+            if any(type(sample[k]) not in (int,float) or not math.isfinite(sample[k]) or abs(sample[k])>1000000 for k in ('x','y','z')):
+                raise ValueError('Invalid replay numeric measurement')
+            previous = sample['at_ms']
     sequence=request.get("button_sequence",[])
     interval=request.get("interval_ms",250)
     if (not isinstance(sequence,list) or len(sequence)>32 or any(type(b) is not str or b not in {"A","B","C"} for b in sequence)
@@ -610,7 +644,8 @@ def simulate(request):
                          max(20000, ((max_ms+15)//16)*128 if api_version==SDK_VERSION else max_ms*2),api_version,lua.table_from(specs,recursive=True),lua.table_from(request.get("hardware") or {},recursive=True),factory,app_memory,lua.table_from(sequence),interval,
                          request.get("native_host_policy")=="fire-native-host-v1",lua.table_from(capture_times),sdk_factory,
                           lua.table_from(sdk_fonts,recursive=True),lua.table_from(sdk_assets),sdk_ui,lua.table_from(AI['limits']),
-                          lua.table_from(DATA['limits']),lua.table_from(request.get('data_capture') or {},recursive=True))
+                          lua.table_from(DATA['limits']),lua.table_from(request.get('data_capture') or {},recursive=True),
+                          lua.table_from(replay_samples,recursive=True) if replay_samples else None)
     hardware_metrics=result["hardware_metrics"]
     resources_used={kind:[values[i] for i in range(1,len(values)+1)] for kind,values in hardware_metrics["resources_used"].items()} if hardware_metrics else {}
     def unpack(value):
@@ -621,6 +656,7 @@ def simulate(request):
         return value
     trace=unpack(result['trace'])
     return {"ok": True, "syntax": "passed", "api_validation": "passed",
+            'evolution_replay_sha256':replay['snapshot_sha256'] if replay is not None else None,
             "native_callback_budgets":{key:SDK['budgets'][key] for key in
                 ('callback_ms','init_callback_ms','sdk_update_callback_ms') if key!='sdk_update_callback_ms' or api_version==SDK_VERSION},
             "native_timing_measured":False,

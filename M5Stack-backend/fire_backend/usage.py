@@ -17,7 +17,7 @@ from .storage import new_id
 from .model_catalog import PRICING_DATE, RATES, MINUTE_RATES, EXPLICIT_CACHE_MODELS, LONG_CONTEXT_MODELS
 
 
-OPERATIONS = {'generate', 'review', 'dialog', 'transcribe', 'speech', 'runtime_ai'}
+OPERATIONS = {'generate', 'review', 'dialog', 'transcribe', 'speech', 'runtime_ai', 'evolution_analysis', 'evolution_reflection'}
 
 
 class UsageBudgetError(ValueError):
@@ -142,7 +142,8 @@ class UsageLedger:
         return datetime.fromtimestamp(stamp, self.tz).date().isoformat()
 
     def begin(self, operation, model, input_tokens, max_output_tokens, *, build_id=None,
-              project_id=None, input_audio_tokens=0, max_output_audio_tokens=0, audio_seconds=None,session_id=None,turn_id=None,runtime_request_id=None):
+              project_id=None, input_audio_tokens=0, max_output_audio_tokens=0, audio_seconds=None,session_id=None,turn_id=None,runtime_request_id=None,
+              evolution_job_id=None,evolution_mandate_id=None):
         if operation not in OPERATIONS:
             raise ValueError('Unknown usage operation')
         if any(type(v) is not int or v < 0 for v in (input_tokens, max_output_tokens, input_audio_tokens, max_output_audio_tokens)):
@@ -157,7 +158,7 @@ class UsageLedger:
                   'cached_tokens': 0, 'cached_text_tokens': 0, 'cached_audio_tokens': 0,
                   'cache_write_tokens': 0, 'cache_write_30m_tokens': 0, 'cache_write_12h_tokens': 0,
                   'reasoning_tokens': 0}
-        cache_ttl = '30m' if operation in {'generate', 'review'} and model in EXPLICIT_CACHE_MODELS else None
+        cache_ttl = '30m' if operation in {'generate', 'review','evolution_analysis','evolution_reflection'} and model in EXPLICIT_CACHE_MODELS else None
         if cache_ttl == '30m':
             # Responses defaults to paid 30m cache writes on current models.
             # Reserve the write rate for the whole input bound before sending.
@@ -177,6 +178,10 @@ class UsageLedger:
         now = self.clock()
         with self.lock:
             records = self.records()
+            if evolution_job_id or evolution_mandate_id:
+                if not evolution_job_id or not evolution_mandate_id or not getattr(self,'evolution_admit',None):
+                    raise UsageBudgetError('Evolution-mandatet mangler gyldig autorisasjon.')
+                self.evolution_admit(evolution_mandate_id,evolution_job_id,reserve,records,model,operation)
             today = sum(r['estimated_usd'] for r in records if self._day(r['started_at']) == self._day(now))
             build = sum(r['estimated_usd'] for r in records if build_id and r.get('build_id') == build_id)
             enforce=getattr(self.settings,'fire_cost_limits_enabled',False)
@@ -202,6 +207,8 @@ class UsageLedger:
                       'estimated_usd': reserve, 'usage_source': 'reservation',
                       'cache_write_ttl': cache_ttl,
                       'request_id': None, 'pricing_date': PRICING_DATE}
+            if evolution_mandate_id:
+                record.update(evolution_mandate_id=_safe_id(evolution_mandate_id),evolution_job_id=_safe_id(evolution_job_id))
             self.store.put('usage', record['id'], record, critical=True)
             return record['id']
 

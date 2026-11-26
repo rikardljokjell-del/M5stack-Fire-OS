@@ -18,7 +18,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8,<10", "httpx>=0.28,<1", "pytest-asyncio>=1,<2", "Jinja2>=3.1,<4", "jsonschema>=4.23,<5"]
+test = ["pytest>=8,<10", "httpx>=0.28,<1", "pytest-asyncio>=1,<2", "Jinja2>=3.1,<4", "jsonschema>=4.23,<5", "hypothesis==6.170.17"]
+evolution = ["gepa==0.1.4; python_version < '3.15'"]
 
 [project.scripts]
 fire-backend = "fire_backend.__main__:main"
@@ -28,7 +29,7 @@ fire-mock = "fire_backend.mock_device:main"
 include = ["fire_backend*"]
 
 [tool.setuptools.package-data]
-fire_backend = ["data/*.md", "data/*.lua", "data/*.json", "data/app_sdk/*", "data/app_sdk/**/*", "web/*"]
+fire_backend = ["data/*.md", "data/*.lua", "data/*.json", "data/*.txt", "data/app_sdk/*", "data/app_sdk/**/*", "web/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

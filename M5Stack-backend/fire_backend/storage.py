@@ -70,7 +70,8 @@ class Store:
     def delete_project(self, project_id):
         self.get("projects", project_id)
         data_targets = []
-        for group in ('datasets','data_results','data_jobs','development_contexts'):
+        for group in ('datasets','data_results','data_jobs','development_contexts','evolution_states','evolution_proposals',
+                'evolution_mandates','evolution_jobs','evolution_findings','evolution_telemetry','evolution_evaluations','evolution_strategies'):
             for record in self.list(group):
                 if record.get('project_id',record.get('parent_project_id')) == project_id:
                     suffixes = ('.json','.data','.index','.events','.data.partial','.index.partial','.events.partial') if group=='datasets' else ('.json','.csv','.csv.partial') if group=='data_results' else ('.json',)

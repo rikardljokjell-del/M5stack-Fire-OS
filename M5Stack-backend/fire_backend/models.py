@@ -6,6 +6,7 @@ from .api_registry import ALL_SERVICES,BASE_SERVICES,BASE_API,HARDWARE_API,API_C
 from .app_sdk import SDK_VERSION,SDK_CONTRACT
 from .runtime_contract import VERSION as AI_VERSION,CONTRACT as AI_CONTRACT,LIMITS as AI_LIMITS
 from .data_contract import VERSION as DATA_VERSION,CONTRACT as DATA_CONTRACT,LIMITS as DATA_LIMITS
+from .evolution_contract import VERSION as EVOLUTION_VERSION,CONTRACT as EVOLUTION_CONTRACT,LIMITS as EVOLUTION_LIMITS
 
 Identifier = str
 ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
@@ -294,7 +295,19 @@ class AppSdkCapability(StrictModel):
         return value
 
 
+class EvolutionCapability(StrictModel):
+    version: Literal['fire-evolution-1.0']
+    contract: str = Field(json_schema_extra={'const':EVOLUTION_CONTRACT})
+
+    @field_validator('contract')
+    @classmethod
+    def exact_contract(cls,value):
+        if value!=EVOLUTION_CONTRACT:raise ValueError('Evolution contract mismatch')
+        return value
+
+
 class Capabilities(StrictModel):
+    evolution: EvolutionCapability | None = None
     service_methods: dict[str,list[str]] | None = Field(default=None,max_length=32)
     service_modes: dict[str,list[str]] | None = Field(default=None,max_length=32)
     api_version: Literal["fire-lua-0.1","fire-lua-0.2"] = "fire-lua-0.1"
@@ -356,6 +369,7 @@ class Capabilities(StrictModel):
     @model_serializer(mode='wrap')
     def serialize_extensions(self,handler):
         result=handler(self)
+        if self.evolution is None:result.pop('evolution',None)
         if self.app_sdk is None:result.pop('app_sdk',None)
         if self.runtime_ai is None:result.pop('runtime_ai',None)
         if self.data_engine is None:result.pop('data_engine',None)
@@ -391,7 +405,8 @@ APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
                       "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None,
                       "repair_id":None,"app_version":None,"build_id":None,"notification_action":None,"request_id":None,"source_sha256":None,"instructions":None,"data_json":None,"schema_json":None,"timeout_ms":None,'runtime_ai_mode':None,"operation":None,"dataset_id":None,"options_json":None,"datasets":[],"mode":None,"instruction":None,"dataset_ids":[],"context_id":None,"development_context_id":None,"observation_action":None}
-CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None,'runtime_ai':None,'data_engine':None,'service_methods':None,'service_modes':None}
+APP_EVENT_DEFAULTS.update({k:None for k in ('expected_revision','evolution_json','telemetry_json','evolution_action','evolution_job_id','evolution_mandate_id','view','settings_json','role')})
+CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None,'runtime_ai':None,'data_engine':None,'service_methods':None,'service_modes':None,'evolution':None}
 
 
 class DeviceDiagnostics(StrictModel):
@@ -406,8 +421,17 @@ class DeviceDiagnostics(StrictModel):
 
 
 class DeviceEvent(StrictModel):
+    expected_revision: int | None = Field(default=None,ge=0,strict=True)
+    evolution_json: str | None = Field(default=None,max_length=EVOLUTION_LIMITS['control_json_bytes'])
+    telemetry_json: str | None = Field(default=None,max_length=EVOLUTION_LIMITS['telemetry_json_bytes'])
+    settings_json: str | None = Field(default=None,max_length=EVOLUTION_LIMITS['control_json_bytes'])
+    role: Literal['dialog_model','code_model','review_model','transcribe_model','speech_model','runtime_model'] | None = None
+    evolution_action: Literal['pause','resume','stop','revoke'] | None = None
+    evolution_job_id: str | None = Field(default=None,pattern=ID_PATTERN)
+    evolution_mandate_id: str | None = Field(default=None,pattern=ID_PATTERN)
+    view: Literal['summary','settings','findings','history','compare','models','usage','limits'] | None = None
     observation_action: Literal['confirm','reject'] | None = None
-    operation: Literal['process','develop','sync'] | None = None
+    operation: Literal['process','develop','sync','configure','generate','repair','optimize','expand','evolve','strategy_app','strategy_owner'] | None = None
     dataset_id: str | None = Field(default=None, pattern=ID_PATTERN, max_length=DATA_LIMITS['identifier_bytes'])
     options_json: str | None = Field(default=None, max_length=DATA_LIMITS['options_bytes'])
     datasets: list[DataDescriptor] = Field(default_factory=list, max_length=DATA_LIMITS['context_dataset_refs'])
@@ -419,7 +443,7 @@ class DeviceEvent(StrictModel):
     runtime_ai_mode: Literal['auto','off'] | None = None
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "runtime_ai_request", "runtime_ai_cancel", "data_request", "data_cancel", "app_develop_request", "app_observation_confirm"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "runtime_ai_request", "runtime_ai_cancel", "data_request", "data_cancel", "app_develop_request", "app_observation_confirm", "evolution_status", "evolution_prepare", "evolution_confirm", "evolution_control", "evolution_telemetry", "backend_settings_status", "backend_settings_prepare", "backend_settings_confirm"]
     request_id: str | None = Field(default=None,pattern=ID_PATTERN)
     source_sha256: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
     instructions: str | None = Field(default=None,max_length=AI_LIMITS['instructions_bytes'])
@@ -471,6 +495,23 @@ class DeviceEvent(StrictModel):
 
     @model_validator(mode="after")
     def versioned_envelope(self):
+        if self.event.startswith('backend_settings_'):
+            required={'backend_settings_status':('request_id',),'backend_settings_prepare':('request_id','expected_revision','settings_json'),
+                'backend_settings_confirm':('request_id','proposal_id','expected_revision')}[self.event]
+            if any(getattr(self,k) is None for k in required):raise ValueError('Missing settings fields')
+            if self.settings_json is not None and len(self.settings_json.encode('utf-8'))>EVOLUTION_LIMITS['control_json_bytes']:raise ValueError('Settings UTF8 bound exceeded')
+        if self.event.startswith('evolution_'):
+            fields={'evolution_status':('request_id','app_id'),
+                'evolution_prepare':('request_id','app_id','operation','expected_revision','evolution_json'),
+                'evolution_confirm':('request_id','app_id','proposal_id','expected_revision'),
+                'evolution_control':('request_id','app_id','evolution_action','expected_revision'),
+                'evolution_telemetry':('request_id','app_id','package_id','source_sha256','telemetry_json')}[self.event]
+            if any(getattr(self,k) is None for k in fields):raise ValueError('Missing Evolution fields')
+            if self.event=='evolution_prepare' and self.operation not in {'configure','generate','repair','optimize','expand','evolve','strategy_app','strategy_owner'}:raise ValueError('Invalid Evolution operation')
+            for key,limit in (('evolution_json',EVOLUTION_LIMITS['control_json_bytes']),('telemetry_json',EVOLUTION_LIMITS['telemetry_json_bytes'])):
+                value=getattr(self,key)
+                if value is not None and len(value.encode('utf-8'))>limit:raise ValueError('Evolution UTF8 limit exceeded')
+        if self.event=='data_request' and self.operation not in {'process','develop','sync'}:raise ValueError('Invalid data operation')
         if self.event == "mode_select" and not (self.conversation_mode or self.runtime_ai_mode):
             raise ValueError("conversation_mode or runtime_ai_mode is required")
         if self.protocol_version == "0.2":

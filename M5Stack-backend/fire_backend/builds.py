@@ -248,6 +248,8 @@ class Builder:
         The enclosing build timeout and cancellation remain authoritative.
         """
         waited=0
+        if build.get('evolution_mandate_id'):
+            return await self.evolution_call(build,phase,call,args)
         for retry in range(5):
             try:return await call(*args)
             except (APIStatusError,APIConnectionError) as error:
@@ -317,6 +319,8 @@ class Builder:
         standard=sdk_standard_contract(capabilities,build['summary'],base_manifest) if self.settings.fire_ai_mode=='openai' else None
         context=context_with_contract(context,standard)
         max_corrections=getattr(self.settings,'fire_max_corrections',0) or None
+        if build.get('evolution_mandate_id'):
+            max_corrections=build['generation_attempt_limit']-1
         offset=build.get('resume_from_attempt',0) if continuing else 0
         max_attempts=offset+max_corrections+1 if max_corrections is not None else None
         build.update(max_corrections=max_corrections,max_attempts=max_attempts)
@@ -371,6 +375,8 @@ class Builder:
                 last_error=dumps({'primary_error':checkpoint.get('last_validation_error') or checkpoint.get('error'),
                     'retained_source_sha256':sha256(core.encode('utf-8')),
                     'instruction':'Retain this core-tested app and make the targeted standard correction. Rerun all tests and review; core-tested is not deliverable.'})
+        if build.get('evolution_mandate_id'):
+            previous=self.evolution_previous(build,previous)
         with tempfile.TemporaryDirectory(prefix="tmp-", dir=folder) as temp:
             work = Path(temp)
             baseline=RepairBaseline(previous,last_error)
@@ -388,8 +394,10 @@ class Builder:
                 operation='repair' if build.get('repair_of') or build.get('repair_job_id') else 'update' if project.get('latest_package') else 'new'
                 await progress("generating", min(25,10 + attempt * 3), build_text('generating',operation=operation,attempt=attempt+1,total=max_attempts))
                 generated=self.reusable_candidate(build,request,summary) if cycle_attempt==0 else None
+                if generated is None and cycle_attempt==0 and build.get('evolution_mandate_id'):
+                    generated=self.evolution_candidate(build)
                 if generated:
-                    build['reused_candidate_from']=build['id'] if continuing else build['retry_of']
+                    build['reused_candidate_from']=build.get('reused_candidate_from') or (build['id'] if continuing else build['retry_of'])
                     self.store.log(build_id,'Gjenbruker appkode fra '+build['reused_candidate_from']+'. Lokale tester og AI-kontroll kjøres på nytt.')
                 else:
                     generated = await self.provider_call(build,'generating',progress,self.provider.generate,summary, context, last_error, previous)
@@ -428,6 +436,7 @@ class Builder:
                     if 'ai' in generated.required_services and runtime_mode=='off':raise CapabilityError('runtime_ai_disabled','AI Developer er OFF; ingen AI-app er levert.')
                     if wants_runtime and 'ai' not in generated.required_services:raise ValueError('The confirmed request explicitly needs Runtime AI; keep the core and add bounded ai/jobs with a meaningful local fallback.')
                     generated=generated.model_copy(update={'required_services':service_closure(generated.required_services,api_version)})
+                    if build.get('evolution_mandate_id'):self.evolution_permissions(build,generated.required_services)
                     Quality(self.store).reject_known_failure(project["id"], sha256(payload))
                     if capabilities and not set(generated.required_services) <= set(capabilities["services"]):
                         raise ValueError("Generated app requests services absent from actual device capabilities")

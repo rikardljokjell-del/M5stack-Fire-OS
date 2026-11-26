@@ -70,7 +70,9 @@ class Jobs:
     def snapshot(self):
         rows=[];projects={p['id']:p for p in self.store.list('projects')};usage=self.service.usage.records()
         costs=self.service.usage.build_costs();conversation_costs=self.service.usage.conversation_costs()
+        evolution={j['id']:j for j in self.store.list('evolution_jobs')}
         for b in self.store.list('builds'):
+            if b.get('evolution_job_id') in evolution:continue
             p=projects.get(b['project_id'],{});record=context_record(self.store,b['id'])
             active=b['status'] in ACTIVE;error=b.get('error','') if not active else ''
             failure=build_failure(self.store,b) if error else {}
@@ -98,7 +100,7 @@ class Jobs:
                     'phase':'queued','message':'Venter på bygger' if repair['status']=='queued' else 'Venter på bekreftelse',
                     'progress':0,'can_add_context':False,'created_at':repair.get('updated_at',0),'context':{},'context_pending':False})
         for session in self.service.sessions.values():
-            if session.stopped or session.build_id or session.state not in {'failed','processing','listening','awaiting_build_confirmation'}:continue
+            if session.stopped or session.build_id or session.evolution_job_id or session.state not in {'failed','processing','listening','awaiting_build_confirmation'}:continue
             error=session.last_error if session.state=='failed' else ''
             price=conversation_costs.get(session.id,{'estimated_usd':None,'price_kind':'unknown','usage_record_missing':True})
             rows.append({'id':session.id,'project_id':session.project_id,'name':projects.get(session.project_id,{}).get('name','Samtale'),
@@ -109,7 +111,22 @@ class Jobs:
                 'estimated_usd':price['estimated_usd'],'cost_detail':price})
         for row in rows:
             if row.get('error_status'):row['message']=row['error_status']
+        from .evolution import ACTIVE as EVOLUTION_ACTIVE
+        for job in evolution.values():
+            project=projects.get(job['project_id'])
+            if not project:continue
+            price=self.service.usage._totals([r for r in usage if r.get('evolution_job_id')==job['id']])
+            active=job['state'] in EVOLUTION_ACTIVE
+            rows.append({'id':job['id'],'project_id':job['project_id'],'name':project['name'],
+                'operation':'evolution_'+job['operation'],'status':'building' if active else job['state'],
+                'phase':job['state'],'message':job.get('message','Evolution'),'progress':job.get('progress',0),
+                'summary':self.store.get('evolution_mandates',job['mandate_id'])['goal'].get('description','Frosset strategi-evaluering'),
+                'error':job.get('reason',''),'created_at':job['created_at'],'can_add_context':False,'can_resume':False,
+                'context':{},'context_pending':False,'estimated_usd':price['estimated_usd'],'cost_detail':price,
+                'build_ids':job.get('build_ids',[]),'package_id':job.get('best_package_id'),
+                'evolution_job_id':job['id'],'physical_verified':False})
         display_active=ACTIVE|{'processing','listening'}
         rows.sort(key=lambda r:(r['status'] in display_active,r['created_at']),reverse=True)
         pending=len(self.service.runtime_ai.tasks)
-        return {'jobs':rows[:100],'active_count':sum(r['status'] in display_active for r in rows)+pending,'runtime_ai_pending':pending}
+        pausing=sum(self.service.evolution.in_flight(j['id']) for j in evolution.values() if j['state'] not in EVOLUTION_ACTIVE)
+        return {'jobs':rows[:100],'active_count':sum(r['status'] in display_active for r in rows)+pending+pausing,'runtime_ai_pending':pending}

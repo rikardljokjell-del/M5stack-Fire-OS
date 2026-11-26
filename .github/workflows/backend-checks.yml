@@ -1,0 +1,49 @@
+name: FIRE backend checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'codex/**']
+    paths: ['M5Stack-backend/**', '.github/workflows/backend-checks.yml']
+  pull_request:
+    paths: ['M5Stack-backend/**', '.github/workflows/backend-checks.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evolution:
+    name: Integrated Evolution and existing safety gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: M5Stack-backend
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Install existing backend with bounded Evolution core
+        run: python -m pip install '.[test,evolution]'
+      - name: Verify canonical OS contract
+        run: python scripts/build_evolution_contract.py --check
+      - name: Actual Builder, journal, permissions, settings and state-machine regression
+        run: >-
+          python -m pytest -q
+          tests/test_evolution_*.py tests/test_backend_settings.py
+          tests/test_device_protocol.py tests/test_contracts.py
+          tests/test_sdk_prefill.py tests/test_data_engine_simulation.py
+          tests/test_development_context.py tests/test_knowledge_context.py
+          tests/test_cost_confidence.py tests/test_usage.py tests/test_app_costs.py
+          tests/test_jobs.py tests/test_build_strategy.py
+      - name: Check existing Web integration syntax
+        run: |
+          node --check fire_backend/web/app.js
+          node --check fire_backend/web/evolution.js

@@ -26,7 +26,9 @@ def session_usage(method):
 def build_usage(method):
     @wraps(method)
     async def scoped(self,build,*args,**kwargs):
-        token=usage_scope.set({'project_id':build['project_id'],'build_id':build['id']})
+        scope={'project_id':build['project_id'],'build_id':build['id']}
+        scope.update({k:build[k] for k in ('evolution_job_id','evolution_mandate_id') if build.get(k)})
+        token=usage_scope.set(scope)
         try:return await method(self,build,*args,**kwargs)
         finally:usage_scope.reset(token)
     return scoped
