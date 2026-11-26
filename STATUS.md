@@ -27,7 +27,7 @@ statusendring. Passiv diagnostikk viste gjentatt
 underårsaken. Ett separat vindu målte 2,739 sekunder i tegning/knappbehandling.
 RC6 er deretter fysisk installert i A55, med RC5 i B54 bevart. Oppkoblingsfasen
 beholdes nå uten gjentatte Connecting-varsler, og Sync skriver bare sin egen
-NVS-innstilling. Fysisk trykkrespons etter dette er ennå ikke prøvd.
+NVS-innstilling. Etter RC7 bekrefter brukeren at Sync-betjeningen fungerer.
 
 Den nye diagnosen i to normale oppstartsvinduer viser åtte feil med åpen socket,
 TLS-tilstand 17 (`SERVER_NEW_SESSION_TICKET`), retur −1 og varighet 5,778–5,847 s.
@@ -38,8 +38,17 @@ Begge ordinære oppstarter fullførte DNS/TCP/TLS på henholdsvis 5,598 og 5,654
 etterfulgt av HTTP101 og godkjent backendøkt. Ingen TLS-feil, panic, watchdog,
 JSON-avvisning eller mistede inputhendelser ble registrert i disse to vinduene.
 Full bildelesing/SHA-256, VALID/CRC, native-CI og komplett firmware-CI er grønne.
-Dette er positiv fysisk oppkoblingsverifikasjon; gjentatt Off/On, opplevd
-knapprespons, langtidsstabilitet og annet Wi-Fi avventes fortsatt fra brukeren.
+Dette er positiv fysisk oppkoblingsverifikasjon. Brukeren svarte «funker» på
+prøven med gjentatt Off/On, rask Sync-betjening og AI Developer åpen. Svaret er
+brukerbekreftelse, uten målt trykklatens eller presis stoppeklokke. Langtidsprøve
+og annet Wi-Fi avventes fortsatt; brukeren har uttrykkelig utsatt hotspot-prøven.
+Brukeren bekrefter faktisk Studio-innlogging og appvisning fra mobilen med mobildata.
+Én etterkontroll viser tre aksepterte gjenoppkoblinger på samme økt/oppstarts-ID,
+uten avslag. En påfølgende ny oppstarts-ID er registrert; årsaken er foreløpig
+ukjent og avklares med brukeren. Dette alene fastslår ikke fysisk omstart,
+ettersom klientkonfigurasjon også oppretter en ny oppstarts-ID.
+Brukeren er usikker på om FIRE ble startet på nytt eller konfigurert; årsaken
+beholdes derfor som uavklart, uten påstand om selvstendig omstart eller panic.
 Offentlig HTTPS-helse fra PC virker også med TLS 1.2 og sertifikatkontroll.
 Ingen sertifikat-/autentiseringsgrense er svekket som feilsøkingstiltak.
 
@@ -100,8 +109,9 @@ samme siste boot/epoch. Begge RC7-oppstartene er akseptert uten nye avslag.
 Ingen Reverse TCP-kanal er aktiv. Dette er en faktisk offentlig fysisk forbindelse;
 langtidsstabilitet og gjentatte av/på-runder er fortsatt egne brukerprøver.
 
-**Gjenstår før fysisk fjernbruk er godkjent:** faktisk OTP-innlogging i Studio
-og fysisk oppkobling/Off-On via den offentlige adressen fra et annet Wi-Fi.
+**Gjenstår før fysisk fjernbruk av FIRE fra annet nett er godkjent:** fysisk
+oppkobling/Off-On via den offentlige adressen fra et annet Wi-Fi. Brukeren prøver
+dette senere. Studio-innlogging og appvisning fra mobil med mobildata er bekreftet.
 Ingen ekstra tunnel eller tokeninnsamling er gjort.
 
 ### Tidligere meny- og tilkoblingsrettinger
