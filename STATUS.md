@@ -59,8 +59,12 @@ forespørsels-IDer beskytter sene svar, og Avbryt trekker tilbake ventende kjør
 før nettverksopprydding. COM-teststyringen er autentisert, av som standard og
 begrenset til vanlige knappbehandlere og den godkjente testappen på offentlig
 TLS-profil. Større testbuffere ligger i PSRAM; ingen global stakk-/IRAM-grense
-er økt. Samlet firmware-CI, faktisk COM-betjening, gjentatte offentlige
-nedlastinger og produksjonsaksept gjenstår.
+er økt. Første fulle firmwarebygg bestod normalfirmware, recovery og bootloader.
+Den separate strenge GCC-kontrollen fanget én misvisende innrykning i
+feedback-svarbehandlingen. Kun klammer og linjeskift er rettet, med uendret
+funksjon; ny samlet CI kreves før denne kandidaten pakkes eller installeres.
+Faktisk COM-betjening, gjentatte offentlige nedlastinger og produksjonsaksept
+gjenstår.
 
 ### Pågående: gjenåpning av jobber og appoppdatering
 

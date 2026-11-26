@@ -71,5 +71,9 @@ bool FireOS::handleFeedbackAck(const String& message) {
     aiJobText(result,"observation_action")==luaFeedbackOutcome_ && !cJSON_GetObjectItemCaseSensitive(result,"error") &&
     luaFeedbackAck_=="obs-"+luaDevelopContext_+"-"+luaFeedbackOutcome_;
   cJSON_Delete(reply);luaFeedbackAck_=String();luaFeedbackConfirmation_=!confirmed;
-  if(!confirmed)luaFeedbackOutcome_="unconfirmed";redrawRequested_=true;return true;
+  if(!confirmed) {
+    luaFeedbackOutcome_="unconfirmed";
+  }
+  redrawRequested_=true;
+  return true;
 }
