@@ -18,6 +18,89 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
+### Ny brukerprøve: RC4 installert, av/på-prøve avventes
+
+Brukeren har meldt trege/mistede knappetrykk, flere konkrete menyavvik og
+gjentatt til-/frakobling i AI Developer på installert 1.6.0-rc2. Den videre
+Evolution-akseptanseprøven er derfor satt på vent.
+
+Tilkoblingsfeilen er gjenskapt fra faktisk lagret trafikkgrunnlag:
+`session_started` passer enhetens grenser, mens følgende `session_snapshot`
+har 6 978 byte, men 1 227 JSON-tokens mot tillatte 1 024. Dupliserte
+kapabiliteter i enhetsdelen er fjernet; grensene økes ikke. Backendrettingen
+er aktivert med én grasiøs omstart og uendrede rå innstillinger/Vault-fingeravtrykk.
+Brukeren opplevde cirka to minutter stabil tilkobling på RC2. En etterfølgende
+status viste offline og flere tilkoblinger; dette alene dokumenterer ikke en
+kontinuerlig socket. Auto-hvile og faktisk tilkoblingsbrudd må skilles i RC3-prøven.
+
+Statiske menyer tegnes nå ved endring og lavfrekvent statusoppdatering.
+En avgrenset GPIO-edgekø fanger korte trykk også under rendering, med samme
+sprett-/hold-/vekkeregler og vakt mot usett godkjenning. Globale dobbeltklikk
+og tilhørende innstillinger er fjernet etter brukerens godkjenning. Resume er
+samlet i én liste; arbeidsmenyen bruker eksisterende jobbkontroller. De meldte
+DateTime-/Bluetooth-/bunntekst-/Back-/MenuLayout-funnene er rettet i kandidaten.
+
+Appikoner bruker et delt utvalg fra eksisterende SDK-ikoner, uten ekstra
+AI-kall. Tidlig ikoncheckpoint har grønn backend-, native- og firmware-CI.
+Ny signert **1.6.0-rc3**, kilde `d37a99ad90d5bee781d0cd1278ab1110d35bccef`,
+har grønn firmware-, native- og backend-CI. Faktisk IRAM er 130 400 av 131 072
+byte (672 byte fri); statisk DRAM er 64 212 byte, 408 byte mer enn RC2.
+Ingen SDK-/appgrenser er økt, og ingen ekstra framebuffer er innført.
+
+Samlet backendkjøring ga 1203 PASS og én reell kostnadsregresjon ved appvalg
+under tale. Minsterettingen beholder eksplisitt jobbmål, men bruker endelig
+valgt app i vanlig samtale. Opprinnelig test er beholdt; etterporter ga 76/76
+PASS og slutt-CI 210/210 PASS. Python-pakken er prøvd isolert med nett blokkert;
+Windows-bygg og 71 modulers kildebytekode/ressurser er kontrollert uten å kjøre
+usignert EXE (Windows App Control). Fullsuiten er ikke gjentatt.
+
+RC3 ble først fysisk installert i B52 og markert VALID med gyldig CRC etter normal
+helsekontroll og omstart. Eksakt fullbildelesing matcher den testede CI-filen.
+RC2 i A51 og SD-/NVS-data ble bevart i dette steget. RC3-sluttbootens HELLO og
+ferske inventory bekrefter RC3, riktige kontrakter og alle 13 apper; de sju
+opprinnelige app-ID-ene er beholdt. Dette er ikke en versjonssammenligning.
+
+Ett passivt vindu på 150 sekunder fant ingen omstart, panic, watchdog eller
+avvist JSON, men registrerte ingen enkelttrykk. Én sluttavlesning viste samme
+boot og epoch, offline og ingen nye tilkoblinger i akkurat dette vinduet.
+Dette var ikke et målevindu for brukerens senere prøve.
+
+Brukeren bekrefter deretter at knappene er raske og fungerer bra, og at
+forbindelsen holder seg når den først er etablert. Brukeren melder samtidig
+oppkobling over 30 sekunder eller uten resultat, særlig Backend av → vent → på.
+Tre faktiske startavslag er funnet. Deres detaljerte konfliktgrunn var ikke
+lagret. En åpen WebSocket kunne fortsatt svare på ping mens FIRE ventet uten
+egen frist på en godkjent samtale. Dette forklarer en konkret fastlåst tilstand,
+men fastslår ikke hvilket identitetsfelt som ga de historiske avslagene.
+
+Ny, avgrenset RC4-retting har fem sekunders samtalestartfrist og tydelig
+terminalt avslag med eksplisitt ny prøve via eksisterende av/på/config.
+Backend gjenoppretter bare identisk, inaktiv utløpt/stoppet samtale som en ny
+samtale med samme prosjekt og plan, uten gamle forslag eller fullmakter.
+En identisk aktiv jobb kan kobles til samme samtale også etter lang venting,
+slik at Pause/Avbryt fortsatt virker. Nye avslag journalfører kort årsakskode.
+Feil eier, oppstart, kapabiliteter eller prosjekt omgås ikke.
+
+Sluttkontrollen for backend har 223/223 PASS i CI; den berørte lokale porten
+har 43/43 PASS etter 91/91 for første checkpoint. Firmware-/native-CI for
+RC4 er grønne, med uendret IRAM og statisk DRAM fra RC3. Signert privat pakke
+består uavhengig kontroll. Backend er aktivert én gang med uendrede rå
+innstillinger/nøkkelfingeravtrykk og én lytter. RC4 er fysisk installert i
+A53 VALID/CRC, med RC3 B52 som bevart reserve. Flash-MD5 og full tilbakelesing
+av de 2 737 216 bildebytene matcher CI/SHA256. Helseprøve 45,170 sekunder og
+vanlig omstart 35,021 sekunder bestod uten panic/watchdog/avvist JSON; COM er
+lukket. SD, NVS og grunnlagsfirmware ble ikke skrevet. Den korte brukerprøven
+med tre av/på-runder og etterfølgende backendkvitteringer avventes.
+Ingen tallfestet trykklatens eller garanti om hver oppkobling utledes av
+brukerbekreftelsen.
+
+Siste kontroll fant også at Avbryt på et Evolution-underbygg måtte stoppe
+hele eksisterende Evolution-jobben. Nå tilbakekalles mandatet før oppgaven
+kanselleres. Vanlig kanselleringskvittering, kandidater, kostnad og eventuelt
+ukjent forbruk beholdes. Feilen er gjenskapt og rettet med målrettede tester;
+ingen nye jobbtyper eller kontrollmekanismer er opprettet.
+Ingen betalte backend-AI-kall eller nye brukerappkommandoer er gjort.
+
 ### Evolution og felles AI Developer Settings – installert, funksjonsprøve gjenstår
 
 Evolution er implementert som styring rundt eksisterende Builder, Repairs, Jobs,
@@ -71,7 +154,7 @@ ressurser, Evolution-status og tilgangskontroller er verifisert. Rå innstilling
 og Vault-fingeravtrykk er uendret; Evolution er fortsatt deaktivert med alle fem
 brytere av. Ingen brukerappkommando ble sendt.
 
-Etter brukerens uttrykkelige installasjonsgodkjenning er eksakt signert
+Ved den opprinnelige Evolution-leveransen, før RC3-rettingene ovenfor, ble eksakt signert
 **1.6.0-rc2 fysisk installert i A51 VALID/CRC**. Flash-MD5 og full tilbakelesing
 av de 2 665 296 bildebytene matcher CI/SHA256. Forrige fungerende 1.5.0-rc2
 i B50 VALID er beholdt. Lokal helseprøve 45,208 s og vanlig omstart 35,009 s
@@ -80,8 +163,8 @@ over SD, NVS, partisjonsoppsett, recovery eller bootloader.
 Sluttoppstartens faktiske HELLO annonserer 1.6.0-rc2 og riktig Evolution-
 kontrakt; SDK, Runtime AI, Data Engine og Hardware API er uendret. Samme
 oppstart har komplett, fersk SD-oversikt med 13 apper. De opprinnelige sju
-app-ID-ene og «Måledata kontroll» er fortsatt present. Enheten er nå offline
-i Auto-idle; åpne AI Developer for å aktivere forbindelsen ved praktisk prøve.
+app-ID-ene og «Måledata kontroll» var fortsatt present. Dette historiske
+snapshotet var offline; årsaken til frakoblingen ble ikke fysisk fastslått.
 
 Brukerbetjening, live AI-prøve og fysisk Evolution-sløyfe er fortsatt
 utestående. Ingen betalte AI-kall eller brukerappkommandoer ble utført.
