@@ -65,10 +65,18 @@ Windows-brukeren. Gjentatt installasjon og kjøring beholdt samme ene prosess.
 PC-en må være våken, på nett og brukeren innlogget; oppstart før Windows-innlogging
 er ikke etablert. Nøkler, modeller og kostnadsgrenser er bevart.
 
-**Gjenstår før fysisk fjernbruk er godkjent:** faktisk OTP-innlogging i Studio,
-bytte av FIREs adresse via eksisterende brukeråpnet Backend config, og fysisk
-oppkobling/Off-On fra et annet Wi-Fi. Den gamle lokale Reverse TCP-veien beholdes
-inntil adressebyttet koordineres. Ingen ekstra tunnel eller tokeninnsamling er gjort.
+FIREs adresse er nå lagret som `fire-device.ljoekjell.no:443` via eksisterende
+Backend config etter brukerens fysiske åpning av oppsettsvinduet. Enheten svarte
+med bekreftet lagring; blanke nøkkel-/ID-felt beholdt eksisterende verdier.
+Backenden er byttet kontrollert fra lokal Reverse TCP til direkte offentlig WSS.
+Kun transportfeltet ble endret; public-felt, modeller, grenser, nøkler og automatisk
+oppstart er bevart. Én prosess og vellykkede helse-/autentiseringskontroller er
+bekreftet. Den ene etteravlesningen hadde ingen nye enhetsstarter; faktisk fysisk
+WSS-adopsjon skal derfor bekreftes i brukerens neste prøve.
+
+**Gjenstår før fysisk fjernbruk er godkjent:** faktisk OTP-innlogging i Studio
+og fysisk oppkobling/Off-On via den offentlige adressen fra et annet Wi-Fi.
+Ingen ekstra tunnel eller tokeninnsamling er gjort.
 
 ### Tidligere meny- og tilkoblingsrettinger
 
