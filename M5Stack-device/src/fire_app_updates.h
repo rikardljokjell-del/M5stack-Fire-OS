@@ -29,10 +29,26 @@ inline bool newer(const char* installed,const char* latest) {
   for(unsigned i=0;i<3;++i) {if(a[i]!=b[i]) return b[i]>a[i];}
   return false;
 }
+// Known metadata is only a read-only suggestion; app_download remains the grant.
+inline bool knownEpoch(uint32_t epoch,uint32_t cachedEpoch) {return epoch && epoch==cachedEpoch;}
+inline bool catalogDue(uint32_t now,bool loading,bool requested,uint32_t completedAt,uint32_t attemptedAt,uint8_t failures) {
+  if (loading) return false;
+  const uint32_t cooldown=failures>=2?45000:failures?3000:0;
+  if (attemptedAt && uint32_t(now-attemptedAt)<cooldown) return false;
+  return !requested || uint32_t(now-completedAt)>=45000;
+}
+inline bool catalogTimeout(uint32_t now,bool loading,uint32_t requestedAt) {return loading && uint32_t(now-requestedAt)>=5000;}
+inline bool catalogReply(uint32_t epoch,uint32_t requestedEpoch,int32_t offset,int32_t requestedOffset,
+    const char* request,const char* received) {
+  return knownEpoch(epoch,requestedEpoch) && offset==requestedOffset && request && *request && received && !strcmp(request,received);
+}
+inline bool seen(uint32_t mask,uint8_t index) {return index<32 && (mask & (uint32_t(1)<<index));}
+
 inline bool eligible(bool online,bool suppressed,bool downloadable,uint32_t epoch,uint32_t cachedEpoch,
     uint32_t now,uint32_t cachedAt,const char* localApp,const char* remoteApp,const char* project,
     const char* installedPackage,const char* latestPackage,const char* installedVersion,const char* latestVersion) {
-  return online && !suppressed && downloadable && epoch && epoch==cachedEpoch && uint32_t(now-cachedAt)<=60000 &&
+  (void)now;(void)cachedAt;
+  return online && !suppressed && downloadable && knownEpoch(epoch,cachedEpoch) &&
       localApp && *localApp && remoteApp && !strcmp(localApp,remoteApp) && project && *project &&
       installedPackage && *installedPackage && latestPackage && *latestPackage && strcmp(installedPackage,latestPackage) &&
       newer(installedVersion,latestVersion);

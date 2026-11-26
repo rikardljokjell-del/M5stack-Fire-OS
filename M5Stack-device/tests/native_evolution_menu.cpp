@@ -49,7 +49,7 @@ int main() {
     assert(!available(false,false,7,7,2000)); // offline: caller directly launches original; no network operation in policy
     assert(!available(true,true,7,7,2000)); // per-app preference
     assert(!available(true,false,8,7,2000)); // new admission epoch invalidates old metadata
-    assert(!available(true,false,7,7,62000));
+    assert(available(true,false,7,7,62000)); // known immutable READY is a read-only proposal; server revalidates Ja
     assert(!available(true,false,7,7,2000,"other-app"));
     assert(active(1,false) && !active(1,true) && !active(2,true) && !active(3,true)); // Quick Settings owns its A/C/B
     assert(confirm(1,0,false)==Action::Download); // Ja is download, never Run
@@ -59,6 +59,21 @@ int main() {
     assert(completed(0,true)==0 && confirm(0,0,true)==Action::Wait); // minimized completion cannot steal screen/run
     assert(completed(2,false)==1);
     assert(eligible(true,false,true,7,7,10,UINT32_MAX-100,"app","app","project","old","new","1.0.0","1.0.1"));
+    assert(catalogDue(46000,false,true,1000,1000,0));
+    assert(!catalogDue(45999,false,true,1000,1000,0));
+    assert(!catalogDue(50000,true,true,1000,1000,0));
+    assert(!catalogDue(12000,false,false,1000,10000,1) && catalogDue(13000,false,false,1000,10000,1));
+    assert(!catalogDue(54999,false,false,1000,10000,2) && catalogDue(55000,false,false,1000,10000,2));
+    assert(catalogTimeout(6000,true,1000) && !catalogTimeout(5999,true,1000));
+    assert(catalogTimeout(20,true,UINT32_MAX-6000));
+    assert(catalogReply(7,7,4,4,"catalog-one","catalog-one"));
+    assert(!catalogReply(8,7,4,4,"catalog-one","catalog-one"));
+    assert(!catalogReply(7,7,0,4,"catalog-one","catalog-one"));
+    assert(!catalogReply(7,7,4,4,"catalog-two","catalog-one"));
+    assert(!knownEpoch(0,7) && !knownEpoch(8,7)); // disconnect/owner clear cannot use another epoch
+    const uint32_t seenBatch=(uint32_t(1)<<1)|(uint32_t(1)<<31);
+    assert(!seen(seenBatch,0) && seen(seenBatch,1) && seen(seenBatch,31) && !seen(seenBatch,32));
+    puts("PASS bounded catalog refresh timeout cooldown request correlation and complete seen-mask");
     puts("PASS cached update decisions offline stale epoch per-app suppression and separate post-install Run");
   }
   puts("PASS Evolution bounded aggregates outbox capacity and exact accepted duplicate ACK gate");

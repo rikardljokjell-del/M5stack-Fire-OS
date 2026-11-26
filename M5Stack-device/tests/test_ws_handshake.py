@@ -61,6 +61,21 @@ void delivery() { fire_package_delivery::Gate gate; gate.begin(1,true); (void)ga
         binding=os_source.split("else if(!luaAiBindSent_",1)[1].split("luaAiBindSent_=",1)[0]
         self.assertIn("!(packageManager_ && packageManager_->busy())",binding)
 
+    def test_actual_package_preconnect_handoff(self):
+        source=(native.ROOT/"src/fire_lua_package_manager.cpp").read_text(encoding="utf-8")
+        spawn=source.split("void FireLuaPackageManager::startWorker()",1)[1].split("void FireLuaPackageManager::service(",1)[0]
+        self.assertLess(spawn.index("handoffReady("),spawn.index("xTaskCreate("))
+        self.assertIn('xTaskCreate(task,"fire-package",16384',spawn)
+        waiting=source.split("void FireLuaPackageManager::preconnect()",1)[1].split("void FireLuaPackageManager::startWorker",1)[0]
+        self.assertIn("client_.connect(",waiting)
+        self.assertNotIn("xTaskCreate(",waiting)
+        worker=source.split("void FireLuaPackageManager::serviceWorker",1)[1]
+        handoff=worker.split("if (preconnectedTls_)",1)[1].split("else if (!reverseClient_)",1)[0]
+        self.assertNotIn("connect(",handoff)
+        self.assertIn("handoffReady(",handoff)
+        failure=source.split("void FireLuaPackageManager::queuedFailure",1)[1].split("String FireLuaPackageManager::connectionFailure",1)[0]
+        self.assertLess(failure.index("client_.stop()"),failure.index("Phase::Cleanup"))
+
     def test_worker_tls_deadline_preserves_tcp_and_trust(self):
         source=(native.ROOT/"src/fire_async_client.cpp").read_text(encoding="utf-8")
         constant=re.search(r"constexpr unsigned long kTlsHandshakeSeconds = ([0-9]+);",source)
@@ -80,6 +95,7 @@ void delivery() { fire_package_delivery::Gate gate; gate.begin(1,true); (void)ga
         self.assertIn("PASS strict WebSocket", output)
         self.assertIn("PASS async connect polling",output)
         self.assertIn("PASS package exclusive worker barriers",output)
+        self.assertIn("PASS TLS-before-package allocation ordering",output)
         self.assertIn("PASS actual session/app/mode producers",output)
         rows=[json.loads(line.split(" ",1)[1]) for line in output.splitlines() if line.startswith("SELECTION_JSON ")]
         self.assertEqual(len(rows),6)

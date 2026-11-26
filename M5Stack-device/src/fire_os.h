@@ -317,6 +317,14 @@ class FireOS {
   int32_t backendCatalogNextOffset_ = 0;
   String backendCatalogStatus_;
   uint32_t backendCatalogEpoch_=0,backendCatalogAt_=0;
+  uint32_t backendCatalogRequestAt_=0,backendCatalogAttemptAt_=0,backendCatalogRequestEpoch_=0,backendCatalogSeen_=0;
+  String backendCatalogRequest_;
+  uint8_t backendCatalogFailures_=0;
+  bool backendCatalogOverflow_=false,backendCatalogDirty_=false;
+  bool requestBackendCatalogPage(uint32_t offset);
+  void failBackendCatalog();
+  void clearBackendCatalog();
+  void invalidateBackendCatalog();
   bool luaUpdateSuppressed_[kMaxLuaApps]={};
   String updatePrefsOwner_;
   uint8_t appUpdateStage_=0,appUpdateSelection_=1,appUpdateShownSelection_=255;

@@ -111,6 +111,22 @@ nedlastings- og åpningsforsøk. Den lagrede fase6-feilen er fra før RC10 og sk
 ikke tolkes som et nytt resultat. Ingen CA-, tidsfrist-, kvote- eller
 sikkerhetsgrense er svekket.
 
+Etter RC10 meldte brukeren fortsatt nedlastingsfeil og ustabil synlighet av
+ny versjon. Én ny avlesning viste to faktiske same-session gjenoppkoblinger og
+registrerte feilkvittringer: den nye feilen er `phase=3,tls=0,err=-32512,ms=31`.
+Pinned mbedTLS definerer -32512 som `MBEDTLS_ERR_SSL_ALLOC_FAILED`; dette er
+TLS-allokering før HTTP, forskjellig fra den tidligere worker-opprettelsesfeilen.
+RC10s gjenoppkobling/resultatbevaring fungerer dermed, men rettingen var ikke
+tilstrekkelig for vellykket overføring. RC11 retter allokeringsrekkefølgen slik
+at samme asynkrone TLS-klient forbindes før pakkearbeiderens 16 KiB-stakk
+allokeres. Ingen ny transport, redusert stakk eller endret CA/tidsfrist innføres.
+Samtidig rettes eksisterende katalogfornyelse, beholdte kjente rader under
+henting, tidsavgrenset sidehenting og svarbinding. Lokal appåpning skal fortsatt
+være uten nettventing. Målrettede objektkontroller og sju Python/C++11-porter
+er bestått lokalt. HTTP-/SD-/ZIP-delen er byteuendret fra RC10. Statisk
+FireOS øker 32 byte; pakke- og nettverksklientene har uendret objektstørrelse.
+Samlet Linux-kjøring, signering og fysisk nedlastingsprøve gjenstår.
+
 ### Backend-sync og sikker nettilgang – 26. november
 
 **Målrettet retting etter adressebyttet:** Brukeren fikk ikke koblet FIRE til den

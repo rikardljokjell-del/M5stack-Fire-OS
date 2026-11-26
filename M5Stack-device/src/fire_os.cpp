@@ -77,7 +77,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc10";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc11";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -4127,72 +4127,102 @@ void FireOS::rebuildAppManagerItems() {
     managerOffset_ = managerSelection_ - 5;
 }
 
+bool FireOS::requestBackendCatalogPage(uint32_t offset) {
+  if (!backendClient_ || !backendClient_->sessionReady()) return false;
+  backendCatalogRequest_="catalog-"+String(esp_random(),HEX)+"-"+String(millis(),HEX);
+  backendCatalogRequestAt_=millis();backendCatalogRequestEpoch_=backendClient_->connectionEpoch();
+  backendCatalogNextOffset_=offset;
+  backendCatalogLoading_=backendClient_->appList(offset,backendCatalogRequest_);
+  return backendCatalogLoading_;
+}
+void FireOS::failBackendCatalog() {
+  backendCatalogLoading_=false;backendCatalogRequested_=false;backendCatalogRequest_=String();
+  backendCatalogFailures_=min<uint8_t>(2,backendCatalogFailures_+1);backendCatalogAttemptAt_=millis();
+  backendCatalogStatus_="Katalog ikke oppdatert";
+  if (screen_==Screen::AppsSettings) managerStatus_=backendCatalogStatus_;
+  redrawRequested_=true;
+}
+void FireOS::invalidateBackendCatalog() {
+  if (backendCatalogLoading_) backendCatalogDirty_=true;
+  backendCatalogRequested_=false;
+}
+void FireOS::clearBackendCatalog() {
+  for (uint8_t i=0;i<backendAppCount_;++i) backendApps_[i]=BackendAppInfo();
+  backendAppCount_=0;backendCatalogEpoch_=backendCatalogAt_=backendCatalogSeen_=0;
+  backendCatalogRequested_=backendCatalogLoading_=backendCatalogOverflow_=backendCatalogDirty_=false;
+  backendCatalogRequestAt_=backendCatalogAttemptAt_=backendCatalogRequestEpoch_=0;
+  backendCatalogFailures_=0;backendCatalogRequest_=String();
+  appUpdateStage_=0;appUpdateReady_=false;appUpdateRequest_=String();
+  appManagerVersionCount_=0;appManagerVersionDialog_=false;
+  appManagerActionMenu_=false;appManagerDeleteConfirm_=appManagerDeleteWaiting_=false;appManagerDeleteMode_=0;
+  rebuildAppManagerItems();
+}
 void FireOS::updateAppManagerBackend() {
-  if (!backendClient_ || !backendClient_->sessionReady() ||
-      !luaCacheValid_ || !luaCacheComplete_ || appInventoryPending_)
-    return;
-  if (!backendCatalogRequested_ && !backendCatalogLoading_) {
-    backendCatalogRequested_ = backendClient_->appList(0);
-    backendCatalogLoading_ = backendCatalogRequested_;
-    if (backendCatalogRequested_) {
-      backendCatalogEpoch_=0;backendAppCount_=0;
-      backendCatalogNextOffset_ = 0;
-      backendCatalogStatus_ = "Loading backend apps...";
-      managerStatus_ = backendCatalogStatus_;
-      redrawRequested_ = true;
-    }
-  }
+  // Only existing online demand reaches this service. App opening never calls it.
+  if (!backendClient_ || !backendClient_->sessionReady()) return;
+  const uint32_t now=millis();
+  if (fire_app_updates::catalogTimeout(now,backendCatalogLoading_,backendCatalogRequestAt_)) failBackendCatalog();
+  if (!luaCacheValid_ || !luaCacheComplete_ || appInventoryPending_ ||
+      !fire_app_updates::catalogDue(now,backendCatalogLoading_,backendCatalogRequested_,backendCatalogAt_,backendCatalogAttemptAt_,backendCatalogFailures_)) return;
+  backendCatalogAttemptAt_=now;backendCatalogSeen_=0;backendCatalogOverflow_=false;backendCatalogDirty_=false;
+  if (requestBackendCatalogPage(0)) {
+    backendCatalogRequested_=true;backendCatalogStatus_="Loading backend apps...";
+    if(screen_==Screen::AppsSettings) managerStatus_=backendCatalogStatus_;
+    redrawRequested_=true;
+  } else failBackendCatalog();
 }
 
 void FireOS::parseBackendAppCatalog(const String& message) {
-  const int appsAt = message.indexOf("\"apps\"");
-  int cursor = appsAt >= 0 ? message.indexOf('{', appsAt) : -1;
-  while (cursor >= 0 && backendAppCount_ < kMaxBackendApps) {
-    const int end = message.indexOf('}', cursor);
-    if (end < 0) break;
-    const String object = message.substring(cursor, end + 1);
-    const String appId = jsonStringField(object, "app_id");
-    if (appId.length() > 0) {
-      int8_t existing = -1;
-      for (uint8_t index = 0; index < backendAppCount_; ++index) {
-        if (backendApps_[index].appId == appId) {
-          existing = index;
-          break;
-        }
-      }
-      const uint8_t index = existing >= 0
-                                 ? static_cast<uint8_t>(existing)
-                                 : backendAppCount_++;
-      BackendAppInfo& item = backendApps_[index];
-      item.appId = appId;
-      item.projectId = jsonStringField(object, "project_id");
-      item.name = jsonStringField(object, "name");
-      item.latestPackageId = jsonStringField(object, "latest_package_id");
-      item.latestVersion = jsonStringField(object, "latest_version");
-      item.versionCount = static_cast<uint8_t>(
-          constrain(jsonIntField(object, "version_count"), 0, 255));
-      item.downloadable = jsonBoolField(object, "downloadable");
-      item.canDelete = jsonBoolField(object, "can_delete_from_device");
-      item.deleteReason = jsonStringField(object, "download_block_reason");
-      if (item.deleteReason.length() == 0)
-        item.deleteReason = jsonStringField(object, "device_delete_block_reason");
-    }
-    cursor = message.indexOf('{', end + 1);
-  }
-  rebuildAppManagerItems();
+  if (!backendCatalogLoading_ || !backendClient_ || !backendClient_->sessionReady()) return;
   cJSON* catalog=cJSON_Parse(message.c_str());
+  const cJSON* offset=cJSON_GetObjectItemCaseSensitive(catalog,"offset");
+  const bool match=cJSON_IsNumber(offset) && fire_app_updates::catalogReply(backendClient_->connectionEpoch(),backendCatalogRequestEpoch_,
+      offset->valueint,backendCatalogNextOffset_,backendCatalogRequest_.c_str(),aiJobText(catalog,"request_event_id").c_str());
+  const cJSON* apps=cJSON_GetObjectItemCaseSensitive(catalog,"apps");
+  if (!match || !cJSON_IsArray(apps) || cJSON_GetArraySize(apps)>4) {cJSON_Delete(catalog);return;}
   const cJSON* nextValue=cJSON_GetObjectItemCaseSensitive(catalog,"next_offset");
   const bool completed=cJSON_IsNull(nextValue);
   const int next=cJSON_IsNumber(nextValue)?nextValue->valueint:-1;
-  cJSON_Delete(catalog);
-  if(!completed && next>backendCatalogNextOffset_ && next<kMaxBackendApps && backendClient_ && backendClient_->sessionReady()) {
-    backendCatalogNextOffset_=next;backendCatalogLoading_=backendClient_->appList(next);return;
+  for (int row=0;row<cJSON_GetArraySize(apps);++row) {
+    const cJSON* object=cJSON_GetArrayItem(apps,row);
+    if (!cJSON_IsObject(object)) continue;
+    const String appId=aiJobText(object,"app_id");if(!appId.length()) continue;
+    int8_t existing=-1;
+    for (uint8_t i=0;i<backendAppCount_;++i) if (backendApps_[i].appId==appId) {existing=i;break;}
+    if (existing<0 && backendAppCount_>=kMaxBackendApps) {backendCatalogOverflow_=true;continue;}
+    const uint8_t index=existing>=0?static_cast<uint8_t>(existing):backendAppCount_++;
+    backendCatalogSeen_|=uint32_t(1)<<index;
+    BackendAppInfo& item=backendApps_[index];
+    item.appId=appId;item.projectId=aiJobText(object,"project_id");item.name=aiJobText(object,"name");
+    item.latestPackageId=aiJobText(object,"latest_package_id");item.latestVersion=aiJobText(object,"latest_version");
+    const cJSON* count=cJSON_GetObjectItemCaseSensitive(object,"version_count");
+    item.versionCount=cJSON_IsNumber(count)?constrain(count->valueint,0,255):0;
+    item.downloadable=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(object,"downloadable"));
+    item.canDelete=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(object,"can_delete_from_device"));
+    item.deleteReason=aiJobText(object,"download_block_reason");
+    if(!item.deleteReason.length()) item.deleteReason=aiJobText(object,"device_delete_block_reason");
   }
-  backendCatalogLoading_=false;backendCatalogRequested_=true;
-  if(completed && backendClient_ && backendClient_->sessionReady()) {backendCatalogEpoch_=backendClient_->connectionEpoch();backendCatalogAt_=millis();}
-  backendCatalogStatus_ = "Backend apps: " + String(backendAppCount_);
-  managerStatus_ = backendCatalogStatus_;
-  redrawRequested_ = true;
+  cJSON_Delete(catalog);
+  rebuildAppManagerItems(); // existing app-ID selection preservation
+  if (!completed) {
+    if (next>backendCatalogNextOffset_ && next<kMaxBackendApps && requestBackendCatalogPage(next)) return;
+    failBackendCatalog();return;
+  }
+  // Only a fully correlated successful batch may remove absent/deleted rows.
+  uint8_t write=0;
+  for (uint8_t i=0;i<backendAppCount_;++i) if (fire_app_updates::seen(backendCatalogSeen_,i)) {
+    if(write!=i) backendApps_[write]=backendApps_[i];
+    ++write;
+  }
+  for (uint8_t i=write;i<backendAppCount_;++i) backendApps_[i]=BackendAppInfo();
+  backendAppCount_=write;backendCatalogLoading_=false;backendCatalogRequested_=true;
+  backendCatalogFailures_=0;backendCatalogRequest_=String();
+  backendCatalogEpoch_=backendClient_->connectionEpoch();backendCatalogAt_=millis();
+  if (backendCatalogDirty_ || (backendCatalogOverflow_ && backendAppCount_<kMaxBackendApps)) backendCatalogRequested_=false;
+  rebuildAppManagerItems();
+  backendCatalogStatus_="Backend apps: "+String(backendAppCount_);
+  if(screen_==Screen::AppsSettings) managerStatus_=backendCatalogStatus_;
+  redrawRequested_=true;
 }
 
 void FireOS::parseBackendAppVersions(const String& message) {
@@ -5014,9 +5044,8 @@ void FireOS::open(Screen screen) {
     managerOffset_ = 0;
     managerItemCount_ = 0;
     managerStatus_ = "Scanning apps...";
-    backendAppCount_ = 0;
     backendCatalogRequested_ = false;
-    backendCatalogLoading_ = false;
+    backendCatalogLoading_ = false;backendCatalogRequest_=String();
     backendCatalogNextOffset_ = 0;
     externalAppCount_ = 0;
     externalAppMessage_ = "Scanning apps...";
@@ -6768,7 +6797,7 @@ void FireOS::handleLuaRepairStatus(const String& message) {
     }
   } else if (luaRepairStatus_ == "ready" &&
              luaRepairReadyPackageId_.length() > 0) {
-    backendCatalogRequested_=false;
+    if (!wasReady) invalidateBackendCatalog();
     luaErrorAction_ = 1;
     luaRepairMessage_ = luaRepairMessage_.length() > 0
                             ? luaRepairMessage_
@@ -7303,9 +7332,10 @@ void FireOS::updateBackend() {
 void FireOS::backendState(void* context, bool connected, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
-  os->backendStatus_ = status;
+  const bool transfer=os->packageManager_ && os->packageManager_->networkPaused();
+  os->backendStatus_ = transfer?String("Overfører app"):status;
   if(!connected) {
-    os->backendCatalogEpoch_=0;os->backendCatalogLoading_=false;os->backendCatalogRequested_=false;
+    os->backendCatalogEpoch_=0;os->backendCatalogLoading_=false;os->backendCatalogRequested_=false;os->backendCatalogRequest_=String();
     for(LuaHardwareJob& job:os->luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.state==0)
       os->cancelLuaRuntimeAi(job,"not_connected");
     for (LuaHardwareJob& job:os->luaJobs_) if (job.kind==LuaJobKind::Data && job.state==0 && job.started && job.aiRequestId.length())
@@ -7318,7 +7348,7 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
     }
   }
   if (connected) {
-    os->backendCatalogRequested_=false;os->backendCatalogLoading_=false;
+    os->backendCatalogRequested_=false;os->backendCatalogLoading_=false;os->backendCatalogAttemptAt_=0;os->backendCatalogFailures_=0;os->backendCatalogRequest_=String();
     os->buildJobsRequested_ = false;
     os->buildJobsRequestAt_ = 0;
     os->buildJobsRetryCount_ = 0;
@@ -7338,12 +7368,12 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   if (!connected && os->screen_ == Screen::AppsSettings) {
     os->backendCatalogLoading_ = false;
     os->backendCatalogRequested_ = false;
-    os->managerStatus_ = "Backend disconnected";
+    os->managerStatus_ = transfer?"Overfører app":"Backend disconnected";
   }
   os->redrawRequested_ = true;
   if (!connected && os->screen_ == Screen::AiDeveloper &&
       os->aiWorkflowState_ > 0) {
-    os->aiWorkflowText_ = "BACKEND OFFLINE";
+    os->aiWorkflowText_ = transfer?"Overfører app":"BACKEND OFFLINE";
   }
 }
 
@@ -7403,12 +7433,15 @@ void FireOS::servicePackageInstall() {
           backendClient_->sessionReady(),packageManager_->installSession().c_str(),packageManager_->installBoot().c_str(),
           backendClient_->sessionId().c_str(),backendClient_->bootId().c_str());
   const bool quiet=(!backendClient_ || (!backendClient_->active() && backendClient_->networkIdle())) && homeApp_.networkIdle();
+  const bool wasPaused=packageManager_->networkPaused();
   packageManager_->service(WiFi.status()==WL_CONNECTED,allowed,occupied,quiet,unexpired);
   if (packageManager_->networkPaused()) {
+    backendStatus_="Overfører app";
     if (backendClient_ && backendClient_->active()) backendClient_->disconnect();
     homeApp_.service(WiFi.status()==WL_CONNECTED,false);reverseTransport_.service(false);
     return;
   }
+  if (wasPaused && backendClient_) {backendStatus_=backendClient_->status();redrawRequested_=true;}
   if (!packageManager_->receiptReady()) return;
   if (!unexpired || (backendClient_->sessionReady() && !fire_package_delivery::sameScope(
       packageManager_->installSession().c_str(),packageManager_->installBoot().c_str(),
@@ -7675,7 +7708,7 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "app_backend_deleted") {
     const String deletedAppId = jsonStringField(message, "app_id");
-    for (uint8_t index = 0; index < backendAppCount_; ++index) {
+    for (uint8_t index = 0; jsonIntField(message,"remaining_versions",-1)==0 && index < backendAppCount_; ++index) {
       if (backendApps_[index].appId != deletedAppId) continue;
       backendApps_[index] = BackendAppInfo();
       for (uint8_t move = index + 1; move < backendAppCount_; ++move)
@@ -7688,7 +7721,7 @@ void FireOS::handleBackendMessage(const String& message) {
     appManagerDeleteMode_ = 0;
     rebuildAppManagerItems();
     managerStatus_ = "Backend app deleted";
-    backendCatalogRequested_ = false;
+    backendCatalogLoading_=false;backendCatalogRequest_=String();invalidateBackendCatalog();
     redrawRequested_ = true;
     return;
   }
@@ -7877,7 +7910,7 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "package_ready") {
-    backendCatalogRequested_=false;
+    invalidateBackendCatalog();
     aiPackageId_ = jsonStringField(message, "package_id");
     aiReadyPackageId_=aiPackageId_;
     const String projectId = jsonStringField(message, "project_id");
@@ -8360,7 +8393,7 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
           scanExternalApps();
           rebuildAppManagerItems();
           sendAppInventory();
-          backendCatalogRequested_ = false;
+          invalidateBackendCatalog();
         }
       } else if (index == 1 && appManagerDeleteMode_ == 2) {
         if (backendClient_ && backendClient_->appBackendDeleteConfirm(
@@ -9000,10 +9033,12 @@ bool FireOS::saveBackendSetupFields(const String& host, const String& port,
     return false;
 
   // Commit all four values together only after every field is valid.
+  const bool changed=backendHost_!=nextHost || backendPort_!=nextPort || backendToken_!=nextToken || backendDeviceId_!=nextDevice;
   backendHost_ = nextHost;
   backendPort_ = static_cast<uint16_t>(nextPort);
   backendToken_ = nextToken;
   backendDeviceId_ = nextDevice;
+  if (changed) clearBackendCatalog();
   aiApiKey_ = "";
   preferences.remove("openai_key");
   saveSettings();

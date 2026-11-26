@@ -96,7 +96,7 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
   for (size_t i = 0; i < expectedHash.length(); ++i) if (!isxdigit(static_cast<unsigned char>(expectedHash[i]))) return false;
   sessionId_=sessionId;bootId_=bootId;expiresAt_=expiresAt;
   receiptEvent_="ir-"+String(esp_random(),HEX)+"-"+String(esp_random(),HEX);
-  receiptFrozen_=false;cancelled_=false;io_.completed=false;
+  receiptFrozen_=false;preconnectedTls_=false;cancelled_=false;io_.completed=false;
   host_ = fireNetworkHost(host);
   secureEndpoint_ = fireNetworkTls(host, port);
   client_.secure(secureEndpoint_);
@@ -122,12 +122,29 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
 
 bool FireLuaPackageManager::cancelled() const {return cancelled_ || time(nullptr)>=expiresAt_;}
 void FireLuaPackageManager::queuedFailure(const String& reason) {
+  client_.stop(); // Ready TLS also owns buffers when package-task allocation fails.
   state_=State::Idle;
   io_.result(false,false,packageId_,String(),reason,installId_);
   delivery_.phase=fire_package_delivery::Phase::Cleanup;
   emitStatus(reason);
 }
+String FireLuaPackageManager::connectionFailure() const {
+  fire_backend_policy::ConnectFailure failure;
+  String reason="Backend download connection failed";
+  if (client_.lastConnectFailure(failure)) reason+=" (phase="+String(failure.phase>>8)+",tls="+String(failure.phase&255)+
+      ",err="+String(failure.error)+",ms="+String(failure.elapsedMs)+")";
+  return reason;
+}
+void FireLuaPackageManager::preconnect() {
+  // This call only creates/polls the existing Async worker; UI never does TLS.
+  client_.setTimeout(1200);
+  if (!client_.connect(host_.c_str(),port_,1200) &&
+      fire_backend_policy::progress(false,client_.connecting(),client_.stopping(),client_.running())==fire_backend_policy::Progress::Failed)
+    queuedFailure(connectionFailure());
+}
 void FireLuaPackageManager::startWorker() {
+  preconnectedTls_=secureEndpoint_;
+  if (!fire_package_delivery::handoffReady(preconnectedTls_,client_.ready())) {queuedFailure("Download connection lost before handoff");return;}
   mbedtls_sha256_init(&sha256_);
   mbedtls_sha256_starts_ret(&sha256_,0);
   lastDataAt_=millis();state_=State::Connecting;io_.running=true;
@@ -140,16 +157,17 @@ void FireLuaPackageManager::service(bool wifiConnected,bool allowed,bool busyNet
   io_.wifi=wifiConnected;
   if (io_.poll(status_) && statusCallback_) statusCallback_(callbackContext_,status_);
   const auto action=delivery_.poll(millis(),allowed && wifiConnected && unexpired,busyNetwork,socketsQuiet,
-      io_.running,client_.running(),io_.completed);
-  if (action==fire_package_delivery::Action::Start) startWorker();
-  else if (action==fire_package_delivery::Action::Cancel || action==fire_package_delivery::Action::Busy) {
+      io_.running,client_.running(),io_.completed,client_.ready());
+  if (action==fire_package_delivery::Action::Connect) {emitStatus("Connecting for download");preconnect();}
+  else if (action==fire_package_delivery::Action::Start) startWorker();
+  else if (action==fire_package_delivery::Action::Cancel || action==fire_package_delivery::Action::Busy || action==fire_package_delivery::Action::Timeout) {
     cancelled_=true;client_.stop();
-    if (!io_.running && !io_.completed) queuedFailure(action==fire_package_delivery::Action::Busy?"Installer network busy":"Download cancelled or expired");
+    if (!io_.running && !io_.completed) queuedFailure(action==fire_package_delivery::Action::Busy?"Installer network busy":action==fire_package_delivery::Action::Timeout?"Backend download connection timeout":"Download cancelled or expired");
   } else if (action==fire_package_delivery::Action::Notify) {
     // Callback can validate/amend this sole result before its immutable receipt.
     if (resultCallback_) resultCallback_(callbackContext_,io_.ok,io_.first,io_.completionId,io_.second,io_.message);
     receiptFrozen_=true;
-  }
+  } else if (delivery_.phase==fire_package_delivery::Phase::Connecting) preconnect();
 }
 void FireLuaPackageManager::task(void* context) {
   auto* self = static_cast<FireLuaPackageManager*>(context);
@@ -171,18 +189,15 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
     }
     if (!secureEndpoint_ && reverseTransport_ && !reverseClient_) reverseClient_ = reverseTransport_->acquire(reverseGeneration_);
     WiFiClient* client = activeClient();
-    if (!reverseClient_) {
+    if (preconnectedTls_) {
+      // Never restart TLS with the 16KiB package stack resident. A drop is a
+      // controlled failed command, not another connection attempt.
+      if (!fire_package_delivery::handoffReady(preconnectedTls_,client_.ready())) {fail("Download connection lost before request");return;}
+    } else if (!reverseClient_) {
       client_.setTimeout(1200);
-      if (!client_.connect(host_.c_str(), port_, 1200)) {
+      if (!client_.connect(host_.c_str(),port_,1200)) {
         if (fire_backend_policy::progress(false,client_.connecting(),client_.stopping(),client_.running())==fire_backend_policy::Progress::Waiting) return;
-        fire_backend_policy::ConnectFailure failure;
-        String reason="Backend download connection failed";
-        if (client_.lastConnectFailure(failure)) {
-          reason+=" (phase="+String(failure.phase>>8)+",tls="+String(failure.phase&255)+
-              ",err="+String(failure.error)+",ms="+String(failure.elapsedMs)+")";
-        }
-        fail(reason);
-        return;
+        fail(connectionFailure());return;
       }
     }
     const String request = "GET " + url_ + " HTTP/1.1\r\nHost: " + host_ + ":" +

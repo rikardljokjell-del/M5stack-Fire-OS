@@ -42,6 +42,7 @@ class NativeGuardTests(unittest.TestCase):
         self.assertIn("PASS Evolution bounded aggregates",output)
         self.assertIn("PASS actual AI menu renderer",output)
         self.assertIn("PASS cached update decisions",output)
+        self.assertIn("PASS bounded catalog refresh",output)
         self.assertIn("PASS exact work status READY Done",output)
 
     def test_local_app_update_decision_is_cache_only(self):
@@ -58,6 +59,27 @@ class NativeGuardTests(unittest.TestCase):
         download=choices.split("if(action==fire_app_updates::Action::Download)",1)[1]
         self.assertNotIn("userRunAfterInstall_=",download)
         self.assertNotIn("confirmRun(",download)
+
+    def test_catalog_refresh_retains_rows_and_owner_scope(self):
+        source=(ROOT/"src/fire_os.cpp").read_text(encoding="utf-8")
+        refresh=source.split("void FireOS::updateAppManagerBackend()",1)[1].split("void FireOS::parseBackendAppCatalog",1)[0]
+        self.assertIn("sessionReady()",refresh)
+        self.assertIn("catalogTimeout(",refresh)
+        self.assertNotIn("backendAppCount_=0",refresh)
+        self.assertNotIn("requestWifi(",refresh)
+        parser=source.split("void FireOS::parseBackendAppCatalog",1)[1].split("void FireOS::parseBackendAppVersions",1)[0]
+        self.assertLess(parser.index("catalogReply("),parser.index("backendCatalogSeen_|="))
+        self.assertLess(parser.index("if (!completed)"),parser.index("uint8_t write=0"))
+        self.assertIn("fire_app_updates::seen(",parser)
+        clear=source.split("void FireOS::clearBackendCatalog",1)[1].split("void FireOS::updateAppManagerBackend",1)[0]
+        self.assertIn("backendAppCount_=0",clear)
+        config=source.split("bool FireOS::saveBackendSetupFields",1)[1].split("void FireOS::",1)[0]
+        self.assertIn("if (changed) clearBackendCatalog();",config)
+        backend_state=source.split("void FireOS::backendState",1)[1].split("void FireOS::packageStatus",1)[0]
+        self.assertNotIn("backendAppCount_",backend_state)
+        button=(ROOT/"src/fire_os_ai_picker.inc").read_text(encoding="utf-8").split("void FireOS::handleAppUpdateButton",1)[1].split("void FireOS::drawAppUpdatePrompt",1)[0]
+        self.assertIn("fire_app_updates::knownEpoch(",button)
+        self.assertNotIn("60000",button)
 
     def test_button_capture_and_ui_cadence(self):
         output=self.run_native("native_input.cpp")

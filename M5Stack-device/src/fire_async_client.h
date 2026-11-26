@@ -19,6 +19,7 @@ class FireAsyncClient : public WiFiClient {
   bool connectBlocking(const char* host, uint16_t port, uint32_t timeoutMs,
                        const std::atomic<bool>* cancelled = nullptr);
   bool connecting() const { return state_.load() == State::Connecting; }
+  bool ready() const {return active_.load() && !stop_.load() && state_.load()==State::Ready;}
   bool stopping() const { return active_.load() && stop_.load(); }
   bool running() const { return active_.load(); }
   bool pendingWrites() const {

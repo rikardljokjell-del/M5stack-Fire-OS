@@ -115,7 +115,7 @@ void FireOS::drawAiPicker() {
     }
   }
   const char* rowsText[]={labels[0].c_str(),labels[1].c_str(),labels[2].c_str(),labels[3].c_str()};
-  const char* connection=!backendClient_ || !backendClient_->configured()?"Backend er ikke satt opp":backendClient_->sessionRejected()?"Tilkobling avvist":backendClient_->sessionReady()?"Backend er tilkoblet":"Kobler til backend";
+  const char* connection=packageManager_ && packageManager_->networkPaused()?"Overfører app":!backendClient_ || !backendClient_->configured()?"Backend er ikke satt opp":backendClient_->sessionRejected()?"Tilkobling avvist":backendClient_->sessionReady()?"Backend er tilkoblet":"Kobler til backend";
   fire_canvas_fill::Surface<M5Canvas> surface(ui);
   fire_ai_menu_ui::draw(surface,aiPickerPage_==Page::Apps?"SELECT APP":aiPickerPage_==Page::Settings?"SETTINGS":"AI DEVELOPER",connection,
       backendClient_ && backendClient_->sessionReady()?kGreen:kOrange,selectedName.c_str(),rowsText,rows,aiProjectSelection_-aiProjectOffset_,aiWorkflowText_.length()<=40?aiWorkflowText_.c_str():"Velg en handling",icons);
@@ -296,7 +296,7 @@ void FireOS::drawAiJobMenu() {
   const bool online=backendClient_ && backendClient_->sessionReady();
   fire_canvas_fill::Surface<M5Canvas> surface(ui);
   fire_ai_menu_ui::draw(surface,aiPickerPage_==Page::Jobs?"RESUME BYGGING":aiPickerPage_==Page::Work?"ARBEID":"VALGT JOBB",
-      online?"Backend er tilkoblet":"Backend er frakoblet",online?kGreen:kOrange,name.c_str(),text,rows,aiProjectSelection_-aiProjectOffset_,
+      packageManager_ && packageManager_->networkPaused()?"Overfører app":online?"Backend er tilkoblet":"Backend er frakoblet",online?kGreen:kOrange,name.c_str(),text,rows,aiProjectSelection_-aiProjectOffset_,
       status.c_str());
 }
 
@@ -372,7 +372,7 @@ void FireOS::handleAppUpdateButton(uint8_t index) {
   for(uint8_t i=0;i<luaAppCount_;++i) if(luaAppIds_[i]==appUpdateApp_ && luaAppPackageIds_[i]==appUpdateInstalled_) name=luaAppDisplayNames_[i];
   if(action==fire_app_updates::Action::Download) {
     bool exact=false;
-    if(backendClient_ && backendClient_->sessionReady() && WiFi.status()==WL_CONNECTED && backendClient_->connectionEpoch()==backendCatalogEpoch_ && millis()-backendCatalogAt_<=60000)
+    if(backendClient_ && backendClient_->sessionReady() && WiFi.status()==WL_CONNECTED && fire_app_updates::knownEpoch(backendClient_->connectionEpoch(),backendCatalogEpoch_))
       for(uint8_t i=0;i<backendAppCount_;++i) if(backendApps_[i].appId==appUpdateApp_ && backendApps_[i].projectId==appUpdateProject_ && backendApps_[i].latestPackageId==appUpdateCandidate_ && backendApps_[i].downloadable) exact=true;
     appUpdateRequest_="update-"+String(esp_random(),HEX)+String(millis(),HEX);
     if(exact && !(packageManager_ && packageManager_->busy()) && backendClient_->appDownload(appUpdateProject_,appUpdateCandidate_,appUpdateApp_,appUpdateRequest_)) {

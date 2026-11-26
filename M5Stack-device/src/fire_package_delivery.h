@@ -14,8 +14,10 @@ inline bool sameScope(const char* sid,const char* boot,const char* actualSid,con
 inline bool admittedScope(bool connected,const char* sid,const char* boot,const char* actualSid,const char* actualBoot) {
   return !connected || sameScope(sid,boot,actualSid,actualBoot);
 }
-enum class Phase:uint8_t {Idle,Waiting,Quiet,Worker,Cleanup,Receipt};
-enum class Action:uint8_t {None,Start,Cancel,Busy,Notify};
+inline bool handoffReady(bool preconnected,bool ready) {return !preconnected || ready;}
+
+enum class Phase:uint8_t {Idle,Waiting,Quiet,Connecting,Worker,Cleanup,Receipt};
+enum class Action:uint8_t {None,Connect,Start,Cancel,Busy,Timeout,Notify};
 struct Gate {
   Phase phase=Phase::Idle;
   uint32_t startedAt=0,lastReceiptAt=0;
@@ -23,7 +25,7 @@ struct Gate {
   void begin(uint32_t now,bool tls) {phase=Phase::Waiting;startedAt=now;lastReceiptAt=0;exclusive=tls;ownsQuiet=false;sent=false;}
   bool paused() const {return ownsQuiet && phase!=Phase::Receipt && phase!=Phase::Idle;}
   bool active() const {return phase!=Phase::Idle;}
-  Action poll(uint32_t now,bool allowed,bool busy,bool quiet,bool worker,bool network,bool completed) {
+  Action poll(uint32_t now,bool allowed,bool busy,bool quiet,bool worker,bool network,bool completed,bool ready=false) {
     if (phase==Phase::Waiting) {
       if (!allowed) return Action::Cancel;
       if (busy) return uint32_t(now-startedAt)>=12000?Action::Busy:Action::None;
@@ -32,8 +34,14 @@ struct Gate {
     }
     if (phase==Phase::Quiet) {
       if (!allowed) return Action::Cancel;
-      if (quiet) {phase=Phase::Worker;return Action::Start;}
+      if (quiet) {phase=Phase::Connecting;startedAt=now;return Action::Connect;}
       return uint32_t(now-startedAt)>=12000?Action::Busy:Action::None;
+    }
+    if (phase==Phase::Connecting) {
+      if (!allowed) return Action::Cancel;
+      if (uint32_t(now-startedAt)>=18000) return Action::Timeout;
+      if (ready) {phase=Phase::Worker;return Action::Start;}
+      return Action::None;
     }
     if (phase==Phase::Worker) {
       if (!worker && completed) phase=Phase::Cleanup;

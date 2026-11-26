@@ -57,9 +57,11 @@ class FireLuaPackageManager {
   fire_package_delivery::Gate delivery_;
   String sessionId_,bootId_,receiptEvent_;
   uint32_t expiresAt_=0;
-  bool receiptFrozen_=false;
+  bool receiptFrozen_=false,preconnectedTls_=false;
   std::atomic<bool> cancelled_{false};
   void startWorker();
+  void preconnect();
+  String connectionFailure() const;
   bool cancelled() const;
   void queuedFailure(const String& reason);
   FireIoMailbox io_;

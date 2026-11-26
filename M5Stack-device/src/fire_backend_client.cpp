@@ -652,8 +652,8 @@ bool FireBackendClient::appInventory(const String& appsJson, bool storageReady,
                                   ",\"apps\":" + appsJson);
 }
 
-bool FireBackendClient::appList(uint32_t offset) {
-  return sendEvent("app_list", ",\"offset\":" + String(offset));
+bool FireBackendClient::appList(uint32_t offset,const String& stableEventId) {
+  return sendEvent("app_list", ",\"offset\":" + String(offset),stableEventId);
 }
 
 bool FireBackendClient::appVersions(const String& projectId,
