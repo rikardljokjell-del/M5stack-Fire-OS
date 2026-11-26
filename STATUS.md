@@ -64,6 +64,12 @@ aktiv socket og alle 13 app-IDer i ferskt komplett inventar på sluttboot/epoch5
 Digitalt vater 0.1.6 er fortsatt READY med uendret arkivhash. Dette er
 oppstarts-/inventarbevis, ikke brukeraksept av de nye menyene eller appnedlasting.
 
+Ny brukerobservasjon etter RC8: arbeidslinjen under datoen står fortsatt på
+hovedskjermen. Én lesende backendkontroll kl. 20:38:01 Oslo viste null aktive
+jobber og Vater-bygg/reparasjon READY; ingen nytt nedlastingsforsøk var gjort.
+En avgrenset native-retting av aktiv-/ferdigindikatoren pågår. Bekreftet READY
+skal vise «Done», mens feil, pause og ukjent status ikke skal fremstilles som arbeid.
+
 ### Backend-sync og sikker nettilgang – 26. november
 
 **Målrettet retting etter adressebyttet:** Brukeren fikk ikke koblet FIRE til den

@@ -42,6 +42,7 @@ class NativeGuardTests(unittest.TestCase):
         self.assertIn("PASS Evolution bounded aggregates",output)
         self.assertIn("PASS actual AI menu renderer",output)
         self.assertIn("PASS cached update decisions",output)
+        self.assertIn("PASS exact work status READY Done",output)
 
     def test_local_app_update_decision_is_cache_only(self):
         source=(ROOT/"src/fire_os_ai_picker.inc").read_text(encoding="utf-8")

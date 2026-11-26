@@ -77,7 +77,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc8";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc9";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -4714,7 +4714,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       buildNoticeActive_ = false;
       open(Screen::AiDeveloper);
       aiBuildId_ = noticeBuild;
-      backgroundBuildActive_ = true;
+      backgroundBuildActive_ = false;
       aiWorkflowState_ = 4;
       aiWorkflowText_ = "Åpner ferdig app";
     } else if (index == 2) {
@@ -5498,7 +5498,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
   if (aiProjectPickerActive_) {handleAiPicker(index);return;}
   if (index==0 && aiWorkflowState_==1) return;
   if (aiWorkflowState_==4 && !aiBuildId_.length()) {
-    if (index==0) {backgroundBuildActive_=true;home();return;}
+    if (index==0) {home();return;}
     if (index==2) {cancelConversationTurn("Avbryter",false);return;}
   }
   if (index==2 && (aiWorkflowState_==0 || aiWorkflowState_==6 || (aiVoiceTestMode_ && !aiAudioCaptureActive_ && !aiVoiceTestPlaybackActive_))) {
@@ -5560,7 +5560,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
   } else if (index == 0 && aiWorkflowState_ == 4 &&
              backgroundBuildsSupported_ && aiBuildId_.length() > 0) {
     if (backendClient_ && backendClient_->buildBackground(aiBuildId_)) {
-      backgroundBuildActive_ = true;
+      // Keep the last authoritative work status; this is only a view change.
       aiWorkflowText_ = "Bygger i bakgrunnen";
       goToBootApp();
     }
@@ -5589,7 +5589,6 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
              backgroundBuildsSupported_ && aiBuildId_.length() > 0) {
     if (backendClient_ && backendClient_->buildCancel(aiBuildId_)) {
       aiWorkflowText_ = "Avbryter bygging";
-      backgroundBuildActive_ = true;
     }
   } else if (index == 2 &&
              (aiWorkflowState_ == 1 || aiWorkflowState_ == 2 ||
@@ -6715,6 +6714,8 @@ void FireOS::handleLuaRepairStatus(const String& message) {
     luaErrorAppId_=luaRepairAppId_;luaErrorAppName_=aiRepairResumeName();
     luaAppError_="Reparasjon av "+luaErrorAppName_;aiRepairResumePending_=false;
   }
+  const bool wasReady=luaRepairStatus_=="ready" && incomingRepair==luaRepairId_ &&
+      jsonStringField(message,"package_id")==luaRepairReadyPackageId_;
   if (incomingRepair.length() > 0) luaRepairId_ = incomingRepair;
   const String incomingProject = jsonStringField(message, "project_id");
   const String incomingProposal = jsonStringField(message, "proposal_id");
@@ -6730,6 +6731,8 @@ void FireOS::handleLuaRepairStatus(const String& message) {
   if(!luaRepairMessage_.length()) luaRepairMessage_=compactStatusText(jsonStringField(message,"message"));
   luaRepairProgress_ = static_cast<uint8_t>(
       constrain(jsonIntField(message, "progress",luaRepairProgress_), 0, 100));
+  workCompletedAt_=fire_ai_menu::completionStamp(millis(),workCompletedAt_,wasReady,
+      luaRepairStatus_.c_str(),luaRepairPhase_.c_str(),luaRepairReadyPackageId_.c_str());
   luaRepairPrepareSent_ = true;
   if (luaRepairId_.length() > 0) {
     preferences.putString("repair_id", luaRepairId_);
@@ -6743,6 +6746,9 @@ void FireOS::handleLuaRepairStatus(const String& message) {
     preferences.putUChar("repair_progress", luaRepairProgress_);
   }
 
+  const String repairBuild=jsonStringField(message,"build_id");
+  if (fire_ai_menu::stopsTrackedWork(aiBuildId_.c_str(),repairBuild.c_str(),luaRepairStatus_.c_str(),luaRepairPhase_.c_str()))
+    backgroundBuildActive_=false;
   const bool repairQueued = luaRepairStatus_ == "queued" ||
                             luaRepairStatus_ == "building" ||
                             luaRepairStatus_ == "testing";
@@ -6903,11 +6909,17 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       if (openingBuild && buildJobIds_[i]==aiJobBuild_) {restoreAiJob(item);opened=true;}
       const String phase=aiJobText(item,"phase");String text=aiJobText(item,"display_text");
       if(!text.length()) text=aiJobText(item,"message");
-      const bool finished=buildJobStatuses_[i]=="ready" || buildJobStatuses_[i]=="failed" || buildJobStatuses_[i]=="cancelled";
+      if (fire_ai_menu::stopsTrackedWork(aiBuildId_.c_str(),buildJobIds_[i].c_str(),buildJobStatuses_[i].c_str(),phase.c_str())) {
+        const String package=aiJobText(item,"package_id");
+        if (fire_ai_menu::workReady(buildJobStatuses_[i].c_str(),phase.c_str(),package.c_str()) && buildPhase_!="ready") workCompletedAt_=millis();
+        else if (buildJobStatuses_[i]!="ready") workCompletedAt_=0;
+        backgroundBuildActive_=false;buildPhase_=phase;
+      }
       const bool selected=!aiJobViewing_ || (!aiJobRepair_.length() && aiJobBuild_==buildJobIds_[i]);
-      const bool active=selected && buildJobIds_[i].length() && !finished && (buildJobStatuses_[i].length() || phase.length());
+      const bool active=selected && buildJobIds_[i].length() && fire_ai_menu::workActive(buildJobStatuses_[i].c_str(),phase.c_str());
       const uint8_t priority=buildJobStatuses_[i]=="queued" && phase=="queued"?1:2;
       if(active && (!activeBuildFound || priority>activeBuildPriority)) {
+        workCompletedAt_=0;
         activeBuildFound=true;activeBuildPriority=priority;aiBuildId_=buildJobIds_[i];
         aiProjectName_=buildJobNames_[i].length()?buildJobNames_[i]:String("Appnavn ikke hentet");
         const cJSON* value=cJSON_GetObjectItemCaseSensitive(item,"progress");
@@ -6920,9 +6932,6 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     }
     cJSON_Delete(document);
     if(openingBuild && !opened) {aiJobOpenPending_=false;aiJobCanOpen_=false;aiWorkflowText_="Jobblisten er endret. Velg igjen";}
-    if (!activeBuildFound && !buildNoticeActive_) {
-      backgroundBuildActive_ = false;
-    }
     aiResumeAvailable_ = buildJobCount_ > 0;
     redrawRequested_ = true;
     return;
@@ -6971,6 +6980,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     const String state = jsonStringField(message, "state");
     const String incomingPhase = jsonStringField(message, "phase");
     const String readyPackage=jsonStringField(message,"package_id");
+    const bool wasReady=buildPhase_=="ready" && readyPackage.length() && readyPackage==aiReadyPackageId_;
     const String errorCode = jsonStringField(message, "error_code");
     const String errorStatus = jsonStringField(message, "error_status");
     const String diagnostic = jsonStringField(message, "diagnostic_message");
@@ -7021,6 +7031,8 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       aiBuildRetryPending_ = false;
       aiAssistantText_ = "";
     }
+    workCompletedAt_=fire_ai_menu::completionStamp(millis(),workCompletedAt_,wasReady,
+        status.c_str(),incomingPhase.c_str(),readyPackage.c_str());
     buildProgress_ = static_cast<uint8_t>(
         constrain(buildProgressField(message,aiBuildProgress_), 0, 100));
     buildPhase_ = incomingPhase;
@@ -7056,13 +7068,18 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     } else {
       aiWorkflowState_ = 4;
       aiDeveloperMode_ = 2;
-      backgroundBuildActive_ = true;
+      backgroundBuildActive_ = fire_ai_menu::workActive(status.c_str(),buildPhase_.c_str());
     }
   } else if (type == "build_ready_notice") {
     if (buildId == buildNoticePendingId_) return;
     if (buildId.length() > 0 && buildId == buildNoticeAckedId_) {
       redrawRequested_ = true;
       return;
+    }
+    const String noticePackage=jsonStringField(message,"package_id");
+    if (buildId.length() && fire_ai_menu::workReady(jsonStringField(message,"status").c_str(),jsonStringField(message,"phase").c_str(),noticePackage.c_str())) {
+      if (buildId!=buildNoticeId_ || noticePackage!=buildNoticePackageId_) workCompletedAt_=millis();
+      if (buildId==aiBuildId_) backgroundBuildActive_=false;
     }
     buildNoticeActive_ = true;
     buildNoticeId_ = buildId;
@@ -7096,11 +7113,12 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       buildNoticePendingEvent_ = "";
     }
   } else if (type == "build_backgrounded") {
-    backgroundBuildActive_ = true;
+    // This ACK changes visibility, not the job state or completion.
+    backgroundBuildActive_ = backgroundBuildActive_ && fire_ai_menu::workPhase(buildPhase_.c_str());
     aiWorkflowText_ = "Bygger i bakgrunnen";
     aiWorkflowState_ = 4;
   } else if (type == "build_cancelled") {
-    backgroundBuildActive_ = false;
+    backgroundBuildActive_ = false;workCompletedAt_=0;
     aiWorkflowState_ = 0;
     aiBuildRetryPending_ = false;
     aiWorkflowText_ = "Bygging avbrutt";
@@ -9937,19 +9955,10 @@ void FireOS::drawStatusBar(const char* title) {
                 : (bluetoothEnabled_ || bluetoothRadioReady) ? 3 : 0;
   drawBluetoothIcon(276, 5, bluetoothState);
   drawBatteryIcon(298, 6, batteryLevel(), batteryCharging());
-  if (backgroundBuildActive_) {
-    drawRounded(112, 23, 96, 3, 1, kMuted, false);
-    drawRounded(113, 24,
-                     max<int>(2, 94 * buildProgress_ / 100), 1, 1, kCyan, true);
-  } else if (luaRepairRequested_ && luaRepairProgress_ > 0 &&
-             luaRepairStatus_ != "ready") {
-    drawRounded(112, 23, 96, 3, 1, kMuted, false);
-    drawRounded(113, 24,
-                     max<int>(2, 94 * luaRepairProgress_ / 100), 1, 1,
-                     kOrange, true);
-  } else if (buildNoticeActive_) {
-    ui.fillCircle(160, 24, 2, kGreen);
-  }
+  const bool build=backgroundBuildActive_ && aiBuildId_.length() && fire_ai_menu::workPhase(buildPhase_.c_str());
+  const bool repair=luaRepairId_.length() && fire_ai_menu::workActive(luaRepairStatus_.c_str(),luaRepairPhase_.c_str());
+  const auto indicator=fire_ai_menu::workIndicator(build,repair,millis(),workCompletedAt_);
+  fire_ai_menu_ui::workStatus(surface,indicator,build?buildProgress_:luaRepairProgress_);
 }
 
 void FireOS::drawFooter(const char* left, const char* middle, const char* right) {
@@ -10907,7 +10916,7 @@ void FireOS::drawLuaApp() {
                  ? kGreen
                  : kOrange,
              1, kBg);
-    if (luaRepairProgress_ > 0 && luaRepairStatus_ != "ready") {
+    if (fire_ai_menu::workActive(luaRepairStatus_.c_str(),luaRepairPhase_.c_str())) {
       drawRounded(32, 160, 256, 10, 4, kMuted, false);
       drawRounded(34, 162,
                        max<int>(2, 252 * luaRepairProgress_ / 100), 6, 3,

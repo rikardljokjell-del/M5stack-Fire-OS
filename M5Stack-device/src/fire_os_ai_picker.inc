@@ -215,7 +215,7 @@ bool FireOS::sendAiJobAction(const String& action) {
     aiProjectPickerActive_=false;
     if (!startAiRecording()) {aiWorkflowText_=aiAudioError_;return false;}
   } else if (action!="background") return false;
-  if (action=="background") {backgroundBuildActive_=job || aiWorkflowState_==2 || aiWorkflowState_==4;home();}
+  if (action=="background") {home();}
   else if (action=="resume") {
     aiProjectName_=aiJobName_;aiProjectPickerActive_=false;
     if (aiJobBuild_.length()) {aiBuildId_=aiJobBuild_;aiBuildResumePending_=false;aiWorkflowState_=4;aiDeveloperMode_=2;}

@@ -139,5 +139,54 @@ int main() {
   assert(offset==length);
   const char* utf8="æøåÆØÅ æøåÆØÅ æøåÆØÅ æøåÆØÅ æøåÆØÅ æøåÆØÅ æøåÆØÅ";
   offset=0;while (offset<strlen(utf8)) {offset=fire_ai_menu_ui::line(utf8,strlen(utf8),offset,line,284);size_t at=0;uint32_t cp=0;while(at<strlen(line)) assert(fire_app_bitmap::codepoint(line,strlen(line),at,cp));}
+  {
+    for (const char* phase:{"queued","preparing","generating","validating","compiling","testing","reviewing","packaging","api_wait"}) {
+      assert(workActive("building",phase));assert(workActive("",phase));
+    }
+    for (const char* status:{"ready","failed","cancelled","paused","interrupted","unknown","awaiting_confirmation","unavailable","not_found"}) {
+      assert(!workActive(status,"generating"));assert(!workActive("",status));
+    }
+    assert(!workActive("building","paused") && !workActive("building","unknown"));
+    assert(!stopsTrackedWork("active-B","history-A","ready","ready")); // another paginated row cannot hide B
+    assert(!stopsTrackedWork("active-B","active-B","building","testing"));
+    assert(stopsTrackedWork("active-B","active-B","paused","paused"));
+    assert(stopsTrackedWork("active-B","active-B","ready","ready"));
+    assert(!stopsTrackedWork("","history-A","ready","ready"));
+
+    assert(workReady("ready","ready","verified-package") && workReady("","ready","verified-package"));
+    assert(!workReady("building","testing","verified-package") && !workReady("ready","ready",""));
+    assert(!workReady("failed","ready","verified-package")); // 100 percent or stale phase cannot produce Done
+    assert(workIndicator(false,false,1000,0)==WorkIndicator::None);
+    assert(workIndicator(false,false,6999,1000)==WorkIndicator::Done);
+    assert(workIndicator(false,false,7000,1000)==WorkIndicator::None);
+    assert(workIndicator(true,false,1100,1000)==WorkIndicator::Build); // ready A cannot hide active B
+    assert(workIndicator(false,true,1100,1000)==WorkIndicator::Repair);
+    assert(doneVisible(20,UINT32_MAX-100) && !doneVisible(6000,UINT32_MAX-100));
+    uint32_t done=completionStamp(1000,0,false,"ready","ready","package-A");
+    assert(done==1000 && completionStamp(2000,done,true,"ready","ready","package-A")==1000);
+    for (const char* status:{"failed","paused","cancelled","unknown","awaiting_confirmation"})
+      assert(completionStamp(2000,done,true,status,status,"package-A")==0);
+    done=completionStamp(2000,done,false,"building","generating",""); // new active B clears A
+    assert(done==0);
+    done=completionStamp(2500,done,false,"failed","failed","");
+    assert(workIndicator(false,false,2600,done)==WorkIndicator::None);
+
+    for (WorkIndicator kind:{WorkIndicator::Build,WorkIndicator::Repair,WorkIndicator::Done,WorkIndicator::None}) {
+      canvas.fillRect(0,0,320,240,FireUI::Bg);
+      FireUI::text(canvas,10,7,"20:38",FireUI::Text,"ui12b",48);
+      FireUI::text(canvas,72,7,"26.11.2026",FireUI::Muted,"ui12",138,1);
+      // Reserved status-icon region and separator must remain untouched.
+      canvas.fillRect(232,5,78,18,FireUI::Blue);canvas.fillRect(10,27,300,1,FireUI::Border);
+      const auto before=canvas.pixels;
+      fire_ai_menu_ui::workStatus(canvas,kind,100);
+      unsigned changed=0;
+      for (int y=0;y<240;++y) for (int x=0;x<320;++x) if (before[y*320+x]!=canvas.pixels[y*320+x]) {
+        ++changed;assert(x>=112 && x<208 && y>=20 && y<27);
+        assert(before[y*320+x]==FireUI::Bg); // never covers date, time, icons or border
+      }
+      assert(kind==WorkIndicator::None?changed==0:changed>0);
+    }
+    puts("PASS exact work status READY Done expiry wrap and actual320x240 header no-overlap rendering");
+  }
   puts("PASS actual AI menu renderer Resume footer parity long UTF8 names independent job mapping and32app pagination");
 }

@@ -1,10 +1,24 @@
 #pragma once
 #include "fire_ui.h"
+#include "fire_ai_menu.h"
 #include <cstring>
 
 // One layout for the AI Developer picker and all of its settings subpages.
 // It is rendered by the firmware and the portable pixel/bounds regression.
 namespace fire_ai_menu_ui {
+// Same bounded header strip for progress and a short verified-ready notice.
+template<class Surface>
+void workStatus(Surface& canvas,fire_ai_menu::WorkIndicator kind,uint8_t progress) {
+  using fire_ai_menu::WorkIndicator;
+  if (kind==WorkIndicator::Done) {
+    FireUI::text(canvas,112,17,"Done",FireUI::Green,"small10",96,1);
+  } else if (kind==WorkIndicator::Build || kind==WorkIndicator::Repair) {
+    FireUI::roundRect(canvas,112,23,96,3,1,FireUI::Muted,false);
+    const int width=progress>100?94:94*progress/100;
+    canvas.fillRect(113,24,width<2?2:width,1,kind==WorkIndicator::Build?FireUI::Accent:FireUI::Amber);
+  }
+}
+
 inline size_t line(const char* text,size_t length,size_t offset,char (&out)[81],int width,const char* font="ui12") {
   const size_t start=offset;size_t end=start,space=start;int advance=0;
   while (offset<length && offset-start<80) {

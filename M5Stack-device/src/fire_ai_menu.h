@@ -2,6 +2,37 @@
 #include <stdint.h>
 #include <cstring>
 namespace fire_ai_menu {
+// Backend work facts only: minimizing and 100 percent are not completion.
+inline bool workPhase(const char* phase) {
+  if (!phase) return false;
+  const char* active[]={"queued","building","preparing","generating","validating","compiling","testing","reviewing","review","packaging","api_wait"};
+  for (const char* value:active) if (!strcmp(phase,value)) return true;
+  return false;
+}
+inline bool workActive(const char* status,const char* phase) {
+  if (status && *status) {
+    if (strcmp(status,"queued") && strcmp(status,"building") && strcmp(status,"testing")) return false;
+    // An explicit terminal/waiting phase must not inherit an older active status.
+    return !phase || !*phase || workPhase(phase);
+  }
+  return workPhase(phase);
+}
+inline bool stopsTrackedWork(const char* tracked,const char* received,const char* status,const char* phase) {
+  return tracked && *tracked && received && !strcmp(tracked,received) && !workActive(status,phase);
+}
+inline bool workReady(const char* status,const char* phase,const char* package) {
+  return package && *package && (status && *status? !strcmp(status,"ready") && (!phase || !*phase || !strcmp(phase,"ready")):
+      phase && !strcmp(phase,"ready"));
+}
+inline uint32_t completionStamp(uint32_t now,uint32_t previous,bool wasReady,const char* status,const char* phase,const char* package) {
+  return workReady(status,phase,package)?(wasReady?previous:now):0;
+}
+inline bool doneVisible(uint32_t now,uint32_t completedAt) {return completedAt && uint32_t(now-completedAt)<6000;}
+enum class WorkIndicator:uint8_t {None,Build,Repair,Done};
+inline WorkIndicator workIndicator(bool build,bool repair,uint32_t now,uint32_t completedAt) {
+  return build?WorkIndicator::Build:repair?WorkIndicator::Repair:doneVisible(now,completedAt)?WorkIndicator::Done:WorkIndicator::None;
+}
+
 enum class Kind:uint8_t {Chat,NewApp,SelectApp,Evolution,Settings,Back,App,Runtime,Models,Usage,Limits,Voice,Connection,Jobs};
 struct Item {Kind kind;uint8_t index=0;};
 enum class Page:uint8_t {Main,Apps,Settings,Jobs,Job,Work};

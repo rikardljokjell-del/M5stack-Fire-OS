@@ -621,6 +621,7 @@ class FireOS {
   bool backgroundBuildsSupported_ = false;
   bool failedBuildResumeSupported_ = false;
   bool backgroundBuildActive_ = false;
+  uint32_t workCompletedAt_ = 0;
   bool buildJobsRequested_ = false;
   bool aiResumeAvailable_ = false;
   bool aiBuildResumePending_ = false;
