@@ -41,15 +41,40 @@ og overgang tilbake til vanlig manuelt arbeid. Fullsuiten ble ikke gjentatt.
 GEPA-kjernen, låst holdout, replay fra faktisk lagringsformat og tre normale
 Builder-baser/kandidater er prøvd offline; dette er ikke en live AI-rangering.
 
+Den avsluttende Python 3.11/Linux-kontrollen er **181/181 PASS**, 32,47 s
+([CI](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45788517423)).
+Første Linux-kjøring avdekket en reell kappløpsfeil der et allerede publisert
+BUILD-forslag kunne bli avvist før tekstoppgaven hadde avsluttet sin siste
+statusmelding. Bekreftelsen venter nå kort på akkurat denne oppgaven og
+revaliderer forslag/sesjon; hele protokollbolken bestod 20/20 tester.
+Manglende GUI-skjerm i CI og en test med eksakt flyttallsammenligning er også
+rettet uten å endre kostnadsberegning eller tilgangskontroll.
+
+Sluttpakken for Python er kontrollert mot alle backendkildene og prøvd isolert
+med ekte GEPA, Evolution av og nettverk blokkert. Windows-pakken er bygget;
+70 innebygde moduler er sammenlignet med kildekodens bytekode, og ressurser,
+GEPA-metadata og lisenser er kontrollert. Den usignerte EXE-filen er ikke kjørt
+fordi Windows App Control blokkerer den. Dette er ikke Windows-runtimebevis.
+
 Firmware **1.6.0-rc2**, kilde `d0fff47c5218cbc30ace0edd53d6edd02b43daee`, har
 [grønn firmware-CI](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45784404031)
 med faktiske native tester og normal/recovery/bootloader-link. Manuelle bygg
 åpnes gjennom kilde-/prosjektbundet eksisterende Developer-forslag, også for
 godkjente prøver på flere apper. BUILD, installasjon og RUN omgås ikke.
+Den private signerte RC2-pakken har bestått en uavhengig kontroll av signatur,
+hasher, bilder og partisjonsoppsett. Ingen serieport ble åpnet. Alle 68
+tidligere publiserte firmwarefiler er kontrollert byteuendret.
 
-Ny backend-/firmwareaktivering, brukerbetjening og fysisk Evolution-sløyfe er
-fortsatt utestående. Ingen betalte AI-kall, firmwareoppdatering eller ny
-brukerapphandling er gjort i denne oppgaven. Nåværende måleapp/skjerm bevares
+Den integrerte backenden er aktivert etter tre ferske tomme aktivitetskontroller,
+grasiøs lukking og én kjøring av eksisterende launcher. Én ny lytter, HTTP/UI/
+ressurser, Evolution-status og tilgangskontroller er verifisert. Rå innstillinger
+og Vault-fingeravtrykk er uendret; Evolution er fortsatt deaktivert med alle fem
+brytere av. Ingen brukerappkommando ble sendt.
+
+Firmwareinstallasjon, brukerbetjening, live AI-prøve og fysisk Evolution-sløyfe
+er fortsatt utestående. Brukeren er bedt om separat installasjonsgodkjenning.
+Ingen betalte AI-kall, firmwareoppdatering eller ny brukerapphandling er gjort
+i denne oppgaven. Nåværende måleapp/skjerm bevares
 til brukerens utsatte avlesning; oppstartsbeviset nedenfor er ikke godkjent
 måleflyt. Eldre signerte pakker og publiserte firmwarefiler er bevart.
 
