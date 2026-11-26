@@ -24,7 +24,7 @@ Brukeren mister jobbvinduet etter minimering: ferdig «Digitalt vater» vises ba
 med «Fjern fra listen» under Resume. Backend har allerede `can_open=true`, men
 native-menyen skiller ikke dette fra `can_resume` og mister reparasjons-ID ved
 en tilknyttet byggejobb. En integrert «Åpne jobb»-vei via eksisterende status og
-leveringsrutiner implementeres; den skal ikke starte et nytt betalt bygg.
+leveringsrutiner er implementert i RC8; visning starter ikke et nytt betalt bygg.
 
 Den brukerstartede reparasjonen har laget Digitalt vater 0.1.6 som READY-pakke,
 med 34 beståtte PC-profiler. Fysisk callback-timing er ikke bekreftet: brukeren
@@ -45,9 +45,24 @@ og riktig arkivhash; dette er ikke fysisk installasjon på FIRE. Neste feildetal
 føres i eksisterende installasjonskvittering fremfor en parallell loggflyt.
 Den nye backend-regresjonen har bestått to faktiske offlineflyter gjennom Builder,
 status, eksplisitt nedlasting, hashbundet installasjonskvittering og normal RUN-port.
-Dette er simulert enhetsprotokoll, ikke fysisk nedlasting. Native-endringene er
-objektkompilert; samlet Linux-kjøring, full firmwarelink og fysisk levering gjenstår.
-Disse endringene er ennå ikke fysisk levert eller verifisert.
+Dette er simulert enhetsprotokoll, ikke fysisk nedlasting. RC8 har bestått de sju kjørbare native-testene, 32 Python/native-regresjoner og
+full Linux-bygging av normalfirmware, recovery og bootloader. Backendporten har
+294 PASS og to miljøbetingede skips. Første fullbygg fanget en C++11-
+kompatibilitetsfeil i den nye feildatatypekonstruktøren; en avgrenset retting og
+egen C++11-kompileringsregresjon bestod før ny samlet grønn kjøring.
+Privat RC8-pakke er signert og uavhengig hash-/layoutkontrollert;
+IRAM er 130 398 av 131 072 byte, statisk DRAM er uendret 64 212 byte.
+Alle 68 tidligere firmwarefiler er kontrollert uendret. RC8 er fysisk installert
+som A57 VALID/CRC etter eksakt 2 751 280-byte SHA256-tilbakeavlesning.
+RC7 B56 og dens metadatasektor er bevart. Første 45-sekunders helsekontroll og
+35-sekunders normal omstart fikk begge strict-TLS-tilkobling og faktisk
+session-adopsjon, uten registrert TLS-feil, panic eller WDT. Ingen app ble startet
+av installasjonskontrollen. Brukerprøve av jobbåpning og nedlasting er forespurt;
+gjenåpning, oppdateringsvalg, vellykket appnedlasting og fysisk callback-retting
+er fortsatt åpne testpunkter. Én sluttavlesning kl. 20:35:11 Oslo bekreftet RC8,
+aktiv socket og alle 13 app-IDer i ferskt komplett inventar på sluttboot/epoch500.
+Digitalt vater 0.1.6 er fortsatt READY med uendret arkivhash. Dette er
+oppstarts-/inventarbevis, ikke brukeraksept av de nye menyene eller appnedlasting.
 
 ### Backend-sync og sikker nettilgang – 26. november
 
