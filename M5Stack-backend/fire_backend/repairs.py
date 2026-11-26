@@ -33,8 +33,8 @@ class Repairs:
         job['updated_at']=time.time()
         self.store.put('repairs',job['id'],job,critical=True)
 
-    def active_project(self, project_id):
-        return any(j['project_id']==project_id and j['status'] in ACTIVE for j in self.store.list('repairs'))
+    def active_project(self, project_id, *, jobs=None):
+        return any(j['project_id']==project_id and j['status'] in ACTIVE for j in (self.store.list('repairs') if jobs is None else jobs))
 
     def owned(self, session, job_id):
         job=self.store.get('repairs',job_id)

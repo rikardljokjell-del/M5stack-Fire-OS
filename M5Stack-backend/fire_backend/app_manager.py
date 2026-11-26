@@ -28,7 +28,7 @@ class AppManager:
         except ValueError as error:
             return False,str(error)
 
-    def manager_delete_check(self,session,project,*,held_lock=False):
+    def manager_delete_check(self,session,project,*,held_lock=False,snapshot=None):
         if session.target!="device" or session.protocol_version!="0.2" or project.get("owner_device_id")!=session.device_id:
             raise PermissionError("Appen tilhører ikke denne enheten.")
         try:
@@ -37,7 +37,7 @@ class AppManager:
             return False,str(error)
         # The caller may be the idle session selecting this app. It is rehomed
         # only after explicit confirmation; every other session still blocks.
-        return self.backend_delete_check(project,ignore_session_id=session.id)
+        return self.backend_delete_check(project,ignore_session_id=session.id,snapshot=snapshot)
 
     def app_revision_hash(self,project):
         return hashlib.sha256(canonical({"project_id":project["id"],"latest":project.get("latest_package"),

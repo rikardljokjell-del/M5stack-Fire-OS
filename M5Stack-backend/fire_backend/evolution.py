@@ -415,8 +415,8 @@ class Evolution:
         job['updated_at']=time.time();job['message']=PHASES.get(job['state'],'Evolution oppdateres')
         self.store.put('evolution_jobs',job['id'],job,critical=True)
 
-    def active_project(self,project_id):
-        for job in self.store.list('evolution_jobs'):
+    def active_project(self,project_id,*,jobs=None):
+        for job in (self.store.list('evolution_jobs') if jobs is None else jobs):
             if job['state'] not in ACTIVE|{'awaiting_build_confirm'} and not self.in_flight(job['id']):continue
             mandate=self.store.get('evolution_mandates',job['mandate_id'])
             if job['project_id']==project_id or project_id in mandate.get('project_bindings',{}):return True

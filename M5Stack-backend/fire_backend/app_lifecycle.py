@@ -50,7 +50,9 @@ class AppLifecycle(AppManager):
             raise ValueError("Velg en app som finnes i denne enhetens backendhistorikk.")
         return matches[0]
 
-    def app_versions(self, project):
+    def app_versions(self, project, *, snapshot=None):
+        if snapshot is not None:
+            return snapshot['versions'].get(project['id'], [])
         builds = {b["id"]: b for b in self.store.list("builds")}
         packages = [p for p in self.store.list("packages") if p["project_id"] == project["id"]
                     and builds.get(p["build_id"], {}).get("status") == "ready"]
@@ -59,8 +61,8 @@ class AppLifecycle(AppManager):
     def app_presence(self, device, app_id):
         return device.get("apps", {}).get(app_id, {})
 
-    def update_base(self, project, device):
-        versions = self.app_versions(project)
+    def update_base(self, project, device, *, snapshot=None):
+        versions = self.app_versions(project, snapshot=snapshot)
         if not versions:
             raise ValueError("Appen har ingen testet versjon å oppdatere.")
         present = self.app_presence(device, self.project_app_id(project))
@@ -68,16 +70,16 @@ class AppLifecycle(AppManager):
                       project.get("latest_package")]
         return next((p for candidate in candidates for p in versions if p["id"] == candidate), versions[0])
 
-    def backend_delete_check(self, project, *, ignore_session_id=None):
+    def backend_delete_check(self, project, *, ignore_session_id=None, snapshot=None):
         if any(r['project_id']==project['id'] for r in self.data_engine.tasks.values()):
             return False,'Databehandling pågår. Vent eller avbryt først.'
         if any(r['project_id']==project['id'] for r in self.runtime_ai.tasks.values()):
             return False,'AI-analyse pågår. Vent eller avbryt først.'
         if any(item['build']['project_id']==project['id'] and not item['task'].done() for item in self.device_builds.values()):
             return False,'Appen bygges i bakgrunnen.'
-        if self.repairs.active_project(project['id']):
+        if self.repairs.active_project(project['id'], jobs=snapshot['repairs'] if snapshot else None):
             return False,'Appen repareres i bakgrunnen. Vent til reparasjonen er ferdig før sletting.'
-        if hasattr(self,'evolution') and self.evolution.active_project(project['id']):
+        if hasattr(self,'evolution') and self.evolution.active_project(project['id'], jobs=snapshot['evolution_jobs'] if snapshot else None):
             return False,'Evolution arbeider med appen. Stopp jobben før sletting.'
         device_id = project.get("owner_device_id")
         active=[s for s in self.sessions.values() if not s.stopped and s.project_id==project["id"] and s.id!=ignore_session_id]
@@ -85,12 +87,14 @@ class AppLifecycle(AppManager):
             return False,"Appen er åpen i en PC-samtale. Avslutt PC-samtalen før sletting."
         if active:
             return False, "Velg Ny app eller en annen app før historikken slettes."
-        if any(p["id"] in self.active_downloads for p in self.app_versions(project)):
+        if any(p["id"] in self.active_downloads for p in self.app_versions(project, snapshot=snapshot)):
             return False, "En nedlasting av appen pågår fortsatt."
         if not device_id:  # Existing PC-only mock projects never assert SD state.
             return True, ""
+        if snapshot is not None and not snapshot['device']:
+            return False, "FIRE har ikke bekreftet at appen er slettet."
         try:
-            device = self.store.get("devices", device_id)
+            device = snapshot['device'] if snapshot is not None else self.store.get("devices", device_id)
         except FileNotFoundError:
             return False, "FIRE har ikke bekreftet at appen er slettet."
         presence = self.app_presence(device, self.project_app_id(project))
@@ -102,9 +106,9 @@ class AppLifecycle(AppManager):
             if device.get("online") and device.get("inventory_status") == "requested":
                 return False, "FIRE har ikke levert en oppdatert SD-oversikt ennå. Firmware må bekrefte slettingen før PC-historikken kan slettes."
             return False, "FIRE må være tilkoblet og bekrefte at appen er borte fra SD-kortet."
-        package_ids = {p["id"] for p in self.app_versions(project)}
+        package_ids = {p["id"] for p in self.app_versions(project, snapshot=snapshot)}
         if any(c["package_id"] in package_ids and c["status"] in {"pending", "started", "healthy"}
-               for c in self.store.list("commands")):
+               for c in (snapshot['commands'] if snapshot is not None else self.store.list("commands"))):
             return False, "En appoperasjon pågår fortsatt."
         return True, ""
 
@@ -168,32 +172,59 @@ class AppLifecycle(AppManager):
                 self.store.put("sessions",saved["session_id"],saved,critical=True)
         self.store.delete_version_files(package)
 
-    def app_catalog(self, device_id, session=None):
+    def _catalog_snapshot(self, device_id):
+        # One synchronous request owns this short-lived metadata view. Never use
+        # it as a delivery/delete grant: those actions re-read their normal gates.
         try:
             device = self.store.get("devices", device_id)
         except FileNotFoundError:
             device = {}
+        owned = [p for p in self.store.list('projects') if p.get('owner_device_id') == device_id
+                 and p.get('latest_package')]
+        owned_ids = {p['id'] for p in owned}
+        builds = {b['id']: b for b in self.store.list('builds')}
+        versions = {}
+        for package in self.store.list('packages'):
+            if package.get('project_id') not in owned_ids:
+                continue
+            if builds.get(package['build_id'], {}).get('status') == 'ready':
+                versions.setdefault(package['project_id'], []).append(package)
+        for packages in versions.values():
+            packages.sort(key=lambda p: int(p['manifest']['version'].split('.')[-1]), reverse=True)
+        projects = [p for p in owned if versions.get(p['id'])]
+        projects.sort(key=lambda p: (p['name'].casefold(), self.project_app_id(p)))
+        return projects, {'device': device, 'versions': versions,
+                          'repairs': self.store.list('repairs'),
+                          'evolution_jobs': self.store.list('evolution_jobs') if hasattr(self, 'evolution') else [],
+                          'commands': self.store.list('commands')}
+
+    def _catalog_rows(self, projects, session, snapshot):
+        device = snapshot['device']
         apps = []
-        for project in self.store.list("projects"):
-            if project.get("owner_device_id") != device_id or not project.get("latest_package"):
-                continue
-            versions = self.app_versions(project)
-            if not versions:
-                continue
+        for project in projects:
+            versions = self.app_versions(project, snapshot=snapshot)
             presence = self.app_presence(device, self.project_app_id(project))
-            allowed, reason = self.backend_delete_check(project)
-            device_allowed,device_reason=self.manager_delete_check(session,project) if session else (False,reason)
+            allowed, reason = self.backend_delete_check(project, snapshot=snapshot)
+            device_allowed,device_reason=self.manager_delete_check(session,project,snapshot=snapshot) if session else (False,reason)
             recommended=next((p for p in versions if p['id']==project.get('latest_package')),versions[0])
             downloadable,download_reason=self.app_download_check(recommended,session.capabilities if session else device.get("capabilities"))
             apps.append({"app_id": self.project_app_id(project), "project_id": project["id"], "name": project["name"],
                          "icon":select_icon(project['name'],base_icon=recommended['manifest'].get('icon')),
                          "latest_package_id": recommended["id"], "latest_version": recommended["manifest"]["version"],
-                         "base_package_id": self.update_base(project, device)["id"], "version_count": len(versions),
+                         "base_package_id": self.update_base(project, device, snapshot=snapshot)["id"], "version_count": len(versions),
                          "device_presence": presence.get("state", "unknown"),
                          "can_delete_backend": allowed, "delete_block_reason": reason,
                          "can_delete_from_device":device_allowed,"device_delete_block_reason":device_reason,
                          "downloadable":downloadable,"download_block_reason":download_reason})
         return sorted(apps, key=lambda a: (a["name"].casefold(), a["app_id"]))
+
+    def app_catalog(self, device_id, session=None):
+        projects, snapshot = self._catalog_snapshot(device_id)
+        return self._catalog_rows(projects, session, snapshot)
+
+    def app_catalog_page(self, device_id, session, offset):
+        projects, snapshot = self._catalog_snapshot(device_id)
+        return self._catalog_rows(projects[offset:offset+4], session, snapshot), len(projects)
 
     def require_app_choice_idle(self, session, *, held_lock=False):
         if (session.stopped or not session.sockets or (session.lock.locked() and not held_lock) or session.operation_task
@@ -338,7 +369,7 @@ class AppLifecycle(AppManager):
             if package["project_id"]!=project["id"]:raise PermissionError("Pakken tilhører ikke valgt app.")
             allowed,reason=self.app_download_check(package,session.capabilities)
             if not allowed:raise ValueError(reason)
-            return await self.install_saved(session,package["id"])
+            return await self.install_saved(session,package["id"],request_event_id=event.event_id)
         if event.event=="app_backend_delete_prepare":return await self.prepare_backend_delete(session,event)
         if event.event=="app_backend_delete_confirm":return await self.confirm_backend_delete(session,event)
         if event.event == "app_select":
@@ -349,8 +380,8 @@ class AppLifecycle(AppManager):
         if event.event == "app_inventory":
             return await self.inventory(session, event)
         if event.event == "app_list":
-            apps = self.app_catalog(session.device_id,session)
-            page, size = apps[event.offset:event.offset+4], 4
+            page, total = self.app_catalog_page(session.device_id, session, event.offset)
+            size = 4
             message = {"type": "app_catalog", "apps": page}
         else:
             project = self.app_project(session.device_id, event.project_id, event.app_id)
@@ -362,8 +393,9 @@ class AppLifecycle(AppManager):
                     "checksum":package["manifest"]["checksum"],"archive_sha256":package["archive_sha256"],
                     "size_bytes":package["size_bytes"],"downloadable":downloadable,"download_block_reason":reason})
             page, size = apps[event.offset:event.offset+8], 8
+            total = len(apps)
             message = {"type": "app_versions", "project_id": project["id"], "versions": page}
-        message.update(offset=event.offset, next_offset=event.offset+size if event.offset+size < len(apps) else None,
+        message.update(offset=event.offset, next_offset=event.offset+size if event.offset+size < total else None,
                        request_event_id=event.event_id)
         await self.emit(session, message)
         return {"status": "listed", "count": len(page)}

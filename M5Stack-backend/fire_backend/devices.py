@@ -1,5 +1,6 @@
 """Physical-device lifecycle. PC simulation never writes these version pointers."""
 import time
+from dataclasses import replace
 
 from .models import State
 from .storage import new_id
@@ -72,7 +73,7 @@ class DeviceLifecycle:
                 raise ValueError("Package exceeds the actual device API or resource capabilities")
         return package
 
-    async def offer_install(self, session, package):
+    async def offer_install(self, session, package, *, request_event_id=None):
         from .quality import require_deliverable
         require_deliverable(self.store.get("packages", package["id"]))
         if hasattr(self,'evolution'):self.evolution.require_delivery(package)
@@ -88,7 +89,8 @@ class DeviceLifecycle:
         command = self.issue_command(session, "install", package["id"],
                                      project_id=package["project_id"], app_id=package["manifest"]["id"],
                                      archive_sha256=package["archive_sha256"], size_bytes=package["size_bytes"],
-                                     download_url=f"/packages/{package['id']}/download")
+                                     download_url=f"/packages/{package['id']}/download",
+                                     **({'request_event_id': request_event_id} if request_event_id else {}))
         device["pending_install_id"] = command["id"]
         self.store.put("devices", device["id"], device)
         await self.state(session, State.awaiting_install)
@@ -110,38 +112,47 @@ class DeviceLifecycle:
 
     async def device_run(self, session, package_id):
         package=self.store.get('packages',package_id)
-        saved_ai='ai' in package['manifest']['required_services'] and self.current_inventory_matches(session,package)
-        if session.state != State.installed or package_id != session.package_id:
-            if not saved_ai or session.state not in {State.idle,State.listening,State.failed,State.ready_to_run,State.installed,State.running}:
+        project=self.store.get('projects',package['project_id'])
+        if project.get('owner_device_id')!=session.device_id:raise PermissionError('Package belongs to another device')
+        if not session.install_permitted:
+            raise ValueError("Appen er slettet fra FIRE; velg og installer på nytt.")
+        saved_present=self.current_inventory_matches(session,package)
+        adopting = session.state != State.installed or package_id != session.package_id
+        if adopting:
+            if not saved_present or session.state not in {State.idle,State.listening,State.failed,State.ready_to_run,State.installed,State.running}:
                 raise ValueError("A matching installed package must await explicit run confirmation")
-            project=self.store.get('projects',package['project_id'])
-            if project.get('owner_device_id')!=session.device_id:raise PermissionError('Package belongs to another device')
             allowed,reason=self.app_download_check(package,session.capabilities)
             if not allowed:raise ValueError(reason)
-            if self.store.get('builds',package['build_id'])['status']!='ready':raise ValueError('Build has not passed')
-            from .builds import verify_archive
-            verify_archive(self.store.path('packages',package_id,'.zip'),package['manifest'],package['archive_sha256'])
-            session.project_id=project['id'];session.package_id=package_id
-            session.install_permitted=True;session.app_revision=self.device_record(session).get('app_change_counter',0)
         device = self.device_record(session)
         if device.get("storage_ready") is False:
             raise ValueError("SD-kortet er ikke tilgjengelig på FIRE.")
-        if not session.install_permitted:
-            raise ValueError("Appen er slettet fra FIRE; velg og installer på nytt.")
         if not device["online"] or device["boot_id"] != session.boot_id:
             raise ValueError("Device is offline or boot changed")
-        if saved_ai and device.get('active_run_id') and device.get('running_package_id')==package_id and device.get('runtime_status')=='unknown' and not device.get('pending_run_id'):
-            prior=self.store.get('commands',device['active_run_id']);self.finish_command(prior,'unknown')
-            device.update(active_run_id=None,running_package_id=None)
-        if device.get("active_run_id") or device.get("pending_run_id") or (device.get("running_package_id") and device["runtime_status"] not in {"stopped", "failed"}):
+        prior = None
+        if saved_present and device.get('active_run_id') and device.get('running_package_id')==package_id and device.get('runtime_status')=='unknown' and not device.get('pending_run_id'):
+            candidate = self.store.get('commands',device['active_run_id'])
+            if (candidate.get('kind')=='run' and candidate.get('device_id')==session.device_id
+                    and candidate.get('boot_id')==session.boot_id and candidate.get('package_id')==package_id):
+                prior = candidate
+        if not prior and (device.get("active_run_id") or device.get("pending_run_id") or (device.get("running_package_id") and device["runtime_status"] not in {"stopped", "failed"})):
             raise ValueError("Stop and confirm the previous run before starting another")
-        if device.get("installed_package_id") != package_id and not saved_ai:
+        if device.get("installed_package_id") != package_id and not saved_present:
             raise ValueError("Installation has not been confirmed by this device")
-        package = self.verify_package(session, package_id)
+        package = self.verify_package(replace(session, project_id=project['id']) if adopting else session, package_id)
         from .quality import require_deliverable
         require_deliverable(package)
+        inventory_adoption = saved_present and (adopting or device.get('installed_package_id') != package_id
+                                                or 'ai' in package['manifest']['required_services'])
+        # No await or persistent/session mutation precedes complete validation.
+        # A rejected explicit Run must not silently select a different app.
+        if adopting:
+            session.project_id=project['id'];session.package_id=package_id
+            session.app_revision=device.get('app_change_counter',0)
+        if prior:
+            self.finish_command(prior,'unknown')
+            device.update(active_run_id=None,running_package_id=None)
         command = self.issue_command(session, "run", package_id, archive_sha256=package["archive_sha256"],
-            source_sha256=package['manifest']['checksum'],sd_presence_verified=saved_ai)
+            source_sha256=package['manifest']['checksum'],sd_presence_verified=inventory_adoption)
         device.update(runtime_status="starting", pending_run_id=command["id"])
         self.store.put("devices", device["id"], device)
         await self.state(session, State.starting)
@@ -176,6 +187,9 @@ class DeviceLifecycle:
                 raise ValueError("Installation status required")
             if event.status == "ok" and event.archive_sha256 != command["archive_sha256"]:
                 raise ValueError("Installation archive checksum mismatch")
+            command['receipt'] = {'event_id': event.event_id, 'status': event.status,
+                'archive_sha256': event.archive_sha256, 'error_code': event.error_code,
+                'message': self.redactor.text(event.message or '')[:240], 'reported_at': time.time()}
             if event.status == "ok":
                 package = self.verify_package(session, package_id)
                 device["storage_ready"] = True
@@ -186,6 +200,8 @@ class DeviceLifecycle:
                 self.finish_command(command, "completed")
                 state = State.installed
             else:
+                command.update(error_code=event.error_code or 'install_failed',
+                               message=self.redactor.text(event.message or 'Enheten rapporterte mislykket installasjon.')[:240])
                 self.finish_command(command, "failed")
                 device["pending_install_id"] = None
                 device["last_install_error"] = event.error_code or "install_failed"
@@ -196,12 +212,14 @@ class DeviceLifecycle:
             if event.run_id != (device.get("active_run_id") or device.get("pending_run_id")):
                 raise ValueError("Receipt is not for the current run")
             if event.event == "app_started":
-                local_ai=command.get('sd_presence_verified') and self.current_inventory_matches(session,self.store.get('packages',package_id))
-                if command["status"] != "pending" or device["installed_package_id"] != package_id and not local_ai:
+                local_present=command.get('sd_presence_verified')
+                if command["status"] != "pending" or device["installed_package_id"] != package_id and not local_present:
                     raise ValueError("Run was already started or package is not installed")
-                if local_ai and event.source_sha256!=command.get('source_sha256'):
+                if local_present and not self.current_inventory_matches(session,self.store.get('packages',package_id)):
+                    raise ValueError('Running SD presence is no longer current')
+                if local_present and event.source_sha256!=command.get('source_sha256'):
                     raise ValueError('Running source checksum mismatch')
-                if local_ai:device['installed_package_id']=package_id
+                if local_present:device['installed_package_id']=package_id
                 device.update(running_package_id=package_id, active_run_id=event.run_id,
                               pending_run_id=None, runtime_status="running")
                 self.finish_command(command, "started")

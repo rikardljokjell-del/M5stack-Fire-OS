@@ -33,7 +33,18 @@ class Store:
         return self.root / group / (identifier(item_id) + suffix)
 
     def size(self):
-        return sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
+        # Read the entire current tree for every admission. DirEntry reuses
+        # directory enumeration metadata on Windows, avoiding two extra path
+        # lookups per file without caching away external file growth.
+        total, pending = 0, [self.root]
+        while pending:
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
+                    elif entry.is_file():
+                        total += entry.stat().st_size
+        return total
 
     def reserve(self, count: int, critical=False):
         limit = self.max_bytes if critical else self.max_bytes - self.failure_reserve

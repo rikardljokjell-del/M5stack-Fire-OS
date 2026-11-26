@@ -18,6 +18,38 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
+
+### Pågående produksjonskontroll av offentlig appflyt
+
+Brukeren har autorisert backend-/firmwarearbeid og automatisert betjening via COM,
+uten egen enhetsbetjening. Kritiske flyter skal bruke offentlig strict-TLS-adresse,
+ikke en lokal reservevei. Katalog, valgt versjon, nedlasting, avbrudd, gjenåpning
+av jobber og eksplisitt kjøring testes samlet før ferdigmelding.
+
+Én ny RC11-avlesning viser at første Vater 0.1.6-install faktisk ble fullført med
+riktig kvittering. Sju senere forsøk feilet ved opprettelse av pakkearbeideren.
+Det er dermed ikke bare en TLS-oppstartsfeil: samtidig ressursbruk må fjernes.
+Kandidaten bruker samme TLS-klient, størrelsesgrense og SD-/ZIP-installasjon, med
+avgrenset PSRAM-mellomlagring og full nettverksopprydding før SD-arbeideren starter.
+
+Katalogens synkrone historikkskanning er gjenskapt på kopierte faktiske data:
+én side tok 1,413 s og leste bygg/pakker 54 ganger hver. En midlertidig indeks
+for den enkelte forespørselen reduserer dette til én lesing av hver gruppe;
+handlinger må fortsatt gjennom de vanlige ferske eier-/kvalitets-/hashportene.
+Lagringsgrensen beholdes, men fersk filstørrelseskontroll er målt redusert fra
+0,340–0,345 s til 0,023–0,025 s på samme tre og identisk byteantall.
+
+Gjennomgangen fant også meny-/svarkorrelasjon, skjulte statusmeldinger,
+uoppnåelig ACK-behandling og avbrudd som ikke straks ryddet ventende kjøring.
+Disse rettes i eksisterende kontrollflyt. En lokalt autentisert, tidsavgrenset
+COM-testinngang skal bruke vanlige knappbehandlere og gjeldende skjermbindinger;
+den skal være av som standard og kan ikke gi egne backend-/bygg-/kjørerettigheter.
+Hele backend-testpakken har bestått: 1 286 PASS, ett Windows-betinget
+symlink-skip og fire eksisterende bibliotekvarsler på 532,86 s. Alle backend-
+og testkilder var uendret gjennom kjøringen. De målrettede katalog-/leverings-
+kontrollene har i tillegg 55 PASS. Arbeidet er pågående; faktisk COM-betjening,
+gjentatte offentlige nedlastinger og produksjonsaksept gjenstår.
+
 ### Pågående: gjenåpning av jobber og appoppdatering
 
 Brukeren mister jobbvinduet etter minimering: ferdig «Digitalt vater» vises bare

@@ -207,6 +207,15 @@ archive_sha256 (lowercase hex SHA256), size_bytes, download_url. Device sessions
 also receive `install_request` with install_id, package_id, archive_sha256,
 size_bytes, download_url, boot_id, expires_at (UTC Unix seconds, normally +300).
 Offer/install expiry does not delete the immutable package.
+For an explicit `app_download`, the stored install command and `install_request`
+also carry `request_event_id`, exactly the initiating device event ID. The offer
+may arrive before that event's ACK. Native uses this reference to reject a late
+or cancelled intent; it does not authorize another download or a run. Builder
+offers may omit it. Re-serializing the same stored command retains the reference;
+backend restart still reconciles uncertain commands, never blindly replays them.
+Validated install results retain a bounded, redacted command `receipt` with the
+event ID, status, reported archive SHA, error code, message and server timestamp.
+Later transfers do not overwrite an earlier command's receipt.
 Use install_retry with the same package_id if the install command expires or
 delivery fails. It never regenerates code or authorizes a run. A delivery error
 does not change a successfully tested build into a failed build.
@@ -563,11 +572,16 @@ may request or receive results. Stop, reboot and disconnect cancel; reconnect
 never automatically replays a charged request. OFF cancels and returns an error
 only to the same valid run, never stale result data.
 
-Apps-list opening uses explicit `run_confirm(package_id)`. Existing SD AI apps
+Apps-list opening uses explicit `run_confirm(package_id)`. Existing SD Lua apps
 require complete fresh current-boot/current-epoch inventory with exact package,
 version and checksum, plus verified backend archive. `run_request` includes
 `source_sha256`; actual native `app_started` must confirm it. Identical already
 running native source may bind without resetting local app state.
+This applies to ordinary Lua packages as well as Runtime AI apps, including an
+already installed version after a failed re-download. Fresh owner, capabilities,
+tested archive, delivery/source guards and install permission still apply. A
+stale/partial inventory, removed app or other active run cannot grant a start.
+Every SD-presence-bound `app_started` must confirm the expected source checksum.
 
 AI Developer sends `mode_select` with `runtime_ai_mode=auto|off` independently of
 `conversation_mode`; SessionStart also accepts it. `ui_event/runtime_ai_policy`

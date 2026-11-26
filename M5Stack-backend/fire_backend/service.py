@@ -242,7 +242,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                          "physical_verified": False})
         return sorted(apps,key=lambda a:(a['updated_at'],a['project_id'],a['version']),reverse=True)
 
-    async def install_saved(self, session, package_id):
+    async def install_saved(self, session, package_id, *, request_event_id=None):
         if session.target=='device':await self.release_foreground(session)
         """Explicit local UI selection reuses a tested package after reboot.
 
@@ -286,7 +286,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             device.update(project_id=project["id"], **{key: versions.get(key) for key in ("current", "previous", "backup")})
             self.store.put("devices", device["id"], device)
             await self.activity(session, "idle")
-            command = await self.offer_install(session, package)
+            command = await self.offer_install(session, package, request_event_id=request_event_id)
             return {"status": "awaiting_device_install", "install_id": command["id"], "package_id": package_id}
 
     def snapshot(self, session):
