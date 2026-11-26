@@ -20,9 +20,9 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ### Backend-sync og sikker nettilgang – 26. november
 
-**Aktuell blokkering etter adressebyttet:** Brukeren får ikke koblet FIRE til den
-offentlige backenden, heller ikke etter Backend-sync Off/On, og opplever tregere
-statusendring. Fjernbruk er derfor ikke godkjent. Passiv diagnostikk viser gjentatt
+**Målrettet retting etter adressebyttet:** Brukeren fikk ikke koblet FIRE til den
+offentlige backenden, heller ikke etter Backend-sync Off/On, og opplevde tregere
+statusendring. Passiv diagnostikk viste gjentatt
 `start_ssl_client=-1` før WebSocket-oppstart, uten nok informasjon til å fastslå
 underårsaken. Ett separat vindu målte 2,739 sekunder i tegning/knappbehandling.
 RC6 er deretter fysisk installert i A55, med RC5 i B54 bevart. Oppkoblingsfasen
@@ -32,9 +32,14 @@ NVS-innstilling. Fysisk trykkrespons etter dette er ennå ikke prøvd.
 Den nye diagnosen i to normale oppstartsvinduer viser åtte feil med åpen socket,
 TLS-tilstand 17 (`SERVER_NEW_SESSION_TICKET`), retur −1 og varighet 5,778–5,847 s.
 Dette avgrenser feilen til TLS-håndtrykkets femsekundersfrist, før WebSocket.
-En RC7-kandidat med avgrenset 12-sekunders TLS-håndtrykksfrist klargjøres; fem
-sekunders TCP-frist og sertifikatkontroll beholdes. Kandidaten er ikke fysisk
-prøvd eller erklært som en vellykket tilkoblingsretting.
+RC7 med avgrenset 12-sekunders TLS-håndtrykksfrist er nå fysisk installert i B56,
+med RC6 i A55 bevart. Fem sekunders TCP-frist og sertifikatkontroll er uendret.
+Begge ordinære oppstarter fullførte DNS/TCP/TLS på henholdsvis 5,598 og 5,654 s,
+etterfulgt av HTTP101 og godkjent backendøkt. Ingen TLS-feil, panic, watchdog,
+JSON-avvisning eller mistede inputhendelser ble registrert i disse to vinduene.
+Full bildelesing/SHA-256, VALID/CRC, native-CI og komplett firmware-CI er grønne.
+Dette er positiv fysisk oppkoblingsverifikasjon; gjentatt Off/On, opplevd
+knapprespons, langtidsstabilitet og annet Wi-Fi avventes fortsatt fra brukeren.
 Offentlig HTTPS-helse fra PC virker også med TLS 1.2 og sertifikatkontroll.
 Ingen sertifikat-/autentiseringsgrense er svekket som feilsøkingstiltak.
 
@@ -89,8 +94,11 @@ med bekreftet lagring; blanke nøkkel-/ID-felt beholdt eksisterende verdier.
 Backenden er byttet kontrollert fra lokal Reverse TCP til direkte offentlig WSS.
 Kun transportfeltet ble endret; public-felt, modeller, grenser, nøkler og automatisk
 oppstart er bevart. Én prosess og vellykkede helse-/autentiseringskontroller er
-bekreftet. Den ene etteravlesningen hadde ingen nye enhetsstarter; faktisk fysisk
-WSS-adopsjon skal derfor bekreftes i brukerens neste prøve.
+bekreftet. Etter RC7 bekrefter faktisk backendstatus offentlig admisjon med online
+socket/økt, korrekt RC7 og ferskt, komplett inventory med alle 13 app-ID-er på
+samme siste boot/epoch. Begge RC7-oppstartene er akseptert uten nye avslag.
+Ingen Reverse TCP-kanal er aktiv. Dette er en faktisk offentlig fysisk forbindelse;
+langtidsstabilitet og gjentatte av/på-runder er fortsatt egne brukerprøver.
 
 **Gjenstår før fysisk fjernbruk er godkjent:** faktisk OTP-innlogging i Studio
 og fysisk oppkobling/Off-On via den offentlige adressen fra et annet Wi-Fi.
