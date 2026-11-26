@@ -11,6 +11,7 @@
 #include "fire_data_deadline.h"
 #include "fire_ai_workflow.h"
 #include "fire_ui.h"
+#include "fire_ai_menu_ui.h"
 #include "fire_ui_antialias.h"
 
 #include <M5Unified.h>
@@ -5158,7 +5159,7 @@ void FireOS::open(Screen screen) {
     aiRestPhaseDuration_ = 30000 + (esp_random() % 30001);
     aiTurnId_ = "";
     aiProposalId_ = "";
-    aiProposalProjectId_=String();
+    aiProposalProjectId_=String();aiProposalJobId_=String();aiProposalAppName_=String();
     aiPackageId_ = "";
     aiReadyPackageId_=String();
     aiInstallId_ = "";
@@ -5853,7 +5854,7 @@ void FireOS::cancelConversationTurn(const String& reason, bool startNew) {
   aiTurnId_ = "";
   if (startNew) {
     aiProposalId_ = "";
-    aiProposalProjectId_=String();
+    aiProposalProjectId_=String();aiProposalJobId_=String();aiProposalAppName_=String();
     aiAssistantText_ = "";
     aiTranscriptText_ = "";
     aiWorkflowState_ = 0;
@@ -7074,7 +7075,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       if(!buildStatusMessage_.length()) buildStatusMessage_=jsonStringField(message,"message");
       aiBuildProgress_ = buildProgress_;
       aiProposalId_ = jsonStringField(message, "proposal_id");
-      aiProposalProjectId_=jsonStringField(message,"project_id");
+      aiProposalProjectId_=jsonStringField(message,"project_id");aiProposalJobId_=jsonStringField(message,"evolution_job_id");aiProposalAppName_=jsonStringField(message,"app_name");
       aiBuildResumePending_ = true;
       aiBuildRetryPending_ = false;
       backgroundBuildActive_ = false;
@@ -7503,6 +7504,7 @@ void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
   if (type=="app_selected") {
+    aiProposalProjectId_=String();aiProposalJobId_=String();aiProposalAppName_=String();
     const String project=jsonStringField(message,"project_id");
     if (project.length()) {
       if (aiEvolutionGoalProject_!=project) {aiEvolutionGoal_=String();aiEvolutionGoalProject_=String();aiDevelopmentContext_=String();}
@@ -7571,7 +7573,7 @@ void FireOS::handleBackendMessage(const String& message) {
     else if (mode == "develop") aiConversationMode_ = 0;
     const String proposal = jsonStringField(message, "proposal_id");
     const String packageId = jsonStringField(message, "package_id");
-    if (proposal.length() > 0) {aiProposalId_=proposal;aiProposalProjectId_=jsonStringField(message,"project_id");}
+    if (proposal.length() > 0) {aiProposalId_=proposal;aiProposalProjectId_=jsonStringField(message,"project_id");aiProposalJobId_=jsonStringField(message,"evolution_job_id");aiProposalAppName_=jsonStringField(message,"app_name");}
     if (packageId.length() > 0) aiPackageId_ = packageId;
     const String restoredState=jsonStringField(message,"state");
     if(packageId.length() && (restoredState=="ready_to_run" || restoredState=="installed")) {
@@ -7747,7 +7749,7 @@ void FireOS::handleBackendMessage(const String& message) {
   if (type == "build_proposal") {
     aiReadyPackageId_=String();
     aiProposalId_ = jsonStringField(message, "proposal_id");
-    aiProposalProjectId_=jsonStringField(message,"project_id");
+    aiProposalProjectId_=jsonStringField(message,"project_id");aiProposalJobId_=jsonStringField(message,"evolution_job_id");aiProposalAppName_=jsonStringField(message,"app_name");
     const String summary = jsonStringField(message, "summary");
     const String project=jsonStringField(message,"project_id");
     if (project.length()) aiProjectId_=project;
@@ -10679,6 +10681,10 @@ void FireOS::drawAiDeveloper() {
   // AI Developer is intentionally immersive: no system status bar or panel.
   ui.fillSprite(kBg);
   if (aiProjectPickerActive_) {drawAiPicker();return;}
+  if (aiWorkflowState_==3 && aiProposalId_.length() && aiProposalProjectId_==aiProjectId_ && aiProposalAppName_.length()) {
+    fire_canvas_fill::Surface<M5Canvas> surface(ui);
+    fire_ai_menu_ui::proposalName(surface,aiProposalAppName_.c_str());
+  }
   static const char* const states[] = {"REST", "LISTEN", "THINK", "TALK"};
   const uint32_t now = millis();
   static uint32_t nextBlinkAt = 0;

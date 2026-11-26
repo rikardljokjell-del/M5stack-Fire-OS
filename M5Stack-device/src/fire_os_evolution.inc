@@ -277,7 +277,7 @@ void FireOS::handleEvolutionButton(uint8_t index) {
     else if (index==0) e.reviewOffset=0;
     redrawRequested_=true;return;
   }
-  const bool proposal=fire_ai_menu::canOpenProposal(aiWorkflowState_,aiProposalId_.c_str(),aiProposalProjectId_.c_str(),e.project.c_str());
+  const bool proposal=fire_ai_menu::canOpenProposal(aiWorkflowState_,aiProposalId_.c_str(),aiProposalProjectId_.c_str(),e.project.c_str(),aiProposalJobId_.c_str(),e.job.c_str(),aiProposalAppName_.c_str());
   uint8_t count=e.page==FireEvolutionUi::Menu?fire_ai_menu::evolutionCount(e.permissionRequest.length()>0,proposal):e.page==FireEvolutionUi::Settings?11:
       e.page==FireEvolutionUi::Autonomy?5:e.page==FireEvolutionUi::Limits?6:e.page==FireEvolutionUi::Operation?6:
       e.page==FireEvolutionUi::Snapshot?e.itemCount+3:e.page==FireEvolutionUi::Metric?e.metricCount+3:3;
@@ -315,7 +315,7 @@ void FireOS::handleEvolutionButton(uint8_t index) {
     } else if (tail==fire_ai_menu::EvolutionTail::Proposal) {
       // The received proposal/workflow remain intact. No open(AiDeveloper),
       // app_select, build_confirm or new instruction is sent here.
-      aiProjectId_=aiProposalProjectId_;aiProjectName_=e.name;
+      aiProjectId_=aiProposalProjectId_;aiProjectName_=aiProposalAppName_.length()?aiProposalAppName_:e.name;
       if (backendClient_) backendClient_->setProjectId(aiProposalProjectId_);
       aiProjectPickerActive_=false;backendSettingsUi_.page=FireBackendSettingsUi::None;
       aiVoiceTestMode_=false;aiBuildResumePending_=false;aiBuildRetryPending_=false;
@@ -427,7 +427,7 @@ void FireOS::drawEvolution() {
   const char* operations[]={"Generate","Repair","Optimize","Expand","Evolve","Tilbake"};
   const char* proposalLabels[]={"Vis hele grunnlaget","Godkjenn forslaget","Avvis"};
   const char* strategy[]={"Strategi for denne appen","Global strategi","Tilbake"};
-  const bool proposal=fire_ai_menu::canOpenProposal(aiWorkflowState_,aiProposalId_.c_str(),aiProposalProjectId_.c_str(),e.project.c_str());
+  const bool proposal=fire_ai_menu::canOpenProposal(aiWorkflowState_,aiProposalId_.c_str(),aiProposalProjectId_.c_str(),e.project.c_str(),aiProposalJobId_.c_str(),e.job.c_str(),aiProposalAppName_.c_str());
   const uint8_t count=e.page==FireEvolutionUi::Menu?fire_ai_menu::evolutionCount(e.permissionRequest.length()>0,proposal):e.page==FireEvolutionUi::Settings?11:e.page==FireEvolutionUi::Operation?6:
       e.page==FireEvolutionUi::Autonomy?5:e.page==FireEvolutionUi::Limits?6:e.page==FireEvolutionUi::Snapshot?e.itemCount+3:e.page==FireEvolutionUi::Metric?e.metricCount+3:3;
   if (e.selection>=count) e.selection=count-1;

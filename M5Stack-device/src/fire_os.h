@@ -663,7 +663,7 @@ class FireOS {
   String buildPhase_;
   String buildStatusMessage_;
   String aiProposalId_;
-  String aiProposalProjectId_; // metadata of the received proposal, not a guessed current app
+  String aiProposalProjectId_,aiProposalJobId_,aiProposalAppName_; // actual received proposal metadata
   String aiPackageId_;
   String aiReadyPackageId_;
   String aiInstallId_;

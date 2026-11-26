@@ -21,11 +21,14 @@ inline Item at(Page page,uint8_t row,bool repair,uint8_t builds,uint8_t apps) {
   const Kind items[]={Kind::Chat,Kind::NewApp,Kind::SelectApp,Kind::Evolution,Kind::Settings,Kind::Back};
   return {items[row<6?row:5]};
 }
-// Open an already received proposal only for its verified project. Opening
-// this route never confirms a build or changes the backend's app selection.
-inline bool canOpenProposal(uint8_t workflow,const char* proposal,const char* project,const char* selectedProject) {
-  return workflow==3 && proposal && *proposal && project && *project && selectedProject && *selectedProject &&
-      !strcmp(project,selectedProject);
+// A received proposal belongs to this project, or to the exact selected
+// server-owned cohort job. A cross-project target must have its actual name.
+// Opening never confirms a build or changes the backend's app selection.
+inline bool canOpenProposal(uint8_t workflow,const char* proposal,const char* project,const char* selectedProject,
+    const char* proposalJob=nullptr,const char* selectedJob=nullptr,const char* targetName=nullptr) {
+  if (workflow!=3 || !proposal || !*proposal || !project || !*project || !selectedProject || !*selectedProject) return false;
+  if (!strcmp(project,selectedProject)) return true;
+  return proposalJob && *proposalJob && selectedJob && *selectedJob && !strcmp(proposalJob,selectedJob) && targetName && *targetName;
 }
 enum class EvolutionTail:uint8_t {Main,Permissions,Proposal,Back};
 inline uint8_t evolutionCount(bool permissions,bool proposal) {return 15+(permissions?1:0)+(proposal?1:0);}

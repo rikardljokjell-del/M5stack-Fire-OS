@@ -54,6 +54,12 @@ int main() {
   assert(!canOpenProposal(3,"proposal-current","project-one",nullptr));
   assert(!canOpenProposal(3,"","project-one","project-one"));
   assert(!canOpenProposal(3,nullptr,"project-one","project-one"));
+  assert(canOpenProposal(3,"proposal-second","project-two","project-one","cohort-job","cohort-job","Målapp to"));
+  assert(!canOpenProposal(3,"proposal-second","project-two","project-one","other-job","cohort-job","Målapp to"));
+  assert(!canOpenProposal(3,"proposal-second","project-two","project-one",nullptr,"cohort-job","Målapp to"));
+  assert(!canOpenProposal(3,"proposal-second","project-two","project-one","cohort-job","","Målapp to"));
+  assert(!canOpenProposal(3,"proposal-second","project-two","project-one","cohort-job","cohort-job",nullptr));
+  assert(!canOpenProposal(3,"proposal-second","project-two","project-one","cohort-job","cohort-job",""));
   for (uint8_t state:{0,1,2,4,5,6}) assert(!canOpenProposal(state,"proposal-current","project-one","project-one"));
   for (bool permissions:{false,true}) for (bool proposal:{false,true}) {
     const uint8_t size=evolutionCount(permissions,proposal);
@@ -70,6 +76,11 @@ int main() {
   puts("PASS Evolution proposal project binding absent stale mismatch and permission menu coexistence");
   static Canvas canvas;const char* labels[]={"Resume feilretting","Resume bygging","Settings","Back"};
   const char* longName="Måleappen for kjøleskap og bodelsbatteri med mange avlesninger";
+  canvas.fillRect(0,0,320,240,FireUI::Bg);fire_ai_menu_ui::proposalName(canvas,"Målapp to");
+  const auto targetPixels=canvas.pixels;
+  canvas.fillRect(0,0,320,240,FireUI::Bg);fire_ai_menu_ui::proposalName(canvas,"Opprinnelsesapp en");
+  assert(canvas.pixels!=targetPixels);
+  for (size_t i=44*320;i<canvas.pixels.size();++i) assert(canvas.pixels[i]==FireUI::Bg && targetPixels[i]==FireUI::Bg);
   std::array<uint16_t,320*18> footer{};
   for (uint8_t selected=0;selected<4;++selected) {
     canvas.fillRect(0,0,320,240,FireUI::Bg);canvas.spans=0;

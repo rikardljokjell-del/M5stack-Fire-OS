@@ -23,6 +23,15 @@ inline size_t line(const char* text,size_t length,size_t offset,char (&out)[81],
   return offset;
 }
 template<class Surface>
+void proposalName(Surface& canvas,const char* actualName) {
+  if (!actualName) return;
+  size_t offset=0;const size_t length=strlen(actualName);char text[81];
+  for (uint8_t i=0;i<3 && offset<length;++i) {
+    offset=line(actualName,length,offset,text,292,"small10");
+    FireUI::text(canvas,14,8+i*12,text,FireUI::Text,"small10",292);
+  }
+}
+template<class Surface>
 void draw(Surface& canvas,const char* title,const char* connection,uint16_t connectionColor,
           const char* selectedName,const char* const (&labels)[4],uint8_t rows,uint8_t selected,const char* status) {
   FireUI::panel(canvas,8,6,304,214);

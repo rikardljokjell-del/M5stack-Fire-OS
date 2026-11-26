@@ -16,7 +16,7 @@ String FireOS::aiRepairResumeName() const {
 void FireOS::selectAiProject(fire_ai_menu::Kind kind,uint8_t index) {
   using fire_ai_menu::Kind;
   aiVoiceTestMode_=kind==Kind::Voice;aiConversationMode_=(kind==Kind::Chat || aiVoiceTestMode_)?1:0;
-  aiProjectId_=String();aiBasePackageId_=String();aiProposalProjectId_=String();
+  aiProjectId_=String();aiBasePackageId_=String();aiProposalProjectId_=String();aiProposalJobId_=String();aiProposalAppName_=String();
   aiEvolutionGoal_=String();aiEvolutionGoalProject_=String();aiDevelopmentContext_=String();aiEvolutionNewPending_=false;
   aiProjectName_=kind==Kind::Chat?"Chat":aiVoiceTestMode_?"Voice test":"New app";
   if (kind==Kind::App) {
