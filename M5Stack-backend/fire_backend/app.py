@@ -18,7 +18,7 @@ from .status_text import display_event
 from .protocol import begin_event, dispatch, finish_event
 from .storage import new_id
 from .security import SecretFilter
-from .service import Backend, Conflict
+from .service import Backend, Conflict, SessionStartRejected
 from .reverse_tcp import ReverseTCP
 from .device_http import DeviceFileResponse
 
@@ -532,6 +532,8 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
                             # a new socket. Dedup acknowledges the action, but
                             # the transport must still attach to that session.
                             prior_id = (duplicate.get("result") or {}).get("session_id")
+                            if not prior_id and (duplicate.get('result') or {}).get('error'):
+                                raise SessionStartRejected('prior_start_rejected')
                             if prior_id:
                                 request = SessionStart(**{k: getattr(event, k) for k in SessionStart.model_fields})
                                 if session is None:
@@ -551,9 +553,16 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
                             request = SessionStart(**{k: getattr(event, k) for k in SessionStart.model_fields})
                             session = await service.start(request, socket, identity)
                         except (ValueError, KeyError, PermissionError, FileNotFoundError) as error:
-                            finish_event(service, record, {"error": type(error).__name__})
+                            reason = (error.reason_code if isinstance(error, SessionStartRejected) else
+                                      'identity_mismatch' if isinstance(error, PermissionError) else
+                                      'reference_unavailable' if isinstance(error, (KeyError, FileNotFoundError)) else
+                                      'session_conflict' if isinstance(error, Conflict) else 'invalid_start')
+                            finish_event(service, record, {"error": type(error).__name__, 'reason_code': reason})
                             raise
-                        ack = finish_event(service, record, service.snapshot(session))
+                        result = service.snapshot(session)
+                        if getattr(session, 'recovery_reason_code', None):
+                            result['recovery_reason_code'] = session.recovery_reason_code
+                        ack = finish_event(service, record, result)
                         if ack:
                             await service.emit(session, ack)
                     else:
@@ -573,11 +582,22 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
                     safe = "Ugyldig melding fra FIRE: " + ", ".join(fields)
                     logging.getLogger("uvicorn.error").warning(safe)
                     error_event = {"type": "error", "code": "invalid_event", "message": safe[:240]}
+                    if session is None:
+                        error_event.update(code='session_start_rejected', retryable=False)
                     await (service.emit(session, error_event) if session else socket.send_json(display_event(error_event)))
+                    if session is None:
+                        await socket.close(code=1008)
+                        break
                 except (ValueError, KeyError, PermissionError, FileNotFoundError) as error:
                     message = "Referenced item not found" if isinstance(error, FileNotFoundError) else service.redactor.text(str(error))[:240]
                     error_event = {"type": "error", "code": error.code if isinstance(error, CapabilityError) else "event_rejected", "message": message}
+                    if session is None:
+                        error_event.update(code='session_start_rejected', retryable=False,
+                            message='Tilkobling avvist. Kontroller valgt app og samtalemodus.')
                     await (service.emit(session, error_event) if session else socket.send_json(display_event(error_event)))
+                    if session is None:
+                        await socket.close(code=1008)
+                        break
         except WebSocketDisconnect:
             pass
         finally:

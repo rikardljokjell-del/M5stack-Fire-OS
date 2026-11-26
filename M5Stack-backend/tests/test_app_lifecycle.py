@@ -173,8 +173,9 @@ def test_invalid_schema_diagnostics_do_not_echo_values_or_extra_field_names(tmp_
             socket.send_json({"type": "device_event", "protocol_version": "0.2", "event": "listen_start",
                 "device_id": "fire-01", "event_id": "evt-invalid", "turn_id": "turn-invalid", "sk-private-property": "sk-private-value"})
             reply = socket.receive_json()
-            assert reply["code"] == "invalid_event" and "extra_fields" in reply["diagnostic_message"]
+            assert reply["code"] == "session_start_rejected" and "extra_fields" in reply["diagnostic_message"]
             assert "sk-private" not in json.dumps(reply) and "sk-private" not in caplog.text
+        with client.websocket_connect("/ws/device", headers=headers()) as socket:
             socket.send_json({"type": "device_event", "protocol_version": "0.2", "event": "listen_start",
                 "device_id": "fire-01", "event_id": "evt-invalid-2", "turn_id": "turn-invalid"})
             assert "session_id" in socket.receive_json()["diagnostic_message"]

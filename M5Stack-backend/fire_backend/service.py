@@ -27,6 +27,12 @@ class Conflict(ValueError):
     pass
 
 
+class SessionStartRejected(Conflict):
+    def __init__(self, reason_code):
+        self.reason_code = reason_code
+        super().__init__('Resume identity, capabilities or context mismatch; start rejected')
+
+
 def bounded_history(history):
     kept, size = [], 0
     for item in reversed(history[-32:]):
@@ -448,7 +454,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         async with self.connection_locks.setdefault(request.device_id, asyncio.Lock()):
             return await self._start(request, socket, principal)
 
-    async def _start(self, request, socket=None, principal="admin"):
+    async def _start(self, request, socket=None, principal="admin", *, recovered=None):
         if request.target == "device" and principal != request.device_id:
             raise PermissionError("Physical sessions require the token scoped to this device")
         if principal != "admin" and (request.device_id != principal or request.target != "device"):
@@ -480,7 +486,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         # A replacement socket may arrive before TCP notices the old peer left.
         # Match the scoped identity/boot/project, then atomically replace it in
         # resume. A deliberate app choice still starts a new session below.
-        if request.target == "device" and request.app_mode is None:
+        if request.target == "device" and request.app_mode is None and recovered is None:
             candidates = [s for s in self.sessions.values() if s.device_id == request.device_id
                           and s.boot_id == request.boot_id and not s.stopped
                           and (not request.project_id or s.project_id == request.project_id)]
@@ -518,7 +524,15 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         session.runtime_ai_mode=request.runtime_ai_mode
         session.app_mode = "update" if request.project_id else "new"
         session.base_package_id = request.base_package_id or project.get("latest_package")
-        if request.project_id:
+        if recovered is not None:
+            # Retain authoring data, never expired confirmations/worker authority.
+            session.base_package_id = recovered.base_package_id
+            session.app_mode = recovered.app_mode
+            session.summary = recovered.summary
+            session.history = copy.deepcopy(recovered.history)
+            session.development_context_id = recovered.development_context_id
+            session.repair_context = copy.deepcopy(recovered.repair_context)
+        elif request.project_id:
             prior = [saved for saved in self.store.list("sessions") if saved["project_id"] == project["id"]]
             if prior:
                 session.history = max(prior, key=lambda saved: saved.get("last_seen", 0)).get("history", [])[-32:]
@@ -534,7 +548,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             except FileNotFoundError:
                 device = {"id": session.device_id, "current": None, "previous": None, "backup": None,
                           "installed_package_id": None, "running_package_id": None}
-            if request.project_id and not request.base_package_id and project.get("latest_package"):
+            if recovered is None and request.project_id and not request.base_package_id and project.get("latest_package"):
                 session.base_package_id = self.update_base(project, device)["id"]
             if session.base_package_id:
                 self.verify_package(session, session.base_package_id)
@@ -558,9 +572,12 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         self.persist(session)
         await self.emit(session, {"type": "session_started", **self.snapshot(session)})
         await self.state(session, session.state)
+        if recovered is not None:
+            await self.session_snapshot(session)
         await self.report_capabilities(session)
         await self.request_inventory(session)
-        await self.build_notices(session)
+        if recovered is None:
+            await self.build_notices(session)
         if development_id:
             await self.data_engine.apply_context(session, development_id, selected=True)
         return session
@@ -569,9 +586,10 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         session = self.sessions.get(request.resume_session_id)
         if session is None:
             saved = self.store.get("sessions", request.resume_session_id)
-            if saved.get("stopped") or saved.get("protocol_version") != "0.2":
-                raise Conflict("Session cannot be resumed")
+            if saved.get("protocol_version") != "0.2":
+                raise SessionStartRejected('protocol_mismatch')
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
+            session.stopped = saved.get('stopped', False)
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
                          "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error", "runtime_ai_mode",
                          "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id", "development_context_id", "evolution_job_id", "job_context_target"):
@@ -580,22 +598,42 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             session.sequence = saved.get("sequence", 0)
             if session.state in {State.building, State.testing, State.processing, State.starting, State.stopping, State.rollback_pending}:
                 session.state, session.proposal_id = State.failed, None
-        if (session.stopped or session.device_id != request.device_id or session.target != request.target
-                or session.boot_id != request.boot_id or (Capabilities.model_validate(session.capabilities).model_dump() if session.capabilities else None) != (self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None)
-                or (request.project_id and request.project_id != session.project_id and not
-                    (request.app_mode is None and request.resume_session_id == session.id and request.project_id in session.resume_project_aliases))
-                or (request.base_package_id and request.base_package_id != session.base_package_id)
-                or session.protocol_version != request.protocol_version or (session.sockets and socket is None)
-                or (request.conversation_mode and request.conversation_mode != session.conversation_mode)
-                or time.time() - (session.disconnected_at or session.last_seen) > self.settings.fire_session_resume_seconds):
-            raise Conflict("Resume identity, capabilities or expiry mismatch")
+        if session.device_id != request.device_id or session.target != request.target:
+            raise SessionStartRejected('identity_mismatch')
+        if session.boot_id != request.boot_id:
+            raise SessionStartRejected('boot_mismatch')
+        if (Capabilities.model_validate(session.capabilities).model_dump() if session.capabilities else None) != (self.redactor.value(request.capabilities.model_dump()) if request.capabilities else None):
+            raise SessionStartRejected('capabilities_mismatch')
+        if request.project_id and request.project_id != session.project_id and not (
+                request.app_mode is None and request.resume_session_id == session.id and request.project_id in session.resume_project_aliases):
+            raise SessionStartRejected('project_mismatch')
+        if request.base_package_id and request.base_package_id != session.base_package_id:
+            raise SessionStartRejected('base_mismatch')
+        if session.protocol_version != request.protocol_version:
+            raise SessionStartRejected('protocol_mismatch')
+        if request.conversation_mode and request.conversation_mode != session.conversation_mode:
+            raise SessionStartRejected('mode_mismatch')
+        if session.sockets and socket is None:
+            raise SessionStartRejected('session_busy')
         if len(self.sessions) >= self.settings.fire_max_sessions and session.id not in self.sessions:
             raise Conflict("Maximum active sessions reached")
         if any(other.device_id == session.device_id and other.id != session.id for other in self.sessions.values()):
             raise Conflict("Device already has another active session")
         device = self.device_record(session) if session.target == "device" else None
         if device and device["boot_id"] != session.boot_id:
-            raise Conflict("Resume from previous boot rejected")
+            raise SessionStartRejected('boot_mismatch')
+        expired = time.time() - (session.disconnected_at or session.last_seen) > self.settings.fire_session_resume_seconds
+        if session.stopped or (expired and not self.session_in_flight(session)):
+            if session.target != 'device' or session.sockets or self.session_in_flight(session):
+                raise SessionStartRejected('session_busy')
+            if not session.stopped:
+                await self._stop(session)
+            fresh_request = request.model_copy(update={'resume_session_id': None, 'app_mode': None,
+                'project_id': session.project_id, 'base_package_id': session.base_package_id,
+                'conversation_mode': session.conversation_mode, 'development_context_id': None})
+            fresh = await self._start(fresh_request, socket, principal, recovered=session)
+            fresh.recovery_reason_code = 'expired' if expired else 'stopped'
+            return fresh
         await self.runtime_ai.cancel_session(session)
         await self.data_engine.cancel_run(session)
         # Publish ownership before closing the former peer; its finally/detach
@@ -686,12 +724,18 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             self.store.put("devices", device["id"], device, critical=True)
         self.persist(session)
 
+    @staticmethod
+    def session_in_flight(session):
+        return session.lock.locked() or any(task and not task.done() for task in (
+            session.task, session.input_task, session.operation_task, session.speech_task))
+
     async def expire_sessions(self):
         for session in list(self.sessions.values()):
             if session.disconnected_at and time.time() - session.disconnected_at > self.settings.fire_session_resume_seconds:
                 async with self.connection_locks.setdefault(session.device_id, asyncio.Lock()):
                     # A reconnect can win the lock after the first check.
-                    if session.disconnected_at and time.time() - session.disconnected_at > self.settings.fire_session_resume_seconds:
+                    if (session.disconnected_at and not self.session_in_flight(session)
+                            and time.time() - session.disconnected_at > self.settings.fire_session_resume_seconds):
                         await self._stop(session)
 
     async def maintenance(self):

@@ -77,9 +77,10 @@ async def test_resume_expiry_and_project_version_isolation(tmp_path):
         second.disconnected_at = time.time() - service.settings.fire_session_resume_seconds - 1
         service.persist(second)
         await service.expire_sessions()
-        with pytest.raises(Conflict):
-            await service.start(request.model_copy(update={"resume_session_id": second.id}), principal="fire-01")
-        assert service.sessions == {}
+        fresh = await service.start(request.model_copy(update={"resume_session_id": second.id}), principal="fire-01")
+        assert fresh.id != second.id and fresh.project_id == second.project_id
+        assert fresh.proposal_id is None and fresh.package_id is None
+        assert list(service.sessions) == [fresh.id]
     finally:
         await service.close()
 

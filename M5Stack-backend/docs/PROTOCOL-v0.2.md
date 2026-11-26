@@ -101,6 +101,26 @@ proposal, package, device record and pending commands. Existing confirmed builds
 continue during transient disconnect. `session_stop` explicitly cancels them.
 Commands are NOT blindly executed again on reconnect.
 
+A known expired/stopped session can obtain a fresh authenticated session on the
+same retained project, base and authoring plan only after matching device, boot,
+capabilities, project, base and conversation mode. In-flight work is not stopped
+for this recovery. An identically bound in-flight session resumes normally with
+the SAME session ID/task even after the idle resume window, so normal job controls
+remain reachable without another provider call. The new inert session receives
+a fresh sequence and snapshot; old
+proposal IDs, build/mandate authority and commands are not inherited or replayed.
+Existing jobs remain available through normal Resume and confirmation gates.
+Successful recovery is journalled as `recovery_reason_code=expired|stopped`.
+Any non-recoverable pre-session rejection sends `error` with
+`code=session_start_rejected`, `retryable=false`, a short safe message, then closes
+the WebSocket with code 1008. Native must not keep an unbound socket alive using
+PONG or retry by clearing identity/project. A fixed application-session deadline
+also bounds a connection that completed HTTP 101 but never received
+`session_started`. Server event records retain a bounded `reason_code` (identity,
+boot, capabilities, project, base, protocol, mode, busy or unavailable reference)
+without raw requests, credentials or foreign IDs. Historical Conflict-only
+records do not establish which predicate failed.
+
 Device snapshots are bounded views, not full database records: capabilities occur
 once, redundant device diagnostics stay in desktop status, and a long summary is
 represented by a complete short notice that the full plan is retained. Up to four

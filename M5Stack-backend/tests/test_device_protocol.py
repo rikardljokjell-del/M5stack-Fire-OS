@@ -318,7 +318,7 @@ def test_admin_cannot_impersonate_device_and_device_cannot_impersonate_peer(tmp_
             with client.websocket_connect("/ws/device", headers=headers(token)) as socket:
                 device = Device(socket, device_id=device_id)
                 device.send("session_start", target="device", capabilities=CAPS)
-                assert device.until("error")["code"] == "event_rejected"
+                assert device.until("error")["code"] == "session_start_rejected"
 
 
 async def test_restart_expires_commands_and_preserves_resumable_project(tmp_path):
