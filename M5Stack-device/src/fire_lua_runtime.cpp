@@ -691,6 +691,7 @@ void FireLuaRuntime::beginCallback(CallbackPhase phase, uint32_t budgetMs) {
 }
 
 bool FireLuaRuntime::finishCallback() {
+  ++callbackSerial_;
   const int64_t elapsed = esp_timer_get_time() -
                           static_cast<int64_t>(callbackStartedUs_);
   const int64_t bounded = elapsed < 0 ? 0 : elapsed > 60000000 ? 60000000 : elapsed;
@@ -787,6 +788,7 @@ bool FireLuaRuntime::loadSource(const uint8_t* source, size_t length) {
   callbackPhase_ = CallbackPhase::None;
   callbackBudgetMs_ = kMaxCallbackMs;
   frames_ = 0;
+  callbackSerial_ = 0;
   error_ = "";
   return true;
 }
@@ -816,6 +818,7 @@ void FireLuaRuntime::stop() {
   maxRuntimeMs_ = kDefaultRuntimeMs;
   callbackBudgetMs_ = kMaxCallbackMs;
   callbackStartedUs_ = 0;
+  callbackSerial_ = 0;
   frames_ = 0;
   sourceBytes_ = 0;
   frameBackground_ = 0;

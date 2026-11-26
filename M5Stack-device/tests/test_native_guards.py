@@ -37,6 +37,11 @@ def host_compiler():
 
 
 class NativeGuardTests(unittest.TestCase):
+    def test_evolution_and_ai_menu_guards(self):
+        output=self.run_native("native_evolution_menu.cpp")
+        self.assertIn("PASS Evolution bounded aggregates",output)
+        self.assertIn("PASS actual AI menu renderer",output)
+
     def test_data_storage_guards(self):
         output=self.run_native("native_data_engine.cpp")
         self.assertIn("PASS data journal",output)

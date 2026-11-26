@@ -73,6 +73,17 @@ class FireBackendClient {
   bool confirmBuild(const String& proposalId,
                     const String& repairId = String());
   bool confirmRun(const String& packageId);
+  bool evolutionStatus(const String& request,const String& app,const String& view,uint32_t offset);
+  bool evolutionPrepare(const String& request,const String& app,const String& operation,uint32_t revision,
+                        const String& json,const String& packageId,const String& source);
+  bool evolutionConfirm(const String& request,const String& app,const String& proposal,uint32_t revision);
+  bool evolutionControl(const String& request,const String& app,const String& action,uint32_t revision,
+                        const String& job,const String& mandate);
+  bool evolutionTelemetry(const String& request,const String& app,const String& packageId,
+                          const String& source,const String& json);
+  bool backendSettingsStatus(const String& request,const String& view,const String& role,uint32_t offset);
+  bool backendSettingsPrepare(const String& request,uint32_t revision,const String& patch);
+  bool backendSettingsConfirm(const String& request,const String& proposal,uint32_t revision);
   bool runtimeAiRequest(const String& requestId,const String& appId,const String& packageId,
                         const String& sourceHash,const String& runId,const String& instructions,
                         const String& data,const String& schema,uint32_t timeoutMs);

@@ -294,6 +294,21 @@ static void callbackTimingTests() {
   puts("PASS SDK update24ms legacy update/button12ms preserved init250ms exact native elapsed and runaway guard");
 }
 
+static void callbackSerialTests() {
+  for (bool handler:{false,true}) {
+    FireLuaRuntime r;r.setHardwareApi(true);r.setAppSdk(true);r.setServiceMask(1);assert(r.begin(host()));
+    const std::string source="function init() end function update(dt) end"+std::string(handler?" function on_button(b,a) end":"");
+    assert(r.loadSource(reinterpret_cast<const uint8_t*>(source.data()),source.size()));
+    const uint32_t initSerial=r.callbackSerial();assert(initSerial==0 && r.lastPhase()==nullptr);
+    assert(r.update(16) && r.callbackSerial()==initSerial+1);
+    const uint32_t before=r.callbackSerial();assert(r.button("B","pressed"));
+    assert(r.callbackSerial()==before+(handler?1:0));
+    assert(!strcmp(r.lastPhase(),handler?"on_button":"update"));
+    r.stop();assert(r.callbackSerial()==0);
+  }
+  puts("PASS OS callback serial counts actual update button callbacks and ignores absent button handler");
+}
+
 static void manifestApiTests() {
   const auto accepted=[](const char* version,const char* contract) {
     return FireLuaRuntime::supportsManifestApi(version,version?strlen(version):0,
@@ -553,6 +568,7 @@ int main(int argc,char** argv) {
   static_assert(sizeof(lua_Integer)==4 && sizeof(lua_Number)==4,"match ESP32 Lua numeric profile");
   assert(!strcmp(FireLuaRuntime::hardwareApiContract(),"0b29618a077256268c1dc78512ccf2700517e6c162cbe72f2f4a171dcfc3cd40"));
   assert(!strcmp(FireLuaRuntime::appSdkContract(),FireSdkData::kContract));
+  callbackSerialTests();
   manifestApiTests();
   runtimeAiTests();
   installCompletionTest();

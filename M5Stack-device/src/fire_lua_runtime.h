@@ -173,6 +173,7 @@ class FireLuaRuntime {
   size_t peakMemoryUsed() const { return peakMemoryUsed_; }
   uint32_t elapsedMs() const;
   uint32_t lastCallbackUs() const { return lastCallbackUs_; }
+  uint32_t callbackSerial() const { return callbackSerial_; }
   uint32_t maxCallbackUs() const { return maxCallbackUs_; }
   uint32_t frameCount() const { return frames_; }
   size_t sourceBytes() const { return sourceBytes_; }
@@ -198,6 +199,7 @@ class FireLuaRuntime {
   uint32_t callbackBudgetMs_ = kMaxCallbackMs;
   uint64_t callbackStartedUs_ = 0;
   uint32_t lastCallbackUs_ = 0;
+  uint32_t callbackSerial_ = 0;
   uint32_t maxCallbackUs_ = 0;
   uint32_t frames_ = 0;
   size_t sourceBytes_ = 0;

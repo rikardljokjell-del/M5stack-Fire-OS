@@ -6,6 +6,7 @@
 #include "fire_lua_runtime.h"
 #include "fire_runtime_ai_contract.h"
 #include "fire_data_engine_contract.h"
+#include "fire_evolution_contract.h"
 #include "fire_hardware_policy.h"
 #include "fire_firmware_http.h"
 #include "fire_json_guard.h"
@@ -693,11 +694,60 @@ bool FireBackendClient::confirmRun(const String& packageId) {
                    jsonEscape(packageId) + "\"");
 }
 
+static String evolutionIdentity(const String& request,const String& app) {
+  return ",\"request_id\":\""+jsonEscape(request)+"\",\"app_id\":\""+jsonEscape(app)+"\"";
+}
+bool FireBackendClient::evolutionStatus(const String& request,const String& app,const String& view,uint32_t offset) {
+  return sendEvent("evolution_status",evolutionIdentity(request,app)+",\"view\":\""+jsonEscape(view)+"\",\"offset\":"+String(offset),request);
+}
+bool FireBackendClient::evolutionPrepare(const String& request,const String& app,const String& operation,uint32_t revision,
+    const String& json,const String& packageId,const String& source) {
+  if (!fireJsonSafe(json.c_str(),json.length(),FireEvolutionContract::kControlJsonBytes)) return false;
+  String fields=evolutionIdentity(request,app)+",\"operation\":\""+jsonEscape(operation)+
+      "\",\"expected_revision\":"+String(revision)+",\"evolution_json\":\""+jsonEscape(json)+
+      "\"";
+  if (packageId.length()) fields+=",\"package_id\":\""+jsonEscape(packageId)+"\"";
+  if (source.length()) fields+=",\"source_sha256\":\""+jsonEscape(source)+"\"";
+  return sendEvent("evolution_prepare",fields,request);
+}
+bool FireBackendClient::evolutionConfirm(const String& request,const String& app,const String& proposal,uint32_t revision) {
+  return sendEvent("evolution_confirm",evolutionIdentity(request,app)+",\"proposal_id\":\""+jsonEscape(proposal)+
+      "\",\"expected_revision\":"+String(revision),request);
+}
+bool FireBackendClient::evolutionControl(const String& request,const String& app,const String& action,uint32_t revision,
+    const String& job,const String& mandate) {
+  if (action!="pause" && action!="resume" && action!="stop" && action!="revoke") return false;
+  String fields=evolutionIdentity(request,app)+",\"evolution_action\":\""+action+"\",\"expected_revision\":"+String(revision);
+  if (job.length()) fields+=",\"evolution_job_id\":\""+jsonEscape(job)+"\"";
+  if (mandate.length()) fields+=",\"evolution_mandate_id\":\""+jsonEscape(mandate)+"\"";
+  return sendEvent("evolution_control",fields,request);
+}
+bool FireBackendClient::evolutionTelemetry(const String& request,const String& app,const String& packageId,
+    const String& source,const String& json) {
+  if (!fireJsonSafe(json.c_str(),json.length(),FireEvolutionContract::kTelemetryJsonBytes)) return false;
+  return sendEvent("evolution_telemetry",evolutionIdentity(request,app)+",\"package_id\":\""+jsonEscape(packageId)+
+      "\",\"source_sha256\":\""+jsonEscape(source)+"\",\"telemetry_json\":\""+jsonEscape(json)+"\"",request);
+}
+
 static String runtimeIdentityFields(const String& requestId,const String& appId,const String& packageId,
                                     const String& sourceHash,const String& runId) {
   return ",\"request_id\":\""+jsonEscape(requestId)+"\",\"app_id\":\""+jsonEscape(appId)+
     "\",\"package_id\":\""+jsonEscape(packageId)+"\",\"source_sha256\":\""+jsonEscape(sourceHash)+
     "\",\"run_id\":\""+jsonEscape(runId)+"\"";
+}
+bool FireBackendClient::backendSettingsStatus(const String& request,const String& view,const String& role,uint32_t offset) {
+  String fields=",\"request_id\":\""+jsonEscape(request)+"\",\"view\":\""+jsonEscape(view)+"\",\"offset\":"+String(offset);
+  if (role.length()) fields+=",\"role\":\""+jsonEscape(role)+"\"";
+  return sendEvent("backend_settings_status",fields,request);
+}
+bool FireBackendClient::backendSettingsPrepare(const String& request,uint32_t revision,const String& patch) {
+  if (!fireJsonSafe(patch.c_str(),patch.length(),FireEvolutionContract::kControlJsonBytes)) return false;
+  return sendEvent("backend_settings_prepare",",\"request_id\":\""+jsonEscape(request)+"\",\"expected_revision\":"+String(revision)+
+      ",\"settings_json\":\""+jsonEscape(patch)+"\"",request);
+}
+bool FireBackendClient::backendSettingsConfirm(const String& request,const String& proposal,uint32_t revision) {
+  return sendEvent("backend_settings_confirm",",\"request_id\":\""+jsonEscape(request)+"\",\"proposal_id\":\""+jsonEscape(proposal)+
+      "\",\"expected_revision\":"+String(revision),request);
 }
 bool FireBackendClient::runtimeAiRequest(const String& requestId,const String& appId,const String& packageId,
                                        const String& sourceHash,const String& runId,const String& instructions,
@@ -1035,7 +1085,8 @@ void FireBackendClient::handleHandshake() {
                         "\",\"app_sdk\":{\"version\":\"" + FireLuaRuntime::appSdkVersion() +
                         "\",\"contract\":\"" + FireLuaRuntime::appSdkContract() +
                         "\"},\"runtime_ai\":{\"version\":\""+FireRuntimeAiContract::kVersion+
-                        "\",\"contract\":\""+FireRuntimeAiContract::kContract+"\"},\"data_engine\":"+dataCapabilities() +
+                        "\",\"contract\":\""+FireRuntimeAiContract::kContract+"\"},\"evolution\":{\"version\":\""+FireEvolutionContract::kVersion+
+                        "\",\"contract\":\""+FireEvolutionContract::kContract+"\"},\"data_engine\":"+dataCapabilities() +
                         hardwareServiceCapabilities() + ",\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":"+i2cWriteResources()+",\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":false,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
                         jsonEscape(firmwareVersion_) + "\"}";
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
@@ -1057,7 +1108,7 @@ void FireBackendClient::handleHandshake() {
                                    ? ",\"base_package_id\":\"" + jsonEscape(pendingBasePackageId_) + "\""
                                    : String())
                         : String()) +
-                   ",\"runtime_ai_mode\":\""+runtimeAiMode_+"\""+fields + "}";
+                   fields + "}";
   if (sendFrame(0x1, reinterpret_cast<const uint8_t*>(payload.c_str()),
                 payload.length())) {
     // Explicit app selection is one-shot. Reconnect must resume, not select a

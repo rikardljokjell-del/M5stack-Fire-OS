@@ -18,6 +18,9 @@
 #include "fire_data_store.h"
 #include "fire_data_imu.h"
 #include "fire_bluetooth_jobs.h"
+#include "fire_evolution_ui.h"
+#include "fire_ai_menu.h"
+#include "fire_backend_settings_ui.h"
 #include <memory>
 
 class DateTimeService {
@@ -70,6 +73,7 @@ class FireOS {
   void finishBackendSetup() { stopWifiSetup(); }
 
  private:
+  struct LuaHardwareJob;
   enum class Screen : uint8_t {
     Main,
     Apps,
@@ -96,6 +100,7 @@ class FireOS {
     AiApi,
     LuaApp,
     Home,
+    Evolution,
   };
 
   struct ButtonState {
@@ -130,6 +135,17 @@ class FireOS {
 
   Screen screen_ = Screen::Main;
   Screen previousScreen_ = Screen::Main;
+  FireEvolution evolution_;
+  FireEvolutionUi evolutionUi_;
+  void openEvolution(bool developer=false);
+  void prepareEvolutionOperation(uint8_t operation);
+  void requestEvolutionView(const char* view,uint32_t offset=0);
+  void prepareEvolution(const char* operation,const String& body);
+  void handleEvolutionButton(uint8_t index);
+  void handleEvolutionMessage(const String& message);
+  void serviceEvolution();
+  void drawEvolution();
+  void noteEvolutionJob(LuaHardwareJob& job);
   ButtonState buttons_[kButtonCount];
   DateTimeService dateTime_;
 
@@ -405,6 +421,7 @@ class FireOS {
     uint16_t id = 0;
     LuaJobKind kind = LuaJobKind::None;
     uint8_t state = 0;  // 0=pending, 1=ready, 2=failed, 3=cancelled
+    bool evolutionCounted = false;
     uint32_t startedAt = 0;
     uint32_t lastProgressAt = 0;
     uint32_t timeoutMs = 3000;
@@ -581,6 +598,26 @@ class FireOS {
   bool aiVoiceTestWifiWasEnabled_ = false;
   String aiBasePackageId_;
   bool aiProjectPickerActive_ = false;
+  fire_ai_menu::Page aiPickerPage_ = fire_ai_menu::Page::Main;
+  fire_ai_menu::Kind aiPickerShownKind_=fire_ai_menu::Kind::Back;
+  String aiPickerShownId_;
+  String aiEvolutionGoal_,aiEvolutionGoalProject_,aiDevelopmentContext_;
+  bool aiEvolutionNewPending_=false;
+  uint32_t aiEvolutionNewAt_=0;
+  void handleAiPicker(uint8_t index);
+  void drawAiPicker();
+  uint8_t aiBuildResumeMask() const;
+  bool aiRepairResumeAvailable() const;
+  String aiRepairResumeName() const;
+  void selectAiProject(fire_ai_menu::Kind kind,uint8_t index=0);
+  String luaRepairAppId_,luaRepairAppName_;
+  bool aiRepairResumePending_ = false;
+  FireBackendSettingsUi backendSettingsUi_;
+  void requestBackendSettings(const char* view,const String& role=String(),uint32_t offset=0);
+  void prepareBackendSettings(const String& patch);
+  void handleBackendSettings(const String& message);
+  void handleBackendSettingsButton(uint8_t index);
+  void drawBackendSettings();
   uint8_t aiProjectSelection_ = 0;
   uint8_t aiProjectOffset_ = 0;
   String aiProjectId_;

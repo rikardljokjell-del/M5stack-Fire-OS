@@ -1,0 +1,333 @@
+{
+  "schema": 1,
+  "api_contract": "f22026c0594d8ae5c855bb4bb6cd5acc37d3286aee19de604657c0e0b8afac99",
+  "registry": {
+    "api_version": "fire-evolution-1.0",
+    "kind": "optional_os_control_extension",
+    "lua_access": false,
+    "features": [
+      "generate",
+      "repair",
+      "optimize",
+      "expand",
+      "evolve"
+    ],
+    "autonomy": [
+      "manual",
+      "suggest",
+      "auto_build",
+      "assisted"
+    ],
+    "defaults": {
+      "enabled": false,
+      "features_enabled": false,
+      "autonomy": "manual",
+      "telemetry_consent": false,
+      "budget_usd": 0.5,
+      "daily_app_budget_usd": 2,
+      "max_builds": 2,
+      "max_generations_per_build": 2,
+      "mandate_ttl_days": 7,
+      "minimum_improvement_percent": 5,
+      "output_tokens": {
+        "analysis": 1500,
+        "reflection": 2000,
+        "generate": 8000,
+        "review": 4000
+      }
+    },
+    "limits": {
+      "control_json_bytes": 2048,
+      "snapshot_json_bytes": 3072,
+      "telemetry_json_bytes": 1536,
+      "note_bytes": 160,
+      "page_items": 4,
+      "telemetry_interval_ms": 60000,
+      "outbox_bytes": 65536,
+      "outbox_batches": 32,
+      "schema_version": 1
+    },
+    "events": {
+      "evolution_status": {
+        "required": [
+          "request_id",
+          "app_id"
+        ],
+        "optional": [
+          "view",
+          "offset"
+        ],
+        "views": [
+          "summary",
+          "settings",
+          "findings",
+          "history",
+          "compare"
+        ]
+      },
+      "evolution_prepare": {
+        "required": [
+          "request_id",
+          "app_id",
+          "operation",
+          "expected_revision",
+          "evolution_json"
+        ],
+        "optional": [
+          "package_id",
+          "source_sha256"
+        ],
+        "operations": [
+          "configure",
+          "generate",
+          "repair",
+          "optimize",
+          "expand",
+          "evolve",
+          "strategy_app",
+          "strategy_owner"
+        ]
+      },
+      "evolution_confirm": {
+        "required": [
+          "request_id",
+          "app_id",
+          "proposal_id",
+          "expected_revision"
+        ],
+        "meaning": "Native user confirmation of exact settings/mandate/strategy proposal; never install/run or fabricated build_confirm"
+      },
+      "evolution_control": {
+        "required": [
+          "request_id",
+          "app_id",
+          "evolution_action",
+          "expected_revision"
+        ],
+        "optional": [
+          "evolution_job_id",
+          "evolution_mandate_id"
+        ],
+        "actions": [
+          "pause",
+          "resume",
+          "stop",
+          "revoke"
+        ]
+      },
+      "evolution_telemetry": {
+        "required": [
+          "request_id",
+          "app_id",
+          "package_id",
+          "source_sha256",
+          "telemetry_json"
+        ],
+        "meaning": "OS producer aggregate; captured boot/run are in payload, distinct from transport boot"
+      },
+      "backend_settings_status": {
+        "required": [
+          "request_id"
+        ],
+        "optional": [
+          "view",
+          "role",
+          "offset"
+        ],
+        "views": [
+          "summary",
+          "models",
+          "usage",
+          "limits"
+        ]
+      },
+      "backend_settings_prepare": {
+        "required": [
+          "request_id",
+          "expected_revision",
+          "settings_json"
+        ]
+      },
+      "backend_settings_confirm": {
+        "required": [
+          "request_id",
+          "proposal_id",
+          "expected_revision"
+        ]
+      }
+    },
+    "responses": {
+      "evolution_snapshot": {
+        "required": [
+          "request_id",
+          "app_id",
+          "revision",
+          "evolution_json"
+        ],
+        "meaning": "Paged config/findings/history/job/comparison; no paid action on status"
+      },
+      "evolution_proposal": {
+        "required": [
+          "request_id",
+          "app_id",
+          "proposal_id",
+          "revision",
+          "expires_at",
+          "evolution_json"
+        ],
+        "meaning": "Exact reviewable settings/mandate/strategy proposal"
+      },
+      "evolution_telemetry_ack": {
+        "required": [
+          "request_id",
+          "batch_id",
+          "status"
+        ],
+        "statuses": [
+          "accepted",
+          "duplicate",
+          "rejected"
+        ],
+        "meaning": "Delete outbox entry only after matching accepted/duplicate ACK"
+      },
+      "backend_settings_snapshot": {
+        "required": [
+          "request_id",
+          "revision",
+          "settings_json"
+        ]
+      },
+      "backend_settings_proposal": {
+        "required": [
+          "request_id",
+          "proposal_id",
+          "revision",
+          "expires_at",
+          "settings_json"
+        ]
+      }
+    },
+    "telemetry": {
+      "required": [
+        "schema",
+        "batch_id",
+        "captured_boot_id",
+        "start_ms",
+        "end_ms",
+        "callbacks",
+        "buttons",
+        "job_errors",
+        "dropped_batches"
+      ],
+      "optional": [
+        "run_id",
+        "free_heap_min",
+        "lua_bytes_peak"
+      ],
+      "callbacks": {
+        "phases": [
+          "init",
+          "update",
+          "on_button"
+        ],
+        "fields": [
+          "count",
+          "total_us",
+          "max_us"
+        ],
+        "wall_time_includes": [
+          "native_work",
+          "GC",
+          "scheduling"
+        ],
+        "p95_is_not_available": true
+      },
+      "buttons": [
+        "A",
+        "B",
+        "C"
+      ],
+      "job_errors": {
+        "max_items": 8,
+        "fields": [
+          "operation",
+          "error_code",
+          "count"
+        ]
+      },
+      "trust": "Backend verifies source/package/owner and historical run identity; unbound captures remain explicitly unbound",
+      "outbox_path": "/logs/evolution/outbox/",
+      "offline_control": "Pause/Stop are pending until backend ACK; offline queue never contains paid/build/install/run operations"
+    },
+    "authorization": {
+      "manual_build": "current explicit build_confirm",
+      "automatic_build": "revocable source/context/permissions/models/evaluation-bound mandate consumed against each current proposal",
+      "physical_install_run": "separate existing explicit confirmations",
+      "candidate_lineage": "own journaled READY candidates may advance latest_package; immutable mandate baseline never moves automatically",
+      "global_strategy": "separate owner approval after independent multi-app evaluation",
+      "output_caps": "Mandate-bound technical token caps; no automatic expansion; manual global settings unchanged"
+    },
+    "compatibility": {
+      "hardware_api_unchanged": true,
+      "app_sdk_unchanged": true,
+      "runtime_ai_unchanged": true,
+      "data_engine_unchanged": true,
+      "old_optional_fields_omitted": true
+    },
+    "backend_settings": {
+      "source_of_truth": "Existing DesktopConfig/DesktopStore, model_catalog and UsageLedger; no duplicate config or secrets on wire",
+      "json_bounds": {
+        "prepare_bytes": 2048,
+        "snapshot_bytes": 3072
+      },
+      "model_roles": [
+        "dialog_model",
+        "code_model",
+        "review_model",
+        "transcribe_model",
+        "speech_model",
+        "runtime_model"
+      ],
+      "patches": [
+        {
+          "runtime_ai_mode": [
+            "auto",
+            "off"
+          ]
+        },
+        {
+          "model_role": "exact_ROLE_MODELS_role",
+          "model": "backend_allowed_choice"
+        },
+        {
+          "disable_all_limits": true
+        },
+        {
+          "limits": [
+            "cost_limits_enabled",
+            "daily_budget_usd",
+            "build_budget_usd",
+            "request_budget_usd",
+            "runtime_ai_limits_enabled",
+            "runtime_ai_request_budget_usd",
+            "runtime_ai_daily_budget_usd",
+            "runtime_ai_daily_calls",
+            "evolution_cost_limits_enabled"
+          ]
+        }
+      ],
+      "disable_all_limits": "Explicit authenticated OS confirmation disables every backend monetary enforcement flag including Evolution, preserving technical token/resource/iteration/permission/install/run limits; provider account quotas are not changed",
+      "runtime_mode": "off disables global Runtime AI and developer inclusion; auto enables global/inclusion while preserving per-app OFF",
+      "consistency": "Revision-checked atomically saved settings; no optimistic device-only update; in-flight model request retains its frozen selection",
+      "forbidden_fields": [
+        "keys",
+        "tokens",
+        "credential_namespace",
+        "endpoints",
+        "workspace",
+        "network",
+        "security_policy"
+      ]
+    }
+  }
+}

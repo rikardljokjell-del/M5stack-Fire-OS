@@ -66,7 +66,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.5.0-rc2";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc1";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -1120,7 +1120,7 @@ void FireOS::begin() {
     backendClient_->setCallbacks(this, backendMessage, backendState);
     backendClient_->configure(backendHost_, backendPort_, backendToken_,
                               backendDeviceId_, kFirmwareVersion);
-    backendClient_->setRuntimeAiMode(aiRuntimeAuto_?"auto":"off");
+    backendClient_->setRuntimeAiMode(aiRuntimeAuto_?"auto":"off",false);
     backendStatus_ = backendClient_->status();
   }
   reverseTransport_.configure(backendDeviceId_, backendToken_);
@@ -1350,6 +1350,7 @@ void FireOS::update() {
   }
   { FireUiPhaseTimer timing("time_sync"); updateTimeSync(); }
   updateBackend();
+  serviceEvolution();
   updateAiAudio();
   updateDebugTests();
   updateAiAudioOutput();
@@ -2462,8 +2463,9 @@ void FireOS::publishLuaAppScan() {
     const String selectedApp = externalAppSelection_ >= externalAppCount_ &&
         externalAppSelection_ - externalAppCount_ < luaAppCount_ ? luaAppPaths_[externalAppSelection_ - externalAppCount_] : String();
     const String selectedMenu = luaMenuSelection_ < luaAppCount_ ? luaAppIds_[luaMenuSelection_] : String();
-    const String selectedProject = aiProjectSelection_ && aiProjectSelection_ <= luaAppCount_
-        ? luaAppIds_[aiProjectSelection_ - 1] : String();
+    const uint8_t oldProjectSelection=aiProjectSelection_;
+    const String selectedProject = aiPickerPage_==fire_ai_menu::Page::Apps && aiProjectSelection_<luaAppCount_
+        ? luaAppIds_[aiProjectSelection_] : String();
     for (uint8_t i = 0; i < luaScanCount_; ++i)
       for (uint8_t j = i + 1; j < luaScanCount_; ++j)
         if (luaScanItems_[j].name.compareTo(luaScanItems_[i].name) < 0) {
@@ -2474,7 +2476,7 @@ void FireOS::publishLuaAppScan() {
     externalAppSelection_ = selectedApp.length() ? externalAppCount_ + luaAppCount_
         : min<uint8_t>(externalAppSelection_, externalAppCount_ + luaAppCount_);
     luaMenuSelection_ = 0;
-    aiProjectSelection_ = 0;
+    aiProjectSelection_ = aiPickerPage_==fire_ai_menu::Page::Apps?0:oldProjectSelection;
     if (bootAppPicker_) bootAppSelection_ = 0;
     for (uint8_t i = 0; i < luaAppCount_; ++i) {
       const LuaScanItem& item = luaScanItems_[i];
@@ -2485,13 +2487,13 @@ void FireOS::publishLuaAppScan() {
       if (item.id == selectedMain) mainIndex_ = kSystemMainCount + i;
       if (item.path == selectedApp) externalAppSelection_ = externalAppCount_ + i;
       if (item.id == selectedMenu) luaMenuSelection_ = i;
-      if (item.id == selectedProject) aiProjectSelection_ = i + 1;
+      if (item.id == selectedProject) aiProjectSelection_ = i;
       if (bootAppPicker_ && item.path == selectedBootAppPath_) bootAppSelection_ = externalAppCount_ + i + 1;
     }
     syncLuaAppSelections();
     externalAppOffset_ = externalAppSelection_ > 4 ? externalAppSelection_ - 4 : 0;
     luaMenuOffset_ = luaMenuSelection_ > 5 ? luaMenuSelection_ - 5 : 0;
-    aiProjectOffset_ = aiProjectSelection_ > 5 ? aiProjectSelection_ - 5 : 0;
+    aiProjectOffset_ = fire_ai_menu::scroll(aiProjectSelection_,aiProjectOffset_);
     if (bootAppPicker_) bootAppOffset_ = bootAppSelection_ > 5 ? bootAppSelection_ - 5 : 0;
     if (appManagerDeleteConfirm_ && appManagerDeleteMode_ == 1) {
       appManagerDeleteConfirm_ = false; appManagerDeleteMode_ = 0;
@@ -2666,7 +2668,7 @@ void FireOS::releaseLuaHardware() {
     luaSpeakerPlaying_ = false;
   }
   luaSpeakerJobId_ = 0;
-  for (LuaHardwareJob& job : luaJobs_) job = LuaHardwareJob();
+  for (LuaHardwareJob& job : luaJobs_) {noteEvolutionJob(job);job = LuaHardwareJob();}
   for (uint8_t pin = 0; pin < 40; ++pin) {
     if (!luaGpioClaimed_[pin]) continue;
     pinMode(pin, INPUT);
@@ -3713,6 +3715,7 @@ bool FireOS::luaJobCloseCallback(void* context, uint16_t id) {
   auto* os = static_cast<FireOS*>(context);
   LuaHardwareJob* job = os ? os->findLuaJob(id) : nullptr;
   if (!job) return false;
+  os->noteEvolutionJob(*job);
   if (job->kind==LuaJobKind::Data && job->state==0) os->cancelLuaDataJob(*job,"cancelled");
   if(job->kind==LuaJobKind::RuntimeAi && job->state==0) os->cancelLuaRuntimeAi(*job,"cancelled");
   if (os && id == os->luaSpeakerJobId_) {
@@ -3748,6 +3751,7 @@ bool FireOS::luaJobCancelCallback(void* context, uint16_t id) {
 #include "fire_os_data.inc"
 
 void FireOS::serviceLuaHardwareJobs() {
+  for (LuaHardwareJob& job:luaJobs_) noteEvolutionJob(job);
   finishPartialDataCapture();
   if (luaWifiScanJob_) {
     const LuaHardwareJob* job=findLuaJob(luaWifiScanJob_);
@@ -4303,6 +4307,7 @@ void FireOS::prepareAppManagerActions() {
   if (item.local && item.kind==1 && item.localPackageId.length()) {
     add(7,"Improve app");add(8,"New app from this");add(9,"Test feedback");
   }
+  if (item.kind==1 || item.backend) add(10,"Evolution");
   if (item.backend && item.packageId.length() > 0) add(2, "Download/update");
   if (item.local) add(3, "Delete local");
   if (item.backend && item.canDeleteBackend) add(4, "Delete backend");
@@ -4759,6 +4764,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
   }
 
   if (screen_ == Screen::Home) { homeApp_.button(index); return; }
+  if (screen_ == Screen::Evolution) {handleEvolutionButton(index);return;}
 
   if (screen_ == Screen::DateTime) {
     handleDateTimeButton(index);
@@ -4790,9 +4796,13 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       return;
     }
     const char* buttonName = index == 0 ? "A" : index == 1 ? "B" : "C";
-    if (luaAppActive_ && luaRuntime_ && !luaRuntime_->button(buttonName, "pressed")) {
-      const String error = luaRuntime_->lastError();
-      stopLuaApp(error);
+    if (luaAppActive_ && luaRuntime_) {
+      evolution_.button(index);
+      const uint32_t serial=luaRuntime_->callbackSerial();
+      const bool ok=luaRuntime_->button(buttonName,"pressed");
+      if (luaRuntime_->callbackSerial()!=serial && luaRuntime_->lastPhase() && !strcmp(luaRuntime_->lastPhase(),"on_button"))
+        evolution_.callback(2,luaRuntime_->lastCallbackUs(),heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),luaRuntime_->peakMemoryUsed());
+      if (!ok) {const String error=luaRuntime_->lastError();stopLuaApp(error);}
     }
     return;
   }
@@ -5129,6 +5139,8 @@ void FireOS::open(Screen screen) {
   }
   if (screen == Screen::AiDeveloper) {
     aiProjectPickerActive_ = true;
+    aiPickerPage_=fire_ai_menu::Page::Main;
+    backendSettingsUi_.page=FireBackendSettingsUi::None;
     aiProjectSelection_ = 0;
     aiProjectOffset_ = 0;
     aiVoiceTestMode_ = false;
@@ -5581,128 +5593,10 @@ void FireOS::handleHelpButton(uint8_t index) {
 }
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
-  if (aiProjectPickerActive_) {
-    const bool repairResume = luaRepairId_.length() > 0 &&
-                              luaRepairStatus_ != "cancelled" &&
-                              luaRepairStatus_ != "failed" &&
-                              luaRepairStatus_ != "unavailable";
-    const uint8_t repairOffset = repairResume ? 1 : 0;
-    const uint8_t buildOffset = aiResumeAvailable_ ? 1 : 0;
-    const uint8_t itemCount = luaAppCount_ + 5 + repairOffset + buildOffset;
-    if (index == 0) {
-      aiProjectSelection_ =
-          (aiProjectSelection_ + itemCount - 1) % itemCount;
-    } else if (index == 2) {
-      aiProjectSelection_ = (aiProjectSelection_ + 1) % itemCount;
-    } else if (aiProjectSelection_ == itemCount - 1) {
-      back();
-    } else if (repairResume && aiProjectSelection_ == 0) {
-      aiProjectPickerActive_ = false;
-      if (luaErrorAppId_.length() == 0)
-        luaErrorAppId_ = pendingDiagnosticAppId_;
-      if (luaAppError_.length() == 0)
-        luaAppError_ = luaRepairMessage_.length() > 0 ? luaRepairMessage_
-                                                      : "Repair pending";
-      previousScreen_ = Screen::AiDeveloper;
-      screen_ = Screen::LuaApp;
-      requestLuaRepairStatus();
-    } else if (aiResumeAvailable_ && aiProjectSelection_ == repairOffset) {
-      aiProjectPickerActive_ = false;
-      aiBuildId_ = buildJobIds_[0];
-      aiBuildErrorCode_ = buildJobErrorCodes_[0];
-      aiBuildErrorStatus_ = buildJobErrors_[0];
-      aiBuildDiagnosticMessage_ = buildJobDiagnostics_[0];
-      aiBuildCanResume_ = buildJobCanResume_[0];
-      aiBuildCanRetry_ = buildJobCanRetry_[0];
-      aiBuildResumePending_ = buildJobStatuses_[0] == "failed";
-      aiBuildRetryPending_ = false;
-      const bool failedJob = buildJobStatuses_[0] == "failed";
-      backgroundBuildActive_ = !failedJob;
-      aiWorkflowState_ = failedJob ? 2 : 4;
-      aiDeveloperMode_ = 2;
-      aiWorkflowText_ = failedJob && aiBuildErrorStatus_.length() > 0
-                            ? compactStatusText(aiBuildErrorStatus_)
-                            : "Resume bygging";
-      aiAssistantText_ = aiBuildErrorStatus_;
-      if (backendClient_) backendClient_->buildResume(aiBuildId_);
-    } else if(aiProjectSelection_==repairOffset+buildOffset+3) {
-      if(backgroundBuildActive_ || aiWorkflowState_==4) {aiWorkflowText_="Fullfør byggingen først";redrawRequested_=true;return;}
-      aiRuntimeAuto_=!aiRuntimeAuto_;aiRuntimeModeAcked_=false;
-      preferences.putBool("runtime_ai_auto",aiRuntimeAuto_);
-      if(backendClient_) backendClient_->setRuntimeAiMode(aiRuntimeAuto_?"auto":"off");
-      redrawRequested_=true;return;
-    } else {
-      aiProjectPickerActive_ = false;
-      const uint8_t selection = aiProjectSelection_ - repairOffset - buildOffset;
-      if (selection == 0) {
-        aiVoiceTestMode_ = false;
-        aiConversationMode_ = 1;
-        aiProjectId_ = "";
-        aiProjectName_ = "Chat";
-        if (backendClient_) {
-          backendClient_->setConversationMode("chat");
-          backendClient_->setProjectId("");
-        }
-      } else if (selection == 1) {
-        aiVoiceTestMode_ = true;
-        aiConversationMode_ = 1;
-        aiProjectId_ = "";
-        aiProjectName_ = "Voice test";
-        if (backendClient_) {
-          backendClient_->setProjectId("");
-          backendClient_->setConversationMode("chat");
-        }
-      } else if (selection == 2) {
-        aiVoiceTestMode_ = false;
-        aiConversationMode_ = 0;
-        aiProjectId_ = "";
-        aiProjectName_ = "New app";
-        if (backendClient_) {
-          backendClient_->setConversationMode("develop");
-          backendClient_->setProjectId("");
-          backendClient_->setAppMode("new");
-        }
-      } else {
-        aiVoiceTestMode_ = false;
-        aiConversationMode_ = 0;
-        const uint8_t selected = selection - 4;
-        const String source = luaAppPaths_[selected];
-        const int slash = source.lastIndexOf('/');
-        const String appFolder = slash > 0 ? source.substring(0, slash) : source;
-        const String appId = sdBaseName(appFolder);
-        fire_lua_install::Identity identity;
-        const auto identityStatus=fire_lua_install::read(SD,(appFolder+"/"+fire_lua_install::kFilename).c_str(),identity);
-        if(identityStatus==fire_lua_install::Read::Invalid ||
-           (identityStatus==fire_lua_install::Read::Valid && appId!=identity.app)) {
-          aiWorkflowText_="metadata_error";aiProjectPickerActive_=true;redrawRequested_=true;return;
-        }
-        aiProjectId_=identityStatus==fire_lua_install::Read::Valid
-          ?(identity.project[0]?String(identity.project):appId)
-          :preferences.getString(compactPreferenceKey("pr_",appId).c_str(),appId);
-        aiProjectName_ = luaAppNames_[selected];
-      }
-      if (backendClient_) {
-        backendClient_->setProjectId(aiProjectId_);
-        if (aiProjectId_.length() > 0) {
-          backendClient_->setConversationMode("develop");
-          backendClient_->setAppMode("update");
-        }
-      }
-      aiWorkflowText_ = aiVoiceTestMode_
-                            ? "VOICE TEST - PRESS B TO RECORD"
-                        : aiProjectId_.length() > 0
-                            ? "EDIT " + aiProjectName_
-                            : "NEW APP";
-      aiDeveloperMode_ = 0;
-      aiWorkflowState_ = 0;
-      aiAssistantText_ = "";
-      redrawRequested_ = true;
-    }
-    if (aiProjectSelection_ < aiProjectOffset_)
-      aiProjectOffset_ = aiProjectSelection_;
-    if (aiProjectSelection_ >= aiProjectOffset_ + 5)
-      aiProjectOffset_ = aiProjectSelection_ - 4;
-    return;
+  if (aiProjectPickerActive_) {handleAiPicker(index);return;}
+  if (index==2 && aiWorkflowState_==0 && !aiVoiceTestMode_) {
+    aiProjectPickerActive_=true;aiPickerPage_=fire_ai_menu::Page::Main;
+    aiProjectSelection_=aiProjectOffset_=0;backendSettingsUi_.page=FireBackendSettingsUi::None;redrawRequested_=true;return;
   }
   if (aiBuildResumePending_ && index == 2 &&
       (aiWorkflowState_ == 2 || aiWorkflowState_ == 3)) {
@@ -6521,10 +6415,17 @@ bool FireOS::startLuaApp(const String& path, const String& name,
     owner.instance=owner.boot+"-"+String(esp_random(),HEX);
     luaDataStore_.configure(SD,owner);
   }
+  evolution_.select(SD,manifestId,packageId,sourceHash,backendClient_?backendClient_->bootId():String("local-boot"),millis());
+  if (evolutionUi_.loaded && evolutionUi_.app==manifestId && evolutionUi_.acknowledgedConsent &&
+      backendClient_ && backendClient_->sessionReady() && !evolutionUi_.request.length() && millis()-evolutionUi_.consentAt<15000)
+    evolution_.consent(manifestId,true,millis());
+  evolutionUi_.runtimeApp=String();evolutionUi_.runtimeRequest=String();
   const bool loaded = readBytes == length && luaRuntime_->loadSource(buffer, length);
+  if (evolution_.consented() && (loaded || (luaRuntime_->lastPhase() && !strcmp(luaRuntime_->lastPhase(),"init"))))
+    evolution_.callback(0,luaRuntime_->lastCallbackUs(),heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),luaRuntime_->peakMemoryUsed());
   free(buffer);
   if (!loaded) {
-    releaseLuaHardware();
+    releaseLuaHardware();evolution_.finish(millis());
     luaAppError_ = luaRuntime_->lastError();
     const char* failureCode = luaFailureCode(luaAppError_);
     const String diagnostics = luaDiagnosticsJson(
@@ -6584,6 +6485,8 @@ void FireOS::stopLuaApp(const String& reason) {
     diagnosticPhase = luaRuntime_->lastPhase();
   }
   const String stoppedDiagnostics = luaDiagnosticsJson(diagnosticPhase);
+  for (LuaHardwareJob& job:luaJobs_) noteEvolutionJob(job);
+  evolution_.finish(millis());
   const bool failedRun = reason.length() > 0 && !userExit && !requestedStop &&
                          !osNavigation;
   if (luaAppActive_ && reason.length() > 0) {
@@ -6800,6 +6703,7 @@ void FireOS::requestLuaRepair() {
       luaRepairStatus_ == "running") {
     return;
   }
+  luaRepairAppId_=luaErrorAppId_;luaRepairAppName_=luaErrorAppName_;
   luaRepairId_ = "";
   luaRepairProposalId_ = "";
   luaRepairProjectId_ = "";
@@ -6821,7 +6725,7 @@ void FireOS::requestLuaRepairStatus() {
   if (!backendClient_ || !backendClient_->sessionReady() ||
       luaRepairId_.length() == 0)
     return;
-  if (backendClient_->appRepairStatus(luaRepairId_, luaErrorAppId_))
+  if (backendClient_->appRepairStatus(luaRepairId_, luaRepairAppId_))
     luaRepairStatusQueryPending_ = false;
 }
 
@@ -6874,8 +6778,16 @@ void FireOS::handleLuaRepairStatus(const String& message) {
   const String incomingApp = jsonStringField(message, "app_id");
   if ((luaRepairId_.length() > 0 && incomingRepair.length() > 0 &&
        incomingRepair != luaRepairId_) ||
-      (incomingApp.length() > 0 && incomingApp != luaErrorAppId_))
+      (incomingApp.length() > 0 && luaRepairAppId_.length() > 0 && incomingApp != luaRepairAppId_) ||
+      (luaRepairId_.length()==0 && luaRepairRequested_ && incomingApp.length()>0 && incomingApp!=luaErrorAppId_))
     return;
+  if (incomingApp.length()) luaRepairAppId_=incomingApp;
+  const String incomingName=jsonStringField(message,"app_name");
+  if (incomingName.length()) luaRepairAppName_=incomingName;
+  if (aiRepairResumePending_ && luaRepairAppId_.length()) {
+    luaErrorAppId_=luaRepairAppId_;luaErrorAppName_=aiRepairResumeName();
+    luaAppError_="Reparasjon av "+luaErrorAppName_;aiRepairResumePending_=false;
+  }
   if (incomingRepair.length() > 0) luaRepairId_ = incomingRepair;
   const String incomingProject = jsonStringField(message, "project_id");
   const String incomingProposal = jsonStringField(message, "proposal_id");
@@ -7275,7 +7187,11 @@ void FireOS::updateLuaApp() {
   const uint32_t now = millis();
   const uint32_t elapsed = now - luaLastFrameAt_;
   luaLastFrameAt_ = now;
-  if (!luaRuntime_ || !luaRuntime_->update(min<uint32_t>(elapsed, 100))) {
+  const uint32_t previousFrames=luaRuntime_?luaRuntime_->frameCount():0;
+  const bool callbackOk=luaRuntime_ && luaRuntime_->update(min<uint32_t>(elapsed,100));
+  if (luaRuntime_ && luaRuntime_->frameCount()!=previousFrames)
+    evolution_.callback(1,luaRuntime_->lastCallbackUs(),heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),luaRuntime_->peakMemoryUsed());
+  if (!callbackOk) {
     const String error = luaRuntime_ ? luaRuntime_->lastError()
                                      : String("runtime unavailable");
     const bool runtimeLimit = error == "Lua app runtime limit exceeded";
@@ -7341,13 +7257,16 @@ void FireOS::updateBackend() {
   const bool bootCheck = backendBootPending_ &&
                          WiFi.status() == WL_CONNECTED &&
                          !backendBootAttempted_;
-  const bool backendDemand = screen_ == Screen::AiDeveloper ||
+  const bool evolutionDemand = evolutionUi_.controlRequest.length()>0 ||
+      (evolution_.pending() && evolutionUi_.connectAt && millis()-evolutionUi_.connectAt<15000);
+  const bool backendDemand = evolutionDemand || screen_ == Screen::AiDeveloper ||
                               (luaAppActive_ && (luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_)) ||
                               luaAiBindPackageId_.length()>0 ||
                               screen_ == Screen::AiApi ||
                               screen_ == Screen::LuaApp ||
                               screen_ == Screen::Settings ||
                               screen_ == Screen::AppsSettings ||
+                              screen_ == Screen::Evolution ||
                                luaRepairRequested_ || luaRepairId_.length() > 0 ||
                                backgroundBuildActive_ || buildNoticeActive_ ||
                                buildNoticePendingId_.length() > 0 ||
@@ -7419,7 +7338,7 @@ void FireOS::updateBackend() {
       luaAiBindSent_=backendClient_->confirmRun(luaAiBindPackageId_);
   }
   if (luaRepairStatusQueryPending_ && backendClient_->sessionReady()) {
-    if (backendClient_->appRepairStatus(luaRepairId_, luaErrorAppId_))
+    if (backendClient_->appRepairStatus(luaRepairId_, luaRepairAppId_))
       luaRepairStatusQueryPending_ = false;
   }
   updateAppManagerBackend();
@@ -7580,9 +7499,34 @@ void FireOS::backendMessage(void* context, const String& message) {
 void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
+  if (type=="app_selected") {
+    const String project=jsonStringField(message,"project_id");
+    if (project.length()) {
+      if (aiEvolutionGoalProject_!=project) {aiEvolutionGoal_=String();aiEvolutionGoalProject_=String();aiDevelopmentContext_=String();}
+      aiProjectId_=project;aiBasePackageId_=jsonStringField(message,"base_package_id");
+      if (backendClient_) backendClient_->setProjectId(project);
+      if (aiEvolutionNewPending_ && jsonStringField(message,"app_mode")=="new") {
+        aiEvolutionNewPending_=false;openEvolution(true);
+      }
+    }
+    return;
+  }
   if(type=="runtime_ai_result") {handleRuntimeAiResult(message);return;}
+  if(type=="evolution_snapshot" || type=="evolution_proposal" || type=="evolution_telemetry_ack") {handleEvolutionMessage(message);return;}
+  if(type=="backend_settings_snapshot" || type=="backend_settings_proposal") {handleBackendSettings(message);return;}
+  if(type=="error") {
+    const String request=jsonStringField(message,"request_id");
+    if (request.length() && request==backendSettingsUi_.request) {handleBackendSettings(message);return;}
+    if (request.length() && (request==evolutionUi_.request || request==evolutionUi_.controlRequest || request==evolutionUi_.policyRequest || request==evolutionUi_.runtimeRequest)) {handleEvolutionMessage(message);return;}
+  }
   if(type=="data_result" || type=="app_develop_ready") {handleDataResult(message);return;}
   if(type=="session_started" || type=="session_snapshot") {
+    const String project=jsonStringField(message,"project_id");
+    if (aiEvolutionNewPending_ && project.length() && jsonStringField(message,"app_mode")=="new") {
+      aiProjectId_=project;aiEvolutionNewPending_=false;
+      if (backendClient_) backendClient_->setProjectId(project);
+      openEvolution(true);
+    }
     const String mode=jsonStringField(message,"runtime_ai_mode");
     if(mode=="auto" || mode=="off") {
       const bool selected=mode=="auto";if(aiRuntimeAuto_!=selected) preferences.putBool("runtime_ai_auto",selected);
@@ -7801,6 +7745,11 @@ void FireOS::handleBackendMessage(const String& message) {
     aiReadyPackageId_=String();
     aiProposalId_ = jsonStringField(message, "proposal_id");
     const String summary = jsonStringField(message, "summary");
+    const String project=jsonStringField(message,"project_id");
+    if (project.length() && summary.length() && summary.length()<=1000) {
+      aiProjectId_=project;aiEvolutionGoalProject_=project;aiEvolutionGoal_=summary;
+      aiDevelopmentContext_=jsonStringField(message,"context_id");
+    }
     const String display=jsonStringField(message,"display_text");
     aiAssistantText_ = display.length()?display:compactStatusText(summary.length()?summary:aiBuildErrorStatus_);
     aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 0;
@@ -7992,6 +7941,7 @@ void FireOS::handleBackendMessage(const String& message) {
       // Bind the normal authorized command without resetting measurements/UI.
       luaRunId_=runId;luaHealthySent_=false;luaAiBindPackageId_=String();luaAiBindSent_=false;
       luaDataStore_.bindRun(runId);
+      evolution_.bindRun(runId,millis());
       receipt->state=fire_run_receipts::State::Started;
       if(backendClient_) backendClient_->appStarted(runId,packageId,luaSourceHash_,luaDiagnosticsJson("start"));
       redrawRequested_=true;return;
@@ -8000,6 +7950,7 @@ void FireOS::handleBackendMessage(const String& message) {
         startLuaApp(path, sdBaseName(path), packageId,commandSource)) {
       luaRunId_ = runId;
       luaDataStore_.bindRun(runId);
+      evolution_.bindRun(runId,millis());
       luaPackageId_ = packageId;
       luaAiBindPackageId_=String();luaAiBindSent_=false;
       luaHealthySent_ = false;
@@ -8404,6 +8355,8 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
             startLuaApp(item.localPath, item.name, item.localPackageId);
           else if (item.kind == 0)
             installExternalApp(item.localPath, true, false);
+        } else if (action == 10) {
+          openEvolution();
         } else if (action == 2) {
           requestSelectedAppVersions();
         } else if (action==7 || action==8 || action==9) {
@@ -9928,6 +9881,9 @@ void FireOS::drawScreen(Screen screen) {
       homeApp_.draw(ui);
       ui.setFont(nullptr);
       break;
+    case Screen::Evolution:
+      drawEvolution();
+      break;
     case Screen::Apps:
       drawApps();
       break;
@@ -10717,86 +10673,7 @@ void FireOS::drawShortcuts() {
 void FireOS::drawAiDeveloper() {
   // AI Developer is intentionally immersive: no system status bar or panel.
   ui.fillSprite(kBg);
-  if (aiProjectPickerActive_) {
-    drawPanel(12, 28, 296, 188);
-    ui.setTextDatum(MC_DATUM);
-    drawText(160, 45, "AI DEVELOPER", kText, 2, kPanel);
-    String backendLabel = "BACKEND: ";
-    uint16_t backendColor = kMuted;
-    if (!backendClient_ || !backendClient_->configured()) {
-      backendLabel += "NOT CONFIGURED";
-      backendColor = kOrange;
-    } else if (backendClient_->sessionReady()) {
-      backendLabel += "CONNECTED";
-      backendColor = kGreen;
-    } else if (WiFi.status() != WL_CONNECTED) {
-      backendLabel += "WAITING FOR WI-FI";
-      backendColor = kOrange;
-    } else if (backendStatus_.indexOf("failed") >= 0 ||
-               backendStatus_.indexOf("timeout") >= 0 ||
-               backendStatus_.indexOf("rejected") >= 0 ||
-               backendStatus_.indexOf("disconnected") >= 0) {
-      backendLabel += "DISCONNECTED";
-      backendColor = kOrange;
-    } else {
-      backendLabel += "CONNECTING";
-      backendColor = kCyan;
-    }
-    drawText(160, 59, backendLabel, backendColor, 1, kPanel);
-    const bool repairResume = luaRepairId_.length() > 0 &&
-                              luaRepairStatus_ != "cancelled" &&
-                              luaRepairStatus_ != "failed" &&
-                              luaRepairStatus_ != "unavailable";
-    const uint8_t repairOffset = repairResume ? 1 : 0;
-    const uint8_t buildOffset = aiResumeAvailable_ ? 1 : 0;
-    const uint8_t itemCount = luaAppCount_ + 5 + repairOffset + buildOffset;
-    const uint8_t visible = min<uint8_t>(6, itemCount - aiProjectOffset_);
-    for (uint8_t row = 0; row < visible; ++row) {
-      const uint8_t item = aiProjectOffset_ + row;
-      const bool selected = item == aiProjectSelection_;
-      const int y = 72 + row * 22;
-      if (selected) drawSelection(20, y - 4, 280, 19, kCyan);
-       String label = repairResume && item == 0
-                          ? "Resume feilretting"
-                          : aiResumeAvailable_ && item == repairOffset
-                              ? "Resume bygging"
-                              : item == repairOffset + buildOffset
-                                  ? "Chat only"
-                                  : item == repairOffset + buildOffset + 1
-                                      ? "Voice test"
-                                      : item == repairOffset + buildOffset + 2
-                                          ? "New app"
-                                          : item == repairOffset + buildOffset + 3
-                                              ? String("Runtime AI: ")+(aiRuntimeAuto_?"AUTO":"OFF")+(aiRuntimeModeAcked_?"":" *")
-                                          : item == itemCount - 1
-                                              ? "Back"
-                                              : luaAppNames_[item - repairOffset - buildOffset - 4];
-
-      drawText(160, y, label, kText, 1,
-               selected ? FireUI::Selected : kPanel);
-    }
-    const uint8_t buildResumeItem = repairOffset;
-    if (aiResumeAvailable_ && aiProjectSelection_ == buildResumeItem &&
-        buildJobCount_ > 0) {
-      const bool failed = buildJobStatuses_[0] == "failed";
-      String reason = buildJobErrors_[0];
-      if (reason.length() == 0) reason = buildJobStatuses_[0];
-      ui.setTextDatum(MC_DATUM);
-      drawText(160, 202,
-               failed ? "FEIL: " + clipUtf8(reason, 25) :
-                        clipUtf8(reason, 30),
-               failed ? kOrange : kMuted, 1, kPanel);
-      String id = buildJobIds_[0];
-      if (id.length() > 14) id = id.substring(0, 14);
-      drawText(160, 216, "ID " + id, kMuted, 1, kPanel);
-      ui.setTextDatum(TL_DATUM);
-    }
-    drawText(48, 232, "PREV", kMuted, 1, kBg);
-    drawText(160, 232, "SELECT", kMuted, 1, kBg);
-    drawText(272, 232, "NEXT", kMuted, 1, kBg);
-    ui.setTextDatum(TL_DATUM);
-    return;
-  }
+  if (aiProjectPickerActive_) {drawAiPicker();return;}
   static const char* const states[] = {"REST", "LISTEN", "THINK", "TALK"};
   const uint32_t now = millis();
   static uint32_t nextBlinkAt = 0;
@@ -10975,7 +10852,7 @@ void FireOS::drawAiDeveloper() {
   }
   const char* leftHint = "HOLD HOME";
   const char* centerHint = "SPEAK";
-  const char* rightHint = "HOLD BACK";
+  const char* rightHint = !aiVoiceTestMode_ && aiWorkflowState_==0?"MENU":"HOLD BACK";
   if (aiWorkflowState_ == 1) {
     centerHint = "FINISH";
   } else if (aiWorkflowState_ == 2) {
@@ -11974,3 +11851,7 @@ void FireOS::drawText(int32_t x, int32_t y, const String& text, uint16_t color,
   FireUI::text(surface, left, top, text.c_str(), color, font, width,
                right ? 2 : centered ? 1 : 0);
 }
+
+#include "fire_os_evolution.inc"
+#include "fire_os_ai_picker.inc"
+#include "fire_os_backend_settings.inc"
