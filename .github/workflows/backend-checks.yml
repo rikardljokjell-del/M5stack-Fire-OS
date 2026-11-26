@@ -39,8 +39,9 @@ jobs:
       - name: Provide a virtual display for existing Tk interface tests
         run: sudo apt-get update && sudo apt-get install -y xvfb xauth
       - name: Actual Builder, journal, permissions, settings and state-machine regression
+        timeout-minutes: 3
         run: >-
-          xvfb-run -a python -m pytest -q
+          xvfb-run -a python -m pytest -vv -o faulthandler_timeout=45
           tests/test_evolution_*.py tests/test_backend_settings.py
           tests/test_device_protocol.py tests/test_contracts.py
           tests/test_sdk_prefill.py tests/test_data_engine_simulation.py
