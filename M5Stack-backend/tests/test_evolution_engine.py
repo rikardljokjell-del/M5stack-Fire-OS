@@ -105,8 +105,12 @@ async def test_snapshot_job_cost_spans_three_projects_without_reservation_as_pri
         assert cost['estimated_usd']==pytest.approx(actual)
         assert cost['budget_reserved_usd']==pytest.approx(unknown['reserved_usd'])
         assert cost['estimated_usd']<cost['budget_exposure_usd']
-        assert cost==b.evolution.price([*rows,unknown])
-        assert cost['estimated_usd']==b.evolution.cost(result['job_id'])['estimated_usd']
+        expected=b.evolution.price([*rows,unknown])
+        assert cost.keys()==expected.keys()
+        for key,value in expected.items():
+            # File enumeration may change the order of floating-point additions.
+            assert cost[key]==(pytest.approx(value,rel=1e-12,abs=1e-12) if isinstance(value,float) else value)
+        assert cost['estimated_usd']==pytest.approx(b.evolution.cost(result['job_id'])['estimated_usd'],rel=1e-12,abs=1e-12)
         own=rows[0]['estimated_usd']+other['estimated_usd']
         for key in ('app_cost','daily_cost'):
             assert snapshot[key]['requests']==2
