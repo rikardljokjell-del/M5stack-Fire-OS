@@ -9,7 +9,7 @@ usage_session = ContextVar('fire_usage_session', default=None)
 def session_usage(method):
     @wraps(method)
     async def scoped(self,session,*args,**kwargs):
-        target=getattr(session,'job_context_target',None) or {}
+        target=dict(getattr(session,'job_context_target',None) or {})
         project_id=target.get('project_id',session.project_id)
         scope={'project_id':project_id}
         if target.get('build_id'):scope['build_id']=target['build_id']
@@ -20,7 +20,7 @@ def session_usage(method):
             try:
                 ledger=getattr(self,'usage',None) or getattr(getattr(self,'service',None),'usage',None)
                 if ledger and session.turn_id:
-                    ledger.attribute_turn(session.id,session.turn_id,project_id)
+                    ledger.attribute_turn(session.id,session.turn_id,target.get('project_id',session.project_id))
             finally:
                 usage_session.reset(session_token)
                 usage_scope.reset(token)

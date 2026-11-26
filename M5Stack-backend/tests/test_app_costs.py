@@ -87,3 +87,32 @@ async def test_attribution_storage_failure_always_releases_project_context():
     with pytest.raises(OSError):
         await Turn().run(SimpleNamespace(id='session-failed',turn_id='turn-failed',project_id='app-failed'))
     assert usage_scope.get()=={} and usage_session.get() is None
+
+
+@pytest.mark.parametrize('explicit_target',[True,False])
+async def test_turn_attribution_isolates_frozen_job_target_from_dynamic_app_choice(tmp_path,explicit_target):
+    b=Backend(configured(tmp_path))
+    try:
+        initial,_=saved_app(b,'Første',slug='initial')
+        target,_=saved_app(b,'Jobbmål',slug='target')
+        final,_=saved_app(b,'Valgt til slutt',slug='final')
+        binding={'project_id':target['id']} if explicit_target else None
+        s=SimpleNamespace(id='session-isolation',project_id=initial['id'],turn_id='turn-isolation',job_context_target=binding)
+        class Turn:
+            service=b
+            @session_usage
+            async def run(self,session):
+                assert usage_scope.get()['project_id']==(target['id'] if explicit_target else initial['id'])
+                item=b.usage.begin('transcribe','gpt-transcribe',0,0,audio_seconds=10,
+                    project_id=usage_scope.get()['project_id'],session_id=session.id,turn_id=session.turn_id)
+                row=b.usage.finish(item,None,duration_seconds=10)
+                session.project_id=final['id']
+                if session.job_context_target is not None:session.job_context_target.clear()
+                session.job_context_target=None
+                return item,row['estimated_usd']
+        identifier,amount=await Turn().run(s)
+        row=b.store.get('usage',identifier)
+        assert row['project_id']==(target['id'] if explicit_target else final['id'])
+        assert row['estimated_usd']==amount and row['usage_source']=='duration'
+        assert usage_scope.get()=={} and usage_session.get() is None
+    finally:await b.close()
