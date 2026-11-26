@@ -18,7 +18,59 @@ lokale tester og faktisk fysisk verifikasjon.
 
 ## Status nå
 
-### Ny brukerprøve: RC4 installert, av/på-prøve avventes
+### Backend-sync og sikker nettilgang – 26. november
+
+Brukerens RC4-avslag er gjenskapt. Kvitteringer viser at en utløpt samtale ble erstattet av
+en ny, mens senere FIRE-forsøk fortsatt sendte forgjengerens ID. Den nye
+samtalen blokkerte da gjenopptakelsen. Disse fem requestene er rekonstruert
+med samme normaliserte SHA som loggen; enhet, oppstart og kapabiliteter var
+identiske. Hvorfor den første nye startkvitteringen ikke ble adoptert på FIRE,
+er fortsatt ikke fysisk fastslått. Alle aktuelle bootstrap-meldinger passer
+de uendrede byte-/token-/dybdegrensene.
+
+Varig, strengt avgrenset forgjenger/etterfølger-gjenopptakelse og kvitterte
+app-/modusvalg er implementert. Backendrettingen er aktivert i samme prosessmodell,
+og den dokumenterte gamle CE/FC-tilstanden er koblet med en kontrollert,
+atomisk metadataretting. Opprinnelige hendelser er bevart byteidentisk.
+Ingen generell overtakelse eller omgåelse av bygge-/kjøre-/kostnadsporter er innført.
+En reell Python 3.11-kanselleringsfeil i eksisterende Reverse TCP er også rettet.
+
+Samlet backendregresjon: **1251 PASS**, 4 varsler, 673,29 sekunder. Slutt-CI:
+292 PASS og to Windows-spesifikke tester som kjøres lokalt (12/12 PASS).
+Reell lokal WebSocket/Reverse TCP-prøve dekker tapt startrespons og gjenforsøk
+uten dupliserte samtaler eller arbeid. Alle sikkerhets- og meldingsgrenser er beholdt.
+
+Brukeren bekrefter nå på fysisk RC4 at den kobler til, beholder forbindelsen og
+at Backend-sync Off/On fungerer. FIRE ble ved et uhell startet på nytt før
+prøven; dette er derfor **ikke** verifikasjon av den gamle CE-bootens gjenopptakelse.
+Signert og CI-kontrollert **1.6.0-rc5** er nå fysisk installert i B54 og markert
+VALID med gyldig CRC etter 45 sekunders helsekontroll og én normal omstart.
+Hele det tilbakeleste bildet på 2 739 776 byte matcher testet SHA-256.
+RC4 i A53 og dens metadatasektor er bevart. RC5 inkluderer kvitterte app-/modusvalg
+og korrekt visning av det midlertidige oppsettspassordet. Dette installasjonsbeviset
+er separat fra den kommende fysiske prøven av offentlig WSS.
+Faktisk RC5-HELLO og fersk, komplett inventory fra sluttbooten bekrefter alle
+13 app-ID-er og uendrede SDK-/Runtime AI-/Data Engine-/Evolution-kontrakter.
+
+Cloudflare er aktivert i **samme backend**. Eksisterende `fire-pc`-tjeneste
+gjenbrukes, med kontrollert offisiell binærfil og automatisk tjenesteoppstart.
+Studio-adressen er `https://firestudio.ljoekjell.no/ui/`; FIRE-adressen er
+`wss://fire-device.ljoekjell.no/ws/device`. Faktiske offentlige prøver bekrefter
+Access-videresending, signaturkontroll, avvisning av feil enhetsnøkkel og en
+autentisert offentlig WSS-oppkobling uten noen enhetshendelser eller AI-kall.
+Enhetsdomenet gir ikke tilgang til Studio eller desktopkontroller.
+
+Én eid automatisk oppstart for eksisterende backend er installert for denne
+Windows-brukeren. Gjentatt installasjon og kjøring beholdt samme ene prosess.
+PC-en må være våken, på nett og brukeren innlogget; oppstart før Windows-innlogging
+er ikke etablert. Nøkler, modeller og kostnadsgrenser er bevart.
+
+**Gjenstår før fysisk fjernbruk er godkjent:** faktisk OTP-innlogging i Studio,
+bytte av FIREs adresse via eksisterende brukeråpnet Backend config, og fysisk
+oppkobling/Off-On fra et annet Wi-Fi. Den gamle lokale Reverse TCP-veien beholdes
+inntil adressebyttet koordineres. Ingen ekstra tunnel eller tokeninnsamling er gjort.
+
+### Tidligere meny- og tilkoblingsrettinger
 
 Brukeren har meldt trege/mistede knappetrykk, flere konkrete menyavvik og
 gjentatt til-/frakobling i AI Developer på installert 1.6.0-rc2. Den videre
@@ -89,8 +141,9 @@ innstillinger/nøkkelfingeravtrykk og én lytter. RC4 er fysisk installert i
 A53 VALID/CRC, med RC3 B52 som bevart reserve. Flash-MD5 og full tilbakelesing
 av de 2 737 216 bildebytene matcher CI/SHA256. Helseprøve 45,170 sekunder og
 vanlig omstart 35,021 sekunder bestod uten panic/watchdog/avvist JSON; COM er
-lukket. SD, NVS og grunnlagsfirmware ble ikke skrevet. Den korte brukerprøven
-med tre av/på-runder og etterfølgende backendkvitteringer avventes.
+lukket. SD, NVS og grunnlagsfirmware ble ikke skrevet. Den etterfølgende
+brukerprøven feilet som dokumentert ovenfor; oppstartskontrollen alene beviser
+ikke fungerende gjenoppkobling.
 Ingen tallfestet trykklatens eller garanti om hver oppkobling utledes av
 brukerbekreftelsen.
 
