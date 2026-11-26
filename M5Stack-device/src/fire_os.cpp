@@ -70,7 +70,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc3";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc4";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -481,6 +481,7 @@ String compactStatusText(const String& raw) {
   value.trim();
   String lower = value;
   lower.toLowerCase();
+  if(lower=="backend session rejected") return "Tilkobling avvist";
   if(lower.indexOf("callback time budget")>=0) return "Appen brukte for lang tid";
   if(lower.indexOf("instruction budget")>=0 || lower.indexOf("io budget")>=0) return "Appens arbeidsgrense nådd";
   if(lower.indexOf("memory")>=0 && (lower.indexOf("budget")>=0 || lower.indexOf("error")>=0)) return "Appen mangler minne";
@@ -5494,6 +5495,9 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
   }
   if (index == 1) {
     if (aiWorkflowState_ == 0) {
+      if (!aiVoiceTestMode_ && backendClient_ && backendClient_->sessionRejected()) {
+        aiWorkflowText_="Tilkobling avvist";aiDeveloperMode_=0;return;
+      }
       if (aiVoiceTestMode_ || (backendClient_ && backendClient_->sessionReady())) {
         if (!startAiRecording()) {
           aiWorkflowText_ = aiAudioError_.length() > 0
@@ -7126,6 +7130,7 @@ void FireOS::applyBackendMode() {
     return;
   }
   if (backendClient_ && backendClient_->configured() && wifiMode_ != 2) {
+    backendClient_->retrySession(); // explicit user policy change clears a terminal admission error
     // Auto performs one lightweight boot check; On remains demanded by
     // updateBackend() until the user changes the policy again.
     backendBootPending_ = true;
@@ -9861,7 +9866,7 @@ void FireOS::drawStatusBar(const char* title) {
   const bool backendConnected = backendClient_ &&
                                 backendClient_->sessionReady();
   const bool backendWorking = !backendConnected && backendClient_ &&
-                              backendClient_->configured() &&
+                              backendClient_->configured() && !backendClient_->sessionRejected() &&
                               backendMode_ != 2 && wifiMode_ != 2 &&
                               (backendClient_->active() || backendBootPending_ ||
                                (backendMode_ == 1 &&
@@ -11136,6 +11141,8 @@ void FireOS::drawQuickSettings() {
     backendValue = "Wi-Fi Off";
   } else if (backendClient_ && backendClient_->sessionReady()) {
     backendValue = "Connected (" + backendModeLabel + ")";
+  } else if (backendClient_ && backendClient_->sessionRejected()) {
+    backendValue = "Avvist";
   } else if (backendClient_ && backendClient_->active()) {
     backendValue = "Connecting (" + backendModeLabel + ")";
   } else {

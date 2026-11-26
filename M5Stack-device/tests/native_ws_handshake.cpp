@@ -20,5 +20,28 @@ int main() {
   assert(!fireWsNewSession("old","","old"));
   assert(!fireWsNewSession("","old","old"));
   assert(fireWsNewSession("new","",""));
+  assert(!fireWsSessionExpired(false,5999,1000));
+  assert(fireWsSessionExpired(false,6000,1000));
+  assert(fireWsSessionExpired(false,65000,1000)); // healthy transport PONG cannot admit a session
+  assert(!fireWsSessionExpired(true,65000,1000));
+  const uint32_t nearWrap=UINT32_MAX-2500;
+  assert(!fireWsSessionExpired(false,nearWrap+4999,nearWrap));
+  assert(fireWsSessionExpired(false,nearWrap+5000,nearWrap));
+  assert(fireWsSessionRejected(false,"error","session_start_rejected",true));
+  assert(!fireWsSessionRejected(true,"error","session_start_rejected",true));
+  assert(!fireWsSessionRejected(false,"error","session_start_rejected",false));
+  assert(!fireWsSessionRejected(false,"error","event_rejected",true));
+  assert(!fireWsSessionRejected(false,"app_failed","session_start_rejected",true));
+  assert(!fireWsSessionRejected(false,nullptr,nullptr,true));
+  FireWsSessionAdmission admission;
+  assert(admission.allowed());
+  assert(!admission.reject(true,"error","session_start_rejected",true) && admission.allowed());
+  assert(admission.reject(false,"error","session_start_rejected",true) && !admission.allowed());
+  assert(!admission.reject(false,"error","event_rejected",true) && !admission.allowed()); // no implicit unblock/replay
+  admission.retry(); // the same production operation used by explicit OFF-to-ON/configuration
+  assert(admission.allowed());
+  assert(!admission.reject(false,"session_started",nullptr,false) && admission.allowed()); // safe backend expired/stopped recovery
+  assert(admission.reject(false,"error","session_start_rejected",true) && !admission.allowed()); // mismatch remains terminal
+  std::puts("PASS bounded session deadline typed rejection and explicit policy retry");
   std::puts("PASS strict WebSocket nonce/header validation");
 }

@@ -6,6 +6,7 @@
 #include <freertos/task.h>
 #include "fire_reverse_transport.h"
 #include "fire_async_client.h"
+#include "fire_ws_handshake.h"
 
 class FireBackendClient {
  public:
@@ -28,6 +29,8 @@ class FireBackendClient {
   }
   void service(bool wifiConnected);
   void disconnect();
+  // A deliberate policy/configuration retry, never an automatic app action.
+  void retrySession() { sessionAdmission_.retry();reconnectAt_=0; }
   bool uploadAudio(const String& turnId, const uint8_t* wavData,
                   size_t wavLength);
   bool downloadAudio(const String& url, uint8_t* buffer, size_t capacity,
@@ -45,6 +48,7 @@ class FireBackendClient {
   bool audioTransferOk() const { return audioTransferOk_; }
   size_t audioTransferLength() const { return audioTransferLength_; }
 
+  bool sessionRejected() const { return !sessionAdmission_.allowed(); }
   bool configured() const { return host_.length() > 0 && token_.length() >= 24; }
   bool connected() const { return state_ == State::Connected && sessionStarted_; }
   bool sessionReady() const { return connected() && sessionId_.length() > 0; }
@@ -165,6 +169,7 @@ class FireBackendClient {
   String pendingBasePackageId_;
   String developmentContext_;
   bool sessionStarted_ = false;
+  FireWsSessionAdmission sessionAdmission_;
   uint32_t lastServerSeq_ = 0;
   uint32_t handshakeStartedAt_ = 0;
   uint32_t lastReceiveAt_ = 0;

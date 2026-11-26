@@ -1,5 +1,6 @@
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 inline bool fireWsEqual(const char* a, size_t n, const char* b, bool fold = false) {
@@ -50,3 +51,28 @@ inline bool fireWsAccepted(const char* headers, size_t length, const char* expec
 inline bool fireWsNewSession(const char* incoming,const char* current,const char* resume) {
   return incoming && *incoming && (!current || strcmp(incoming,current)) && (!resume || strcmp(incoming,resume));
 }
+
+// The application session has the same bounded 5 s admission window as the
+// HTTP upgrade. PING/PONG traffic must not extend this stage indefinitely.
+inline bool fireWsSessionExpired(bool ready,uint32_t now,uint32_t started) {
+  return !ready && uint32_t(now-started)>=5000;
+}
+
+inline bool fireWsSessionRejected(bool ready,const char* type,const char* code,bool nonRetryable) {
+  return !ready && nonRetryable && type && code &&
+      !strcmp(type,"error") && !strcmp(code,"session_start_rejected");
+}
+
+// Keep the terminal admission state portable; the existing OS policy change
+// or configuration path alone requests a deliberate retry.
+class FireWsSessionAdmission {
+ public:
+  bool allowed() const {return !rejected_;}
+  void retry() {rejected_=false;}
+  bool reject(bool ready,const char* type,const char* code,bool nonRetryable) {
+    if (!fireWsSessionRejected(ready,type,code,nonRetryable)) return false;
+    rejected_=true;return true;
+  }
+ private:
+  bool rejected_=false;
+};

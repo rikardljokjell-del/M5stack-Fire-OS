@@ -104,7 +104,7 @@ void FireOS::drawAiPicker() {
     }
   }
   const char* rowsText[]={labels[0].c_str(),labels[1].c_str(),labels[2].c_str(),labels[3].c_str()};
-  const char* connection=!backendClient_ || !backendClient_->configured()?"Backend er ikke satt opp":backendClient_->sessionReady()?"Backend er tilkoblet":"Kobler til backend";
+  const char* connection=!backendClient_ || !backendClient_->configured()?"Backend er ikke satt opp":backendClient_->sessionRejected()?"Tilkobling avvist":backendClient_->sessionReady()?"Backend er tilkoblet":"Kobler til backend";
   fire_canvas_fill::Surface<M5Canvas> surface(ui);
   fire_ai_menu_ui::draw(surface,aiPickerPage_==Page::Apps?"SELECT APP":aiPickerPage_==Page::Settings?"SETTINGS":"AI DEVELOPER",connection,
       backendClient_ && backendClient_->sessionReady()?kGreen:kOrange,selectedName.c_str(),rowsText,rows,aiProjectSelection_-aiProjectOffset_,aiWorkflowText_.length()<=40?aiWorkflowText_.c_str():"Velg en handling",icons);

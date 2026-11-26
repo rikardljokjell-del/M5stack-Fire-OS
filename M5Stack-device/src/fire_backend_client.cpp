@@ -118,6 +118,7 @@ void FireBackendClient::configure(const String& host, uint16_t port,
                                   const String& token, const String& deviceId,
                                   const String& firmwareVersion) {
   disconnect();
+  retrySession();
   secureEndpoint_ = fireNetworkTls(host, port);
   host_ = fireNetworkEndpointValid(host) ? fireNetworkHost(host) : String();
   client_.secure(secureEndpoint_);
@@ -1004,6 +1005,10 @@ void FireBackendClient::service(bool wifiConnected) {
     setState(State::Offline, "Waiting for Wi-Fi");
     return;
   }
+  if (!sessionAdmission_.allowed()) {
+    setState(State::Offline,"Backend session rejected");
+    return;
+  }
   if (state_ == State::Offline) {
     if (millis() < reconnectAt_) return;
     reconnectAt_ = millis() + 3000;
@@ -1055,7 +1060,13 @@ void FireBackendClient::service(bool wifiConnected) {
   }
   if (state_ == State::Connected) {
     readFrames();
+    if (state_!=State::Connected) return;
     const uint32_t now = millis();
+    if (fireWsSessionExpired(sessionStarted_,now,handshakeStartedAt_)) {
+      disconnect();
+      setState(State::Offline,"Backend session timeout");
+      return;
+    }
     if (now - lastPingAt_ >= 20000) {
       sendFrame(0x9, nullptr, 0);
       lastPingAt_ = now;
@@ -1082,6 +1093,7 @@ void FireBackendClient::handleHandshake() {
   }
   sessionStarted_ = false;
   lastReceiveAt_ = millis();
+  handshakeStartedAt_=lastReceiveAt_; // fresh application-session stage; never refreshed by PONG
   lastPongAt_ = millis();
   setState(State::Connected, "Waiting for backend session");
   const String fields = ",\"target\":\"device\",\"boot_id\":\"" +
@@ -1296,6 +1308,19 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
     message.reserve(length);
     for (size_t index = 0; index < length; ++index) message += static_cast<char>(data[index]);
     const String type = jsonStringField(message, "type");
+    if (!sessionStarted_ && type=="error") {
+      cJSON* envelope=cJSON_Parse(message.c_str());
+      const cJSON* code=cJSON_GetObjectItemCaseSensitive(envelope,"code");
+      const bool rejected=sessionAdmission_.reject(sessionStarted_,type.c_str(),
+          cJSON_IsString(code)?code->valuestring:nullptr,
+          cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(envelope,"retryable")));
+      cJSON_Delete(envelope);
+      if (rejected) {
+        disconnect();setState(State::Offline,"Backend session rejected");
+        messageCallback_(callbackContext_,message);
+        return;
+      }
+    }
     const uint32_t seq = jsonUintField(message, "seq");
     const String startedSession=type=="session_started"?jsonStringField(message,"session_id"):String();
     if (type=="session_started" && fireWsNewSession(startedSession.c_str(),sessionId_.c_str(),resumeSessionId_.c_str())) lastServerSeq_=0;
