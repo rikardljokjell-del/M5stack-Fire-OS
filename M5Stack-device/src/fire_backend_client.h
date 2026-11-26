@@ -106,6 +106,7 @@ class FireBackendClient {
   bool appRepairCancel(const String& repairId);
   bool buildBackground(const String& buildId);
   bool buildJobs(uint32_t offset = 0);
+  bool jobControl(const String& action,const String& build,const String& repair);
   bool buildResume(const String& buildId);
   bool buildCancel(const String& buildId);
   bool buildNoticeAck(const String& buildId, const String& action,

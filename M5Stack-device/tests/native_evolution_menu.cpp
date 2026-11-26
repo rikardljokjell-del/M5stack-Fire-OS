@@ -40,10 +40,19 @@ int main() {
   puts("PASS Evolution bounded aggregates outbox capacity and exact accepted duplicate ACK gate");
 
   using namespace fire_ai_menu;
-  assert(count(Page::Main,false,0,32)==6);
-  assert(at(Page::Main,3,false,0,32).kind==Kind::Evolution && at(Page::Main,4,false,0,32).kind==Kind::Settings && at(Page::Main,5,false,0,32).kind==Kind::Back);
-  assert(count(Page::Main,true,15,32)==11);
-  for (uint8_t i=0;i<4;++i) {const auto item=at(Page::Main,i+1,true,15,32);assert(item.kind==Kind::Build && item.index==i);}
+  assert(count(Page::Main,false,0,32)==7);
+  assert(count(Page::Main,true,15,32)==7); // one Resume entry, no per-job duplicates
+  assert(at(Page::Main,0,true,15,32).kind==Kind::Jobs);
+  assert(at(Page::Main,4,false,0,32).kind==Kind::Evolution && at(Page::Main,5,false,0,32).kind==Kind::Settings && at(Page::Main,6,false,0,32).kind==Kind::Back);
+  assert(sameJob("build-one","","build-one","child-repair"));
+  assert(!sameJob("build-one","","other-build","child-repair"));
+  assert(sameJob("","repair-one","linked-build","repair-one"));
+  assert(!sameJob("","repair-one","linked-build","repair-two"));
+  assert(!sameJob("","","",""));
+  JobAction menu[5];
+  assert(actions(false,true,true,false,false,menu)==3 && menu[0]==JobAction::Resume && menu[1]==JobAction::Delete && menu[2]==JobAction::Back);
+  assert(actions(true,false,false,true,true,menu)==5 && menu[0]==JobAction::Pause && menu[3]==JobAction::Context && menu[4]==JobAction::Back);
+  assert(actions(true,false,false,false,true,menu)==4 && menu[0]==JobAction::Cancel && menu[2]==JobAction::Context); // thinking has no invented Pause
   assert(count(Page::Apps,false,0,32)==33 && at(Page::Apps,31,false,0,32).index==31 && at(Page::Apps,32,false,0,32).kind==Kind::Back);
   assert(at(Page::Settings,4,false,0,32).kind==Kind::Voice && at(Page::Settings,6,false,0,32).kind==Kind::Back);
   assert(scroll(31,0)==28 && scroll(0,28)==0);
@@ -89,6 +98,10 @@ int main() {
     if (!selected) memcpy(footer.data(),canvas.pixels.data()+222*320,sizeof(footer));
     else assert(!memcmp(footer.data(),canvas.pixels.data()+222*320,sizeof(footer)));
   }
+  const char* appIcons[]={"icon.timer","icon.activity","icon.compass","icon.code"};
+  canvas.fillRect(0,0,320,240,FireUI::Bg);
+  fire_ai_menu_ui::draw(canvas,"SELECT APP","Backend er tilkoblet",FireUI::Green,longName,labels,4,3,"Velg en app",appIcons);
+  assert(!memcmp(footer.data(),canvas.pixels.data()+222*320,sizeof(footer)));
   char line[81];size_t offset=0;const size_t length=strlen(longName);
   for (uint8_t i=0;i<3 && offset<length;++i) {const size_t before=offset;offset=fire_ai_menu_ui::line(longName,length,offset,line,284,"small10");assert(offset>before && strlen(line)<=80);}
   assert(offset==length);

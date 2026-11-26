@@ -2,13 +2,13 @@
 #include <stdint.h>
 #include <cstring>
 namespace fire_ai_menu {
-enum class Kind:uint8_t {Repair,Build,Chat,NewApp,SelectApp,Evolution,Settings,Back,App,Runtime,Models,Usage,Limits,Voice,Connection};
+enum class Kind:uint8_t {Chat,NewApp,SelectApp,Evolution,Settings,Back,App,Runtime,Models,Usage,Limits,Voice,Connection,Jobs};
 struct Item {Kind kind;uint8_t index=0;};
-enum class Page:uint8_t {Main,Apps,Settings};
+enum class Page:uint8_t {Main,Apps,Settings,Jobs,Job,Work};
 inline uint8_t count(Page page,bool repair,uint8_t builds,uint8_t apps) {
   if (page==Page::Apps) return apps+1;
   if (page==Page::Settings) return 7;
-  uint8_t n=repair?1:0;for (uint8_t i=0;i<4;++i) if (builds&(1u<<i)) ++n;return n+6;
+  (void)repair;(void)builds;return 7;
 }
 inline Item at(Page page,uint8_t row,bool repair,uint8_t builds,uint8_t apps) {
   if (page==Page::Apps) return row<apps?Item{Kind::App,row}:Item{Kind::Back};
@@ -16,10 +16,39 @@ inline Item at(Page page,uint8_t row,bool repair,uint8_t builds,uint8_t apps) {
     const Kind items[]={Kind::Runtime,Kind::Models,Kind::Usage,Kind::Limits,Kind::Voice,Kind::Connection,Kind::Back};
     return {items[row<7?row:6]};
   }
-  if (repair) {if (!row) return {Kind::Repair};--row;}
-  for (uint8_t i=0;i<4;++i) if (builds&(1u<<i)) {if (!row) return {Kind::Build,i};--row;}
+  (void)repair;(void)builds;
+  if (!row) return {Kind::Jobs};
+  --row;
   const Kind items[]={Kind::Chat,Kind::NewApp,Kind::SelectApp,Kind::Evolution,Kind::Settings,Kind::Back};
   return {items[row<6?row:5]};
+}
+inline bool sameJob(const char* build,const char* repair,const char* receivedBuild,const char* receivedRepair) {
+  if (build && *build) return receivedBuild && !strcmp(build,receivedBuild);
+  return repair && *repair && receivedRepair && !strcmp(repair,receivedRepair);
+}
+enum class JobAction:uint8_t {Resume,Delete,Pause,Cancel,Background,Context,Back};
+inline uint8_t actions(bool work,bool resume,bool remove,bool pause,bool context,JobAction (&out)[5]) {
+  uint8_t n=0;
+  if (work) {
+    if (pause) out[n++]=JobAction::Pause;
+    out[n++]=JobAction::Cancel;out[n++]=JobAction::Background;
+    if (context) out[n++]=JobAction::Context;
+  } else {
+    if (resume) out[n++]=JobAction::Resume;
+    if (remove) out[n++]=JobAction::Delete;
+  }
+  out[n++]=JobAction::Back;return n;
+}
+inline const char* actionLabel(JobAction action) {
+  switch(action) {
+    case JobAction::Resume:return "Resume";
+    case JobAction::Delete:return "Fjern fra listen";
+    case JobAction::Pause:return "Pause";
+    case JobAction::Cancel:return "Avbryt";
+    case JobAction::Background:return "Minimer";
+    case JobAction::Context:return "Gi mer kontekst";
+    default:return "Back";
+  }
 }
 // A received proposal belongs to this project, or to the exact selected
 // server-owned cohort job. A cross-project target must have its actual name.

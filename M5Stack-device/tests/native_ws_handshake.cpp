@@ -15,5 +15,10 @@ int main() {
   assert(!fireWsAccepted(duplicate.data(), duplicate.size(), accept));
   assert(!fireWsAccepted(valid.data(), valid.size() - 1, accept));
   std::string nul = valid; nul[22] = 0; assert(!fireWsAccepted(nul.data(), nul.size(), accept));
+  assert(fireWsNewSession("new","old","old"));
+  assert(!fireWsNewSession("old","old",""));
+  assert(!fireWsNewSession("old","","old"));
+  assert(!fireWsNewSession("","old","old"));
+  assert(fireWsNewSession("new","",""));
   std::puts("PASS strict WebSocket nonce/header validation");
 }

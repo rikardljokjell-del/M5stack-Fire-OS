@@ -42,6 +42,11 @@ class NativeGuardTests(unittest.TestCase):
         self.assertIn("PASS Evolution bounded aggregates",output)
         self.assertIn("PASS actual AI menu renderer",output)
 
+    def test_button_capture_and_ui_cadence(self):
+        output=self.run_native("native_input.cpp")
+        self.assertIn("PASS actual button edge replay",output)
+        self.assertIn("PASS dirty static redraw",output)
+
     def test_data_storage_guards(self):
         output=self.run_native("native_data_engine.cpp")
         self.assertIn("PASS data journal",output)

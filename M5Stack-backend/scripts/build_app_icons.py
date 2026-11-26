@@ -38,7 +38,8 @@ def generate():
              '  const char* found=text;while ((found=std::strstr(found,word))) {if (found==text || found[-1]==\' \') return true; ++found;} return false;',
              '}',
              'inline const char* select(const char* name,const char* declared=nullptr) {',
-             '  if (valid(declared)) return declared; char text[256];normalise(name,text);']
+             '  if (declared) for (const char* id:ids) if (!std::strcmp(id,declared)) return id;',
+             '  char text[256];normalise(name,text);']
     for rule in rules['rules']:
         assert all(w and w.isascii() and len(w)<40 for w in rule['keywords'])
         condition = ' || '.join('startsWord(text,'+json.dumps(w)+')' for w in rule['keywords'])

@@ -1,3 +1,4 @@
+#include "fire_app_icons.h"
 #include "fire_os.h"
 #include "fire_audio_capture.h"
 #include "fire_json_guard.h"
@@ -12,6 +13,8 @@
 #include "fire_ai_workflow.h"
 #include "fire_ui.h"
 #include "fire_ai_menu_ui.h"
+#include "fire_button_capture.h"
+#include "fire_ui_cadence.h"
 #include "fire_ui_antialias.h"
 
 #include <M5Unified.h>
@@ -67,7 +70,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc2";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc3";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -715,29 +718,6 @@ String durationLabel(uint8_t option) {
   return minutes == 0 ? "Always on" : String(minutes) + " min";
 }
 
-const char* doubleClickActionLabel(uint8_t action) {
-  switch (action) {
-    case 1:
-      return "Apps";
-    case 2:
-      return "Power";
-    case 3:
-      return "All settings";
-    case 4:
-      return "Display & Sound";
-    case 5:
-      return "Wi-Fi";
-    case 6:
-      return "Bluetooth";
-    case 7:
-      return "Menu Layout";
-    case 8:
-      return "System Info";
-    default:
-      return "Disabled";
-  }
-}
-
 uint8_t nearestBrightnessStep(uint8_t brightness) {
   uint8_t best = 0;
   uint8_t distance = 255;
@@ -1205,6 +1185,7 @@ void FireOS::begin() {
     Serial.println("FIRE OS started");
   }
   draw();
+  beginButtonCapture();
 }
 
 void FireOS::update() {
@@ -1281,7 +1262,7 @@ void FireOS::update() {
   if (redrawRequested_) {
     FireUiPhaseTimer timing("draw_input");
     draw();
-    renderedThisLoop = true;
+    renderedThisLoop = true;pollButtons();
   }
   if (appScanPending_) {
     appScanPending_ = false;
@@ -1361,13 +1342,14 @@ void FireOS::update() {
   if (githubFirmware_)
     githubFirmware_->service(WiFi.status() == WL_CONNECTED, sdReady_);
   manageDisplayPower();
-  const bool animatedScreen = screen_ == Screen::AiDeveloper ||
-                              screen_ == Screen::LuaApp;
-  const uint32_t drawInterval = screen_ == Screen::AiDeveloper
-                                    ? 33
-                                    : animatedScreen ? 25 : 50;
-  if (!renderedThisLoop &&
-      (redrawRequested_ || millis() - lastDrawAt_ >= drawInterval)) {
+  // A static menu is not an animation. Input/network callbacks request an
+  // immediate frame; the one-second fallback refreshes clock/battery/status.
+  const auto cadence=screen_==Screen::LuaApp && luaAppActive_?fire_ui_cadence::View::Lua:
+      screen_==Screen::AiDeveloper && !aiProjectPickerActive_?fire_ui_cadence::View::Developer:
+      screen_==Screen::Debug || screen_==Screen::Home ||
+      (screen_==Screen::QuickSettings && previousScreen_==Screen::LuaApp && luaAppActive_)?fire_ui_cadence::View::Live:fire_ui_cadence::View::Static;
+  pollButtons(); // drain edges captured during the previous frame/background work
+  if (!renderedThisLoop && fire_ui_cadence::due(millis(),lastDrawAt_,redrawRequested_,cadence)) {
     if (esp_timer_get_time() - loopStartedUs < 20000) {
       FireUiPhaseTimer timing("draw_frame"); draw();
     } else {
@@ -1393,11 +1375,11 @@ void FireOS::update() {
     const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     const uint32_t largest = heap_caps_get_largest_free_block(caps);
     minLargestInternal_ = min(minLargestInternal_, largest);
-    Serial.printf("FIRE diag loop_us=%lu gap_us=%lu callback_us=%lu heap=%u min_heap=%u largest=%u min_largest=%lu stack=%u rgb_timeouts=%lu\n",
+    Serial.printf("FIRE diag loop_us=%lu gap_us=%lu callback_us=%lu heap=%u min_heap=%u largest=%u min_largest=%lu stack=%u rgb_timeouts=%lu input_dispatch_us=%lu input_present_us=%lu input_dropped=%lu render_us=%lu present_us=%lu\n",
         (unsigned long)maxLoopUs_, (unsigned long)maxLoopGapUs_,
         (unsigned long)(luaRuntime_ ? luaRuntime_->maxCallbackUs() : 0),
         heap_caps_get_free_size(caps), heap_caps_get_minimum_free_size(caps), largest,
-        (unsigned long)minLargestInternal_, uxTaskGetStackHighWaterMark(nullptr), (unsigned long)fireRgbTimeouts);
+        (unsigned long)minLargestInternal_, uxTaskGetStackHighWaterMark(nullptr), (unsigned long)fireRgbTimeouts, (unsigned long)maxInputDispatchUs_, (unsigned long)maxInputPresentUs_, (unsigned long)fire_button_capture::dropped(), (unsigned long)maxUiRenderUs_, (unsigned long)maxUiPresentUs_);
   }
   delay(5);
 }
@@ -1597,13 +1579,6 @@ void FireOS::loadSettings() {
     screenOffOption_ = legacyMinutes[min<uint8_t>(preferences.getUChar("screenoff", 3), 6)];
     preferences.putBool("duration_v2", true);
   }
-  for (uint8_t index = 0; index < kButtonCount; ++index) {
-    doubleClickAction_[index] = min<uint8_t>(
-        preferences.getUChar(("dbl_" + String(index)).c_str(), 0),
-        kDoubleClickActionCount - 1);
-    doubleClickLuaAppId_[index] =
-        preferences.getString(("dbl_app_" + String(index)).c_str(), "");
-  }
   WiFi.setHostname("M5Stack-FIRE");
   if (wifiMode_ != 1) WiFi.mode(WIFI_OFF);
 }
@@ -1643,11 +1618,7 @@ void FireOS::saveSettings() {
   preferences.putUChar("dim", dimOption_);
   preferences.putUChar("screenoff", screenOffOption_);
   preferences.putBool("duration_v2", true);
-  for (uint8_t index = 0; index < kButtonCount; ++index) {
-    preferences.putUChar(("dbl_" + String(index)).c_str(), doubleClickAction_[index]);
-    preferences.putString(("dbl_app_" + String(index)).c_str(),
-                          doubleClickLuaAppId_[index]);
-  }
+  // Legacy dbl_/dbl_app_ keys are deliberately neither read nor rewritten.
   saveLuaAppSelections();
 }
 
@@ -2427,6 +2398,7 @@ void FireOS::serviceLuaAppScan() {
         if (!item.id.length()) item.id = item.name;
         item.displayName = field("name");
         if (!item.displayName.length()) item.displayName = item.name;
+        item.icon=fire_app_icons::select(item.displayName.c_str(),field("icon").c_str());
         item.version = field("version");
         item.checksum = field("checksum");
         fire_lua_install::Identity identity;
@@ -2483,6 +2455,7 @@ void FireOS::publishLuaAppScan() {
       const LuaScanItem& item = luaScanItems_[i];
       luaAppPaths_[i] = item.path; luaAppNames_[i] = item.name;
       luaAppIds_[i] = item.id; luaAppDisplayNames_[i] = item.displayName;
+      luaAppIcons_[i] = item.icon;
       luaAppVersions_[i] = item.version; luaAppChecksums_[i] = item.checksum;
       luaAppPackageIds_[i] = item.packageId;
       if (item.id == selectedMain) mainIndex_ = kSystemMainCount + i;
@@ -2519,28 +2492,7 @@ void FireOS::syncLuaAppSelections() {
   for (uint8_t index = 0; index < luaAppCount_; ++index) {
     luaMenuSelected_[index] = saved.indexOf("|" + luaAppIds_[index] + "|") >= 0;
   }
-  for (uint8_t button = 0; button < kButtonCount; ++button) {
-    if (doubleClickAction_[button] < kBaseDoubleClickActionCount) continue;
-    if (doubleClickLuaAppId_[button].length() == 0) {
-      const uint8_t oldIndex = doubleClickAction_[button] -
-                               kBaseDoubleClickActionCount;
-      if (oldIndex < luaAppCount_)
-        doubleClickLuaAppId_[button] = luaAppIds_[oldIndex];
-    }
-    uint8_t found = 0xFF;
-    for (uint8_t index = 0; index < luaAppCount_; ++index) {
-      if (luaAppIds_[index] == doubleClickLuaAppId_[button]) {
-        found = index;
-        break;
-      }
-    }
-    if (found == 0xFF) {
-      doubleClickAction_[button] = 0;
-      doubleClickLuaAppId_[button] = "";
-    } else {
-      doubleClickAction_[button] = kBaseDoubleClickActionCount + found;
-    }
-  }
+
 }
 
 void FireOS::saveLuaAppSelections() {
@@ -2549,43 +2501,6 @@ void FireOS::saveLuaAppSelections() {
     if (luaMenuSelected_[index]) saved += luaAppIds_[index] + "|";
   }
   preferences.putString("lua_menu", saved);
-}
-
-uint8_t FireOS::shortcutActionCount() const {
-  uint8_t count = kBaseDoubleClickActionCount;
-  for (uint8_t index = 0; index < luaAppCount_; ++index)
-    if (luaMenuSelected_[index]) ++count;
-  return count;
-}
-
-uint8_t FireOS::shortcutActionAtPosition(uint8_t position) const {
-  if (position < kBaseDoubleClickActionCount) return position;
-  uint8_t visible = kBaseDoubleClickActionCount;
-  for (uint8_t index = 0; index < luaAppCount_; ++index) {
-    if (!luaMenuSelected_[index]) continue;
-    if (visible++ == position) return kBaseDoubleClickActionCount + index;
-  }
-  return 0;
-}
-
-uint8_t FireOS::shortcutPositionForAction(uint8_t action) const {
-  if (action < kBaseDoubleClickActionCount) return action;
-  uint8_t position = kBaseDoubleClickActionCount;
-  const uint8_t target = action - kBaseDoubleClickActionCount;
-  for (uint8_t index = 0; index < luaAppCount_; ++index) {
-    if (!luaMenuSelected_[index]) continue;
-    if (index == target) return position;
-    ++position;
-  }
-  return 0;
-}
-
-String FireOS::shortcutActionLabel(uint8_t action) const {
-  if (action < kBaseDoubleClickActionCount)
-    return String(doubleClickActionLabel(action));
-  const uint8_t index = action - kBaseDoubleClickActionCount;
-  if (index < luaAppCount_) return luaAppDisplayNames_[index];
-  return "Disabled";
 }
 
 void FireOS::setLuaError(const char** error, const char* value) {
@@ -4635,59 +4550,92 @@ bool FireOS::rollbackLuaPackage(const String& packageId,const String& archiveHas
   return false;
 }
 
+uint64_t FireOS::buttonView() const {
+  uint64_t details=0;
+  switch(screen_) {
+    case Screen::AiDeveloper:details=aiProjectPickerActive_ | (uint64_t(aiPickerPage_)<<1) | (uint64_t(backendSettingsUi_.page)<<4) | (uint64_t(aiWorkflowState_)<<8);break;
+    case Screen::Evolution:details=uint64_t(evolutionUi_.page);break;
+    case Screen::AppsSettings:details=appManagerActionMenu_ | (uint64_t(appManagerDeleteConfirm_)<<1) | (uint64_t(appManagerVersionDialog_)<<2) | (uint64_t(appManagerDevelopConfirm_)<<3);break;
+    case Screen::FileExplorer:details=sdActionMenu_ | (uint64_t(sdDeleteConfirm_)<<1) | (uint64_t(sdNameEditor_)<<2) | (uint64_t(sdPreview_)<<3);break;
+    case Screen::Firmware:details=firmwareInstallConfirm_ | (uint64_t(firmwareGithubDialog_)<<1) | (uint64_t(firmwareSdDialog_)<<2) | (uint64_t(firmwareGithubOverwriteConfirm_)<<3) | (uint64_t(firmwareGithubActionMenu_)<<4);break;
+    case Screen::Wifi:details=wifiScanDialog_ | (uint64_t(wifiSavedDialog_)<<1);break;
+    case Screen::Bluetooth:details=bluetoothScanDialog_ | (uint64_t(bluetoothSavedDialog_)<<1) | (uint64_t(bluetoothUnknownDialog_)<<2);break;
+    case Screen::Boot:details=bootAppPicker_;break;
+    case Screen::MainMenuSettings:details=luaMenuPicker_;break;
+    case Screen::QuickSettings:details=quickEditing_;break;
+    case Screen::DateTime:details=dateEditing_;break;
+    case Screen::LuaApp:details=luaFeedbackConfirmation_ | (uint64_t(luaRepairConfirmPending_)<<1);break;
+    default:break;
+  }
+  return uint64_t(screen_) | (details<<8) | (uint64_t(buildNoticeActive_)<<63);
+}
+String FireOS::buttonViewIdentity() const {
+  if(buildNoticeActive_) return buildNoticeId_;
+  if(screen_==Screen::Evolution && evolutionUi_.page==FireEvolutionUi::Proposal) return evolutionUi_.proposalId;
+  if(screen_==Screen::AiDeveloper) {
+    if(backendSettingsUi_.page==FireBackendSettingsUi::Proposal) return backendSettingsUi_.proposalId;
+    if(!aiProjectPickerActive_ && aiWorkflowState_==3) return aiProposalId_;
+  }
+  if(screen_==Screen::LuaApp && luaFeedbackConfirmation_) return luaDevelopContext_;
+  return String();
+}
+void FireOS::publishButtonView() {
+  const uint64_t view=buttonView();const String identity=buttonViewIdentity();
+  if(view!=inputShownView_ || identity!=inputShownIdentity_) {
+    inputShownView_=view;inputShownIdentity_=identity;if(++inputContext_==0) ++inputContext_;
+  }
+  fire_button_capture::shown(inputContext_);
+  if(inputPresentationPending_) {
+    maxInputPresentUs_=max(maxInputPresentUs_,static_cast<uint32_t>(esp_timer_get_time())-inputPendingAtUs_);
+    inputPresentationPending_=false;
+  }
+}
+void FireOS::beginButtonCapture() {
+  const bool ready=fire_button_capture::begin();
+  fire_button_capture::sleeping(displayPowerState_!=0);fire_button_capture::discard();
+  inputSyncUs_=static_cast<uint32_t>(esp_timer_get_time());const uint8_t mask=fire_button_capture::mask();
+  for(uint8_t i=0;i<kButtonCount;++i) buttons_[i].resync(mask&(1u<<i),inputSyncUs_);
+  Serial.printf("FIRE input edge_capture=%u\n",ready?1:0);
+}
 void FireOS::pollButtons() {
-  const uint32_t now = millis();
-  for (uint8_t index = 0; index < kButtonCount; ++index) {
-    if (buttons_[index].clickPending &&
-        now - buttons_[index].lastClickAt > kDoubleClickWindowMs) {
-      buttons_[index].clickPending = false;
-      onButton(index, false);
-    }
-    const bool pressed = digitalRead(kButtonPins[index]) == LOW;
-    if (pressed != buttons_[index].rawPressed) {
-      buttons_[index].rawPressed = pressed;
-      buttons_[index].rawChangedAt = now;
-    }
-    if (buttons_[index].rawPressed != buttons_[index].down &&
-        now - buttons_[index].rawChangedAt >= kButtonDebounceMs) {
-      buttons_[index].down = buttons_[index].rawPressed;
-      if (buttons_[index].down) {
-        buttons_[index].longTriggered = false;
-        buttons_[index].started = now;
-        buttons_[index].wakeOnly = displayPowerState_ != 0;
-        if (displayPowerState_ != 0) {
-          wakeDisplay();
-        } else {
-          lastActivity_ = now;
+  const auto resync=[&]() {
+    // Never turn an incomplete gesture into an irreversible B action.
+    fire_button_capture::discard();inputSyncUs_=static_cast<uint32_t>(esp_timer_get_time());
+    const uint8_t mask=fire_button_capture::mask();
+    for(uint8_t i=0;i<kButtonCount;++i) buttons_[i].resync(mask&(1u<<i),inputSyncUs_);
+  };
+  if (fire_button_capture::takeOverflow()) {resync();return;}
+  const auto advance=[&](uint32_t at) {
+    for(uint8_t i=0;i<kButtonCount;++i) for(unsigned n=0;n<2;++n) {
+      const auto event=buttons_[i].advance(at);if(event.kind==fire_buttons::Kind::None) break;
+      if(event.kind==fire_buttons::Kind::Press) {lastActivity_=millis();continue;}
+      if(event.kind==fire_buttons::Kind::Wake) {wakeDisplay();redrawRequested_=true;}
+      else {
+        if(i==1 && event.kind==fire_buttons::Kind::Click && !fire_buttons::visibleClick(event,inputContext_,buttonView(),inputShownView_,buttonViewIdentity()==inputShownIdentity_)) continue;
+        if(event.kind==fire_buttons::Kind::Click) {
+          const uint32_t now=static_cast<uint32_t>(esp_timer_get_time());
+          maxInputDispatchUs_=max(maxInputDispatchUs_,now-event.at);
+          if(!inputPresentationPending_ || uint32_t(now-event.at)>uint32_t(now-inputPendingAtUs_)) inputPendingAtUs_=event.at;
+          inputPresentationPending_=true;
         }
-      } else {
-        const bool shortPress = !buttons_[index].longTriggered &&
-                                !buttons_[index].wakeOnly;
-        buttons_[index].wakeOnly = false;
-        if (shortPress) {
-          if (doubleClickAction_[index] == 0) {
-            onButton(index, false);
-          } else if (buttons_[index].clickPending &&
-                     now - buttons_[index].lastClickAt <=
-                         kDoubleClickWindowMs) {
-            buttons_[index].clickPending = false;
-            onDoubleClick(index);
-          } else {
-            buttons_[index].clickPending = true;
-            buttons_[index].lastClickAt = now;
-          }
-        }
+        lastActivity_=millis();onButton(i,event.kind==fire_buttons::Kind::Hold);
       }
     }
-    if (buttons_[index].down &&
-        !buttons_[index].wakeOnly && !buttons_[index].longTriggered &&
-        now - buttons_[index].started >= kLongPressMs) {
-      buttons_[index].longTriggered = true;
-      buttons_[index].clickPending = false;
-      lastActivity_ = now;
-      onButton(index, true);
-    }
+  };
+  fire_buttons::Edge edge;
+  for(unsigned n=0;n<fire_buttons::Ring::capacity && fire_button_capture::pop(edge);++n) {
+    if(fire_button_capture::takeOverflow()) {resync();return;}
+    if(!fire_buttons::afterOrEqual(edge.at,inputSyncUs_)) continue;
+    inputSyncUs_=edge.at;advance(edge.at);
+    if(inputSyncUs_!=edge.at) return; // sleep/wake resynchronized during dispatch
+    for(uint8_t i=0;i<kButtonCount;++i) buttons_[i].edge(edge.mask&(1u<<i),edge.at,edge.sleeping,edge.context);
   }
+  const uint32_t now=static_cast<uint32_t>(esp_timer_get_time());
+  if(!fire_button_capture::active()) {
+    const uint8_t mask=fire_button_capture::mask();
+    for(uint8_t i=0;i<kButtonCount;++i) buttons_[i].edge(mask&(1u<<i),now,displayPowerState_!=0,inputContext_);
+  }
+  if(!fire_button_capture::pending()) {inputSyncUs_=now;advance(now);}
 }
 
 void FireOS::onButton(uint8_t index, bool longPress) {
@@ -4718,7 +4666,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       openQuickSettings();
     } else if (index == 2) {
       if (screen_ == Screen::Settings) {
-        goToBootApp();
+        home();
       } else {
         back();
       }
@@ -4982,7 +4930,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
         powerEditing_ = false;
         open(Screen::Power);
       } else if (settingsIndex_ == 16) {
-        back();
+        home();
       } else if (settingsIndex_ == 13) {
         factoryResetArmed_ = false;
         open(Screen::FactoryReset);
@@ -4994,85 +4942,6 @@ void FireOS::onButton(uint8_t index, bool longPress) {
                screen_ == Screen::SystemInfo) {
       // B is reserved for select/action. Back is always long A.
     }
-  }
-}
-
-void FireOS::onDoubleClick(uint8_t index) {
-  redrawRequested_ = true;
-  if (screen_ == Screen::Debug && index == 1 && detailIndex_ == 3) {
-    static constexpr uint8_t kBrightness[] = {40, 80, 120, 180, 255};
-    uint8_t current = 0;
-    while (current + 1 < sizeof(kBrightness) / sizeof(kBrightness[0]) &&
-           kBrightness[current] != debugRgbBrightness_)
-      ++current;
-    debugRgbBrightness_ =
-        kBrightness[(current + 1) % (sizeof(kBrightness) / sizeof(kBrightness[0]))];
-    const uint8_t colors[7][3] = {{0, 0, 0},       {255, 0, 0},
-                                  {0, 180, 0},      {0, 80, 255},
-                                  {255, 160, 0},   {180, 0, 255},
-                                  {255, 255, 255}};
-    const uint8_t* color = colors[debugRgbIndex_];
-    writeRgbForDebug(color[0], color[1], color[2], debugRgbBrightness_);
-    return;
-  }
-  if (screen_ == Screen::Debug && index == 1 && detailIndex_ == 4) {
-    if (debugMicRecording_)
-      stopDebugMicTest();
-    else if (debugMicPlaying_) {
-      cancelConversationTurn("READY", false);
-      debugMicPlaying_ = false;
-      debugMicStatus_ = "Playback stopped";
-    } else
-      startDebugMicTest();
-    return;
-  }
-  playButtonSound(index, false);
-  if (doubleClickAction_[index] >= kBaseDoubleClickActionCount) {
-    const uint8_t appIndex = doubleClickAction_[index] -
-                             kBaseDoubleClickActionCount;
-    if (appIndex < luaAppCount_ && luaMenuSelected_[appIndex]) {
-      startLuaApp(luaAppPaths_[appIndex], luaAppDisplayNames_[appIndex]);
-    } else {
-      doubleClickAction_[index] = 0;
-      doubleClickLuaAppId_[index] = "";
-      saveSettings();
-    }
-    return;
-  }
-  switch (doubleClickAction_[index]) {
-    case 1:
-      open(Screen::Apps);
-      break;
-    case 2:
-      powerIndex_ = 0;
-      powerEditing_ = false;
-      open(Screen::Power);
-      break;
-    case 3:
-      open(Screen::Settings);
-      break;
-    case 4:
-      detailIndex_ = 0;
-      detailEditing_ = false;
-      open(Screen::DisplaySound);
-      break;
-    case 5:
-      wifiIndex_ = 0;
-      open(Screen::Wifi);
-      break;
-    case 6:
-      bluetoothIndex_ = 0;
-      open(Screen::Bluetooth);
-      break;
-    case 7:
-      detailIndex_ = 0;
-      open(Screen::MainMenuSettings);
-      break;
-    case 8:
-      open(Screen::SystemInfo);
-      break;
-    default:
-      break;
   }
 }
 
@@ -5088,7 +4957,7 @@ void FireOS::playButtonSound(uint8_t index, bool longPress) {
 void FireOS::open(Screen screen) {
   if (screen_ == Screen::Debug && screen != Screen::Debug) cleanupDebugTests();
   // Any OS navigation from a running Lua app is an app exit, including
-  // configurable double-click shortcuts. Home/Back use their own path, but
+  // ordinary navigation. Home/Back use their own path, but
   // this guard closes the remaining routes through one cleanup boundary.
   if (screen_ == Screen::LuaApp && screen != Screen::LuaApp)
     stopLuaApp("os_navigation");
@@ -5170,6 +5039,7 @@ void FireOS::open(Screen screen) {
   if (screen == Screen::AiApi) {
     wifiIndex_ = 0;
   }
+  if (screen == Screen::MainMenuSettings) {luaMenuPicker_=false;luaMenuSelection_=luaMenuOffset_=0;detailIndex_=0;}
   if (screen == Screen::FileExplorer) {
     sdPath_ = "/";
     sdSelection_ = 0;
@@ -5248,6 +5118,7 @@ void FireOS::selectMainItem(uint8_t nextIndex) {
 }
 
 void FireOS::back() {
+  if (screen_==Screen::AiDeveloper) {backAiDeveloper();return;}
   if (screen_ == Screen::Home) {
     if (!homeApp_.back()) home();
     redrawRequested_ = true;
@@ -5399,12 +5270,16 @@ void FireOS::handleDisplaySoundButton(uint8_t index) {
 void FireOS::handleBootButton(uint8_t index) {
   if (bootAppPicker_) {
     const uint8_t appCount = externalAppCount_ + luaAppCount_;
-    const uint8_t itemCount = appCount + 1;
+    const uint8_t itemCount = appCount + 2;
     if (index == 0) {
       bootAppSelection_ = (bootAppSelection_ + itemCount - 1) % itemCount;
     } else if (index == 2) {
       bootAppSelection_ = (bootAppSelection_ + 1) % itemCount;
     } else {
+      if (bootAppSelection_ == appCount + 1) {
+        bootAppPicker_ = false;
+        return;
+      }
       if (bootAppSelection_ == 0) {
         selectedBootAppPath_ = "";
       } else if (bootAppSelection_ - 1 < externalAppCount_) {
@@ -5595,8 +5470,14 @@ void FireOS::handleHelpButton(uint8_t index) {
 }
 
 void FireOS::handleAiDeveloperButton(uint8_t index) {
+  if (!aiProjectPickerActive_ && index==1 && !aiVoiceTestMode_ && aiWorkflowState_>=2 && aiWorkflowState_<=5) {openAiWork();return;}
   if (aiProjectPickerActive_) {handleAiPicker(index);return;}
-  if (index==2 && aiWorkflowState_==0 && !aiVoiceTestMode_) {
+  if (index==0 && aiWorkflowState_==1) return;
+  if (aiWorkflowState_==4 && !aiBuildId_.length()) {
+    if (index==0) {backgroundBuildActive_=true;home();return;}
+    if (index==2) {cancelConversationTurn("Avbryter",false);return;}
+  }
+  if (index==2 && (aiWorkflowState_==0 || aiWorkflowState_==6 || (aiVoiceTestMode_ && !aiAudioCaptureActive_ && !aiVoiceTestPlaybackActive_))) {
     aiProjectPickerActive_=true;aiPickerPage_=fire_ai_menu::Page::Main;
     aiProjectSelection_=aiProjectOffset_=0;backendSettingsUi_.page=FireBackendSettingsUi::None;redrawRequested_=true;return;
   }
@@ -5705,6 +5586,7 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
       aiWorkflowStarted_ = millis();
     }
   } else if (index == 0) {
+    if (aiWorkflowState_==2) cancelConversationTurn("Klar",false);
     aiDeveloperMode_ = 0;
     aiWorkflowState_ = 0;
     aiBuildProgress_ = 0;
@@ -6906,6 +6788,9 @@ void FireOS::handleLuaErrorButton(uint8_t index) {
     back();
     return;
   }
+  if (repairActive && index==1 && (luaRepairStatus_=="queued" || luaRepairStatus_=="building" || luaRepairStatus_=="testing" || luaRepairStatus_=="paused")) {
+    openAiWork();return;
+  }
   if (luaErrorAction_ == 0) {
     requestLuaRepair();
   } else {
@@ -6927,7 +6812,20 @@ void FireOS::requestBackgroundBuildJobs() {
 void FireOS::handleBackgroundBuildMessage(const String& message) {
   const String type = jsonStringField(message, "type");
   const String buildId = jsonStringField(message, "build_id");
+  if (type=="job_control_result") {
+    const String replyBuild=jsonStringField(message,"build_id"),replyRepair=jsonStringField(message,"repair_id");
+    if (!fire_ai_menu::sameJob(aiJobBuild_.c_str(),aiJobRepair_.c_str(),replyBuild.c_str(),replyRepair.c_str())) return;
+    aiWorkflowText_=jsonStringField(message,"display_text");
+    if (!aiWorkflowText_.length()) aiWorkflowText_=jsonStringField(message,"message");
+    if (jsonStringField(message,"status")=="context_ready") {
+      aiProjectPickerActive_=false;
+      if (!startAiRecording()) {aiWorkflowText_=aiAudioError_;aiProjectPickerActive_=true;aiPickerPage_=fire_ai_menu::Page::Work;}
+    } else if (jsonStringField(message,"job_action")=="delete") openAiJobs(buildJobsOffset_);
+    redrawRequested_=true;return;
+  }
   if (type == "build_jobs") {
+    buildJobsOffset_=static_cast<uint32_t>(max<int32_t>(0,jsonIntField(message,"offset",0)));
+    buildJobsNext_=jsonIntField(message,"next_offset",-1)>static_cast<int32_t>(buildJobsOffset_);
     buildJobsRequested_ = false;
     buildJobsRequestAt_ = 0;
     buildJobsRetryCount_ = 0;
@@ -6952,7 +6850,12 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       const String item = message.substring(cursor, end + 1);
       const uint8_t jobIndex = buildJobCount_;
       buildJobIds_[jobIndex] = jsonStringField(item, "build_id");
-      buildJobNames_[jobIndex] = jsonStringField(item, "name");
+      buildJobRepairIds_[jobIndex]=jsonStringField(item,"repair_id");
+      buildJobNames_[jobIndex] = jsonStringField(item, "app_name");
+      if (!buildJobNames_[jobIndex].length()) buildJobNames_[jobIndex]=jsonStringField(item,"name");
+      buildJobCanDelete_[jobIndex]=jsonBoolField(item,"can_delete",false);
+      buildJobCanPause_[jobIndex]=jsonBoolField(item,"can_pause",false);
+      buildJobCanContext_[jobIndex]=jsonBoolField(item,"can_add_context",false);
       buildJobStatuses_[jobIndex] = jsonStringField(item, "status");
       buildJobErrors_[jobIndex] = jsonStringField(item, "error_status");
       if (buildJobErrors_[jobIndex].length() == 0)
@@ -6984,6 +6887,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
         activeBuildFound = true;
         activeBuildPriority = activePriority;
         aiBuildId_ = buildJobIds_[jobIndex];
+        aiProjectName_=buildJobNames_[jobIndex].length()?buildJobNames_[jobIndex]:String("Appnavn ikke hentet");
         aiBuildResumeCount_ = jsonIntField(item, "resume_count", -1);
         buildProgress_ = static_cast<uint8_t>(
             constrain(buildProgressField(item,aiBuildProgress_), 0, 100));
@@ -6999,7 +6903,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
         aiBuildResumePending_ = false;
         aiBuildRetryPending_ = false;
       }
-      if (buildJobIds_[jobIndex].length() > 0) ++buildJobCount_;
+      if (buildJobIds_[jobIndex].length() || buildJobRepairIds_[jobIndex].length()) ++buildJobCount_;
       cursor = end + 1;
     }
     if (!activeBuildFound && !buildNoticeActive_) {
@@ -7024,6 +6928,9 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
   }
   if (buildEvent && buildId.length() > 0 && buildId != aiBuildId_ &&
       !independentNotice) {
+    aiProjectName_=jsonStringField(message,"app_name");
+    if(!aiProjectName_.length()) aiProjectName_=jsonStringField(message,"name");
+    if(!aiProjectName_.length()) aiProjectName_="Appnavn ikke hentet";
     aiReadyPackageId_=String();aiBuildProgress_=0;buildProgress_=0;
     aiBuildErrorCode_ = "";
     aiBuildErrorStatus_ = "";
@@ -7236,7 +7143,7 @@ void FireOS::updateBackend() {
     if (backendClient_->active()) backendClient_->disconnect();
     return;
   }
-  if (backendMode_ == 2 || wifiMode_ == 2) {
+  if (!fire_ui_cadence::networkAllowed(wifiMode_==2,backendMode_==2)) {
     if (backendClient_->active()) backendClient_->disconnect();
     backendBootPending_ = false;
     backendBootSyncWaiting_ = false;
@@ -7263,14 +7170,16 @@ void FireOS::updateBackend() {
                          !backendBootAttempted_;
   const bool evolutionDemand = evolutionUi_.controlRequest.length()>0 ||
       (evolution_.pending() && evolutionUi_.connectAt && millis()-evolutionUi_.connectAt<15000);
-  const bool backendDemand = evolutionDemand || screen_ == Screen::AiDeveloper ||
+  // Quick Settings is an overlay, not an exit from its live conversation.
+  const Screen demandScreen=fire_ui_cadence::contentScreen(screen_,previousScreen_,Screen::QuickSettings);
+  const bool backendDemand = evolutionDemand || demandScreen == Screen::AiDeveloper ||
                               (luaAppActive_ && (luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_)) ||
                               luaAiBindPackageId_.length()>0 ||
-                              screen_ == Screen::AiApi ||
-                              screen_ == Screen::LuaApp ||
-                              screen_ == Screen::Settings ||
-                              screen_ == Screen::AppsSettings ||
-                              screen_ == Screen::Evolution ||
+                              demandScreen == Screen::AiApi ||
+                              demandScreen == Screen::LuaApp ||
+                              demandScreen == Screen::Settings ||
+                              demandScreen == Screen::AppsSettings ||
+                              demandScreen == Screen::Evolution ||
                                luaRepairRequested_ || luaRepairId_.length() > 0 ||
                                backgroundBuildActive_ || buildNoticeActive_ ||
                                buildNoticePendingId_.length() > 0 ||
@@ -7546,6 +7455,7 @@ void FireOS::handleBackendMessage(const String& message) {
     buildNoticePendingEvent_ = "";
     buildNoticeLastSendAt_ = 0;
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
+    jobControlsSupported_=message.indexOf("job_controls_v1")>=0;
     failedBuildResumeSupported_ =
         message.indexOf("failed_build_resume_v1") >= 0;
     repairCancelSupported_ = message.indexOf("repair_cancel_v1") >= 0;
@@ -7561,6 +7471,7 @@ void FireOS::handleBackendMessage(const String& message) {
   }
   if (type == "session_snapshot") {
     backgroundBuildsSupported_ = message.indexOf("background_builds_v1") >= 0;
+    jobControlsSupported_=message.indexOf("job_controls_v1")>=0;
     failedBuildResumeSupported_ =
         message.indexOf("failed_build_resume_v1") >= 0;
     repairCancelSupported_ = message.indexOf("repair_cancel_v1") >= 0;
@@ -7621,7 +7532,7 @@ void FireOS::handleBackendMessage(const String& message) {
   if (type == "build_progress" || type == "build_job_status" ||
       type == "build_resumed" || type == "build_backgrounded" ||
       type == "build_cancelled" || type == "build_ready_notice" ||
-      type == "build_jobs" || type == "build_notice_closed" ||
+      type == "build_jobs" || type == "job_control_result" || type == "build_notice_closed" ||
       type == "event_ack") {
     handleBackgroundBuildMessage(message);
     return;
@@ -8168,7 +8079,7 @@ bool FireOS::luaButtonPressed(void* context, const char* button) {
   auto* os = static_cast<FireOS*>(context);
   if (!os || !button || strlen(button) != 1) return false;
   const uint8_t index = button[0] == 'A' ? 0 : button[0] == 'B' ? 1 : 2;
-  return os->buttons_[index].down;
+  return os->buttons_[index].down();
 }
 
 void FireOS::luaRgbSet(void* context, int index, int red, int green,
@@ -8458,43 +8369,8 @@ void FireOS::handleAppsSettingsButton(uint8_t index) {
     return;
   }
   if (screen_ == Screen::Shortcuts) {
-    if (shortcutPicker_) {
-      const uint8_t count = shortcutActionCount();
-      uint8_t position = shortcutPositionForAction(shortcutPickerAction_);
-      if (index == 0 || index == 2) {
-        position = (position + count + (index == 0 ? -1 : 1)) % count;
-        shortcutPickerAction_ = shortcutActionAtPosition(position);
-        shortcutPickerOffset_ = position > 6 ? position - 6 : 0;
-      } else {
-        doubleClickAction_[shortcutPickerButton_] = shortcutPickerAction_;
-        if (shortcutPickerAction_ < kBaseDoubleClickActionCount) {
-          doubleClickLuaAppId_[shortcutPickerButton_] = "";
-        } else {
-          const uint8_t appIndex = shortcutPickerAction_ -
-                                   kBaseDoubleClickActionCount;
-          doubleClickLuaAppId_[shortcutPickerButton_] =
-              appIndex < luaAppCount_ ? luaAppIds_[appIndex] : String();
-        }
-        shortcutPicker_ = false;
-        saveSettings();
-      }
-      return;
-    }
-    constexpr uint8_t kCount = 7;
-    if (index == 0) {
-      detailIndex_ = (detailIndex_ + kCount - 1) % kCount;
-    } else if (index == 2) {
-      detailIndex_ = (detailIndex_ + 1) % kCount;
-    } else if (detailIndex_ >= 3 && detailIndex_ <= 5) {
-      shortcutPickerButton_ = detailIndex_ - 3;
-      shortcutPickerAction_ = doubleClickAction_[shortcutPickerButton_];
-      shortcutPickerOffset_ = shortcutPositionForAction(shortcutPickerAction_) > 6
-                                  ? shortcutPositionForAction(shortcutPickerAction_) - 6
-                                  : 0;
-      shortcutPicker_ = true;
-    } else if (detailIndex_ == 6) {
-      back();
-    }
+    if (index==0 || index==2) detailIndex_=(detailIndex_+4+(index==0?-1:1))%4;
+    else if (detailIndex_==3) back();
     return;
   }
   if (index == 2 || index == 1) back();
@@ -9643,16 +9519,17 @@ void FireOS::manageDisplayPower() {
 
   if (offMs > 0 && idleMs >= offMs && displayPowerState_ < 2) {
     M5.Display.setBrightness(0);
-    displayPowerState_ = 2;
+    displayPowerState_ = 2;fire_button_capture::sleeping(true);
   } else if (dimMs > 0 && idleMs >= dimMs && displayPowerState_ == 0) {
     M5.Display.setBrightness(max<uint8_t>(8, brightness_ / 3));
-    displayPowerState_ = 1;
+    displayPowerState_ = 1;fire_button_capture::sleeping(true);
   }
 }
 
 void FireOS::wakeDisplay() {
   lastActivity_ = millis();
   displayPowerState_ = 0;
+  fire_button_capture::sleeping(false);
   M5.Display.setBrightness(brightness_);
 }
 
@@ -9662,14 +9539,15 @@ void FireOS::enterLightSleep() {
     return;
   }
   M5.Display.setBrightness(0);
-  displayPowerState_ = 2;
+  displayPowerState_ = 2;fire_button_capture::sleeping(true);fire_button_capture::pause();
   for (const uint8_t pin : kButtonPins) {
     gpio_wakeup_enable(static_cast<gpio_num_t>(pin), GPIO_INTR_LOW_LEVEL);
   }
   esp_sleep_enable_gpio_wakeup();
   esp_light_sleep_start();
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
-  wakeDisplay();
+  for(const uint8_t pin:kButtonPins) gpio_wakeup_disable(static_cast<gpio_num_t>(pin));
+  wakeDisplay();beginButtonCapture();
 }
 
 void FireOS::adjustDateField(int8_t amount) {
@@ -9728,9 +9606,6 @@ void FireOS::resetSettings() {
   sleepOption_ = 0;
   dimOption_ = 5;
   screenOffOption_ = 10;
-  doubleClickAction_[0] = 0;
-  doubleClickAction_[1] = 0;
-  doubleClickAction_[2] = 0;
   buttonSoundsEnabled_ = true;
   bootRgbPulse_ = true;
   bootMelody_ = true;
@@ -9837,21 +9712,27 @@ void FireOS::draw() {
   redrawRequested_ = false;
   if (screen_ == Screen::FileExplorer && sdImagePreview_ && sdImageRendered_ &&
       !buildNoticeActive_) {
+    inputPresentationPending_=false; // unchanged image preview: no new presentation sample
     return;
   }
+  const int64_t drawStartedUs=esp_timer_get_time();
   // An active SDK view prepares its whole canvas in drawLuaApp. Do not
   // first paint another full background here; legacy/non-app paths stay as-is.
   const bool sdkAppView=screen_==Screen::LuaApp ||
     (screen_==Screen::QuickSettings && previousScreen_==Screen::LuaApp);
-  if (!(sdkAppView && runningSdkLuaApp() && fullLuaCanvas())) ui.fillSprite(kBg);
+  if (screen_!=Screen::QuickSettings && !(sdkAppView && runningSdkLuaApp() && fullLuaCanvas())) ui.fillSprite(kBg);
   if (screen_ == Screen::QuickSettings) {
-    drawScreen(previousScreen_);
+    if(previousScreen_==Screen::LuaApp && luaAppActive_) drawScreen(previousScreen_);
     drawQuickSettings();
   } else {
     drawScreen(screen_);
   }
   if (buildNoticeActive_) drawBuildNoticeOverlay();
+  const int64_t presentStartedUs=esp_timer_get_time();
+  if (screen_!=Screen::LuaApp) maxUiRenderUs_=max(maxUiRenderUs_,uint32_t(presentStartedUs-drawStartedUs));
   ui.pushSprite(0, 0);
+  maxUiPresentUs_=max(maxUiPresentUs_,uint32_t(esp_timer_get_time()-presentStartedUs));
+  publishButtonView();
   if (screen_ == Screen::FileExplorer && sdImagePreview_ && !buildNoticeActive_) {
     M5.Display.fillRect(0, 28, 320, 188, kBg);
     bool drawn = false;
@@ -10070,7 +9951,8 @@ void FireOS::drawMainCard(uint8_t item, int32_t x, int32_t y, bool selected) {
                    luaAppDisplayNames_[item - kSystemMainCount] : String("App");
   const char* icon = item == 0 ? "icon.layout-grid" : item == 1 ? "icon.settings" :
                      item == 2 ? "icon.power" : item == 3 ? "icon.folder" :
-                     item == 4 ? "icon.sparkles" : item == 5 ? "icon.house" : "icon.code";
+                     item == 4 ? "icon.sparkles" : item == 5 ? "icon.house" :
+                     item-kSystemMainCount<luaAppCount_?luaAppIcons_[item-kSystemMainCount]:"icon.code";
   fire_canvas_fill::Surface<M5Canvas> surface(ui);
   FireUI::tile(surface, x, y, 144, 70, title.c_str(), icon, accent, selected);
 }
@@ -10095,7 +9977,7 @@ void FireOS::drawApps() {
     const String& name = luaApp ? luaAppNames_[appIndex] : externalAppNames_[appIndex];
     const String value = luaApp ? "Lua" : formatBytes(externalAppSizes_[appIndex]);
     FireUI::menuRow(surface, y, name.c_str(), value.c_str(), selected,
-                    luaApp ? "icon.code" : "icon.package");
+                    luaApp ? luaAppIcons_[appIndex] : fire_app_icons::select(name.c_str()));
     if (!luaApp && !externalAppCompatible_[appIndex])
       ui.fillCircle(301, y + 5, 3, kOrange);
   }
@@ -10162,7 +10044,7 @@ void FireOS::drawDateTime() {
     if (selected) drawSelection(10, y - 1, 300, 14, highlight);
     drawText(18, y + 1, fields[row], kText, 1,
              selected ? FireUI::Selected : kBg);
-    ui.setTextDatum(MR_DATUM);
+    ui.setTextDatum(TR_DATUM);
     drawText(302, y + 1, values[row], kText, 1,
              selected ? FireUI::Selected : kBg);
     ui.setTextDatum(TL_DATUM);
@@ -10289,7 +10171,7 @@ void FireOS::drawBluetooth() {
                                  "Connected",     "Visibility",
                                  "Advanced",      "Back"};
   const uint8_t first = bluetoothIndex_ < 5 ? 0 : bluetoothIndex_ - 4;
-  for (uint8_t row = 0; row < 6; ++row) {
+  for (uint8_t row = 0; row < 5; ++row) {
     const uint8_t item = first + row;
     if (item >= 8) break;
     String value;
@@ -10307,13 +10189,13 @@ void FireOS::drawBluetooth() {
 #endif
   if (activeConnection) {
     ui.setTextDatum(MC_DATUM);
-    drawText(160, 197, "Connected", kGreen, 1, kBg);
+    drawText(160, 209, "Connected", kGreen, 1, kBg);
     ui.setTextDatum(TL_DATUM);
   } else if (bluetoothStatus_.length() > 0) {
     String status = bluetoothStatus_;
     if (status.length() > 34) status = status.substring(0, 34);
     ui.setTextDatum(MC_DATUM);
-    drawText(160, 197, status, kMuted, 1, kBg);
+    drawText(160, 209, status, kMuted, 1, kBg);
     ui.setTextDatum(TL_DATUM);
   } else {
     ui.setTextDatum(MC_DATUM);
@@ -10324,7 +10206,7 @@ void FireOS::drawBluetooth() {
                                     : bluetoothRadioReady
                                           ? "Ready / hidden"
                                           : "Auto / standby";
-    drawText(160, 197, status, kMuted, 1, kBg);
+    drawText(160, 209, status, kMuted, 1, kBg);
     ui.setTextDatum(TL_DATUM);
   }
   drawFooter("Previous", "Select", "Next");
@@ -10436,23 +10318,24 @@ void FireOS::drawBoot() {
   if (bootAppPicker_) {
     drawPanel(12, 32, 296, 180);
     drawText(24, 40, "Choose Boot App", kText, 2, kPanel);
-    const uint8_t itemCount = externalAppCount_ + luaAppCount_ + 1;
+    const uint8_t itemCount = externalAppCount_ + luaAppCount_ + 2;
     const uint8_t visible = min<uint8_t>(6, itemCount - bootAppOffset_);
     for (uint8_t row = 0; row < visible; ++row) {
       const uint8_t item = bootAppOffset_ + row;
       const bool selected = item == bootAppSelection_;
       const int y = 72 + row * 22;
       if (selected) drawSelection(18, y - 3, 284, 19, kCyan);
-      String name = "FIRE OS (Default)";
+      const bool backItem = item == itemCount - 1;
+      String name = backItem ? "Back" : "FIRE OS (Default)";
       if (item > 0 && item - 1 < externalAppCount_) {
         name = externalAppNames_[item - 1];
-      } else if (item > externalAppCount_) {
+      } else if (!backItem && item > externalAppCount_) {
         name = luaAppDisplayNames_[item - 1 - externalAppCount_];
       }
 
       drawText(26, y, name, kText, 1,
                selected ? FireUI::Selected : kPanel);
-      if (item > externalAppCount_) {
+      if (!backItem && item > externalAppCount_) {
         ui.setTextDatum(MR_DATUM);
         drawText(298, y, "Lua", selected ? kText : kCyan, 1,
                  selected ? FireUI::Selected : kPanel);
@@ -10633,48 +10516,12 @@ void FireOS::drawMainMenuSettings() {
 }
 
 void FireOS::drawShortcuts() {
-  drawStatusBar("Shortcuts");
-  drawText(16, 37, "Hold all 3 buttons at boot = Default", kMuted, 1);
-  const char* labels[] = {"Long left",    "Long center",  "Long right",
-                          "Double left",  "Double center", "Double right",
-                          "Back"};
-  const String values[] = {"Home", "Quick Settings", "Back",
-                           shortcutActionLabel(doubleClickAction_[0]),
-                           shortcutActionLabel(doubleClickAction_[1]),
-                           shortcutActionLabel(doubleClickAction_[2]), ""};
-  for (uint8_t row = 0; row < 7; ++row) {
-    const int y = 53 + row * 22;
-    const bool selected = row == detailIndex_;
-    if (selected) drawSelection(10, y - 2, 300, 19, kCyan);
-    drawText(20, y + 2, labels[row], kText, 1,
-             selected ? FireUI::Selected : kBg);
-    if (values[row].length() > 0) {
-      ui.setTextDatum(MR_DATUM);
-      String value = values[row];
-      if (value.length() > 17) value = value.substring(0, 14) + "...";
-      drawText(300, y + 2, value, selected ? kText : kMuted, 1,
-               selected ? FireUI::Selected : kBg);
-      ui.setTextDatum(TL_DATUM);
-    }
-  }
-  if (shortcutPicker_) {
-    drawPanel(12, 32, 296, 180);
-    drawText(24, 40, "Choose shortcut", kText, 2, kPanel);
-    const uint8_t actionCount = shortcutActionCount();
-    const uint8_t visible = min<uint8_t>(7, actionCount - shortcutPickerOffset_);
-    for (uint8_t row = 0; row < visible; ++row) {
-      const uint8_t position = shortcutPickerOffset_ + row;
-      const uint8_t action = shortcutActionAtPosition(position);
-      const int y = 70 + row * 19;
-      const bool selected = action == shortcutPickerAction_;
-      if (selected) drawSelection(18, y - 3, 284, 17, kCyan);
-      String label = shortcutActionLabel(action);
-
-      drawText(26, y, label, kText, 1,
-               selected ? FireUI::Selected : kPanel);
-    }
-  }
-  drawFooter("Previous", "Select", "Next");
+  drawStatusBar("Buttons");
+  drawText(16,37,"One press performs one action",kMuted,1);
+  const char* labels[]={"Hold A","Hold B","Hold C","Back"};
+  const char* values[]={"Home","Quick Settings","One level back",""};
+  for(uint8_t row=0;row<4;++row) drawRow(row,labels[row],row==detailIndex_,values[row]);
+  drawFooter("Previous","Back","Next");
 }
 
 void FireOS::drawAiDeveloper() {
@@ -10861,46 +10708,16 @@ void FireOS::drawAiDeveloper() {
                      static_cast<int32_t>(226 * aiBuildProgress_ / 100), 3,
                      1, kCyan, true);
   }
-  const char* leftHint = "HOLD HOME";
-  const char* centerHint = "SPEAK";
-  const char* rightHint = !aiVoiceTestMode_ && aiWorkflowState_==0?"MENU":"HOLD BACK";
-  if (aiWorkflowState_ == 1) {
-    centerHint = "FINISH";
-  } else if (aiWorkflowState_ == 2) {
-    if (aiBuildResumePending_) {
-      centerHint = "VENTER...";
-      rightHint = "TILBAKE";
-    } else {
-      centerHint = "NEW TALK";
-      rightHint = "CANCEL";
-    }
-  } else if (aiWorkflowState_ == 3) {
-    if (aiBuildResumePending_) {
-      leftHint = "PRØV IGJEN";
-      centerHint = "ENDRE";
-      rightHint = "TILBAKE";
-    } else {
-      leftHint = "BUILD";
-      centerHint = "ADD TALK";
-      rightHint = "CANCEL";
-    }
-  } else if (aiWorkflowState_ == 4) {
-    leftHint = backgroundBuildsSupported_ ? "BACKGROUND" : "WAIT";
-    centerHint = "SETTINGS";
-    rightHint = backgroundBuildsSupported_ ? "CANCEL" : "CANCEL";
-  } else if (aiWorkflowState_ == 5) {
-    leftHint = "RUN";
-    centerHint = "QUICK";
-    rightHint = "CANCEL";
-  } else if (aiWorkflowState_ == 6) {
-    centerHint = "QUICK";
-  }
-  if (aiVoiceTestMode_) {
-    centerHint = aiAudioCaptureActive_
-                     ? "FINISH"
-                     : aiVoiceTestPlaybackActive_ ? "NEW TEST" : "RECORD";
-    rightHint = aiVoiceTestPlaybackActive_ ? "CANCEL" : "HOLD BACK";
-  }
+  const char* leftHint="Hvile";
+  const char* centerHint="Snakk";
+  const char* rightHint="Meny";
+  if (aiWorkflowState_==1) {leftHint="";centerHint="Fullfør";rightHint="Avbryt";}
+  else if (aiWorkflowState_==2) {leftHint="Hvile";centerHint="Arbeid";rightHint="Avbryt";}
+  else if (aiWorkflowState_==3) {leftHint=aiBuildResumePending_?"Prøv igjen":"Bygg";centerHint="Arbeid";rightHint="Avbryt";}
+  else if (aiWorkflowState_==4) {leftHint=backgroundBuildsSupported_?"Minimer":"";centerHint="Arbeid";rightHint="Avbryt";}
+  else if (aiWorkflowState_==5) {leftHint="Kjør";centerHint="Arbeid";rightHint="Avbryt";}
+  else if (aiWorkflowState_==6) {leftHint="Hvile";centerHint="";rightHint="Meny";}
+  if (aiVoiceTestMode_) {centerHint=aiAudioCaptureActive_?"Fullfør":aiVoiceTestPlaybackActive_?"Ny test":"Ta opp";rightHint=aiVoiceTestPlaybackActive_?"Avbryt":"Meny";}
   drawFooter(leftHint, centerHint, rightHint);
 
 #ifdef FIRE_OS_BLE
@@ -10943,10 +10760,10 @@ void FireOS::drawAiApi() {
   if (host.length() > 24) host = host.substring(0, 21) + "...";
   String device = backendDeviceId_.length() > 0 ? backendDeviceId_ : "not set";
   if (device.length() > 19) device = device.substring(0, 16) + "...";
-  drawText(16, 174, "PC: " + host, kMuted, 1);
-  drawText(16, 190, "Port: " + String(backendPort_) + "  ID: " + device,
+  drawText(16, 169, "PC: " + host, kMuted, 1);
+  drawText(16, 185, "Port: " + String(backendPort_) + "  ID: " + device,
            kMuted, 1);
-  drawText(16, 206, "Token: " + String(backendToken_.length() >= 24 ? "configured" : "not set"),
+  drawText(16, 201, "Token: " + String(backendToken_.length() >= 24 ? "configured" : "not set"),
            backendToken_.length() >= 24 ? kGreen : kOrange, 1);
   drawFooter("Previous", "Select", "Next");
 }
@@ -11051,7 +10868,7 @@ void FireOS::drawLuaApp() {
                kBg);
     else
       drawText(160, 207, "B starter valgt handling", kMuted, 1, kBg);
-    drawFooter("Minimer", "Velg", "Avbryt");
+    drawFooter("Minimer",waitingForRepair?"Arbeid":"Velg","Avbryt");
     ui.setTextDatum(TL_DATUM);
   }
 }
@@ -11606,9 +11423,9 @@ void FireOS::drawDebug() {
     drawText(16, 202, "Firmware/API status", kMuted, 1, kBg);
   } else if (detailIndex_ == 3) {
     drawTitle("Hardware tests", "Buttons and RGB");
-    drawStatusRow(0, "Button A", buttons_[0].down ? "DOWN" : "UP");
-    drawStatusRow(1, "Button B", buttons_[1].down ? "DOWN" : "UP");
-    drawStatusRow(2, "Button C", buttons_[2].down ? "DOWN" : "UP");
+    drawStatusRow(0, "Button A", buttons_[0].down() ? "DOWN" : "UP");
+    drawStatusRow(1, "Button B", buttons_[1].down() ? "DOWN" : "UP");
+    drawStatusRow(2, "Button C", buttons_[2].down() ? "DOWN" : "UP");
     static const char* const colors[] = {"OFF", "RED", "GREEN", "BLUE",
                                          "ORANGE", "PURPLE", "WHITE"};
     const uint8_t percent = static_cast<uint16_t>(debugRgbBrightness_) * 100 / 255;
@@ -11729,21 +11546,21 @@ void FireOS::refreshBatteryStatus() const {
 }
 
 void FireOS::drawBackendIcon(int32_t x, int32_t y, uint8_t state) {
-  const uint16_t color = state == 2 ? kGreen : state == 1 ? kCyan : kMuted;
+  const uint16_t color = state == 2 ? kGreen : state == 1 ? kOrange : kRed;
   fire_canvas_fill::Surface<M5Canvas> surface(ui);
-  FireUI::icon(surface, "icon.cloud", x, y, color, 16);
+  FireUI::icon(surface, state ? "icon.cloud" : "icon.cloud-off", x, y, color, 16);
 }
 
 void FireOS::drawWifiIcon(int32_t x, int32_t y, uint8_t state) {
-  const uint16_t color = state == 2 ? kGreen : state == 1 ? kCyan : kMuted;
+  const uint16_t color = state == 2 ? kGreen : state == 1 ? kOrange : kRed;
   fire_canvas_fill::Surface<M5Canvas> surface(ui);
   FireUI::icon(surface, state ? "icon.wifi" : "icon.wifi-off", x, y, color, 16);
 }
 
 void FireOS::drawBluetoothIcon(int32_t x, int32_t y, uint8_t state) {
-  const uint16_t color = state == 2 ? kGreen : state ? kCyan : kMuted;
+  const uint16_t color = state == 2 ? kGreen : state ? kOrange : kMuted;
   fire_canvas_fill::Surface<M5Canvas> surface(ui);
-  FireUI::icon(surface, "icon.bluetooth", x, y, color, 16);
+  FireUI::icon(surface, state ? "icon.bluetooth" : "icon.bluetooth-off", x, y, color, 16);
 }
 
 void FireOS::drawBatteryIcon(int32_t x, int32_t y, int level, bool charging) {

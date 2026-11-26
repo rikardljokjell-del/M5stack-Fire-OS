@@ -835,6 +835,12 @@ bool FireBackendClient::buildJobs(uint32_t offset) {
   return sendEvent("build_jobs", ",\"offset\":" + String(offset));
 }
 
+bool FireBackendClient::jobControl(const String& action,const String& build,const String& repair) {
+  if ((build.length()>0)==(repair.length()>0) ||
+      (action!="resume" && action!="pause" && action!="cancel" && action!="background" && action!="context" && action!="delete")) return false;
+  return sendEvent("job_control",",\"job_action\":\""+action+"\",\""+(build.length()?String("build_id"):String("repair_id"))+"\":\""+jsonEscape(build.length()?build:repair)+"\"");
+}
+
 bool FireBackendClient::buildResume(const String& buildId) {
   if (buildId.length() == 0) return false;
   return sendEvent("build_resume", ",\"build_id\":\"" +
@@ -1283,6 +1289,7 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
     lastPongAt_ = millis();
   } else if (opcode == 0x1 && messageCallback_) {
     if (!fireJsonSafe(reinterpret_cast<const char*>(data), length, kMaxFrameBytes)) {
+      Serial.printf("FIRE backend rejected_json bytes=%u max_bytes=%u max_tokens=1024\n",unsigned(length),unsigned(kMaxFrameBytes));
       disconnect(); setState(State::Offline, "Invalid backend message"); return;
     }
     String message;
@@ -1290,6 +1297,8 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
     for (size_t index = 0; index < length; ++index) message += static_cast<char>(data[index]);
     const String type = jsonStringField(message, "type");
     const uint32_t seq = jsonUintField(message, "seq");
+    const String startedSession=type=="session_started"?jsonStringField(message,"session_id"):String();
+    if (type=="session_started" && fireWsNewSession(startedSession.c_str(),sessionId_.c_str(),resumeSessionId_.c_str())) lastServerSeq_=0;
     if (seq > 0 && lastServerSeq_ > 0 && seq <= lastServerSeq_) return;
     if (seq > 0) lastServerSeq_ = seq;
     if (type == "session_started") {

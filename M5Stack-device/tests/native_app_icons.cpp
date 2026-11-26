@@ -23,6 +23,9 @@ int main() {
     assert(!std::strcmp(fire_app_icons::select(c.name)+5,c.icon));
   }
   assert(!std::strcmp(fire_app_icons::select("Stopwatch","icon.house"),"icon.house"));
+  char declared[]="icon.house";
+  const char* retained=fire_app_icons::select("Unknown",declared);declared[5]='x';
+  assert(!std::strcmp(retained,"icon.house")); // Cached pointer owns no temporary manifest string.
   assert(!std::strcmp(fire_app_icons::select("Unknown","../../file"),"icon.code"));
   char longName[1100];std::memset(longName,'x',sizeof(longName)-1);longName[sizeof(longName)-1]=0;
   assert(!std::strcmp(fire_app_icons::select(longName),"icon.code"));

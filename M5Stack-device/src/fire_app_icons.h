@@ -26,7 +26,8 @@ inline bool startsWord(const char* text,const char* word) {
   const char* found=text;while ((found=std::strstr(found,word))) {if (found==text || found[-1]==' ') return true; ++found;} return false;
 }
 inline const char* select(const char* name,const char* declared=nullptr) {
-  if (valid(declared)) return declared; char text[256];normalise(name,text);
+  if (declared) for (const char* id:ids) if (!std::strcmp(id,declared)) return id;
+  char text[256];normalise(name,text);
   if (startsWord(text,"stoppeklok") || startsWord(text,"stopwatch") || startsWord(text,"timer") || startsWord(text,"nedtelling") || startsWord(text,"countdown")) return "icon.timer";
   if (startsWord(text,"kalkulator") || startsWord(text,"calculator") || startsWord(text,"regnemaskin")) return "icon.calculator";
   if (startsWord(text,"prikk") || startsWord(text,"oppdrag") || startsWord(text,"quest") || startsWord(text,"target") || startsWord(text,"jakt")) return "icon.crosshair";

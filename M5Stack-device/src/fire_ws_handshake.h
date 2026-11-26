@@ -44,3 +44,9 @@ inline bool fireWsAccepted(const char* headers, size_t length, const char* expec
   }
   return upgrade == 1 && connection == 1 && accept == 1;
 }
+
+// Sequence numbers belong to one authenticated backend session. Resume keeps
+// its watermark; a genuinely new session starts its own sequence at one.
+inline bool fireWsNewSession(const char* incoming,const char* current,const char* resume) {
+  return incoming && *incoming && (!current || strcmp(incoming,current)) && (!resume || strcmp(incoming,resume));
+}

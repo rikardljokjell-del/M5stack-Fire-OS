@@ -33,7 +33,7 @@ void proposalName(Surface& canvas,const char* actualName) {
 }
 template<class Surface>
 void draw(Surface& canvas,const char* title,const char* connection,uint16_t connectionColor,
-          const char* selectedName,const char* const (&labels)[4],uint8_t rows,uint8_t selected,const char* status) {
+          const char* selectedName,const char* const (&labels)[4],uint8_t rows,uint8_t selected,const char* status,const char* const* icons=nullptr) {
   FireUI::panel(canvas,8,6,304,214);
   FireUI::text(canvas,18,12,title,FireUI::Text,"ui16",284);
   FireUI::text(canvas,18,35,connection,connectionColor,"small10",284);
@@ -44,7 +44,9 @@ void draw(Surface& canvas,const char* title,const char* connection,uint16_t conn
   for (uint8_t row=0;row<rows && row<4;++row) {
     const int y=92+row*27;
     if (row==selected) FireUI::roundRect(canvas,14,y-2,292,25,6,FireUI::Selected,true);
-    FireUI::text(canvas,22,y+2,labels[row],FireUI::Text,"ui12",276);
+    const bool icon=icons && icons[row];
+    if (icon) FireUI::icon(canvas,icons[row],22,y+1,FireUI::Accent,20);
+    FireUI::text(canvas,icon?49:22,y+2,labels[row],FireUI::Text,"ui12",icon?249:276);
   }
   FireUI::text(canvas,18,205,status?status:"",FireUI::Muted,"small10",284);
   // This helper never reads or changes M5 text datum. Resume details cannot

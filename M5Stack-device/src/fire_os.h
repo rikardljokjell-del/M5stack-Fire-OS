@@ -21,6 +21,7 @@
 #include "fire_evolution_ui.h"
 #include "fire_ai_menu.h"
 #include "fire_backend_settings_ui.h"
+#include "fire_buttons.h"
 #include <memory>
 
 class DateTimeService {
@@ -103,16 +104,7 @@ class FireOS {
     Evolution,
   };
 
-  struct ButtonState {
-    bool down = false;
-    bool rawPressed = false;
-    bool longTriggered = false;
-    bool wakeOnly = false;
-    bool clickPending = false;
-    uint32_t started = 0;
-    uint32_t lastClickAt = 0;
-    uint32_t rawChangedAt = 0;
-  };
+  using ButtonState=fire_buttons::Button;
 
   static constexpr uint8_t kButtonCount = 3;
   static constexpr uint8_t kSystemMainCount = 6;
@@ -126,12 +118,7 @@ class FireOS {
   static constexpr uint8_t kMaxBluetoothSavedDevices = 5;
   static constexpr uint8_t kDurationCount = 21;
   static constexpr uint8_t kDateFieldCount = 11;
-  static constexpr uint8_t kBaseDoubleClickActionCount = 9;
-  static constexpr uint8_t kDoubleClickActionCount =
-      kBaseDoubleClickActionCount + kMaxLuaApps;
-  static constexpr uint32_t kLongPressMs = 650;
-  static constexpr uint32_t kDoubleClickWindowMs = 350;
-  static constexpr uint32_t kButtonDebounceMs = 18;
+
 
   Screen screen_ = Screen::Main;
   Screen previousScreen_ = Screen::Main;
@@ -172,8 +159,6 @@ class FireOS {
   uint8_t sleepOption_ = 0;
   uint8_t dimOption_ = 2;
   uint8_t screenOffOption_ = 3;
-  uint8_t doubleClickAction_[kButtonCount] = {0, 0, 0};
-  String doubleClickLuaAppId_[kButtonCount];
   uint8_t placeholderIndex_ = 0;
   bool safeMode_ = false;
   bool factoryResetArmed_ = false;
@@ -283,10 +268,6 @@ class FireOS {
   bool firmwareBootGuardActive_ = false;
   uint32_t firmwareBootGuardStarted_ = 0;
   String firmwareMessage_;
-  bool shortcutPicker_ = false;
-  uint8_t shortcutPickerButton_ = 0;
-  uint8_t shortcutPickerAction_ = 0;
-  uint8_t shortcutPickerOffset_ = 0;
   String externalAppPaths_[kMaxExternalApps];
   String externalAppNames_[kMaxExternalApps];
   uint32_t externalAppSizes_[kMaxExternalApps] = {};
@@ -370,6 +351,7 @@ class FireOS {
   uint8_t appManagerVersionCount_ = 0;
   String luaAppPaths_[kMaxLuaApps];
   String luaAppNames_[kMaxLuaApps];
+  const char* luaAppIcons_[kMaxLuaApps] = {};
   String luaAppIds_[kMaxLuaApps];
   String luaAppDisplayNames_[kMaxLuaApps];
   String luaAppVersions_[kMaxLuaApps];
@@ -378,6 +360,7 @@ class FireOS {
   uint8_t luaAppCount_ = 0;
   struct LuaScanItem {
     String path, name, id, displayName, version, checksum, packageId;
+    const char* icon = nullptr;
   };
   LuaScanItem luaScanItems_[kMaxLuaApps];
   enum class LuaScanPhase : uint8_t {
@@ -606,7 +589,6 @@ class FireOS {
   uint32_t aiEvolutionNewAt_=0;
   void handleAiPicker(uint8_t index);
   void drawAiPicker();
-  uint8_t aiBuildResumeMask() const;
   bool aiRepairResumeAvailable() const;
   String aiRepairResumeName() const;
   void selectAiProject(fire_ai_menu::Kind kind,uint8_t index=0);
@@ -634,6 +616,17 @@ class FireOS {
   bool aiBuildCanRetry_ = false;
   int32_t aiBuildResumeCount_ = -1;
   uint8_t buildJobCount_ = 0;
+  bool aiWorkReturnRepair_=false,jobControlsSupported_=false,buildJobsNext_=false,aiJobCanResume_=false,aiJobCanDelete_=false,aiJobCanPause_=false,aiJobCanContext_=false;
+  uint32_t buildJobsOffset_=0;
+  uint8_t aiJobShownSelection_=255;
+  String buildJobRepairIds_[4],aiJobBuild_,aiJobRepair_,aiJobName_,aiJobShownId_;
+  bool buildJobCanDelete_[4]={},buildJobCanPause_[4]={},buildJobCanContext_[4]={};
+  void openAiJobs(uint32_t offset=0);
+  void handleAiJobMenu(uint8_t index);
+  void drawAiJobMenu();
+  void openAiWork();
+  void backAiDeveloper();
+  bool sendAiJobAction(const String& action);
   String buildJobIds_[4];
   String buildJobNames_[4];
   String buildJobStatuses_[4];
@@ -652,7 +645,7 @@ class FireOS {
   String buildNoticePendingAction_;
   String buildNoticePendingEvent_;
   uint32_t buildNoticeLastSendAt_ = 0;
-  uint32_t maxLoopUs_ = 0;
+  uint32_t maxLoopUs_ = 0,maxUiRenderUs_=0,maxUiPresentUs_=0;
   uint32_t maxLoopGapUs_ = 0, diagnosticsAt_ = 0;
   int64_t lastLoopStartedUs_ = 0;
   uint32_t minLargestInternal_ = UINT32_MAX;
@@ -837,10 +830,6 @@ class FireOS {
   void publishLuaAppScan();
   void syncLuaAppSelections();
   void saveLuaAppSelections();
-  uint8_t shortcutActionCount() const;
-  uint8_t shortcutActionAtPosition(uint8_t position) const;
-  uint8_t shortcutPositionForAction(uint8_t action) const;
-  String shortcutActionLabel(uint8_t action) const;
   void serviceLuaHardwareJobs();
   void cancelLuaRuntimeAi(LuaHardwareJob& job,const char* reason);
   void handleRuntimeAiResult(const String& message);
@@ -915,9 +904,16 @@ class FireOS {
                           bool makeBootApp);
   bool launchSelectedBootApp();
   String externalAppBaseName(const String& path) const;
+  void beginButtonCapture();
   void pollButtons();
+  uint32_t inputSyncUs_=0,maxInputDispatchUs_=0,inputContext_=1,maxInputPresentUs_=0,inputPendingAtUs_=0;
+  bool inputPresentationPending_=false;
+  uint64_t inputShownView_=UINT64_MAX;
+  String inputShownIdentity_;
+  uint64_t buttonView() const;
+  String buttonViewIdentity() const;
+  void publishButtonView();
   void onButton(uint8_t index, bool longPress);
-  void onDoubleClick(uint8_t index);
   void playButtonSound(uint8_t index, bool longPress);
   void open(Screen screen);
   void selectMainItem(uint8_t nextIndex);
