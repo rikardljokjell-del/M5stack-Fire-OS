@@ -58,6 +58,46 @@
       "title": "Name",
       "type": "string"
     },
+    "icon": {
+      "anyOf": [
+        {
+          "enum": [
+            "icon.code",
+            "icon.timer",
+            "icon.calculator",
+            "icon.crosshair",
+            "icon.gamepad-2",
+            "icon.battery",
+            "icon.cloud-sun",
+            "icon.clock",
+            "icon.thermometer",
+            "icon.lightbulb",
+            "icon.house",
+            "icon.bluetooth",
+            "icon.wifi",
+            "icon.radio",
+            "icon.mic",
+            "icon.volume-2",
+            "icon.camera",
+            "icon.zap",
+            "icon.cpu",
+            "icon.wrench",
+            "icon.calendar-days",
+            "icon.map-pin",
+            "icon.compass",
+            "icon.ruler",
+            "icon.file-text",
+            "icon.activity"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Icon"
+    },
     "version": {
       "pattern": "^0\\.1\\.[1-9][0-9]*$",
       "title": "Version",

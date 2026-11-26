@@ -38,6 +38,8 @@ class BuildLifecycle:
         failed=build_failure(self.store,build) if status=='failed' else {}
         if failed:failed['diagnostic_message']=failed['diagnostic_message'][:240]
         if failed:message=failed['error_status']
+        paused=build.get('error_code')=='build_paused' and status=='failed'
+        if paused:message='På pause. Velg Resume.';failed['error_status']=message
         if package:
             try:
                 require_deliverable(package)
@@ -47,7 +49,9 @@ class BuildLifecycle:
         return {'build_id':build['id'],'project_id':project['id'],'app_id':project.get('app_id'),
                 'operation':build.get('operation','new'),'repair_id':build.get('repair_job_id'),
                 'created_at':build.get('created_at',build.get('phase_started_at',0)),
-                'name':package['manifest']['name'] if package else project['name'],'status':status,'phase':phase,'progress':build.get('progress',0),
+                'name':package['manifest']['name'] if package else project['name'],'status':'paused' if paused else status,'phase':'paused' if paused else phase,'progress':build.get('progress',0),
+                'job_kind':'build','can_pause':status in {'queued','building'},'can_delete':status in {'ready','failed'},
+                'can_add_context':status in {'queued','building'} or paused,
                 'message':message,'background':build.get('background',False),'package_id':package_id,
                 'resume_count':build.get('resume_count',0),'attempt':build.get('generation_attempt',build.get('attempts',0)),
                 'total':build.get('max_attempts'),
@@ -206,14 +210,25 @@ class BuildLifecycle:
         self.persist(session)
 
     async def build_event(self,session,event):
+        if event.event=='job_control':return await self.jobs.control(session,event)
         if event.event=='build_jobs':
             if session.target!='device':raise PermissionError('Device build action required')
-            builds=[b for b in self.store.list('builds') if b.get('owner_device_id')==session.device_id]
+            builds=[b for b in self.store.list('builds') if b.get('owner_device_id')==session.device_id and not b.get('resume_hidden_at')]
             rows=[]
             for b in builds:
                 try:rows.append(self.build_view(b))
                 except FileNotFoundError:continue
-            rows.sort(key=lambda v:({'building':3,'queued':2,'ready':1}.get(v['status'],0),v['created_at']),reverse=True)
+            for repair in self.store.list('repairs'):
+                if repair['device_id']!=session.device_id or repair.get('build_id') or repair.get('resume_hidden_at'):continue
+                project=self.store.get('projects',repair['project_id'])
+                rows.append({'job_kind':'repair','repair_id':repair['id'],'build_id':None,'project_id':project['id'],
+                    'app_id':repair['app_id'],'name':project['name'],'app_name':project['name'],'status':repair['status'],
+                    'phase':repair.get('phase',repair['status']),'progress':repair.get('progress',0),
+                    'message':repair.get('message','Reparasjon'),'created_at':repair.get('created_at',repair.get('updated_at',0)),
+                    'can_resume':repair['status'] in {'paused','awaiting_confirmation'},'can_open':repair['status'] in {'paused','awaiting_confirmation'},
+                    'can_pause':repair['status'] in {'queued','building'},'can_delete':repair['status'] not in {'queued','building','awaiting_confirmation'},
+                    'can_add_context':repair['status'] in {'queued','paused'}})
+            rows.sort(key=lambda v:v['created_at'],reverse=True)
             page=rows[event.offset:event.offset+4]
             reply={'type':'build_jobs','jobs':page,'offset':event.offset,
                    'next_offset':event.offset+4 if event.offset+4<len(rows) else None,

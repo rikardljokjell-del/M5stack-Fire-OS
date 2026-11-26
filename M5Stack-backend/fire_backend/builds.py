@@ -22,6 +22,7 @@ from .app_sdk import SDK_VERSION,SDK_CONTRACT,package_api,selected_context
 from .models import Manifest,AppTestSequence,GeneratedApp
 from .storage import canonical
 from .app_names import app_id_for
+from .app_icons import select_icon
 from .rendering import VISUAL_POLICY,NATIVE_HOST_POLICY
 from .status_text import build_text
 from .provider_errors import account_limit
@@ -32,7 +33,7 @@ from .capabilities import CapabilityError
 from .usage import UsageBudgetError
 from .jobs import apply_context,mark_context_applied,require_current_context,ContextChanged
 from .data_contract import EXTENSION as DATA_EXTENSION
-from .generation_errors import GenerationResponseError
+from .generation_errors import GenerationResponseError,BuildPaused
 from .build_strategy import POLICY as DEVELOPMENT_POLICY,VERSION as DEVELOPMENT_VERSION,RepairBaseline,evidence_for,review_conflicts,retained_baseline,retained_standard_core
 
 
@@ -235,7 +236,7 @@ class Builder:
             if sha256(source)!=meta['source_sha256']:return None
             plan_path=folder/f"test-plan-{source_attempt}.json"
             if plan_path.stat().st_size>24000:return None
-            return GeneratedApp(name=meta['name'],main_lua=source.decode('utf-8'),required_services=meta['required_services'],
+            return GeneratedApp(name=meta['name'],icon=meta.get('icon'),main_lua=source.decode('utf-8'),required_services=meta['required_services'],
                                 test_sequences=json.loads(plan_path.read_text(encoding='utf-8')))
         except (OSError,ValueError,KeyError,TypeError):return None
 
@@ -251,6 +252,7 @@ class Builder:
         if build.get('evolution_mandate_id'):
             return await self.evolution_call(build,phase,call,args)
         for retry in range(5):
+            if self.store.get('builds',build['id']).get('pause_requested'):raise BuildPaused()
             try:return await call(*args)
             except (APIStatusError,APIConnectionError) as error:
                 if account_limit(error):raise
@@ -420,7 +422,7 @@ class Builder:
                 (work / "main.lua").write_bytes(payload)
                 (folder / f"attempt-{attempt + 1}.lua").write_bytes(payload)
                 self.store.write(folder / f"test-plan-{attempt+1}.json",[s.model_dump() for s in generated.test_sequences])
-                candidate_meta={'name':generated.name,'required_services':generated.required_services,'source_sha256':source_hash,
+                candidate_meta={'name':generated.name,'icon':generated.icon,'required_services':generated.required_services,'source_sha256':source_hash,
                     'context_sha256':request['context_sha256'],'summary_sha256':sha256(summary.encode('utf-8')),
                     'capabilities_sha256':sha256(canonical(capabilities)),'base_package_id':request['base_package_id'],
                     'mode':request['mode'],'local_validated':False}
@@ -543,6 +545,7 @@ class Builder:
             version = project.get("next_version", 1)
             manifest = Manifest(
                 id=app_id_for(generated.name, project, self.store), name=generated.name, version=f"0.1.{version}",
+                icon=select_icon(generated.name,build['summary'],base_icon=(base_manifest or {}).get('icon'),proposed_icon=generated.icon),
                 api_version=api_version,
                 api_contract=SDK_CONTRACT if api_version==SDK_VERSION else API_CONTRACT if api_version==HARDWARE_API else None,
                 required_services=generated.required_services,

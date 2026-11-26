@@ -7,6 +7,7 @@ from .app_sdk import SDK_VERSION,SDK_CONTRACT
 from .runtime_contract import VERSION as AI_VERSION,CONTRACT as AI_CONTRACT,LIMITS as AI_LIMITS
 from .data_contract import VERSION as DATA_VERSION,CONTRACT as DATA_CONTRACT,LIMITS as DATA_LIMITS
 from .evolution_contract import VERSION as EVOLUTION_VERSION,CONTRACT as EVOLUTION_CONTRACT,LIMITS as EVOLUTION_LIMITS
+from .app_icons import ALLOWED_ICONS
 
 Identifier = str
 ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
@@ -59,12 +60,21 @@ class AppTestSequence(StrictModel):
 
 class GeneratedApp(StrictModel):
     name: str = Field(min_length=1, max_length=32)
+    icon: str | None = Field(default=None, description='Optional curated OS app icon; null selects an appropriate icon automatically.',
+        json_schema_extra={'anyOf':[{'type':'string','enum':list(ALLOWED_ICONS)},{'type':'null'}]})
     main_lua: str = Field(min_length=1, max_length=100_000,
         description="Complete executable Lua source only. No prose, Markdown, progress text or requests for confirmation.")
     required_services: list[str] = Field(max_length=24,
         description="Bare Lua service names, e.g. display, buttons, rgb. Never fire.display or permission names.",
         json_schema_extra={"items":{"type":"string","enum":sorted(ALL_SERVICES)}})
     test_sequences: list[AppTestSequence] = Field(default_factory=list,max_length=6)
+
+    @field_validator('icon')
+    @classmethod
+    def supported_icon(cls,value):
+        from .app_icons import valid_icon
+        if value is not None and not valid_icon(value):raise ValueError('Unknown OS app icon')
+        return value
 
     @field_validator("name")
     @classmethod
@@ -184,6 +194,7 @@ class DataDescriptor(StrictModel):
 class Manifest(StrictModel):
     id: str = Field(pattern=ID_PATTERN)
     name: str = Field(min_length=1, max_length=64)
+    icon: str | None = Field(default=None,json_schema_extra={'anyOf':[{'type':'string','enum':list(ALLOWED_ICONS)},{'type':'null'}]})
     version: str = Field(pattern=r"^0\.1\.[1-9][0-9]*$")
     api_version: Literal["fire-lua-0.1","fire-lua-0.2","fire-app-sdk-1.0"] = "fire-lua-0.1"
     api_contract: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
@@ -195,6 +206,10 @@ class Manifest(StrictModel):
     checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
     runtime_ai: RuntimeAICapability | None = None
     data_engine: DataEngineExtension | None = None
+
+    @field_validator('icon')
+    @classmethod
+    def supported_icon(cls,value):return GeneratedApp.supported_icon(value)
 
     @model_validator(mode="after")
     def permissions_match(self):
@@ -225,6 +240,7 @@ class Manifest(StrictModel):
         if self.api_version==BASE_API:result.pop("api_contract",None)
         if self.runtime_ai is None:result.pop('runtime_ai',None)
         if self.data_engine is None:result.pop('data_engine',None)
+        if self.icon is None:result.pop('icon',None)
         return result
 
 
@@ -405,7 +421,7 @@ APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "offset": 0, "apps": [], "storage_ready": None, "complete": None, "conversation_mode": None, "diagnostics": None,
                       "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None,
                       "repair_id":None,"app_version":None,"build_id":None,"notification_action":None,"request_id":None,"source_sha256":None,"instructions":None,"data_json":None,"schema_json":None,"timeout_ms":None,'runtime_ai_mode':None,"operation":None,"dataset_id":None,"options_json":None,"datasets":[],"mode":None,"instruction":None,"dataset_ids":[],"context_id":None,"development_context_id":None,"observation_action":None}
-APP_EVENT_DEFAULTS.update({k:None for k in ('expected_revision','evolution_json','telemetry_json','evolution_action','evolution_job_id','evolution_mandate_id','view','settings_json','role')})
+APP_EVENT_DEFAULTS.update({k:None for k in ('expected_revision','evolution_json','telemetry_json','evolution_action','evolution_job_id','evolution_mandate_id','view','settings_json','role','job_action')})
 CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None,'runtime_ai':None,'data_engine':None,'service_methods':None,'service_modes':None,'evolution':None}
 
 
@@ -443,7 +459,7 @@ class DeviceEvent(StrictModel):
     runtime_ai_mode: Literal['auto','off'] | None = None
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "runtime_ai_request", "runtime_ai_cancel", "data_request", "data_cancel", "app_develop_request", "app_observation_confirm", "evolution_status", "evolution_prepare", "evolution_confirm", "evolution_control", "evolution_telemetry", "backend_settings_status", "backend_settings_prepare", "backend_settings_confirm"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "job_control", "runtime_ai_request", "runtime_ai_cancel", "data_request", "data_cancel", "app_develop_request", "app_observation_confirm", "evolution_status", "evolution_prepare", "evolution_confirm", "evolution_control", "evolution_telemetry", "backend_settings_status", "backend_settings_prepare", "backend_settings_confirm"]
     request_id: str | None = Field(default=None,pattern=ID_PATTERN)
     source_sha256: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
     instructions: str | None = Field(default=None,max_length=AI_LIMITS['instructions_bytes'])
@@ -452,6 +468,7 @@ class DeviceEvent(StrictModel):
     timeout_ms: int | None = Field(default=None,ge=AI_LIMITS['timeout_min_ms'],le=AI_LIMITS['timeout_max_ms'],strict=True)
     build_id: str | None = Field(default=None,pattern=ID_PATTERN)
     notification_action: Literal['open','dismiss'] | None = None
+    job_action: Literal['resume','pause','cancel','background','context','delete'] | None = None
     repair_id: str | None = Field(default=None,pattern=ID_PATTERN)
     app_version: str | None = Field(default=None,max_length=32)
     conversation_mode: Literal["chat", "develop"] | None = None
@@ -495,6 +512,11 @@ class DeviceEvent(StrictModel):
 
     @model_validator(mode="after")
     def versioned_envelope(self):
+        if self.event=='job_control':
+            if self.protocol_version!='0.2' or not self.job_action or bool(self.build_id)==bool(self.repair_id):
+                raise ValueError('Job control requires exactly one owned build or repair')
+            if self.text is not None and (self.job_action!='context' or not self.text.strip() or len(self.text.encode('utf-8'))>2000):
+                raise ValueError('Only context accepts 1-2000 UTF8 bytes')
         if self.event.startswith('backend_settings_'):
             required={'backend_settings_status':('request_id',),'backend_settings_prepare':('request_id','expected_revision','settings_json'),
                 'backend_settings_confirm':('request_id','proposal_id','expected_revision')}[self.event]

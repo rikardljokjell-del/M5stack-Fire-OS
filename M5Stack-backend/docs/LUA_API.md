@@ -148,6 +148,13 @@ Rollback restores files/selection only; another run requires explicit run_confir
 
 ## Package installation
 
+Optional `manifest.icon` is a curated canonical `icon.*` string for the OS app
+list. It grants no Lua service or permission. New packages select it in the same
+normal generation/build request, with deterministic selection when omitted;
+updates preserve the base icon unless an explicit supported choice replaces it.
+Old manifests omit the field and old ZIPs remain unchanged; the OS uses the shared
+name-based fallback. The curated metadata vocabulary is `data/app_icons.json`.
+
 Only four ZIP_STORED entries are accepted: apps/<id>/manifest.json, main.lua,
 assets/ and appdata/. manifest.entry=main.lua. Validate CRC, exact file list,
 manifest schema, permissions, source checksum and full archive SHA256/size.

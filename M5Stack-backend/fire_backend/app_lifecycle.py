@@ -4,6 +4,7 @@ import time
 from .models import State
 from .storage import new_id
 from .app_manager import AppManager
+from .app_icons import select_icon
 
 
 class AppLifecycle(AppManager):
@@ -185,6 +186,7 @@ class AppLifecycle(AppManager):
             recommended=next((p for p in versions if p['id']==project.get('latest_package')),versions[0])
             downloadable,download_reason=self.app_download_check(recommended,session.capabilities if session else device.get("capabilities"))
             apps.append({"app_id": self.project_app_id(project), "project_id": project["id"], "name": project["name"],
+                         "icon":select_icon(project['name'],base_icon=recommended['manifest'].get('icon')),
                          "latest_package_id": recommended["id"], "latest_version": recommended["manifest"]["version"],
                          "base_package_id": self.update_base(project, device)["id"], "version_count": len(versions),
                          "device_presence": presence.get("state", "unknown"),
@@ -234,6 +236,7 @@ class AppLifecycle(AppManager):
             session.resume_project_aliases = []
             session.resumed_from_build_id = None
             session.development_context_id = None
+            session.job_context_target = None
             session.app_revision = device.get("app_change_counter", 0)
             session.package_id = session.build_id = session.proposal_id = session.turn_id = None
             session.summary, session.last_error, session.progress, session.history = "", "", {}, []

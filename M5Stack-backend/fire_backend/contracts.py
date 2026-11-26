@@ -9,6 +9,7 @@ from .api_registry import REGISTRY,API_CONTRACT,ALL_SERVICES
 
 
 REQUIRED = {
+    'job_control':['job_action'],
     "build_background":["build_id"],"build_resume":["build_id"],"build_cancel":["build_id"],
     "build_notice_ack":["build_id","notification_action"],
     "app_repair_prepare":["app_id"],"app_repair_cancel":["repair_id"],
@@ -75,6 +76,9 @@ def schemas():
     conditions.append({"if":{"properties":{"event":{"const":"app_repair_status"}}},
                        "then":{"anyOf":[{"required":[name],"properties":{name:nonnull(name)}} for name in ('repair_id','app_id')]}})
     event["allOf"] = conditions
+    conditions.append({'if':{'properties':{'event':{'const':'job_control'}}},'then':{
+        'oneOf':[{'required':[key],'properties':{key:nonnull(key),other:{'type':'null'}}}
+                 for key,other in [('build_id','repair_id'),('repair_id','build_id')]]}})
     conditions.append({"if":{"properties":{"event":{"const":"firmware_store_result"},"status":{"const":"ok"}}},
                        "then":{"required":["sha256"],"properties":{"sha256":nonnull("sha256")}}})
     for event_name in ("app_versions", "app_select", "app_backend_delete_prepare"):

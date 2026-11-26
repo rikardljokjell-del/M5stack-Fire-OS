@@ -7,6 +7,11 @@ class GenerationResponseError(ValueError):
         super().__init__(detail)
 
 
+class BuildPaused(GenerationResponseError):
+    def __init__(self):
+        super().__init__('build_paused','Jobben er på pause. Plan og mottatt appkode er bevart; velg Resume.')
+
+
 def response_meta(response, limit, effort):
     def field(obj, name, default=None):
         return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)

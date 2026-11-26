@@ -94,6 +94,59 @@ def headers(token=TOKEN):
     return {"Authorization": "Bearer " + token}
 
 
+@pytest.mark.parametrize('worst_case',[False,True])
+async def test_native_snapshot_keeps_one_capability_copy_within_json_token_guard(tmp_path,worst_case):
+    import re
+    import hashlib
+    from fire_backend.api_registry import preview_capabilities
+    from fire_backend.evolution_contract import EXTENSION
+    from test_repair_target import Peer
+    caps=preview_capabilities()
+    # Native board advertises the external I2C address set, unlike the small
+    # PC preview profile; its repeated numeric commas count toward the guard.
+    caps['hardware']['i2c_write_addresses']=[i for i in range(8,120) if i not in (16,104,117)]
+    caps.update(evolution=EXTENSION,firmware_version='fire-os-1.6.0-rc2',audio_input=True,audio_output=True,
+        service_methods={'wifi':['status','scan'],'bluetooth':['scan','read_gatt','write_gatt','advertise','advertise_raw','close'],'mic':['level','record']},
+        service_modes={'bluetooth.scan':['ble']})
+    caps['data_engine'].update(capture_sources=['imu','mic','ble.advertisements'],capture_limits={
+        'imu':{'duration_ms_max':60000,'max_records':6000,'sample_rates_hz':[50,100]},
+        'mic':{'duration_ms_max':10000,'max_records':160000,'sample_rates_hz':[8000,16000]},
+        'ble.advertisements':{'duration_ms_max':60000,'max_records':6000}})
+    b=Backend(configured(tmp_path));peer=Peer()
+    try:
+        s=await b.start(SessionStart(device_id='fire-01',target='device',protocol_version='0.2',
+            boot_id='boot-json',capabilities=caps),peer,'fire-01')
+        device=b.device_record(s)
+        device['apps']={'app-'+str(i):{'state':'present','checksum':'a'*64} for i in range(13)}
+        if worst_case:
+            source_hash=hashlib.sha256(b'fixture-source').hexdigest()
+            s.summary='Måøæ'*250;s.last_error='ø'*240
+            s.progress={'phase':'failed','message':'Jobben venter','diagnostic_message':'ø'*240,'progress':0}
+            device.update(last_install_message='ø'*240,last_error='ø'*240)
+            for kind in ['install','run','stop','rollback']:
+                b.issue_command(s,kind,'build-retained',source_sha256=source_hash,archive_sha256=hashlib.sha256(b'fixture-archive').hexdigest())
+        b.store.put('devices',s.device_id,device)
+        await b.session_snapshot(s)
+        frame=next(e for e in reversed(peer.events) if e['type']=='session_snapshot')
+        assert frame['capabilities']==s.capabilities
+        assert 'capabilities' not in frame['device'] and 'apps' not in frame['device']
+        assert b.device_record(s)['capabilities']==s.capabilities  # Full desktop/store facts retained.
+        encoded=json.dumps(frame,ensure_ascii=False,separators=(',',':'))
+        # Same string/open-container/colon/comma tokens counted by native fireJsonSafe.
+        tokens=lambda text:len(re.findall(r'"(?:[^"\\]|\\.)*"|[\{\[,:]',text))
+        assert len(encoded.encode('utf-8'))<=8192 and tokens(encoded)<=1024
+        def depth(v):return 1+max((depth(x) for x in (v.values() if isinstance(v,dict) else v)),default=0) if isinstance(v,(dict,list)) else 0
+        assert depth(frame)<=12
+        if worst_case:
+            assert s.summary=='Måøæ'*250 and 'Hele planen er bevart' in frame['summary']
+            assert len(frame['pending_commands'])==4
+            assert all(c['source_sha256']==source_hash for c in b.pending_commands(s))
+            assert b.device_record(s)['last_install_message']=='ø'*240
+        duplicate={**frame,'device':{**frame['device'],'capabilities':s.capabilities}}
+        assert tokens(json.dumps(duplicate,ensure_ascii=False))>1024
+    finally:await b.close()
+
+
 def test_full_device_lifecycle_and_idempotency(tmp_path):
     with TestClient(create_app(configured(tmp_path))) as client:
         with client.websocket_connect("/ws/device", headers=headers()) as socket:

@@ -134,7 +134,7 @@ async def handle(service, session, event):
     if name in {'data_request','app_develop_request'}:return await service.data_engine.request(session,event)
     if name=='data_cancel':return await service.data_engine.cancel_event(session,event)
     if name=='app_observation_confirm':return await service.data_engine.confirm_observation(session,event)
-    if name in {'build_background','build_jobs','build_notice_ack','build_resume','build_cancel'}:
+    if name in {'build_background','build_jobs','build_notice_ack','build_resume','build_cancel','job_control'}:
         return await service.build_event(session,event)
     if name=='app_repair_prepare':return await service.repairs.prepare(session,event)
     if name=='app_repair_status':return await service.repairs.status(session,event)

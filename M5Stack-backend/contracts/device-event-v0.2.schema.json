@@ -1091,6 +1091,7 @@
         "build_notice_ack",
         "build_resume",
         "build_cancel",
+        "job_control",
         "runtime_ai_request",
         "runtime_ai_cancel",
         "data_request",
@@ -1216,6 +1217,26 @@
       ],
       "default": null,
       "title": "Notification Action"
+    },
+    "job_action": {
+      "anyOf": [
+        {
+          "enum": [
+            "resume",
+            "pause",
+            "cancel",
+            "background",
+            "context",
+            "delete"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Job Action"
     },
     "repair_id": {
       "anyOf": [
@@ -2330,6 +2351,33 @@
       "if": {
         "properties": {
           "event": {
+            "const": "job_control"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "job_action"
+        ],
+        "properties": {
+          "job_action": {
+            "enum": [
+              "resume",
+              "pause",
+              "cancel",
+              "background",
+              "context",
+              "delete"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
             "const": "build_background"
           }
         }
@@ -3201,6 +3249,47 @@
               "app_id": {
                 "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
                 "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "job_control"
+          }
+        }
+      },
+      "then": {
+        "oneOf": [
+          {
+            "required": [
+              "build_id"
+            ],
+            "properties": {
+              "build_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "repair_id": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "required": [
+              "repair_id"
+            ],
+            "properties": {
+              "repair_id": {
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              "build_id": {
+                "type": "null"
               }
             }
           }

@@ -48,6 +48,7 @@ jobs:
           tests/test_cost_confidence.py tests/test_usage.py tests/test_app_costs.py
           tests/test_jobs.py tests/test_build_strategy.py
           tests/test_app_icons.py
+          tests/test_job_controls.py
       - name: Check existing Web integration syntax
         run: |
           node --check fire_backend/web/app.js

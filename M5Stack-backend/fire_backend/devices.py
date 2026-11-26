@@ -7,7 +7,10 @@ from .storage import new_id
 
 class DeviceLifecycle:
     def device_view(self, session):
-        return {key: value for key, value in self.device_record(session).items() if key not in {"projects", "apps"}}
+        # Capabilities already accompany session messages. Duplicating the full
+        # registry here exceeds the native JSON token guard before the byte cap.
+        return {key: value for key, value in self.device_record(session).items()
+                if key not in {"projects", "apps", "capabilities", "last_error", "last_install_error", "last_install_message"}}
 
     def device_record(self, session):
         if session.target != "device":

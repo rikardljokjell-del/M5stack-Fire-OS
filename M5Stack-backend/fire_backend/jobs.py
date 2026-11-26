@@ -56,7 +56,8 @@ class Jobs:
 
     def context(self,build_id,text):
         build=self.store.get('builds',build_id)
-        if build['status'] not in ACTIVE or build.get('phase') in CLOSED:
+        paused=build['status']=='failed' and build.get('error_code')=='build_paused'
+        if not paused and (build['status'] not in ACTIVE or build.get('phase') in CLOSED):
             raise ValueError('Jobben er avsluttet eller pakken ferdigstilles. Bruk Aktivitet for neste oppdatering.')
         if not isinstance(text,str) or not 1<=len(text.strip())<=2000:raise ValueError('Skriv 1–2000 tegn med kontekst.')
         record=context_record(self.store,build_id)
@@ -67,6 +68,107 @@ class Jobs:
         self.store.log(build_id,'Manuell kontekst lagret, revisjon '+str(record['revision']))
         return {'status':'pending','revision':record['revision'],'message':'Konteksten er lagret for neste generering. Pågående modellkall endres ikke.'}
 
+    async def control(self,session,event):
+        """Native controls reuse the existing build/repair lifecycle and context."""
+        from .models import State
+        repair=self.service.repairs.owned(session,event.repair_id) if event.repair_id else None
+        build=self.service.owned_build(session,event.build_id or repair.get('build_id')) if event.build_id or repair and repair.get('build_id') else None
+        project_id=build['project_id'] if build else repair['project_id']
+        action=event.job_action
+        target=session.job_context_target
+        if action in {'resume','cancel','delete'} and target and (
+                build and target.get('build_id')==build['id'] or repair and target.get('repair_id')==repair['id']):
+            session.job_context_target=None;self.service.persist(session)
+        reply={'type':'job_control_result','job_action':action,'build_id':build['id'] if build else None,
+               'repair_id':repair['id'] if repair else build.get('repair_job_id'), 'status':'ok'}
+        if action=='context':
+            if build and build['status'] not in ACTIVE and build.get('error_code')!='build_paused':raise ValueError('Åpne Resume før du endrer en avsluttet jobb.')
+            if event.text is None:
+                if session.operation_task or session.input_task and not session.input_task.done():raise ValueError('Fullfør taleomgangen først.')
+                self.service.detach_device_build(session)
+                session.job_context_target={'build_id':build['id'] if build else None,'repair_id':repair['id'] if repair else None,
+                    'project_id':project_id,'device_id':session.device_id,'expires_at':time.time()+300}
+                self.service.persist(session)
+                reply.update(status='context_ready',message='Si mer kontekst',display_text='Si mer kontekst')
+            else:reply.update(self.add_owned_context(session,build,repair,event.text))
+        elif action=='delete':
+            entry=self.service.build_entry(build['id']) if build else None
+            task=(entry or {}).get('task') or (self.service.repairs.tasks.get(repair['id']) if repair else None)
+            if (task and not task.done() or build and build['status'] not in {'ready','failed'} or
+                    not build and repair['status'] in {'queued','building','awaiting_confirmation'}):raise ValueError('Avbryt aktiv jobb før du fjerner den fra Resume.')
+            record=build or repair;record['resume_hidden_at']=time.time()
+            self.store.put('builds' if build else 'repairs',record['id'],record,critical=True)
+            reply.update(status='hidden',message='Fjernet fra Resume; app og historikk beholdt.')
+        elif action=='pause':
+            if build and build.get('evolution_job_id'):
+                job=self.store.get('evolution_jobs',build['evolution_job_id'])
+                await self.service.evolution.control(session.device_id,job['project_id'],'pause',
+                    self.service.evolution.state(session.device_id,job['project_id'])['revision'],job_id=job['id'])
+            elif build:
+                if build['status'] not in ACTIVE:raise ValueError('Jobben er allerede avsluttet.')
+                build['pause_requested']=True
+                entry=self.service.build_entry(build['id'])
+                if entry:entry['build']['pause_requested']=True
+                self.store.put('builds',build['id'],build,critical=True)
+            else:
+                if repair['status'] not in {'queued','building'}:raise ValueError('Jobben kan ikke pauses nå.')
+                repair['pause_requested']=True;self.service.repairs.save(repair)
+            reply.update(status='pause_requested',message='Pauser etter gjeldende kall',display_text='Pauser etter gjeldende kall')
+        elif action=='resume':
+            if build:
+                if build.get('evolution_job_id'):
+                    job=self.store.get('evolution_jobs',build['evolution_job_id'])
+                    result=await self.service.evolution.control(session.device_id,job['project_id'],'resume',
+                        self.service.evolution.state(session.device_id,job['project_id'])['revision'],job_id=job['id'])
+                    reply.update(status='resumed',message='Evolution fortsetter med sitt bekreftede mandat')
+                    await self.service.emit(session,reply);return reply
+                if build.get('resume_hidden_at'):
+                    build.pop('resume_hidden_at');self.store.put('builds',build['id'],build)
+                return await self.service.resume_build(session,build)
+            if repair['status']=='awaiting_confirmation':return await self.service.repairs.emit(session,repair)
+            if repair['status']!='paused' or not repair.get('confirmed_event_id'):raise ValueError('Jobben krever en ny reparasjonsbekreftelse.')
+            project=self.store.get('projects',project_id)
+            if project.get('latest_package')!=repair['base_package_id'] or session.capabilities!=repair['capabilities']:
+                raise ValueError('App eller tilganger er endret; bruk Fix error for nytt forslag.')
+            repair.update(pause_requested=False,status='queued');self.service.repairs.save(repair)
+            import asyncio
+            self.service.repairs.tasks[repair['id']]=asyncio.create_task(self.service.repairs.run(repair['id']))
+            reply.update(status='resumed',message='Fortsetter den bekreftede reparasjonen')
+        elif action=='cancel':
+            if repair:return await self.service.repairs.cancel(session,event)
+            from .models import DeviceEvent
+            return await self.service.build_event(session,event.model_copy(update={'event':'build_cancel'}))
+        elif action=='background':
+            if build and session.build_id==build['id']:
+                return await self.service.build_event(session,event.model_copy(update={'event':'build_background','build_id':build['id']}))
+            if repair:self.service.repairs.watchers.get(repair['id'],set()).discard(session.id)
+            reply.update(status='backgrounded',message='Jobben fortsetter i bakgrunnen')
+        await self.service.emit(session,reply)
+        return reply
+
+    def add_owned_context(self,session,build,repair,text):
+        if not text or not 1<=len(text.strip().encode('utf-8'))<=2000:raise ValueError('Konteksten må være 1–2000 UTF8 bytes.')
+        if build:return self.context(build['id'],text)
+        if repair['status'] not in {'queued','paused'}:raise ValueError('Kontekst kan ikke legges til denne jobben nå.')
+        record=context_record(self.store,repair['id'])
+        if len(record['notes'])>=8:raise ValueError('Maks åtte konteksttillegg per jobb.')
+        record['revision']+=1;record['notes'].append({'revision':record['revision'],'text':self.service.redactor.text(text.strip()),'at':time.time()})
+        self.store.put('job_context',repair['id'],record)
+        return {'status':'pending','message':'Konteksten er lagret for neste generering.'}
+
+    async def consume_context(self,session,text):
+        target=session.job_context_target
+        session.job_context_target=None;self.service.persist(session)
+        if session.stopped or target['device_id']!=session.device_id or target['expires_at']<time.time():raise ValueError('Kontekstvalget er utløpt. Velg jobben igjen.')
+        build=self.service.owned_build(session,target['build_id']) if target.get('build_id') else None
+        repair=self.service.repairs.owned(session,target['repair_id']) if target.get('repair_id') else None
+        if (build or repair)['project_id']!=target['project_id']:raise PermissionError('Kontekstjobben er endret.')
+        result=self.add_owned_context(session,build,repair,text)
+        await self.service.emit(session,{'type':'assistant_message','text':result['message'],'display_text':'Kontekst lagret'})
+        from .models import State
+        await self.service.state(session,State.idle);await self.service.activity(session,'idle')
+        return result
+
     def snapshot(self):
         rows=[];projects={p['id']:p for p in self.store.list('projects')};usage=self.service.usage.records()
         costs=self.service.usage.build_costs();conversation_costs=self.service.usage.conversation_costs()
@@ -76,9 +178,11 @@ class Jobs:
             p=projects.get(b['project_id'],{});record=context_record(self.store,b['id'])
             active=b['status'] in ACTIVE;error=b.get('error','') if not active else ''
             failure=build_failure(self.store,b) if error else {}
+            paused=b.get('error_code')=='build_paused' and b['status']=='failed'
+            if paused:failure['error_status']='På pause. Velg Resume.'
             rows.append({'id':b['id'],'build_id':b['id'],'project_id':b['project_id'],'name':p.get('name','App'),
                 'operation':b.get('operation','repair' if b.get('repair_of') else 'update' if b.get('repair_job_id') else 'build'),
-                'status':b['status'],'phase':b.get('phase','queued'),'progress':b.get('progress',0),
+                'status':'paused' if paused else b['status'],'phase':'paused' if paused else b.get('phase','queued'),'progress':b.get('progress',0),
                 'message':build_text(b.get('phase'),operation=b.get('operation','new'),attempt=b.get('generation_attempt',1),
                     total=b.get('max_attempts',4),progress=b.get('progress',0),detail=error),
                 'error':failure.get('diagnostic_message',error),'error_status':failure.get('error_status',''),
@@ -89,15 +193,15 @@ class Jobs:
                 'created_at':b.get('created_at',b.get('phase_started_at',0)),'phase_started_at':b.get('phase_started_at'),
                 'retry_at':b.get('retry_at') if active and b.get('phase')=='api_wait' else None,
                 'phase_seconds':b.get('phase_seconds',{}),'package_id':b.get('package_id'),
-                'can_add_context':active and b.get('phase') not in CLOSED,
+                'can_add_context':paused or active and b.get('phase') not in CLOSED,
                 'context':record,'context_pending':record['revision']>record['applied_revision'],
                 'estimated_usd':costs.get(b['id'],{}).get('estimated_usd',0),
                 'cost_detail':costs.get(b['id'],{}),'resume_count':b.get('resume_count',0),
                 'usage_unknown':sum(u['usage_source']=='reservation' for u in usage if u.get('build_id')==b['id'])})
         for repair in self.store.list('repairs'):
-            if not repair.get('build_id') and repair['status'] in {'queued','awaiting_confirmation'}:
+            if not repair.get('build_id') and repair['status'] in {'queued','awaiting_confirmation','paused'}:
                 rows.append({'id':repair['id'],'name':repair.get('name','Reparasjon'),'operation':'repair','status':repair['status'],
-                    'phase':'queued','message':'Venter på bygger' if repair['status']=='queued' else 'Venter på bekreftelse',
+                    'phase':repair['status'],'message':'På pause' if repair['status']=='paused' else 'Venter på bygger' if repair['status']=='queued' else 'Venter på bekreftelse',
                     'progress':0,'can_add_context':False,'created_at':repair.get('updated_at',0),'context':{},'context_pending':False})
         for session in self.service.sessions.values():
             if session.stopped or session.build_id or session.evolution_job_id or session.state not in {'failed','processing','listening','awaiting_build_confirmation'}:continue

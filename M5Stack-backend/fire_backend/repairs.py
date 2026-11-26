@@ -13,6 +13,7 @@ from .storage import new_id
 from .builds import verify_archive
 from .quality import require_deliverable
 from .status_text import VERSION as STATUS_TEXT_VERSION,repair_text
+from .generation_errors import BuildPaused
 
 
 ACTIVE = {"queued", "building"}
@@ -221,7 +222,10 @@ class Repairs:
         worker=None
         try:
             job=self.store.get('repairs',job_id)
-            while self.service.build_lock.locked():await asyncio.sleep(.1)
+            while self.service.build_lock.locked():
+                if self.store.get('repairs',job_id).get('pause_requested'):raise BuildPaused()
+                await asyncio.sleep(.1)
+            if self.store.get('repairs',job_id).get('pause_requested'):raise BuildPaused()
             # No yields between selecting the source and reserving the builder.
             from .service import Session
             project=self.store.get('projects',job['project_id'])
@@ -242,6 +246,9 @@ class Repairs:
                 'latest_version_used_as_base':base['manifest']['version'],'physical_root_cause_verified':False}
             build=await self.service.confirm_build(worker,job['proposal_id'])
             build.update(repair_job_id=job_id,confirmed_event_id=job['confirmed_event_id'])
+            from .jobs import context_record
+            notes=context_record(self.store,job_id)
+            if notes['revision']:self.store.put('job_context',build['id'],{**notes,'id':build['id']})
             self.workers[job_id]={'build':build,'worker':worker,'task':worker.task}
             self.store.put('builds',build['id'],build)
             job.update(status='building',build_id=build['id']);self.save(job)
@@ -253,11 +260,15 @@ class Repairs:
                     self.save(job);await self.notify(job)
             await worker.task
             build=self.store.get('builds',build['id'])
+            if build.get('error_code')=='build_paused':raise BuildPaused()
             if build['status']!='ready':raise ValueError(build.get('error','Reparasjonen kunne ikke godkjennes.'))
             package=self.store.get('packages',build['package_id']);require_deliverable(package)
             job.update(status='ready',phase='ready',progress=100,package_id=package['id'],version=package['manifest']['version'],
                 message='Ny testet versjon er klar. Last ned og bekreft kjøring, eller hent senere i App Manager.')
             self.save(job);await self.notify(job)
+        except BuildPaused as error:
+            job=self.store.get('repairs',job_id);job.update(status='paused',phase='paused',message=str(error));self.save(job)
+            await self.notify(job)
         except asyncio.CancelledError:
             if worker and worker.task and not worker.task.done():
                 worker.task.cancel()

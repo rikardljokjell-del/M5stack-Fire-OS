@@ -15,6 +15,7 @@ from .app_lifecycle import AppLifecycle
 from .build_lifecycle import BuildLifecycle
 from .capabilities import generation_policy, policy, status as capability_status
 from .app_quality import APP_QUALITY_POLICY,experience_contract
+from .app_icons import select_icon
 from .security import Redactor
 from .storage import Store, new_id
 from .status_text import VERSION as STATUS_TEXT_VERSION,build_text,error_text,display_event
@@ -88,6 +89,7 @@ class Session:
     resumed_from_build_id: str | None = None
     development_context_id: str | None = None
     evolution_job_id: str | None = None
+    job_context_target: dict | None = None
 
 
 class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
@@ -207,6 +209,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             absent = presence.get("state") in {"deleted", "missing"}
             can_delete, block_reason = self.backend_delete_check(project) if project else (False, "Prosjektet finnes ikke.")
             apps.append({"app_id": manifest["id"], "name": manifest["name"], "version": manifest["version"],
+                         "icon":select_icon(manifest['name'],base_icon=manifest.get('icon')),
                          "updated_at":updated_at,
                          "api_version":manifest.get("api_version","fire-lua-0.1"),
                          "quality": package.get("quality", {}), "validation_suite": package.get("validation",{}).get("suite"),
@@ -279,7 +282,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
 
     def snapshot(self, session):
         return {"session_id": session.id, "device_id": session.device_id,
-                "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1","repair_cancel_v1"],
+                "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1","repair_cancel_v1","job_controls_v1"],
                 "resumed_from_build_id":session.resumed_from_build_id,
                 "evolution_job_id":session.evolution_job_id,
                 "project_id": session.project_id, "state": session.state,
@@ -307,7 +310,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                        "summary": session.summary, "sequence": session.sequence, "stopped": session.stopped,
                        "last_seen": session.last_seen, "disconnected_at": session.disconnected_at,
                        "progress": session.progress, "repair_context": session.repair_context,
-                       "resume_project_aliases": session.resume_project_aliases,"runtime_ai_mode":session.runtime_ai_mode}, critical=session.state in {State.failed, State.idle})
+                       "resume_project_aliases": session.resume_project_aliases,"runtime_ai_mode":session.runtime_ai_mode,
+                       "job_context_target":session.job_context_target}, critical=session.state in {State.failed, State.idle})
 
     async def emit(self, session, event):
         event=display_event(event,operation='repair' if session.repair_context else 'update' if session.app_mode=='update' else 'new',delivery=session.target=='device')
@@ -570,7 +574,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
                          "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error", "runtime_ai_mode",
-                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id", "development_context_id", "evolution_job_id"):
+                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id", "development_context_id", "evolution_job_id", "job_context_target"):
                 if name in saved:
                     setattr(session, name, saved[name])
             session.sequence = saved.get("sequence", 0)
@@ -632,8 +636,17 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         return session
 
     async def session_snapshot(self, session):
+        summary=session.summary
+        if session.target=='device' and len(summary.encode('utf-8'))>1600:
+            summary='Hele planen er bevart i backend. Velg Resume for å fortsette samme byggforslag.'
+        commands=[self.command_message(c) for c in self.pending_commands(session)]
+        if session.target=='device':
+            # These are references for reconciliation, never replayed commands.
+            # Actual install/run requests retain their complete hash-bound fields.
+            keys={'type','install_id','run_id','stop_id','rollback_id','package_id','boot_id','expires_at'}
+            commands=[{k:v for k,v in c.items() if k in keys} for c in commands[:4]]
         await self.emit(session, {"type": "session_snapshot", **self.snapshot(session), "progress": session.progress,
-                                  "summary": session.summary, "pending_commands": [self.command_message(c) for c in self.pending_commands(session)],
+                                  "summary": summary, "pending_commands": commands,
                                   "device": self.device_view(session) if session.target == "device" else None})
         if session.target=='device':
             jobs=sorted((j for j in self.store.list('repairs') if j['device_id']==session.device_id),key=lambda j:(j['status'] in {'queued','building'},j['updated_at']),reverse=True)
@@ -805,6 +818,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 session.operation_task = None
 
     async def _text(self, session, text, *, source="text"):
+        if session.job_context_target:
+            return await self.jobs.consume_context(session,text)
         turn_id = session.turn_id
         from .quality import repair_requested, RepairChoiceNeeded
         repair_intent = bool(text and session.conversation_mode == "develop" and repair_requested(text))
@@ -943,6 +958,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
     async def release_foreground(self, session):
         """A new explicit action may replace speech/dialog, never the build source."""
         self.detach_device_build(session)
+        session.job_context_target=None
         await self.evolution.release_session(session)
         if session.state not in {State.building,State.testing,State.running,State.starting,State.stopping,State.rollback_pending}:
             from .protocol import cancel_turn
@@ -1034,7 +1050,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 'attempts':continuing.get('attempts',0),
                 'run_history':continuing.get('run_history',[])+[checkpoint],
                 'resume_checkpoint':checkpoint,'resumed_at':time.time(),
-                'error':'','error_code':'','phase_started_at':None,'package_id':None}
+                'error':'','error_code':'','phase_started_at':None,'package_id':None,'pause_requested':False}
             if session.summary==prior_summary:
                 build['summary']=continuing['summary']  # notes remain revisioned, not duplicated
             else:

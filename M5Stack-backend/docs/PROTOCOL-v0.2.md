@@ -101,6 +101,15 @@ proposal, package, device record and pending commands. Existing confirmed builds
 continue during transient disconnect. `session_stop` explicitly cancels them.
 Commands are NOT blindly executed again on reconnect.
 
+Device snapshots are bounded views, not full database records: capabilities occur
+once, redundant device diagnostics stay in desktop status, and a long summary is
+represented by a complete short notice that the full plan is retained. Up to four
+pending-command references contain IDs/type/package/boot/expiry for reconciliation;
+they are not executable replay requests. Full stored commands and actual separate
+install/run requests retain their original source/archive checksums and guards.
+Native control frames remain within 8192 UTF8 bytes, 1024 JSON guard tokens and
+depth 12. Desktop status and the retained plan are not shortened or mutated.
+
 For the current native client, resume_session_id may be omitted when reconnecting
 within the window with the SAME device/boot/capabilities and an offline session.
 Backend resumes that session/project/history/proposal instead of creating a new
@@ -381,6 +390,33 @@ Additive device events require the usual scoped v0.2 envelope:
 | build_resume | build_id | Restore project/dialogue and current progress/package |
 | build_cancel | build_id | Cancel only that active/queued job; preserve completed packages |
 | build_notice_ack | build_id, notification_action=open/dismiss | Open Resume or dismiss completed popup |
+| job_control | job_action; exactly one build_id or repair_id | Same existing job actions from the native control menu |
+
+`job_controls_v1` announces `job_action=resume|pause|cancel|background|context|delete`.
+`build_jobs` is one list, newest `created_at` first, four rows per page. A repair
+with a child build appears once with both references; a repair without a build
+uses `job_kind=repair`. Rows expose actual app name and `can_resume`, `can_pause`,
+`can_delete`, `can_add_context`. `next_offset` retains normal pagination.
+
+Pause prevents the next model request and lets an already sent reply finish.
+Received code and completed usage remain stored; paused source is locally tested
+before its reusable checkpoint is exposed. Resume restores the existing job and
+requires its current explicit BUILD confirmation; no generation is triggered by
+listing, reopening or changing settings. Cancel retains unknown usage/reservations.
+Delete hides only a finished Resume row; active work must first be cancelled, and
+app packages, source, data, logs and usage are retained. Evolution children still
+use their original mandate/control/permission gates.
+
+`context` with `text` accepts 1..2000 UTF8 bytes through the existing Jobs context.
+Without text it arms a server-owned, device/job-bound target for five minutes and
+returns `job_control_result(status=context_ready, display_text="Si mer kontekst")`.
+The next ordinary audio recording/transcription adds the note directly to that
+job without a DialogReply call. Explicit app selection clears this target; expired
+or wrong-owner targets are rejected. In-flight model inputs remain immutable.
+
+Other controls return `job_control_result` with job_action, build_id/repair_id,
+status and a short message; Resume/cancel/background may reuse the established
+build/repair response. No control installs or starts an app by itself.
 
 Job views contain build_id, project_id, app_id, name, status, phase, progress,
 message, background, package_id/version, can_open, created_at and status_text_version.

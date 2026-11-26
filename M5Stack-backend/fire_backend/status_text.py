@@ -132,6 +132,7 @@ def build_text(phase,*,operation='new',attempt=1,total=4,progress=0,detail='',de
 
 def repair_text(job):
     status=job.get('status')
+    if status=='paused':return 'På pause'
     if status=='ready':return TEXT['repair_ready']
     if status=='awaiting_confirmation':return TEXT['prepared']
     if status=='failed':return error_text(job.get('message',''))
