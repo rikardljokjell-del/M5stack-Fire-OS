@@ -18,6 +18,9 @@ class SharedBundleTls : public WiFiClientSecure {
   }
   fire_backend_policy::TlsFailure failure;
 };
+// Eight physical RC6 attempts hit the 5 s TLS deadline at NewSessionTicket.
+// This changes only the worker's TLS handshake stage; TCP stays at 5000 ms.
+constexpr unsigned long kTlsHandshakeSeconds = 12;
 constexpr size_t kRxBytes = 8192;
 constexpr size_t kTxBytes = 16384;
 bool privateHost(const String& host) {
@@ -138,9 +141,13 @@ void FireAsyncClient::run() {
       while (!stop_ && time(nullptr) < 1700000000 && millis() - started < 8000) delay(20);
     }
     tls.useSharedBundle();
-    tls.setHandshakeTimeout(5);
+    tls.setHandshakeTimeout(kTlsHandshakeSeconds);
     tls.setTimeout(1);
-    if (!stop_ && time(nullptr) >= 1700000000) ok = tls.connect(host_, port_, 5000);
+    if (!stop_ && time(nullptr) >= 1700000000) {
+      const uint32_t connectStarted=millis();
+      ok=tls.connect(host_,port_,5000);
+      if (ok && !stop_) Serial.printf("FIRE net_ready connect_ms=%lu\n",static_cast<unsigned long>(millis()-connectStarted));
+    }
   } else {
     plain.setTimeout(1);
     if (!stop_) ok = plain.connect(host_, port_, 1200);

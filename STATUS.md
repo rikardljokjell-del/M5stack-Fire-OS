@@ -25,8 +25,17 @@ offentlige backenden, heller ikke etter Backend-sync Off/On, og opplever tregere
 statusendring. Fjernbruk er derfor ikke godkjent. Passiv diagnostikk viser gjentatt
 `start_ssl_client=-1` før WebSocket-oppstart, uten nok informasjon til å fastslå
 underårsaken. Ett separat vindu målte 2,739 sekunder i tegning/knappbehandling.
-En konkret gjentatt Connecting-status i klienten undersøkes sammen med denne
-forsinkelsen. Offentlig HTTPS-helse fra PC virker med sertifikatkontroll.
+RC6 er deretter fysisk installert i A55, med RC5 i B54 bevart. Oppkoblingsfasen
+beholdes nå uten gjentatte Connecting-varsler, og Sync skriver bare sin egen
+NVS-innstilling. Fysisk trykkrespons etter dette er ennå ikke prøvd.
+
+Den nye diagnosen i to normale oppstartsvinduer viser åtte feil med åpen socket,
+TLS-tilstand 17 (`SERVER_NEW_SESSION_TICKET`), retur −1 og varighet 5,778–5,847 s.
+Dette avgrenser feilen til TLS-håndtrykkets femsekundersfrist, før WebSocket.
+En RC7-kandidat med avgrenset 12-sekunders TLS-håndtrykksfrist klargjøres; fem
+sekunders TCP-frist og sertifikatkontroll beholdes. Kandidaten er ikke fysisk
+prøvd eller erklært som en vellykket tilkoblingsretting.
+Offentlig HTTPS-helse fra PC virker også med TLS 1.2 og sertifikatkontroll.
 Ingen sertifikat-/autentiseringsgrense er svekket som feilsøkingstiltak.
 
 Brukerens RC4-avslag er gjenskapt. Kvitteringer viser at en utløpt samtale ble erstattet av

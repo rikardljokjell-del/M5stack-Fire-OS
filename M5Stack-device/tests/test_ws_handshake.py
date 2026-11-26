@@ -1,8 +1,23 @@
 import json
+import re
 import unittest
 import test_native_guards as native
 
 class WebSocketHandshakeTests(unittest.TestCase):
+    def test_worker_tls_deadline_preserves_tcp_and_trust(self):
+        source=(native.ROOT/"src/fire_async_client.cpp").read_text(encoding="utf-8")
+        constant=re.search(r"constexpr unsigned long kTlsHandshakeSeconds = ([0-9]+);",source)
+        self.assertIsNotNone(constant)
+        # Bounded causal candidate for measured state17 timeouts; never an
+        # unbounded/default handshake or a change to TCP/CA authentication.
+        self.assertGreater(int(constant[1]),5)
+        self.assertLessEqual(int(constant[1]),12)
+        self.assertIn("tls.setHandshakeTimeout(kTlsHandshakeSeconds);",source)
+        self.assertRegex(source,r"tls\.connect\(host_,\s*port_,\s*5000\)")
+        self.assertIn("tls.useSharedBundle();",source)
+        self.assertNotIn("setInsecure(",source)
+        self.assertIn("FIRE net_ready connect_ms=%lu",source)
+
     def test_actual_upgrade_validator(self):
         output = native.NativeGuardTests().run_native("native_ws_handshake.cpp")
         self.assertIn("PASS strict WebSocket", output)
