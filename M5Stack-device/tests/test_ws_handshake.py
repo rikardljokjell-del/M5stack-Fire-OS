@@ -1,9 +1,39 @@
 import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
 import re
 import unittest
 import test_native_guards as native
 
 class WebSocketHandshakeTests(unittest.TestCase):
+    def test_connect_failure_cpp11_construction(self):
+        compiler=native.host_compiler()
+        if compiler is None:
+            self.skipTest("No C++ host compiler")
+        if Path(compiler).stem.lower() in ("cl","clang-cl"):
+            self.skipTest("This compiler has no strict C++11 language mode")
+        zig=Path(compiler).stem.lower()=="zig"
+        prefix=[compiler,"c++"] if zig else [compiler]
+        if zig and os.name=="nt":
+            prefix += ["-target","x86_64-windows-gnu"]
+        with tempfile.TemporaryDirectory(prefix="fire-cpp11-policy-") as directory:
+            source=Path(directory)/"policy.cpp"
+            source.write_text("""#include "fire_backend_policy.h"
+using fire_backend_policy::ConnectFailure;
+constexpr ConnectFailure empty;
+constexpr ConnectFailure failed(768,-1,5800,2);
+static_assert(empty.phase==0 && empty.error==0 && empty.elapsedMs==0 && empty.attempt==0,"default");
+static_assert(failed.phase==768 && failed.error==-1 && failed.elapsedMs==5800 && failed.attempt==2,"fields");
+static_assert(sizeof(ConnectFailure)==16,"bounded snapshot");
+void assign(ConnectFailure& value) { value={}; value={768,-1,5800,2}; }
+""",encoding="utf-8")
+            command=prefix+["-std=c++11","-Wall","-Wextra","-Werror","-pedantic",
+                            "-I",str(native.ROOT/"src"),"-c",str(source),"-o",str(Path(directory)/"policy.o")]
+            result=subprocess.run(command,capture_output=True,text=True,timeout=90)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_worker_tls_deadline_preserves_tcp_and_trust(self):
         source=(native.ROOT/"src/fire_async_client.cpp").read_text(encoding="utf-8")
         constant=re.search(r"constexpr unsigned long kTlsHandshakeSeconds = ([0-9]+);",source)

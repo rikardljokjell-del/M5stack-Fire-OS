@@ -13,9 +13,12 @@ template<class Store> bool saveMode(Store& store,uint8_t& current,uint8_t next) 
 }
 inline bool failureReadable(bool active,bool stopped,bool failed) {return !active && !stopped && failed;}
 struct ConnectFailure {
-  uint32_t phase=0; // upper byte: fixed worker phase; lower byte: TLS state
-  int32_t error=0;
-  uint32_t elapsedMs=0,attempt=0;
+  uint32_t phase; // upper byte: fixed worker phase; lower byte: TLS state
+  int32_t error;
+  uint32_t elapsedMs,attempt;
+  constexpr ConnectFailure() : phase(0),error(0),elapsedMs(0),attempt(0) {}
+  constexpr ConnectFailure(uint32_t phaseValue,int32_t errorValue,uint32_t elapsedValue,uint32_t attemptValue)
+      : phase(phaseValue),error(errorValue),elapsedMs(elapsedValue),attempt(attemptValue) {}
   bool matches(uint32_t current) const {return attempt && attempt==current;}
 };
 struct TlsFailure {
