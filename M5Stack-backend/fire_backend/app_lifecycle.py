@@ -241,14 +241,18 @@ class AppLifecycle(AppManager):
             session.package_id = session.build_id = session.proposal_id = session.turn_id = None
             session.summary, session.last_error, session.progress, session.history = "", "", {}, []
             session.audio_status, session.recording_started_at = {}, None
+            session.selection_ack.pop('mode_select',None)
+            self.selection_committed(session,event)
             device.update(project_id=project["id"], **{k: device.get("projects", {}).get(project["id"], {}).get(k)
                                                      for k in ("current", "previous", "backup")})
             self.store.put("devices", device["id"], device)
             await self.activity(session, "idle")
             await self.state(session, State.idle)
             selected = {"app_mode": session.app_mode, "project_id": project["id"],
-                        "app_id": self.project_app_id(project), "base_package_id": session.base_package_id}
-            await self.emit(session, {"type": "app_selected", **selected})
+                        "app_id": self.project_app_id(project), "base_package_id": session.base_package_id,
+                        'conversation_mode':session.conversation_mode}
+            await self.emit(session, {"type": "app_selected", **selected,
+                **({'event_id':event.event_id} if event.event_id else {})})
             return selected
 
     def present_app(self, device, app_id, **fields):

@@ -116,6 +116,10 @@ async def test_native_snapshot_keeps_one_capability_copy_within_json_token_guard
     try:
         s=await b.start(SessionStart(device_id='fire-01',target='device',protocol_version='0.2',
             boot_id='boot-json',capabilities=caps),peer,'fire-01')
+        # Both longest legal receipt refs come from actual OS selections.
+        for kind,values in [('app_select',{'app_mode':'new'}),('mode_select',{'conversation_mode':'develop'})]:
+            await dispatch(b,s,DeviceEvent(device_id=s.device_id,session_id=s.id,boot_id=s.boot_id,
+                protocol_version='0.2',event_id='evt-'+('x' if kind=='app_select' else 'y')*60,event=kind,**values))
         device=b.device_record(s)
         device['apps']={'app-'+str(i):{'state':'present','checksum':'a'*64} for i in range(13)}
         if worst_case:
@@ -129,6 +133,7 @@ async def test_native_snapshot_keeps_one_capability_copy_within_json_token_guard
         await b.session_snapshot(s)
         frame=next(e for e in reversed(peer.events) if e['type']=='session_snapshot')
         assert frame['capabilities']==s.capabilities
+        assert frame['selection_ack']=={'app_select':'evt-'+'x'*60,'mode_select':'evt-'+'y'*60}
         assert 'capabilities' not in frame['device'] and 'apps' not in frame['device']
         assert b.device_record(s)['capabilities']==s.capabilities  # Full desktop/store facts retained.
         encoded=json.dumps(frame,ensure_ascii=False,separators=(',',':'))

@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import contextlib
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field, replace
@@ -17,7 +18,7 @@ from .capabilities import generation_policy, policy, status as capability_status
 from .app_quality import APP_QUALITY_POLICY,experience_contract
 from .app_icons import select_icon
 from .security import Redactor
-from .storage import Store, new_id
+from .storage import Store, new_id, canonical, identifier
 from .status_text import VERSION as STATUS_TEXT_VERSION,build_text,error_text,display_event
 from .provider_errors import account_limit
 from .metering import session_usage
@@ -96,6 +97,8 @@ class Session:
     development_context_id: str | None = None
     evolution_job_id: str | None = None
     job_context_target: dict | None = None
+    recovery: dict = field(default_factory=dict)
+    selection_ack: dict = field(default_factory=dict)
 
 
 class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
@@ -288,6 +291,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
 
     def snapshot(self, session):
         return {"session_id": session.id, "device_id": session.device_id,
+                **({'selection_ack':acks} if (acks:=self.acknowledged_selections(session)) else {}),
                 "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1","repair_cancel_v1","job_controls_v1"],
                 "resumed_from_build_id":session.resumed_from_build_id,
                 "evolution_job_id":session.evolution_job_id,
@@ -317,7 +321,35 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                        "last_seen": session.last_seen, "disconnected_at": session.disconnected_at,
                        "progress": session.progress, "repair_context": session.repair_context,
                        "resume_project_aliases": session.resume_project_aliases,"runtime_ai_mode":session.runtime_ai_mode,
-                       "job_context_target":session.job_context_target}, critical=session.state in {State.failed, State.idle})
+                       "job_context_target":session.job_context_target, 'recovery':session.recovery,
+                       'selection_ack':session.selection_ack}, critical=session.state in {State.failed, State.idle})
+
+    def acknowledged_selections(self, session):
+        result={}
+        for kind in ('app_select','mode_select'):
+            event_id=session.selection_ack.get(kind)
+            if not event_id:continue
+            try:
+                record=self.store.get('events',event_id)
+                receipt=record.get('selection_receipt',{})
+            except (FileNotFoundError,ValueError):continue
+            if (record.get('device_id')==session.device_id and receipt.get('event')==kind and receipt.get('device_id')==session.device_id
+                    and receipt.get('boot_id')==session.boot_id and receipt.get('project_id')==session.project_id
+                    and receipt.get('base_package_id')==session.base_package_id
+                    and (kind!='mode_select' or receipt.get('conversation_mode')==session.conversation_mode)):
+                result[kind]=event_id
+        return result
+
+    def selection_committed(self, session, event):
+        if not event.event_id:return
+        try:record=self.store.get('events',event.event_id)
+        except FileNotFoundError:return
+        if record['device_id']!=session.device_id or record['status']!='processing':return
+        record['selection_receipt']={name:getattr(session,name) for name in (
+            'device_id','boot_id','project_id','base_package_id','conversation_mode')}
+        record['selection_receipt']['event']=event.event
+        self.store.put('events',event.event_id,record,critical=True)
+        session.selection_ack[event.event]=event.event_id
 
     async def emit(self, session, event):
         event=display_event(event,operation='repair' if session.repair_context else 'update' if session.app_mode=='update' else 'new',delivery=session.target=='device')
@@ -454,7 +486,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         async with self.connection_locks.setdefault(request.device_id, asyncio.Lock()):
             return await self._start(request, socket, principal)
 
-    async def _start(self, request, socket=None, principal="admin", *, recovered=None):
+    async def _start(self, request, socket=None, principal="admin", *, recovered=None, recovery_id=None):
         if request.target == "device" and principal != request.device_id:
             raise PermissionError("Physical sessions require the token scoped to this device")
         if principal != "admin" and (request.device_id != principal or request.target != "device"):
@@ -519,7 +551,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 raise PermissionError("Project belongs to another device")
         else:
             project = self.new_project(request.device_id, request.target)
-        session = Session(new_id("session"), request.device_id, project["id"])
+        session = Session(recovery_id or new_id("session"), request.device_id, project["id"])
         session.conversation_mode = request.conversation_mode or "develop"
         session.runtime_ai_mode=request.runtime_ai_mode
         session.app_mode = "update" if request.project_id else "new"
@@ -532,6 +564,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             session.history = copy.deepcopy(recovered.history)
             session.development_context_id = recovered.development_context_id
             session.repair_context = copy.deepcopy(recovered.repair_context)
+            session.selection_ack = dict(self.acknowledged_selections(recovered))
         elif request.project_id:
             prior = [saved for saved in self.store.list("sessions") if saved["project_id"] == project["id"]]
             if prior:
@@ -552,7 +585,7 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
                 session.base_package_id = self.update_base(project, device)["id"]
             if session.base_package_id:
                 self.verify_package(session, session.base_package_id)
-                if session.base_package_id != project.get("latest_package"):
+                if recovered is None and session.base_package_id != project.get("latest_package"):
                     session.history = []
             versions = device.setdefault("projects", {})
             if device.get("project_id") and device["project_id"] not in versions:
@@ -566,6 +599,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             device["connection_epoch"] = device.get("connection_epoch", 0) + 1
             session.app_revision = device.get("app_change_counter", 0)
             self.store.put("devices", device["id"], device)
+        if recovered is not None:
+            self.bind_recovery(recovered, session)
         if socket:
             session.sockets.add(socket)
         self.sessions[session.id] = session
@@ -582,22 +617,92 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             await self.data_engine.apply_context(session, development_id, selected=True)
         return session
 
-    async def resume(self, request, socket, principal):
-        session = self.sessions.get(request.resume_session_id)
+    def resume_record(self, session_id):
+        session = self.sessions.get(session_id)
         if session is None:
-            saved = self.store.get("sessions", request.resume_session_id)
+            saved = self.store.get("sessions", session_id)
             if saved.get("protocol_version") != "0.2":
                 raise SessionStartRejected('protocol_mismatch')
             session = Session(saved["session_id"], saved["device_id"], saved["project_id"])
             session.stopped = saved.get('stopped', False)
             for name in ("state", "proposal_id", "package_id", "build_id", "history", "summary", "protocol_version",
                          "target", "boot_id", "capabilities", "last_seen", "disconnected_at", "progress", "turn_id", "last_error", "runtime_ai_mode",
-                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id", "development_context_id", "evolution_job_id", "job_context_target"):
+                         "app_mode", "conversation_mode", "base_package_id", "app_revision", "install_permitted", "audio_status", "repair_context", "resume_project_aliases", "resumed_from_build_id", "development_context_id", "evolution_job_id", "job_context_target", "recovery", "selection_ack"):
                 if name in saved:
                     setattr(session, name, saved[name])
             session.sequence = saved.get("sequence", 0)
             if session.state in {State.building, State.testing, State.processing, State.starting, State.stopping, State.rollback_pending}:
                 session.state, session.proposal_id = State.failed, None
+        return session
+
+    @staticmethod
+    def recovery_scope(session):
+        return {name: getattr(session, name) for name in ('device_id','target','protocol_version','boot_id',
+            'capabilities','project_id','base_package_id','conversation_mode','app_mode','development_context_id')}
+
+    def recovery_link(self, root_id, predecessor_id, successor_id, session, scope_sha256=None):
+        fields = {'root_id':root_id,'predecessor_id':predecessor_id,'session_id':successor_id,
+            'scope_sha256':scope_sha256 or hashlib.sha256(canonical(self.recovery_scope(session))).hexdigest()}
+        return {**fields,'binding_sha256':hashlib.sha256(canonical(fields)).hexdigest()}
+
+    def checked_recovery_link(self, session, link):
+        try:
+            assert isinstance(link,dict) and set(link)=={'root_id','predecessor_id','session_id','scope_sha256','binding_sha256'}
+            for name in ('root_id','predecessor_id','session_id'):identifier(link[name])
+            assert link['session_id'] not in {link['root_id'],link['predecessor_id']}
+            assert len(link['scope_sha256'])==64 and all(c in '0123456789abcdef' for c in link['scope_sha256'])
+            assert link==self.recovery_link(link['root_id'],link['predecessor_id'],link['session_id'],session,link['scope_sha256'])
+        except (AssertionError,TypeError,ValueError,KeyError):
+            raise SessionStartRejected('recovery_link_invalid') from None
+        return link
+
+    def bind_recovery(self, predecessor, successor):
+        # The root is a bounded, scope-checked shortcut. First edges and each
+        # successor's origin remain intact as historical evidence.
+        root = predecessor
+        origin = predecessor.recovery.get('origin')
+        if origin:
+            self.checked_recovery_link(predecessor,origin)
+            candidate = self.resume_record(origin['root_id'])
+            if hashlib.sha256(canonical(self.recovery_scope(predecessor))).hexdigest()==origin['scope_sha256']:root=candidate
+        link = self.recovery_link(root.id,predecessor.id,successor.id,predecessor)
+        predecessor.recovery.setdefault('first_successor',copy.deepcopy(link))
+        predecessor.recovery['successor']=copy.deepcopy(link)
+        root.recovery.setdefault('first_successor',copy.deepcopy(link))
+        root.recovery['successor']=copy.deepcopy(link)
+        successor.recovery['origin']=copy.deepcopy(link)
+        # Reserve the exact successor ID before its first persist/emit. A crash
+        # in between resumes this reservation rather than allocating session 3.
+        self.persist(root)
+        if root is not predecessor:self.persist(predecessor)
+
+    def recovery_destination(self, session):
+        link = session.recovery.get('successor')
+        if not link and session.stopped:link=session.recovery.get('origin')
+        if not link:return None
+        self.checked_recovery_link(session,link)
+        root=self.resume_record(link['root_id'])
+        security=('device_id','target','protocol_version','boot_id','capabilities')
+        if any(getattr(root,k)!=getattr(session,k) for k in security):
+            raise SessionStartRejected('recovery_context_mismatch')
+        latest=self.checked_recovery_link(root,root.recovery.get('successor'))
+        if latest['root_id']!=root.id:raise SessionStartRejected('recovery_link_invalid')
+        if latest['session_id']==session.id:
+            if session.recovery.get('successor'):raise SessionStartRejected('recovery_link_invalid')
+            return None
+        try:target=self.resume_record(latest['session_id'])
+        except FileNotFoundError:
+            parent=self.resume_record(latest['predecessor_id'])
+            if (not parent.stopped or hashlib.sha256(canonical(self.recovery_scope(parent))).hexdigest()!=latest['scope_sha256']
+                    or any(getattr(parent,k)!=getattr(session,k) for k in security)):
+                raise SessionStartRejected('recovery_context_mismatch')
+            return parent,latest['session_id']
+        if (target.recovery.get('origin')!=latest or any(getattr(target,k)!=getattr(session,k) for k in security)
+                or hashlib.sha256(canonical(self.recovery_scope(target))).hexdigest()!=latest['scope_sha256']):
+            raise SessionStartRejected('recovery_context_mismatch')
+        return target,None
+
+    def check_resume_identity(self, session, request):
         if session.device_id != request.device_id or session.target != request.target:
             raise SessionStartRejected('identity_mismatch')
         if session.boot_id != request.boot_id:
@@ -613,6 +718,37 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             raise SessionStartRejected('protocol_mismatch')
         if request.conversation_mode and request.conversation_mode != session.conversation_mode:
             raise SessionStartRejected('mode_mismatch')
+
+    def recovery_replay_matches(self, prior_id, current, request):
+        if request.app_mode is not None or request.development_context_id is not None:return False
+        seen=set()
+        for _ in range(4):
+            if prior_id in seen:return False
+            seen.add(prior_id)
+            prior=self.resume_record(prior_id)
+            self.check_resume_identity(prior,request.model_copy(update={'resume_session_id':prior_id}))
+            if prior_id==current.id:return True
+            destination=self.recovery_destination(prior)
+            if not destination or destination[1]:return False
+            prior_id=destination[0].id
+        return False
+
+    async def resume(self, request, socket, principal, *, recovery_seen=()):
+        session = self.resume_record(request.resume_session_id)
+        self.check_resume_identity(session,request)
+        destination=self.recovery_destination(session)
+        if destination:
+            if (request.app_mode is not None or request.development_context_id is not None
+                    or session.id in recovery_seen or len(recovery_seen)>=4):
+                raise SessionStartRejected('recovery_context_mismatch')
+            target,reserved_id=destination
+            if reserved_id:
+                fresh_request=request.model_copy(update={'resume_session_id':None,'app_mode':None,
+                    'project_id':target.project_id,'base_package_id':target.base_package_id,
+                    'conversation_mode':target.conversation_mode,'development_context_id':None})
+                return await self._start(fresh_request,socket,principal,recovered=target,recovery_id=reserved_id)
+            return await self.resume(request.model_copy(update={'resume_session_id':target.id}),socket,principal,
+                                     recovery_seen=(*recovery_seen,session.id))
         if session.sockets and socket is None:
             raise SessionStartRejected('session_busy')
         if len(self.sessions) >= self.settings.fire_max_sessions and session.id not in self.sessions:

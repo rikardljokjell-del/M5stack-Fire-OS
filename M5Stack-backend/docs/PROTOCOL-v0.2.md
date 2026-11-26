@@ -121,6 +121,29 @@ boot, capabilities, project, base, protocol, mode, busy or unavailable reference
 without raw requests, credentials or foreign IDs. Historical Conflict-only
 records do not establish which predicate failed.
 
+Recovery reserves a source-scoped successor reference in the existing session
+records before its first response. A lost response can retry the original ID and
+resume that exact successor. A durable root shortcut handles repeated expiry
+without an unbounded chain; first edges and immutable birth-scope hashes remain
+as provenance. Missing reserved records are materialized with the reserved ID.
+Cycles, corrupt links, foreign scopes and changed project/base/mode are rejected
+for old aliases. The exact current session ID can resume after legitimate
+selection changes and establish a new lineage. Ordinary text/history changes
+retain the current plan and never restore an older plan. BUILD/RUN authorization
+and event digests are unchanged.
+
+`session_started`/`session_snapshot` can contain bounded
+`selection_ack={app_select:event_id,mode_select:event_id}` for actually committed
+OS choices in this boot/project. `app_selected` and `conversation_mode` also carry
+their event ID; app selection reports its actual conversation mode. Rejected
+choices carry `error.event_id` and create no receipt. These references are
+receipts, never permissions or authority to repeat an intent. Native consumes a
+matching pending choice without replay, including after cold restart/recovery;
+an unclear outcome is not an automatic retry. While a choice awaits acknowledgement,
+normal resume omits that choice's optional project/base or conversation-mode
+expectation while retaining its exact resume ID/device/boot/capabilities. Pending
+New/update/mode intent is sent only through existing post-admission OS events.
+
 Device snapshots are bounded views, not full database records: capabilities occur
 once, redundant device diagnostics stay in desktop status, and a long summary is
 represented by a complete short notice that the full plan is retained. Up to four

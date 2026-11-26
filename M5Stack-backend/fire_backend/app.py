@@ -539,7 +539,7 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
                                 if session is None:
                                     request = request.model_copy(update={"resume_session_id": prior_id})
                                     session = await service.start(request, socket, identity)
-                                elif session.id != prior_id:
+                                elif session.id != prior_id and not service.recovery_replay_matches(prior_id,session,request):
                                     raise Conflict("Session start belongs to another session")
                                 else:
                                     await service.emit(session, {"type": "session_started", **service.snapshot(session)})
@@ -591,6 +591,8 @@ def create_app(settings=None, provider=None, *, config_store=None, restart_callb
                 except (ValueError, KeyError, PermissionError, FileNotFoundError) as error:
                     message = "Referenced item not found" if isinstance(error, FileNotFoundError) else service.redactor.text(str(error))[:240]
                     error_event = {"type": "error", "code": error.code if isinstance(error, CapabilityError) else "event_rejected", "message": message}
+                    if session and event.event in {'app_select','mode_select'}:
+                        error_event['event_id']=event.event_id
                     if session is None:
                         error_event.update(code='session_start_rejected', retryable=False,
                             message='Tilkobling avvist. Kontroller valgt app og samtalemodus.')

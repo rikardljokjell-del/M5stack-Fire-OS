@@ -50,6 +50,7 @@ jobs:
           tests/test_app_icons.py
           tests/test_job_controls.py
           tests/test_session_reconnect.py
+          tests/test_reverse_bootstrap.py tests/test_reverse_tcp.py
       - name: Check existing Web integration syntax
         run: |
           node --check fire_backend/web/app.js

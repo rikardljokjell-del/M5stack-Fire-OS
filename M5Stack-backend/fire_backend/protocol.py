@@ -31,6 +31,7 @@ def begin_event(service, event):
         return None, {"type": "event_ack", "event_id": event.event_id, "status": status, "result": saved.get("result")}
     record = {"id": event.event_id, "device_id": event.device_id, "digest": digest,
               "status": "processing", "created_at": time.time()}
+    if event.event in {'app_select','mode_select'}:record['selection_kind']=event.event
     service.store.put("events", record["id"], record)
     return record, None
 
@@ -38,6 +39,9 @@ def begin_event(service, event):
 def finish_event(service, record, result):
     if record is None:
         return None
+    if record.get('selection_kind'):
+        receipt=service.store.get('events',record['id']).get('selection_receipt')
+        if receipt:record['selection_receipt']=receipt
     record.update(status="completed", result=result)
     service.store.put("events", record["id"], record, critical=True)
     return {"type": "event_ack", "event_id": record["id"], "status": "accepted", "result": result}
@@ -203,7 +207,9 @@ async def handle(service, session, event):
         await cancel_turn(service, session)
         session.conversation_mode = event.conversation_mode
         session.history = []
-        await service.emit(session, {"type": "conversation_mode", "conversation_mode": session.conversation_mode})
+        service.selection_committed(session,event)
+        await service.emit(session, {"type": "conversation_mode", "conversation_mode": session.conversation_mode,
+            **({'event_id':event.event_id} if event.event_id else {})})
         return {"conversation_mode": session.conversation_mode}
     if name == "app_stop":
         return {"stop_id": (await service.request_app_stop(session))["id"]}
