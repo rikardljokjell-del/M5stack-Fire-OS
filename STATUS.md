@@ -63,8 +63,16 @@ er økt. Første fulle firmwarebygg bestod normalfirmware, recovery og bootloade
 Den separate strenge GCC-kontrollen fanget én misvisende innrykning i
 feedback-svarbehandlingen. Kun klammer og linjeskift er rettet, med uendret
 funksjon; ny samlet CI kreves før denne kandidaten pakkes eller installeres.
-Faktisk COM-betjening, gjentatte offentlige nedlastinger og produksjonsaksept
-gjenstår.
+Ny CI på `d47f0f3` bestod de 45 firmwaretestene, 18 separate strenge native-/QA-
+tester og alle tre firmwarebygg. Signert RC12 er fysisk installert i A61,
+med eksakt SHA256-tilbakekontroll og VALID/CRC; RC11 B60 er bevart. Én fersk
+sluttavlesning bekreftet offentlig socket, komplett inventar med alle 13 app-IDer
+og uendrede kontrakter. To automatiserte UART-forsøk navigerte Settings korrekt,
+men stoppet på en feilformet kandidat til et autentisert testsvar. Dette er
+avgrenset til testkanalen, og er ikke bevis for vellykket appflyt eller et
+avvist menyvalg. Testkanalen rettes med uendret HMAC-/sekvenskontroll og kun
+avgrenset gjentakelse av nøyaktig samme forespørsel. Gjentatte offentlige
+nedlastinger, faktisk kjøring og produksjonsaksept gjenstår.
 
 ### Pågående: gjenåpning av jobber og appoppdatering
 

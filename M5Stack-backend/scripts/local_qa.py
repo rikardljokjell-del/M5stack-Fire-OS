@@ -210,19 +210,39 @@ class Session:
         # Retries use EXACT bytes/nonce/sequence. Native caches the last receipt;
         # an uncertain button is never issued again with a fresh sequence.
         for _attempt in range(2):
-            written = self.stream.write(wire)
+            try:
+                written = self.stream.write(wire)
+            except OSError:
+                self._uncertain = True
+                raise
             if written is not None and written != len(wire):
                 self._uncertain = True
                 raise QaError('Incomplete QA write; outcome is unknown.')
             deadline = time.monotonic() + self.timeout
             try:
                 while True:
-                    parts = self.auth.decode(self._line(deadline))
-                    if parts[:2] != ['FQ1', expected]:
-                        continue
-                    if expected == 'R' and (len(parts) != 19 or parts[2] != self._nonce or _uint(parts[3]) != seq):
+                    line = self._line(deadline)  # Reset/watchdog/I/O faults are not candidate noise.
+                    try:
+                        parts = self.auth.decode(line)
+                        if parts[:2] != ['FQ1', expected]:
+                            continue
+                        if expected == 'R':
+                            decode_snapshot(parts, self._nonce, seq)
+                        elif expected == 'C':
+                            if len(parts) != 4 or not 0 < _uint(parts[3]) <= 120000:
+                                continue
+                            _hex(parts[2], 32)
+                        else:
+                            continue
+                    except QaError:
+                        # UART diagnostics can split a candidate reply. Ignore
+                        # only that invalid candidate within this SAME deadline;
+                        # a valid authenticated rejection returns immediately.
                         continue
                     return parts
+            except OSError:
+                self._uncertain = True
+                raise
             except QaError as error:
                 if str(error) != 'No authenticated QA response before the deadline.':
                     self._uncertain = True
