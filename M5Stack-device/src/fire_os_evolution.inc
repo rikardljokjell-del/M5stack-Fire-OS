@@ -277,11 +277,14 @@ void FireOS::handleEvolutionButton(uint8_t index) {
     else if (index==0) e.reviewOffset=0;
     redrawRequested_=true;return;
   }
-  uint8_t count=e.page==FireEvolutionUi::Menu?(e.permissionRequest.length()?16:15):e.page==FireEvolutionUi::Settings?11:
+  const bool proposal=fire_ai_menu::canOpenProposal(aiWorkflowState_,aiProposalId_.c_str(),aiProposalProjectId_.c_str(),e.project.c_str());
+  uint8_t count=e.page==FireEvolutionUi::Menu?fire_ai_menu::evolutionCount(e.permissionRequest.length()>0,proposal):e.page==FireEvolutionUi::Settings?11:
       e.page==FireEvolutionUi::Autonomy?5:e.page==FireEvolutionUi::Limits?6:e.page==FireEvolutionUi::Operation?6:
       e.page==FireEvolutionUi::Snapshot?e.itemCount+3:e.page==FireEvolutionUi::Metric?e.metricCount+3:3;
+  if (e.selection>=count) e.selection=count-1;
   if (index!=1) {e.selection=(e.selection+count+(index==0?-1:1))%count;}
   else if (e.page==FireEvolutionUi::Menu) {
+    const auto tail=fire_ai_menu::evolutionTail(e.selection,e.permissionRequest.length()>0,proposal);
     if (e.selection==0) page(FireEvolutionUi::Operation);
     else if (e.selection==1) {page(FireEvolutionUi::Settings);requestEvolutionView("settings");}
     else if (e.selection==2 || e.selection==4 || e.selection==5) {
@@ -307,9 +310,17 @@ void FireOS::handleEvolutionButton(uint8_t index) {
       if (luaAppActive_ && luaPackageId_==item.localPackageId) {
         const char* error=nullptr;if (!queueDataDevelop("feedback","",true,&error)) managerStatus_=error?error:"Tilbakemelding utilgjengelig";
       } else appManagerDevelopConfirm_=9;
-    } else if (e.selection==14 && e.permissionRequest.length()) {
+    } else if (tail==fire_ai_menu::EvolutionTail::Permissions) {
       prepareEvolution(e.permissionOperation.c_str(),e.permissionRequest);
-    } else if (e.selection==14 || e.selection==15) {
+    } else if (tail==fire_ai_menu::EvolutionTail::Proposal) {
+      // The received proposal/workflow remain intact. No open(AiDeveloper),
+      // app_select, build_confirm or new instruction is sent here.
+      aiProjectId_=aiProposalProjectId_;aiProjectName_=e.name;
+      if (backendClient_) backendClient_->setProjectId(aiProposalProjectId_);
+      aiProjectPickerActive_=false;backendSettingsUi_.page=FireBackendSettingsUi::None;
+      aiVoiceTestMode_=false;aiBuildResumePending_=false;aiBuildRetryPending_=false;
+      previousScreen_=Screen::Evolution;screen_=Screen::AiDeveloper;
+    } else if (tail==fire_ai_menu::EvolutionTail::Back) {
       screen_=e.developer?Screen::AiDeveloper:Screen::AppsSettings;
       if (e.developer) aiProjectPickerActive_=false; // continue this verified Developer project, never create another app
     }
@@ -414,13 +425,20 @@ void FireOS::drawEvolution() {
   const char* menu[]={"Forbedre nå","Innstillinger","Funn","Målinger","Historikk","Sammenlign","Tilbakemelding","Versjoner / rollback","Pause","Gjenoppta","Stopp","Tilbakekall mandat","Kostnad","Oppdater status","Tilbake"};
   const char* settings[]={"Evolution","Generate","Repair","Optimize","Expand","Evolve","Autonomi","Telemetri","Mandatgrenser","Vurder endringer","Tilbake"};
   const char* operations[]={"Generate","Repair","Optimize","Expand","Evolve","Tilbake"};
-  const char* proposal[]={"Vis hele grunnlaget","Godkjenn forslaget","Avvis"};
+  const char* proposalLabels[]={"Vis hele grunnlaget","Godkjenn forslaget","Avvis"};
   const char* strategy[]={"Strategi for denne appen","Global strategi","Tilbake"};
-  const uint8_t count=e.page==FireEvolutionUi::Menu?(e.permissionRequest.length()?16:15):e.page==FireEvolutionUi::Settings?11:e.page==FireEvolutionUi::Operation?6:
+  const bool proposal=fire_ai_menu::canOpenProposal(aiWorkflowState_,aiProposalId_.c_str(),aiProposalProjectId_.c_str(),e.project.c_str());
+  const uint8_t count=e.page==FireEvolutionUi::Menu?fire_ai_menu::evolutionCount(e.permissionRequest.length()>0,proposal):e.page==FireEvolutionUi::Settings?11:e.page==FireEvolutionUi::Operation?6:
       e.page==FireEvolutionUi::Autonomy?5:e.page==FireEvolutionUi::Limits?6:e.page==FireEvolutionUi::Snapshot?e.itemCount+3:e.page==FireEvolutionUi::Metric?e.metricCount+3:3;
+  if (e.selection>=count) e.selection=count-1;
+  e.scroll=fire_ai_menu::scroll(e.selection,e.scroll);
   for (uint8_t row=0;row<4 && e.scroll+row<count;++row) {
     const uint8_t index=e.scroll+row;String label,value;
-    if (e.page==FireEvolutionUi::Menu) label=index==14 && e.permissionRequest.length()?"Vurder tillatelser":index==15?"Tilbake":menu[index];
+    if (e.page==FireEvolutionUi::Menu) {
+      const auto tail=fire_ai_menu::evolutionTail(index,e.permissionRequest.length()>0,proposal);
+      label=tail==fire_ai_menu::EvolutionTail::Permissions?"Vurder tillatelser":tail==fire_ai_menu::EvolutionTail::Proposal?"Åpne byggforslag":
+          tail==fire_ai_menu::EvolutionTail::Back?"Tilbake":menu[index];
+    }
     else if (e.page==FireEvolutionUi::Settings) {
       label=settings[index];
       if (!index) value=e.enabled?"På":"Av";
@@ -430,7 +448,7 @@ void FireOS::drawEvolution() {
     } else if (e.page==FireEvolutionUi::Autonomy) label=index<4?evoModeNames[index]:"Tilbake";
     else if (e.page==FireEvolutionUi::Operation) label=operations[index];
     else if (e.page==FireEvolutionUi::Metric) label=index<e.metricCount?e.metricLabels[index]:index==e.metricCount?"Neste side":index==e.metricCount+1?"Forrige side":"Tilbake";
-    else if (e.page==FireEvolutionUi::Proposal) label=proposal[index];
+    else if (e.page==FireEvolutionUi::Proposal) label=proposalLabels[index];
     else if (e.page==FireEvolutionUi::Strategy) label=strategy[index];
     else if (e.page==FireEvolutionUi::Limits) {
       const char* labels[]={"USD per mandat","Kandidatbygg","Forsøk per bygg","Gyldig i dager","USD per app per dag","Tilbake"};label=labels[index];

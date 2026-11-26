@@ -66,7 +66,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc1";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc2";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -5158,6 +5158,7 @@ void FireOS::open(Screen screen) {
     aiRestPhaseDuration_ = 30000 + (esp_random() % 30001);
     aiTurnId_ = "";
     aiProposalId_ = "";
+    aiProposalProjectId_=String();
     aiPackageId_ = "";
     aiReadyPackageId_=String();
     aiInstallId_ = "";
@@ -5852,6 +5853,7 @@ void FireOS::cancelConversationTurn(const String& reason, bool startNew) {
   aiTurnId_ = "";
   if (startNew) {
     aiProposalId_ = "";
+    aiProposalProjectId_=String();
     aiAssistantText_ = "";
     aiTranscriptText_ = "";
     aiWorkflowState_ = 0;
@@ -7072,6 +7074,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       if(!buildStatusMessage_.length()) buildStatusMessage_=jsonStringField(message,"message");
       aiBuildProgress_ = buildProgress_;
       aiProposalId_ = jsonStringField(message, "proposal_id");
+      aiProposalProjectId_=jsonStringField(message,"project_id");
       aiBuildResumePending_ = true;
       aiBuildRetryPending_ = false;
       backgroundBuildActive_ = false;
@@ -7568,7 +7571,7 @@ void FireOS::handleBackendMessage(const String& message) {
     else if (mode == "develop") aiConversationMode_ = 0;
     const String proposal = jsonStringField(message, "proposal_id");
     const String packageId = jsonStringField(message, "package_id");
-    if (proposal.length() > 0) aiProposalId_ = proposal;
+    if (proposal.length() > 0) {aiProposalId_=proposal;aiProposalProjectId_=jsonStringField(message,"project_id");}
     if (packageId.length() > 0) aiPackageId_ = packageId;
     const String restoredState=jsonStringField(message,"state");
     if(packageId.length() && (restoredState=="ready_to_run" || restoredState=="installed")) {
@@ -7744,10 +7747,12 @@ void FireOS::handleBackendMessage(const String& message) {
   if (type == "build_proposal") {
     aiReadyPackageId_=String();
     aiProposalId_ = jsonStringField(message, "proposal_id");
+    aiProposalProjectId_=jsonStringField(message,"project_id");
     const String summary = jsonStringField(message, "summary");
     const String project=jsonStringField(message,"project_id");
+    if (project.length()) aiProjectId_=project;
     if (project.length() && summary.length() && summary.length()<=1000) {
-      aiProjectId_=project;aiEvolutionGoalProject_=project;aiEvolutionGoal_=summary;
+      aiEvolutionGoalProject_=project;aiEvolutionGoal_=summary;
       aiDevelopmentContext_=jsonStringField(message,"context_id");
     }
     const String display=jsonStringField(message,"display_text");
