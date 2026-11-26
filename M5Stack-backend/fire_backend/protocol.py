@@ -284,7 +284,23 @@ async def handle(service, session, event):
             service.audio.expect_upload(session)
         return {"turn_id": session.turn_id}
     if session.input_task and not session.input_task.done():
-        raise ValueError("Venter på AI-svaret. Trykk B for å avbryte og snakke på nytt.")
+        pending=session.input_task
+        if (name!='build_confirm' or session.state!=State.awaiting_build_confirmation
+                or not event.proposal_id or event.proposal_id!=session.proposal_id):
+            raise ValueError("Venter på AI-svaret. Trykk B for å avbryte og snakke på nytt.")
+        # The proposal may reach FIRE before this same text task finishes its
+        # final activity notification. Drain only that task, without cancelling it.
+        proposal,turn=session.proposal_id,session.turn_id
+        try:
+            await asyncio.wait_for(asyncio.shield(pending),timeout=2)
+        except TimeoutError:
+            raise ValueError("Venter på AI-svaret. Trykk B for å avbryte og snakke på nytt.") from None
+        except asyncio.CancelledError:
+            if not pending.cancelled():raise
+            raise ValueError("Byggforslaget er erstattet; vent på det nye forslaget.") from None
+        if (session.stopped or session.input_task is not pending or session.turn_id!=turn
+                or session.proposal_id!=proposal or session.state!=State.awaiting_build_confirmation):
+            raise ValueError("Byggforslaget er erstattet; vent på det nye forslaget.")
     if name == "build_confirm":
         build = await service.confirm_build(session, event.proposal_id)
         return {"build_id": build["id"]}

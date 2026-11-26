@@ -196,6 +196,51 @@ def test_three_versions_and_confirmed_rollback(tmp_path):
             assert status["current"] == ids[1] and status["running_package_id"] is None
 
 
+@pytest.mark.parametrize('outcome',['ready','replaced','timeout'])
+async def test_current_build_confirm_drains_only_its_published_text_epilogue(tmp_path,outcome):
+    from fire_backend.storage import new_id
+    service=Backend(configured(tmp_path));published=asyncio.Event();release=asyncio.Event()
+    original=service.activity
+    async def delayed_activity(session,activity):
+        if activity=='idle' and session.proposal_id:
+            published.set()
+            await release.wait()
+        await original(session,activity)
+    service.activity=delayed_activity
+    def packet(session,name,**values):
+        return DeviceEvent(device_id=session.device_id,event=name,session_id=session.id,event_id=new_id('evt'),
+            boot_id=session.boot_id,protocol_version='0.2',**values)
+    try:
+        session=await service.start(SessionStart(device_id='fire-01',target='device',protocol_version='0.2',
+            boot_id='boot-epilogue',capabilities=Capabilities(**CAPS)),principal='fire-01')
+        await dispatch(service,session,packet(session,'text',text='Lag en sirkel'))
+        await asyncio.wait_for(published.wait(),2)
+        pending=session.input_task;proposal=session.proposal_id
+        assert proposal and not pending.done()
+        with pytest.raises(ValueError):
+            await dispatch(service,session,packet(session,'build_confirm',proposal_id='proposal-stale'))
+        with pytest.raises(ValueError):
+            await dispatch(service,session,packet(session,'run_confirm',package_id='build-other'))
+        confirmation=asyncio.create_task(dispatch(service,session,packet(session,'build_confirm',proposal_id=proposal)))
+        await asyncio.sleep(0)
+        assert not confirmation.done() and not service.store.list('builds')
+        if outcome=='replaced':session.proposal_id=new_id('proposal')
+        if outcome!='timeout':release.set()
+        if outcome=='ready':
+            result=await asyncio.wait_for(confirmation,5)
+            assert service.store.get('builds',result['build_id'])['confirmed_proposal_id']==proposal
+            await session.task
+            assert len(service.store.list('builds'))==1
+        else:
+            with pytest.raises(ValueError):await asyncio.wait_for(confirmation,5)
+            assert not pending.cancelled() and not service.store.list('builds')
+        release.set()
+        await pending
+    finally:
+        release.set()
+        await service.close()
+
+
 def test_resume_preserves_history_proposal_and_no_automatic_run(tmp_path):
     with TestClient(create_app(configured(tmp_path))) as client:
         with client.websocket_connect("/ws/device", headers=headers()) as socket:
