@@ -89,9 +89,27 @@ Ny faktisk nedlastingsprøve på RC9 ga tre nye installasjonsfeil med
 `fire-net` på 8 KiB feiler før TLS starter; ingen HTTP- eller backendport ble
 avvist. Forsøkene hadde korrekt pakke og godkjent `app_download`. Tidligere
 minnepresshypotese er avgrenset til faktisk worker-opprettelse; nøyaktig ledig
-minne ved feilen er ikke målt. Kontrollert serialisering gjennom eksisterende
-nettverkseierskap og bevaring av installasjonskvitteringen vurderes før endring.
-Ingen CA-, tidsfrist-, kvote- eller sikkerhetsgrense er svekket.
+minne ved feilen er ikke målt. RC10 bruker den eksisterende nettverkseierskaps-
+pausen før nedlastingsarbeiderne starter og gjenopptar samme autoriserte økt
+før det ene bevarte installasjonsresultatet bekreftes. Resultatet gjenbruker
+eksisterende mailbox, har stabil event-ID og kan ikke utløse ny nedlasting.
+Kjøring krever godkjent resultat og en fortsatt eksplisitt brukerintensjon;
+oppdaterings-Ja krever fremdeles egen åpning etter installasjon.
+Ti nye faktiske offline WebSocket-flyter og samlet backendport på 304 PASS
+(to miljøbetingede skips) er grønne. Native-kontroller og full normal-/recovery-/
+bootloader-bygging er bestått; IRAM 130 398 / 131 072 og statisk DRAM 64 212
+er uendret. Pakkehåndtereren øker med 72 byte, og samme resultatbuffer beholdes.
+RC10 er fysisk installert i A59 VALID/CRC etter eksakt 2 757 984-byte
+SHA256-tilbakeavlesning; RC9 B58 og dens metadatasektor er bevart.
+45-sekunders helseoppstart og 35-sekunders normal omstart fikk begge strictTLS
+og faktisk session-adopsjon uten registrert TLS-feil, panic eller WDT. COM er
+lukket. Ingen app ble startet av denne kontrollen. Vellykket fysisk appnedlasting
+er fortsatt ikke bekreftet. Én sluttbaseline kl. 21:46:33 Oslo bekreftet
+RC10 online med aktiv socket og ferskt komplett inventar med alle 13 app-IDer.
+Vater 0.1.6 og arkivhash er uendret; brukeren er bedt om ett nytt vanlig
+nedlastings- og åpningsforsøk. Den lagrede fase6-feilen er fra før RC10 og skal
+ikke tolkes som et nytt resultat. Ingen CA-, tidsfrist-, kvote- eller
+sikkerhetsgrense er svekket.
 
 ### Backend-sync og sikker nettilgang – 26. november
 
