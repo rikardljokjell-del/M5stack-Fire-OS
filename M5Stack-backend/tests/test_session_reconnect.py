@@ -17,6 +17,14 @@ async def expire(service, session):
     service.persist(session)
 
 
+def bounded_receive(socket):
+    # TestClient.receive has no deadline. Bound just these scheduling-sensitive
+    # websocket fixtures so a missing message produces a failure, not a CI hang.
+    async def receive():
+        return await asyncio.wait_for(socket._send_rx.receive(), timeout=3)
+    socket.receive=lambda:socket.portal.call(receive)
+
+
 def request(**extra):
     return SessionStart(device_id='fire-01', target='device', protocol_version='0.2',
                         boot_id='boot-01', capabilities=Capabilities(**CAPS), **extra)
@@ -437,11 +445,15 @@ def test_historical_start_duplicate_on_attached_successor_uses_verified_alias_wi
     with TestClient(create_app(configured(tmp_path))) as client:
         service=client.app.state.backend
         with client.websocket_connect('/ws/device',headers=headers()) as socket:
+            bounded_receive(socket)
             first=Device(socket)
             original_start=first.send('session_start',target='device',capabilities=CAPS)
             old_id=first.until('session_started')['session_id']
+            accepted=first.ack(original_start)
+            assert accepted['status']=='accepted' and accepted['result']['session_id']==old_id
         client.portal.call(expire,service,service.session(old_id))
         with client.websocket_connect('/ws/device',headers=headers()) as socket:
+            bounded_receive(socket)
             peer=Device(socket);peer.counter=100
             current=peer.start(resume_session_id=old_id)
             peer.until('session_snapshot')
@@ -452,10 +464,54 @@ def test_historical_start_duplicate_on_attached_successor_uses_verified_alias_wi
             assert ack['status']=='duplicate' and ack['result']['session_id']==current['session_id']
             assert service.device_record(service.session(peer.session_id))['connection_epoch']==epoch
         with client.websocket_connect('/ws/device',headers=headers()) as socket:
+            bounded_receive(socket)
             socket.send_json(original_start)
             peer=Device(socket)
             assert peer.until('session_started')['session_id']==current['session_id']
         assert len(service.store.list('sessions'))==2 and not service.store.list('commands')
+
+
+def test_torn_initial_start_recovers_with_fresh_nonce_without_claiming_unknown_event_accepted(tmp_path,monkeypatch):
+    entered=asyncio.Event()
+    first_id=None
+    notices=Backend.build_notices
+    async def blocked_epilogue(self,session):
+        nonlocal first_id
+        if first_id is None:
+            first_id=session.id
+            entered.set()
+            await asyncio.Event().wait()
+        await notices(self,session)
+    monkeypatch.setattr(Backend,'build_notices',blocked_epilogue)
+    with TestClient(create_app(configured(tmp_path))) as client:
+        service=client.app.state.backend
+        with client.websocket_connect('/ws/device',headers=headers()) as socket:
+            bounded_receive(socket)
+            peer=Device(socket)
+            torn=peer.send('session_start',target='device',capabilities=CAPS)
+            old_id=peer.until('session_started')['session_id']
+            async def reached_epilogue():await asyncio.wait_for(entered.wait(),3)
+            client.portal.call(reached_epilogue)
+        record=service.store.get('events',torn['event_id'])
+        assert record['status']=='processing' and record.get('result') is None
+        with client.websocket_connect('/ws/device',headers=headers()) as socket:
+            bounded_receive(socket)
+            peer=Device(socket);peer.counter=100
+            sent=peer.send('session_start',target='device',capabilities=CAPS)
+            current=peer.until('session_started');peer.session_id=current['session_id']
+            assert peer.ack(sent)['status']=='accepted'
+            assert current['session_id']==old_id
+            begin=len(peer.events)
+            socket.send_json(torn)
+            unknown=peer.ack(torn)
+            assert unknown['status']=='unknown' and unknown['result'] is None
+            assert not any(e['type']=='session_started' for e in peer.events[begin:])
+            assert service.store.get('events',torn['event_id'])==record
+            peer.send('ping');assert peer.until('pong')['session_id']==old_id
+            peer.send('build_confirm',proposal_id='proposal-never-confirmed')
+            assert peer.until('error')['code']=='event_rejected'
+        assert len(service.store.list('sessions'))==len(service.store.list('projects'))==1
+        assert not service.store.list('builds') and not service.store.list('commands') and not service.usage.records()
 
 
 @pytest.mark.parametrize('endpoint_stopped',[False,True])
