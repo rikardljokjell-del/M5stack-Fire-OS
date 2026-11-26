@@ -592,6 +592,7 @@ class FireOS {
   bool requestAppDownload(const String& project,const String& package,const String& app,bool runAfter=false);
   void cancelAppDownload();
   void downloadIntentStatus(const String& text);
+  const char* packageTransferLabel() const;
   void serviceDownloadIntent();
   bool handleDownloadIntent(const String& message);
   bool handleFeedbackAck(const String& message);

@@ -119,7 +119,7 @@ bool FireLuaPackageManager::startDownload(const String& host, uint16_t port,
   received_ = 0;
   progress_=0;
   contentLength_ = 0;
-  headerBuffer_ = "";
+  fire_backend_policy::releaseTextBuffer(headerBuffer_);
   lastDataAt_ = millis();
   delivery_.begin(millis(),secureEndpoint_);
   emitStatus("Waiting for download resources");
@@ -140,7 +140,7 @@ bool FireLuaPackageManager::prepareStaging() {
 }
 bool FireLuaPackageManager::cancelled() const {return cancelled_ || time(nullptr)>=expiresAt_;}
 void FireLuaPackageManager::queuedFailure(const String& reason) {
-  client_.stop();freeHash();freeStaging(); // No worker owns these on a queued failure.
+  client_.stop();freeHash();freeStaging();fire_backend_policy::releaseTextBuffer(headerBuffer_); // No worker owns these on a queued failure.
   state_=State::Idle;
   io_.result(false,false,packageId_,String(),reason,installId_);
   delivery_.phase=fire_package_delivery::Phase::Cleanup;
@@ -291,7 +291,7 @@ void FireLuaPackageManager::serviceWorker(bool wifiConnected) {
       ++received_;
     }
     }
-    headerBuffer_ = "";
+    fire_backend_policy::releaseTextBuffer(headerBuffer_);
     state_ = State::Downloading;
     progress_=contentLength_?min<uint32_t>(100,uint64_t(received_)*100/contentLength_):0;
     emitStatus("Downloading " + String(received_) + "/" + String(contentLength_));
@@ -402,7 +402,7 @@ void FireLuaPackageManager::fail(const String& reason) {
   }
   const String path = "/apps/.download-" + packageId_ + ".zip";
   if (ownsArchive_ && SD.exists(path)) SD.remove(path);ownsArchive_=false;
-  freeHash();freeStaging();
+  freeHash();freeStaging();fire_backend_policy::releaseTextBuffer(headerBuffer_);
   state_ = State::Idle;
   emitStatus(reason);
   io_.result(false, false, packageId_, "", reason,installId_);

@@ -3,6 +3,14 @@
 
 // Small, portable operations used by the existing client and settings path.
 namespace fire_backend_policy {
+// Arduino String's empty assignment retains its allocation. A fresh move
+// constructor steals that allocation and resets the source; destruction frees
+// it even when its logical length was already zero. Never use move-assignment.
+template<class Text> void releaseTextBuffer(Text& value) {
+  Text released(static_cast<Text&&>(value));
+  (void)released;
+}
+
 enum class Progress:uint8_t {Waiting,Failed,Ready};
 inline Progress progress(bool ready,bool connecting,bool stopping,bool cleanup=false) {
   return ready?Progress::Ready:(connecting || stopping || cleanup)?Progress::Waiting:Progress::Failed;

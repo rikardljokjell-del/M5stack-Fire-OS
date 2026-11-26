@@ -74,6 +74,22 @@ avvist menyvalg. Testkanalen rettes med uendret HMAC-/sekvenskontroll og kun
 avgrenset gjentakelse av nøyaktig samme forespørsel. Gjentatte offentlige
 nedlastinger, faktisk kjøring og produksjonsaksept gjenstår.
 
+Den fysiske RC12-prøven startet en ordinær offentlig nedlasting av Vater 0.1.6.
+En TLS-forbindelse ble opprettet, men senere gjenoppkobling fikk
+`SSL_ALLOC_FAILED`; installasjonskvitteringen nådde ikke serveren. Kommandoen
+utløp som UNKNOWN etter sin opprinnelige frist, uten RUN eller nytt AI-kall.
+Avbryt ble registrert, og Wi-Fi-/backendvalg ble tilbakeført til On.
+Separat åpnet den eksisterende, kildeverifiserte 0.1.6-appen lokalt med backend
+av og kjørte i omtrent 108 sekunder, inkludert B-/C-betjening og vanlig Back,
+uten observert appfeil. Dette beviser ikke den offentlige installasjonsflyten.
+
+RC13 frigjør ubrukte nettlesebufferes faktiske kapasitet etter sikker
+callback-avslutning, og holder Home tilbake mens backend alene kobler til for
+installasjonskvitteringen. Ventebildet skiller installert, feil, avbrudd og
+ventende kvittering. App Manager bruker lagrede visningsnavn. Ingen minne-,
+stakk-, TLS- eller callbackgrense er økt. Eksakt allokering bak TLS-feilen er
+fortsatt ikke målt; ny samlet CI og fysisk gjentatt levering kreves.
+
 ### Pågående: gjenåpning av jobber og appoppdatering
 
 Brukeren mister jobbvinduet etter minimering: ferdig «Digitalt vater» vises bare

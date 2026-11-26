@@ -76,7 +76,8 @@ void FireOS::localQaSnapshot(fire_local_qa::Snapshot& out) const {
     }
     case Screen::AppsSettings:
       detail=managerStatus_;
-      if(appManagerVersionsWaiting_ || appManagerDeleteWaiting_){label="Vennligst vent";out.count=1;out.busy=true;}
+      if(downloadPhase_==1 || downloadPhase_==2 || (packageManager_ && packageManager_->busy())) {label=packageTransferLabel();out.count=1;out.busy=true;}
+      else if(appManagerVersionsWaiting_ || appManagerDeleteWaiting_){label="Vennligst vent";out.count=1;out.busy=true;}
       else if(appManagerDevelopConfirm_){label="Start app";out.count=1;}
       else if(appManagerDeleteConfirm_){label="Confirm delete";out.count=1;}
       else if(appManagerVersionDialog_){out.index=appManagerVersionSelection_;out.count=appManagerVersionCount_+1;label=out.index<appManagerVersionCount_?appManagerVersionLabels_[out.index]:String("Back");}

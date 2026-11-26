@@ -117,6 +117,10 @@ static void deliveryTests() {
   assert(gate.poll(40,true,false,true,false,true,true)==Action::None && gate.paused());
   assert(gate.poll(50,true,false,true,false,false,true)==Action::Notify && !gate.paused());
   assert(gate.phase==Phase::Receipt && gate.receiptDue(50));
+  assert(!gate.paused() && gate.otherNetworksPaused()); // backend may ACK; Home may not start competing TLS
+  assert(std::string(receiptLabel(true,false,false))=="Installert, kobler til");
+  assert(std::string(receiptLabel(true,true,true))=="Installert, start avbrutt");
+  assert(std::string(receiptLabel(false,false,true))=="Nedlasting feilet, sender kvittering");
   gate.receiptSent(50);assert(!gate.receiptDue(3049) && gate.receiptDue(3050));
   assert(gate.poll(3050,true,false,true,false,false,true)==Action::None); // held mailbox never re-notifies/re-downloads
   assert(!recordedAck("ir-one","ir-other","accepted","recorded","pkg-one","pkg-one",false));
@@ -126,7 +130,7 @@ static void deliveryTests() {
   assert(!recordedAck("ir-one","ir-one","accepted","unknown","pkg-one","pkg-one",false));
   assert(recordedAck("ir-one","ir-one","accepted","recorded","pkg-one","pkg-one",false));
   assert(recordedAck("ir-one","ir-one","duplicate","recorded","pkg-one","pkg-one",false)); // lost ACK, same immutable receipt
-  gate.clear();assert(!gate.active() && !gate.receiptDue(4000));
+  gate.clear();assert(!gate.active() && !gate.receiptDue(4000) && !gate.otherNetworksPaused());
   Gate spawnFail;spawnFail.begin(10,true);assert(spawnFail.poll(10,true,false,true,false,false,false)==Action::Connect);
   assert(spawnFail.poll(11,true,false,true,false,true,false,true)==Action::Stream);
   assert(spawnFail.poll(11,true,false,true,false,true,false,true,true)==Action::None);
@@ -146,7 +150,7 @@ static void deliveryTests() {
   assert(workerOff.poll(12,false,false,true,true,true,false)==Action::Cancel);
   assert(workerOff.poll(13,false,false,true,false,true,true)==Action::None && workerOff.paused());
   assert(workerOff.poll(14,false,false,true,false,false,true)==Action::Notify);
-  Gate plain;plain.begin(10,false);assert(plain.poll(10,true,false,false,false,false,false)==Action::Start && !plain.paused());
+  Gate plain;plain.begin(10,false);assert(plain.poll(10,true,false,false,false,false,false)==Action::Start && !plain.paused() && !plain.otherNetworksPaused());
   Gate timeout;timeout.begin(10,true);assert(timeout.poll(10,true,false,true,false,false,false)==Action::Connect);
   assert(timeout.poll(18010,true,false,true,false,true,false,true)==Action::Timeout);
   Gate netFail;netFail.begin(10,true);assert(netFail.poll(10,true,false,true,false,false,false)==Action::Connect);

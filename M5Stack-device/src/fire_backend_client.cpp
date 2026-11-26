@@ -225,11 +225,20 @@ void FireBackendClient::disconnect() {
   fragmentOpcode_ = 0;
   fragmentBuffer_ = "";
   resetReceiveFrame();
+  releaseReadBuffersPending_=true;releaseReadBuffers();
   if (sessionId_.length() > 0) resumeSessionId_ = sessionId_;
   sessionId_ = "";
   sessionStarted_ = false;
   setState(configured() ? State::Offline : State::Offline,
            configured() ? "Backend disconnected" : "Backend not configured");
+}
+
+void FireBackendClient::releaseReadBuffers() {
+  if(receiveCallbackActive_ || !releaseReadBuffersPending_) return;
+  fire_backend_policy::releaseTextBuffer(handshakeBuffer_);
+  fire_backend_policy::releaseTextBuffer(frameBuffer_);
+  fire_backend_policy::releaseTextBuffer(fragmentBuffer_);
+  releaseReadBuffersPending_=false;
 }
 
 void FireBackendClient::resetReceiveFrame() {
@@ -1305,6 +1314,11 @@ void FireBackendClient::readFrames() {
 
 void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
                                     size_t length) {
+  receiveCallbackActive_=true;
+  struct ReceiveLifetime {
+    FireBackendClient* owner;
+    ~ReceiveLifetime() {owner->receiveCallbackActive_=false;owner->releaseReadBuffers();}
+  } lifetime{this}; // Declared first: all message copies/callbacks finish before release.
   lastReceiveAt_ = millis();
   if (!sessionStarted_) bootstrapDiagnostic(3,opcode,length);
   if (opcode == 0x8) {

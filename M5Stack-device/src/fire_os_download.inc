@@ -1,10 +1,10 @@
 // One production download intent shared by repair, jobs, App Manager and updates.
 // An offer is authority from the backend, not authority to retain a cancelled RUN.
 void FireOS::downloadIntentStatus(const String& text) {
-  managerStatus_=text;
-  if(downloadPackage_==luaRepairReadyPackageId_) luaRepairMessage_=text;
-  if(downloadPackage_==aiReadyPackageId_ || downloadPackage_==aiPackageId_) aiWorkflowText_=text;
-  redrawRequested_=true;
+  bool changed=managerStatus_!=text;managerStatus_=text;
+  if(downloadPackage_==luaRepairReadyPackageId_) {changed=changed || luaRepairMessage_!=text;luaRepairMessage_=text;}
+  if(downloadPackage_==aiReadyPackageId_ || downloadPackage_==aiPackageId_) {changed=changed || aiWorkflowText_!=text;aiWorkflowText_=text;}
+  if(changed) redrawRequested_=true;
 }
 
 bool FireOS::requestAppDownload(const String& project,const String& package,const String& app,bool runAfter) {
@@ -76,4 +76,14 @@ bool FireOS::handleFeedbackAck(const String& message) {
   }
   redrawRequested_=true;
   return true;
+}
+
+const char* FireOS::packageTransferLabel() const {
+  if(packageManager_ && packageManager_->receiptReady()) {
+    return fire_package_delivery::receiptLabel(packageManager_->outcomeOk(),downloadPhase_==3,
+      backendClient_ && backendClient_->sessionReady());
+  }
+  if(downloadPhase_==3) return "Avbryter appoverføring";
+  if(downloadPhase_==1) return "Venter på appoverføring";
+  return "Overfører app";
 }

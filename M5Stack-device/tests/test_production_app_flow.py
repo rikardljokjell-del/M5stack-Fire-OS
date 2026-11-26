@@ -23,7 +23,12 @@ def source():
     identity=os_source.split('String FireOS::buttonViewIdentity()',1)[1].split('void FireOS::publishButtonView',1)[0]
     manager=identity.split('  if(screen_==Screen::AppsSettings) {',1)[1].split('  if(screen_==Screen::Apps &&',1)[0]
     manager='String FireOS::managerIdentity() const {\n'+manager.rsplit('}',1)[0]+'\n}\n'
-    return PREAMBLE+'\n#include "fire_os_download.inc"\n'+methods+manager+MAIN
+    backend=(ROOT/'src/fire_backend_client.cpp').read_text(encoding='utf-8')
+    release=backend.split('void FireBackendClient::releaseReadBuffers()',1)[1].split('void FireBackendClient::resetReceiveFrame',1)[0]
+    lifetime=backend.split('void FireBackendClient::handleFrame(',1)[1].split('  lastReceiveAt_',1)[0].split('{',1)[1]
+    release='void FireBackendClient::releaseReadBuffers()'+release
+    lifetime='void FireBackendClient::callbackLifetimeTest() {'+lifetime+"\n releaseReadBuffersPending_=true;releaseReadBuffers();assert(frameBuffer_.length()==8192);\n}\n"
+    return PREAMBLE+'\n#include "fire_os_download.inc"\n'+methods+manager+release+lifetime+MAIN
 
 PREAMBLE=r'''
 #include <string>
@@ -34,12 +39,15 @@ PREAMBLE=r'''
 #include <stdint.h>
 #include "fire_app_updates.h"
 #include "fire_buttons.h"
+#include "fire_backend_policy.h"
+#include "fire_package_delivery.h"
 constexpr unsigned HEX=16;
 class String {
   std::string s;
  public:
   String()=default;String(const char* v):s(v?v:""){} String(std::string v):s(v){}
   String(uint32_t v,unsigned base=10){std::ostringstream out;if(base==16)out<<std::hex;out<<v;s=out.str();}
+  size_t capacity()const{return s.capacity();}
   size_t length()const{return s.size();}const char* c_str()const{return s.c_str();}
   String& operator+=(const String& other){s+=other.s;return *this;}
   friend bool operator==(const String&a,const String&b){return a.s==b.s;}
@@ -98,9 +106,15 @@ struct FireOS {
   void rebuildAppManagerItems(){}void invalidateBackendCatalog(){}
   bool applyBackendDeleteResult(const cJSON*);
   void sendAppInventory(){++inventories;}void goToBootApp(){++homes;}
+  const char* packageTransferLabel()const;
   void downloadIntentStatus(const String&);bool requestAppDownload(const String&,const String&,const String&,bool runAfter=false);
   void cancelAppDownload();void serviceDownloadIntent();bool handleDownloadIntent(const String&);bool handleFeedbackAck(const String&);
   void finishPackageReceipt(bool);void cancelLuaRepair();bool managerTargetCurrent()const;void invalidateManagerTarget();
+};
+struct FireBackendClient {
+  bool receiveCallbackActive_=false,releaseReadBuffersPending_=false;
+  String handshakeBuffer_,frameBuffer_,fragmentBuffer_;
+  void releaseReadBuffers();void callbackLifetimeTest();
 };
 '''
 
@@ -161,6 +175,13 @@ int main(){
   assert(!os.applyBackendDeleteResult(&deleted) && os.backendAppCount_==2);
   deleted.fields["app_id"].text="app-a";assert(os.applyBackendDeleteResult(&deleted) && os.backendAppCount_==1);
   assert(os.backendApps_[0].appId=="app-b" && !os.applyBackendDeleteResult(&deleted));
+  // Exact production deferral + destructor guard keep borrowed bytes alive through callback.
+  FireBackendClient buffers;buffers.handshakeBuffer_=String(std::string(4096,'h'));
+  buffers.frameBuffer_=String(std::string(8192,'p'));buffers.fragmentBuffer_=String(std::string(1024,'f'));
+  assert(buffers.frameBuffer_.capacity()>=8192);
+  buffers.callbackLifetimeTest();
+  assert(!buffers.receiveCallbackActive_ && !buffers.releaseReadBuffersPending_);
+  assert(!buffers.frameBuffer_.length() && buffers.frameBuffer_.capacity()<8192 && !buffers.handshakeBuffer_.length());
   // Actual identity branch: Actions A -> Back -> replacement at SAME row before paint.
   os.managerTargetValid_=true;os.managerTarget_.appId="app-a";os.managerItems_[0]=os.managerTarget_;
   os.managerItemCount_=1;os.managerSelection_=0;os.appManagerActionMenu_=true;

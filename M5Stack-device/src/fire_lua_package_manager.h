@@ -29,6 +29,7 @@ class FireLuaPackageManager {
   void cancel() {cancelled_.store(true,std::memory_order_release);}
   bool busy() const { return delivery_.active() || io_.busy(); }
   bool networkPaused() const {return delivery_.paused();}
+  bool otherNetworksPaused() const {return delivery_.otherNetworksPaused();}
   bool receiptReady() const {return delivery_.phase==fire_package_delivery::Phase::Receipt && receiptFrozen_ && io_.completed;}
   bool receiptDue(uint32_t now) const {return receiptReady() && delivery_.receiptDue(now);}
   void receiptSent(uint32_t now) {delivery_.receiptSent(now);}

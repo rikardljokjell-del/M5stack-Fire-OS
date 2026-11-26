@@ -214,6 +214,8 @@ class FireBackendClient {
   void snapshotAudioEndpoint();
   static void audioTaskEntry(void* context);
   void runAudioTransfer();
+  bool receiveCallbackActive_=false,releaseReadBuffersPending_=false;
+  void releaseReadBuffers();
   String handshakeBuffer_;
   String expectedAccept_;
   String frameBuffer_;

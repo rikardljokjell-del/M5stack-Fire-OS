@@ -25,6 +25,7 @@ struct Gate {
   void begin(uint32_t now,bool tls) {phase=Phase::Waiting;startedAt=now;lastReceiptAt=0;exclusive=tls;ownsQuiet=false;sent=false;}
   bool paused() const {return ownsQuiet && phase!=Phase::Receipt && phase!=Phase::Idle;}
   bool active() const {return phase!=Phase::Idle;}
+  bool otherNetworksPaused() const {return ownsQuiet && phase!=Phase::Idle;} // Receipt reserves TLS for backend ACK only.
   Action poll(uint32_t now,bool allowed,bool busy,bool quiet,bool worker,bool network,bool completed,bool ready=false,bool staged=false) {
     if (phase==Phase::Waiting) {
       if (!allowed) return Action::Cancel;
@@ -62,6 +63,11 @@ struct Gate {
   void receiptSent(uint32_t now) {sent=true;lastReceiptAt=now;}
   void clear() {phase=Phase::Idle;ownsQuiet=false;sent=false;}
 };
+inline const char* receiptLabel(bool installed,bool cancelled,bool connected) {
+  if(cancelled) return installed?"Installert, start avbrutt":"Avbrutt, sender kvittering";
+  if(installed) return connected?"Installert, sender kvittering":"Installert, kobler til";
+  return connected?"Nedlasting feilet, sender kvittering":"Nedlasting feilet, kobler til";
+}
 inline bool recordedAck(const char* expectedEvent,const char* event,const char* status,const char* resultStatus,
                         const char* expectedPackage,const char* package,bool error) {
   return expectedEvent && event && !strcmp(expectedEvent,event) && status &&

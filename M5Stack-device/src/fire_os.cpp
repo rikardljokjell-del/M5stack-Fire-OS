@@ -78,7 +78,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc12";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc13";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -1327,7 +1327,7 @@ void FireOS::update() {
   if (homeApp_.configured() && screen_ == Screen::Home && wifiMode_ != 2 &&
       WiFi.status() != WL_CONNECTED && !wifiConnectActive_ && wifiSsid_.length())
     requestWifi(true);
-  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2 && !firmwareNetworkPaused_ && !(packageManager_ && packageManager_->networkPaused())); }
+  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2 && !firmwareNetworkPaused_ && !(packageManager_ && packageManager_->otherNetworksPaused())); }
   if (homeApp_.takeSetupRequest()) {
     startWifiSetup(); homeApp_.setupHint(wifiSetupPassword_);
   }
@@ -4078,7 +4078,7 @@ void FireOS::rebuildAppManagerItems() {
     item.kind = 1;
     item.local = true;
     item.appId = appId;
-    item.name = luaAppNames_[index];
+    item.name = luaAppDisplayNames_[index].length()?luaAppDisplayNames_[index]:luaAppNames_[index];
     item.localPath = source;
     item.localPackageId = luaAppPackageIds_[index];
     item.localVersion = luaAppVersions_[index];
@@ -7552,7 +7552,11 @@ void FireOS::servicePackageInstall() {
     return;
   }
   if (wasPaused && backendClient_) {backendStatus_=backendClient_->status();redrawRequested_=true;}
+  if(packageManager_->otherNetworksPaused()) homeApp_.service(WiFi.status()==WL_CONNECTED,false);
   if (!packageManager_->receiptReady()) return;
+  const char* receiptStatus=packageTransferLabel();
+  if(managerStatus_!=receiptStatus || (downloadPackage_==luaRepairReadyPackageId_ && luaRepairMessage_!=receiptStatus) ||
+      ((downloadPackage_==aiReadyPackageId_ || downloadPackage_==aiPackageId_) && aiWorkflowText_!=receiptStatus)) downloadIntentStatus(receiptStatus);
   if (!unexpired || (backendClient_->sessionReady() && !fire_package_delivery::sameScope(
       packageManager_->installSession().c_str(),packageManager_->installBoot().c_str(),
       backendClient_->sessionId().c_str(),backendClient_->bootId().c_str()))) {
@@ -8445,7 +8449,7 @@ void FireOS::handleAppsButton(uint8_t index) {
 
 void FireOS::handleAppsSettingsButton(uint8_t index) {
   if (screen_ == Screen::AppsSettings) {
-    if ((downloadPhase_==1 || downloadPhase_==2) && index==2) {cancelAppDownload();return;}
+    if (downloadPhase_==1 || downloadPhase_==2 || (packageManager_ && packageManager_->busy())) {if(index==2) cancelAppDownload();return;}
     if (appManagerDeleteWaiting_) {if(index==2) {appManagerDeleteWaiting_=false;appManagerDeleteRequest_=String();managerStatus_="Avbrutt";}return;}
     if (appManagerVersionsWaiting_) {if(index==2) {appManagerVersionsWaiting_=false;appManagerRequest_=String();managerStatus_="Avbrutt";}return;}
     if ((appManagerActionMenu_ || appManagerDeleteConfirm_ || appManagerDevelopConfirm_ || appManagerVersionDialog_) && !managerTargetCurrent()) {
@@ -11237,9 +11241,11 @@ void FireOS::drawAppsSettings() {
 void FireOS::drawAppsSettingsBackend() {
   drawStatusBar("App Manager");
   const auto statusLine=[&]() {drawText(16,203,compactStatusText(managerStatus_),kOrange,1,kBg);};
-  if(appManagerVersionsWaiting_ || appManagerDeleteWaiting_ || downloadPhase_==1 || downloadPhase_==2) {
+  if(appManagerVersionsWaiting_ || appManagerDeleteWaiting_ || downloadPhase_==1 || downloadPhase_==2 || (packageManager_ && packageManager_->busy())) {
     drawPanel(12,48,296,146);drawText(24,64,managerTargetValid_?managerTarget_.name:String("Appoverføring"),kText,1,kPanel);
-    drawText(24,100,"Vennligst vent",kText,2,kPanel);statusLine();drawFooter("","Vent","Avbryt");return;
+    drawText(24,100,"Vennligst vent",kText,2,kPanel);
+    if(downloadPhase_ || (packageManager_ && packageManager_->busy())) drawText(16,203,packageTransferLabel(),kOrange,1,kBg);else statusLine();
+    drawFooter("","Vent","Avbryt");return;
   }
   if (appManagerDevelopConfirm_) {
     drawPanel(12,48,296,150);
