@@ -19,7 +19,45 @@ lokale tester og faktisk fysisk verifikasjon.
 ## Status nå
 
 
-### Under retting: tale etter New app — RC22
+### Installert rettelse: tale etter New app — RC22
+
+FIRE kjører nå `fire-os-1.6.0-rc22`, kilde
+`fd8a581cf29096a1bcc0dfaf667a288d232cabc0`, i A71 VALID/CRC. Bildet er
+lest tilbake med eksakt MD5/SHA256; RC21 B70 og dens metadatasektor er bevart.
+Bootloader, partisjonstabell, recovery, SD og NVS ble ikke skrevet i installasjonen.
+
+Den fysiske prøven bekreftet New app → mikrofonopptak → offentlig HTTPS →
+lydmellomlagring → gjenopptatt samme økt → mottatt commit-kvittering.
+Overføringen fullførte uten feil etter 21,586 sekunder fra opptaksstopp.
+Én faktisk OpenAI-transkribering fullførte, men fant ingen tale i opptaket.
+Dette er transport-/behandlingsbevis, ikke bevis for forståelig tale ved mikrofonen.
+
+En separat kontroll av den samme kjørende backenden brukte en kjent syntetisk
+talefil i en ny PC-simulert økt. Én ekte transkribering gjenkjente quiz-/spillønsket,
+og én ekte AI-dialog produserte et appforslag. Ingen bygg, installasjon eller Run
+ble startet; den egne testøkten ble stoppet. Enhetens beskyttede app-/kjørepekere
+og innstillinger var identiske før og etter. Talesvar var og er slått av.
+Dette supplerer enhetsprøven; det etablerer ikke en fysisk mikrofon → appforslag-prøve.
+
+Testmaskinens eneste lydutgang er digital S/PDIF, så en hørbar testfrase ved
+FIRE-mikrofonen kunne ikke bekreftes. FIREs eksisterende mikrofon- og
+høyttalerdrivere bruker samme I²S-enhet og kan ikke brukes som samtidig
+testsløyfe gjennom dagens grensesnitt. Full akustisk tale → appforslag er derfor
+fortsatt en eksplisitt verifikasjonsgrense.
+
+Eksakt RC22-kilde bestod
+[31 native-kontroller](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45961804084)
+og [59 firmware-kontroller samt normal/recovery/boot-bygg](https://github.com/rikardljokjell-del/M5stack-Fire-OS/actions/runs/45961804028).
+Uendret backend beholder sin kontroll med 380 beståtte og tre hoppede tester.
+Ingen stakk-, TLS-, CA-, IRAM- eller lydstørrelsesgrense ble økt.
+
+Sluttkontroll 27. november kl. 09:28 Oslo etter én vanlig, kontrollert omstart:
+RC22 koblet automatisk til, med ny økt og ferskt komplett inventar over de
+samme 13 appene. Økten var ledig uten opptak, forslag eller ventende
+installasjon/kjøring. Teststyring er ikke aktivert på sluttbooten, og COM er
+lukket. Innstillinger og nøkler er bevart; PC-lydinnstillingene er gjenopprettet.
+
+#### Årsaker og avgrensede rettelser
 
 Brukeren presiserte flyten: New app → snakke → Think → «Apphandling feilet».
 Selve appvalget og opptaksstart/-stopp ble godtatt, men ingen lydfil eller
@@ -32,29 +70,28 @@ eksisterende tids- og størrelsesgrenser. Opplastet lyd mellomlagres; bare en
 eksplisitt, deduplisert commit etter samme økt/boot-gjenoppkobling kan starte
 transkribering. Gjenoppkobling alene starter aldri nye AI-kall. Ferdige talesvar
 kan hentes uten ny modellforespørsel. Eksakt RC19-kilde bestod backend-, native-
-og firmware-CI. RC19 er installert i B68 med RC18 A67 bevart. Den første fysiske
+og firmware-CI. RC19 ble installert i B68 med RC18 A67 bevart. Den første fysiske
 prøven startet mikrofonen og fikk godkjent avslutningskvittering, men stoppet
 før HTTP; ingen transkribering eller modellforespørsel ble startet.
 
 En konkret RC20-regresjon dekker at et gyldig serversvar kunne avvises når den
 lokale klokkeestimeringen rundet ned. Rettelsen beholder serverfristene og
-innfører uavhengige, ufornybare grenser fra opprinnelig opptaksstopp. Hele den
-fysiske taleflyten er fortsatt under kontroll; ingen ferdigpåstand er gjort.
+innfører uavhengige, ufornybare grenser fra opprinnelig opptaksstopp.
 
-RC20 bestod samlet CI og er installert i A69 med RC19 B68 bevart. Normalbootens
+RC20 bestod samlet CI og ble installert i A69 med RC19 B68 bevart. Normalbootens
 nettforbindelse kom opp, men appøkten ble avvist før lydprøven; ingen mikrofon-
 eller modellhandling ble utført. Meldingsnumre basert bare på oppstartstid og
 teller kan kollidere mellom omstarter. RC21 binder automatisk genererte
 meldingsnumre til oppstarten uten å svekke backendens duplikatkontroll.
 
-RC21 er installert i B70 med RC20 A69 bevart. Begge installasjonsoppstarter og
+RC21 ble installert i B70 med RC20 A69 bevart. Begge installasjonsoppstarter og
 en senere normal omstart fikk godkjent backend-økt. Fysisk mikrofonopptak og
 offentlig HTTPS-mellomlagring er bekreftet. Ett forløp nådde eksplisitt commit
 og transkribering uten påvist tale; testavspilling på PC feilet først, og PC-lyden
 viste seg dessuten å være dempet. Et annet forløp manglet commit etter vellykket
 mellomlagring. RC22 retter at svarfristen startet før sendekøen var tømt, og
 bevarer konkret lydfeil på skjermen fremfor å overskrive den med «Tenker».
-Full tale → AI-svar/appforslag → talesvar er fortsatt ikke fysisk bekreftet.
+Den fysiske og separate AI-verifikasjonen er beskrevet over.
 
 RC18 ryddet tidligere byggefeil ved
 nytt appvalg og rettet naturlig avslutning etter startfrist. En fysisk New app-
@@ -65,7 +102,7 @@ også denne overstyringen. Dette var ikke tilstrekkelig bevis for taleflyten.
 ### Tidligere verifisert offentlig appflyt — RC17
 
 De rapporterte feilene er rettet. Katalog-, leverings-, kjøre- og nettverksflytene
-er fysisk prøvd. FIRE kjører nå
+er fysisk prøvd. I denne kontrollen kjørte FIRE
 `fire-os-1.6.0-rc17`, kilde `085d657`, i B66 VALID/CRC. Eksakt bilde er lest
 tilbake og hashkontrollert; RC16 A65 og dens metadatasektor er bevart.
 Bootloader, partisjonstabell, recovery og de 68 tidligere firmwarefilene er
