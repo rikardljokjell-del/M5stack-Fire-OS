@@ -19,7 +19,7 @@ lokale tester og faktisk fysisk verifikasjon.
 ## Status nå
 
 
-### Under retting: tale etter New app — RC20
+### Under retting: tale etter New app — RC21
 
 Brukeren presiserte flyten: New app → snakke → Think → «Apphandling feilet».
 Selve appvalget og opptaksstart/-stopp ble godtatt, men ingen lydfil eller
@@ -40,6 +40,12 @@ En konkret RC20-regresjon dekker at et gyldig serversvar kunne avvises når den
 lokale klokkeestimeringen rundet ned. Rettelsen beholder serverfristene og
 innfører uavhengige, ufornybare grenser fra opprinnelig opptaksstopp. Hele den
 fysiske taleflyten er fortsatt under kontroll; ingen ferdigpåstand er gjort.
+
+RC20 bestod samlet CI og er installert i A69 med RC19 B68 bevart. Normalbootens
+nettforbindelse kom opp, men appøkten ble avvist før lydprøven; ingen mikrofon-
+eller modellhandling ble utført. Meldingsnumre basert bare på oppstartstid og
+teller kan kollidere mellom omstarter. RC21 binder automatisk genererte
+meldingsnumre til oppstarten uten å svekke backendens duplikatkontroll.
 
 RC18 ryddet tidligere byggefeil ved
 nytt appvalg og rettet naturlig avslutning etter startfrist. En fysisk New app-

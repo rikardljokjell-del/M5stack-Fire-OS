@@ -63,6 +63,8 @@ def source():
         'String FireBackendClient::eventId(', 'bool FireBackendClient::uploadAudio(',
         'bool FireBackendClient::downloadAudio(',
         'bool FireBackendClient::audioPlaybackStarted(', 'bool FireBackendClient::audioPlaybackFinished(',
+        'bool FireBackendClient::sendEvent(', 'bool FireBackendClient::listenStart(',
+        'bool FireBackendClient::appInventory(',
     )
     relative = method((ROOT / 'src/fire_async_client.cpp').read_text(encoding='utf-8'), 'bool fireRelativePath(')
     golden = '\n'.join(
@@ -79,9 +81,11 @@ def source():
               method(os_source, 'void FireOS::serviceAiAudioTransport(') +
               'void FireOS::audioReady(const String& message){const String type="audio_ready";' + audio_ready + '}\n')
     wav_helpers = method(os_source, 'void writeWavHeader(') + method(os_source, 'size_t normalizePcmDuration(')
+    handshake = method(cpp, 'void FireBackendClient::handleHandshake(')
+    start_producer = 'void FireBackendClient::startProducer(){\n' + handshake[handshake.index('  const String startEvent='):]
     return (INCLUDES + strings + ADAPTERS.replace('/*GOLDEN*/', golden) + relative + ops +
             CLASS.replace('/*FIELDS*/', fields).replace('/*BEGIN_SELECTION*/', begin_selection) + '\n'.join(method(cpp, n) for n in names) +
-            wav_helpers + QA_CLASS + actual_qa + output + QA_MAIN + MAIN.replace('int main(){', 'int main(){qaMatrix();outputMatrix();completionMatrix();newIntentMatrix();deadlineMatrix();autoStopMatrix();'))
+            start_producer + wav_helpers + QA_CLASS + actual_qa + output + QA_MAIN + MAIN.replace('int main(){', 'int main(){eventIdentityMatrix();qaMatrix();outputMatrix();completionMatrix();newIntentMatrix();deadlineMatrix();autoStopMatrix();'))
 
 
 INCLUDES = r'''
@@ -97,6 +101,7 @@ INCLUDES = r'''
 #include "fire_firmware_http.h"
 #include "fire_lua_install_identity.h"
 #include "fire_package_delivery.h"
+#include "fire_run_receipts.h"
 #include "fire_local_qa.h"
 #include "fire_buttons.h"
 #include "fire_ai_menu.h"
@@ -119,6 +124,12 @@ void fireStopMicCapture(){++micStops;micRunning=false;}
 constexpr int WL_CONNECTED=3;
 struct {int status()const{return WL_CONNECTED;}} WiFi;
 String jsonEscape(const String& s){return fire_session::escape(s);}
+String jsonStringField(const String&,const char*);
+struct FireLuaRuntime {static const char* hardwareApiContract(){return "hardware";}static const char* appSdkVersion(){return "sdk";}static const char* appSdkContract(){return "sdkhash";}};
+namespace FireRuntimeAiContract {const char* kVersion="runtime";const char* kContract="runtimehash";}
+namespace FireEvolutionContract {const char* kVersion="evolution";const char* kContract="evolutionhash";}
+String dataCapabilities(){return "{\"capture\":true}";}String hardwareServiceCapabilities(){return ",\"services\":[]";}
+String i2cWriteResources(){return "[60]";}
 // cJSON compatibility adapter over the actual bounded production JSON reader.
 // It parses real test wire bytes; it does not choose expected branch results.
 struct cJSON {
@@ -206,7 +217,7 @@ struct FireBackendClient {
   bool secureEndpoint_=true,sessionStarted_=true,usingReverseTransport_=false;
   bool releaseReadBuffersPending_=false;uint8_t fragmentOpcode_=0;
   uint32_t connectionEpoch_=4,reconnectAt_=99,eventCounter_=0;uint8_t selectionReply_=0;
-  String bootId_="boot-one",sessionId_="session-one",resumeSessionId_;
+  String bootId_="boot-one",sessionId_="session-one",resumeSessionId_,deviceId_="device-one",developmentContext_,firmwareVersion_="fire-os-test";
   String confirmedProject_="project-one",confirmedBase_="base-one",confirmedMode_="develop";
   String host_="fixture.invalid",token_="test-only-fake-credential",handshakeBuffer_,frameBuffer_,fragmentBuffer_;
   uint16_t port_=443;fire_session::Selection<String> selection_;
@@ -228,14 +239,18 @@ struct FireBackendClient {
   String confirmedAppMode_="new";
   void resetReceiveFrame(){}void releaseReadBuffers(){}
   void setState(State s,const String&){state_=s;}
-  bool sendEvent(const String& event,const String& fields=String(),const String& id=String()){
+  bool sendFrame(uint8_t op,const uint8_t* bytes,size_t count){
+    assert(op==1);const String payload(std::string(reinterpret_cast<const char*>(bytes),count));
     lastSendDisposition_=sends?fire_backend_policy::SendDisposition::Queued:fire_backend_policy::SendDisposition::NotQueued;
-    if(!sessionReady() || !sends) {
+    if(!sends) {
       return false;
     }
-    events.push_back({event,fields,id});
+    events.push_back({jsonStringField(payload,"event"),payload,jsonStringField(payload,"event_id")});
     return true;
   }
+  bool sendEvent(const String&,const String& fields=String(),const String& id=String());
+  void startProducer();void disconnect(){closeControl(false);}
+  bool listenStart(const String&);bool appInventory(const String&,bool,bool);
   bool audioTransferActive()const{return audioTransferRunning_ || (serialAudioTransfer_ && audioPhase_!=AudioPhase::Idle);}
   bool audioTransferFinished()const{return (dataTransferActive_ && dataChunkDone_) || (!audioTransferRunning_ && audioTransferFinished_);}
   bool audioTransferOk()const{return audioTransferOk_;}size_t audioTransferLength()const{return audioTransferLength_;}
@@ -452,6 +467,47 @@ static void startWorker(FireBackendClient& c){
 static void admitted(FireBackendClient& c){
   c.state_=FireBackendClient::State::Connected;c.sessionStarted_=true;
   c.sessionId_=c.audioSession_;++c.connectionEpoch_;
+}
+static void normalEvent(FireBackendClient& c,unsigned kind){
+  if(kind==0){c.listenStart("turn-one");}
+  else if(kind==1){c.appInventory("[]",true,true);}
+  else {c.startProducer();}
+}
+static void eventIdentityMatrix(){
+  for(unsigned kind=0;kind<3;++kind){
+    nowMs=1234;FireBackendClient first,second;first.bootId_="boot-alpha";second.bootId_="boot-beta";
+    normalEvent(first,kind);normalEvent(second,kind);
+    assert(first.events.size()==1 && second.events.size()==1);
+    const auto& a=first.events[0];const auto& b=second.events[0];
+    assert(a.id!=b.id && a.id.length()<=64 && b.id.length()<=64);
+    assert(fire_package_delivery::wireId(a.id.c_str()) && fire_package_delivery::wireId(b.id.c_str()));
+    assert(a.id.indexOf(first.bootId_)>=0 && b.id.indexOf(second.bootId_)>=0);
+    assert(a.kind==(kind==0?"listen_start":kind==1?"app_inventory":"session_start"));
+  }
+  FireBackendClient reconnect;assert(reconnect.listenStart("turn-one"));const String first=reconnect.events[0].id;
+  const uint32_t count=reconnect.eventCounter_;reconnect.disconnect();assert(reconnect.eventCounter_==count);
+  reconnect.startProducer();assert(reconnect.events.size()==2 && reconnect.events[1].id!=first && reconnect.eventCounter_==count+1);
+  FireBackendClient maximum;maximum.eventCounter_=UINT32_MAX-1;
+  const String last=maximum.eventId("evt");assert(last.length() && maximum.eventCounter_==UINT32_MAX);
+  assert(!maximum.eventId("evt").length() && maximum.eventCounter_==UINT32_MAX);
+  for(unsigned kind=0;kind<3;++kind)for(unsigned failure=0;failure<5;++failure){
+    FireBackendClient c;
+    if(failure==0)c.eventCounter_=UINT32_MAX;
+    if(failure==1)c.bootId_=String();
+    if(failure==2)c.bootId_=std::string(64,'b'); // Valid boot syntax but composed ID exceeds64.
+    if(failure==3)String::reserveLimit=0;
+    if(failure==4)String::allocationLimit=0;
+    normalEvent(c,kind);
+    String::reserveLimit=-1;String::allocationLimit=-1;
+    assert(c.events.empty());
+  }
+  FireBackendClient stable;const String stableId="stable-existing-event";
+  assert(stable.sendEvent("app_inventory",",\"apps\":[]",stableId));
+  const String original=stable.events[0].fields;const uint32_t before=stable.eventCounter_;
+  nowMs+=10000;assert(stable.eventId("unrelated").length());
+  assert(stable.sendEvent("app_inventory",",\"apps\":[]",stableId));
+  assert(stable.events[1].id==stableId && stable.events[1].fields==original && stable.eventCounter_==before+1);
+  puts("PASS actual boot-bound auto event producers startup inventory listen reconnect max OOM and stable exact retry");
 }
 static void fractionalGrantMatrix(){
   // Both server_time and elapsed millis are floored in audioNow(). A valid
@@ -707,7 +763,7 @@ class SerialAudioTests(unittest.TestCase):
                        'PASS extracted actual QA', 'PASS extracted actual audio_ready',
                        'PASS extracted actual upload completion', 'PASS extracted successful new intent',
                        'PASS actual fractional server grant', 'PASS actual immutable local grant caps',
-                       'PASS actual OS autoStop'):
+                       'PASS actual OS autoStop', 'PASS actual boot-bound auto event producers'):
             self.assertIn(marker, result)
 
 

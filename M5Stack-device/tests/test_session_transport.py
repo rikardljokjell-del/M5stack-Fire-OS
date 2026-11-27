@@ -21,8 +21,8 @@ def source():
     release=method('void FireBackendClient::releaseReadBuffers(')
     receive=method('void FireBackendClient::resetReceiveFrame(')+method('void FireBackendClient::readFrames(')
     legacy=(ROOT/'tests/session_start_rc14.inc').read_text(encoding='utf-8')
-    start=backend.split('void FireBackendClient::handleHandshake()',1)[1].split('  String payload;',1)[1].split('  // Pending choices',1)[0]
-    start='  String payload;'+start.replace('return;}','return String();}')+'  return payload;\n'
+    start=backend.split('void FireBackendClient::handleHandshake()',1)[1].split('  const String startEvent=',1)[1].split('  // Pending choices',1)[0]
+    start='  const String startEvent='+start.replace('return;}','return String();}')+'  return payload;\n'
     fields=method('String jsonStringField(')+method('uint32_t jsonUintField(')
     return PREAMBLE+fields+observe+frame+release+receive+'String FireBackendClient::legacyStart(){\n'+legacy+'return payload;\n}\nString FireBackendClient::start(){\n'+start+'}\n'+MAIN
 
@@ -113,7 +113,8 @@ struct FireBackendClient {
   void disconnect(){++disconnected;releaseReadBuffersPending_=true;releaseReadBuffers();}
   void setState(State,const char*){}void bootstrapDiagnostic(uint8_t,uint32_t=0,uint32_t=0){}
   bool sendFrame(uint8_t op,const uint8_t* data,size_t n){sentOpcode=op;sent=String(std::string(reinterpret_cast<const char*>(data),n));return true;}
-  String eventId(const char*){return "evt-fixed";}
+  bool eventIdentityAvailable=true;
+  String eventId(const char*){return eventIdentityAvailable?String("evt-fixed"):String();}
   void observeSession(const String&,const String&);void handleFrame(uint8_t,String&);void releaseReadBuffers();void resetReceiveFrame();void readFrames();
   String legacyStart();String start();
 };
@@ -200,6 +201,8 @@ int main(){
     assert(producer.start()==producer.legacyStart());
   }
   String::allocationLimit=3;assert(!producer.start().length() && producer.disconnected==1);String::allocationLimit=-1;
+  producer.eventIdentityAvailable=false;
+  assert(!producer.start().length() && producer.disconnected==2); // Actual bootstrap empty-ID guard.
   puts("PASS actual session observer, owned frames and byte-exact session_start");
 }
 '''

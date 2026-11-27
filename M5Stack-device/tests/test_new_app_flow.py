@@ -87,6 +87,7 @@ def source():
 
 PREAMBLE = r'''
 #include "fire_ai_menu.h"
+#include "fire_package_delivery.h"
 #include "fire_ai_workflow.h"
 uint32_t millis(){return 100;}
 unsigned installedAppIo=0;

@@ -137,12 +137,12 @@ void FireBackendClient::setConversationMode(const String& mode) {
   // Existing frozen Data Engine context applies its own mode/proposal on the
   // server. A later mode_select would cancel that just-restored proposal.
   if (developmentContext_.length() && mode=="develop") return;
-  selection_.queueMode(mode,bootId_+"-"+eventId("mode"));
+  selection_.queueMode(mode,eventId("mode"));
 }
 
 void FireBackendClient::setAppMode(const String& mode,const String& basePackageId) {
   if (mode!="new" && mode!="update") return;
-  selection_.queueApp(mode,projectId_,basePackageId,bootId_+"-"+eventId("app"));
+  selection_.queueApp(mode,projectId_,basePackageId,eventId("app"));
 }
 
 void FireBackendClient::serviceSelection() {
@@ -682,7 +682,7 @@ bool FireBackendClient::sendAudioCommit() {
   lastSendDisposition_=fire_backend_policy::SendDisposition::NotQueued;
   if(selection_.pending() || selection_.unclear() || !audioScope(true) || !audioDeadlineLive(false) || audioTransferCancel_ || !fire_lua_install::hash(audioHash_)) return false;
   if(!audioEvent_.length()) {
-    String event=bootId_+"-"+eventId("audio-commit");
+    String event=eventId("audio-commit");
     if(!fire_package_delivery::wireId(event.c_str())) return false;
     audioEvent_=static_cast<String&&>(event);
   }
@@ -831,9 +831,15 @@ void FireBackendClient::runAudioTransfer() {
 }
 
 String FireBackendClient::eventId(const char* prefix) {
-  ++eventCounter_;
-  return String(prefix) + "-" + String(millis(), HEX) + "-" +
-         String(eventCounter_, HEX);
+  if(!prefix || !fire_package_delivery::wireId(prefix) ||
+      !fire_package_delivery::wireId(bootId_.c_str()) || eventCounter_==UINT32_MAX) return String();
+  const String counter(++eventCounter_,HEX);
+  const size_t bytes=strlen(prefix)+1+bootId_.length()+1+counter.length();
+  String id;
+  if(!counter.length() || bytes>64 || !id.reserve(bytes) || !id.concat(prefix) ||
+      !id.concat("-") || !id.concat(bootId_.c_str()) || !id.concat("-") ||
+      !id.concat(counter.c_str()) || id.length()!=bytes || !fire_package_delivery::wireId(id.c_str())) return String();
+  return id;
 }
 
 bool FireBackendClient::sendFrame(uint8_t opcode, const uint8_t* data,
@@ -906,8 +912,10 @@ bool FireBackendClient::sendEvent(const String& event, const String& fields,
        !payload.concat("\"") || !payload.concat(fields.c_str()) || !payload.concat("}") || payload.length()!=size) return false;
     return sendFrame(0x1,reinterpret_cast<const uint8_t*>(payload.c_str()),payload.length());
   }
+  const String eventIdentity=stableEventId.length()?jsonEscape(stableEventId):eventId("evt");
+  if(!eventIdentity.length()) return false;
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
-                   (stableEventId.length() ? jsonEscape(stableEventId) : eventId("evt")) + "\",\"device_id\":\"" +
+                   eventIdentity + "\",\"device_id\":\"" +
                    jsonEscape(deviceId_) + "\",\"event\":\"" + event +
                    "\",\"boot_id\":\"" + jsonEscape(bootId_) + "\"";
   if (sessionId_.length() > 0)
@@ -930,7 +938,8 @@ bool FireBackendClient::listenStop(const String& turnId) {
     audioTransferUploadData_=nullptr;audioTransferDownloadBuffer_=nullptr;audioTransferBytes_=0;audioTransferLength_=0;
     audioUploadExpires_=audioCommitExpires_=0;audioEpoch_=connectionEpoch_;audioCommitSent_=false;audioPausedControl_=false;
     audioTransferCancel_=false;audioTransferFinished_=false;audioTransferOk_=false;serialAudioTransfer_=true;
-    audioGrantAt_=millis();audioPhase_=AudioPhase::StopAck;audioPhaseAt_=audioGrantAt_;audioEvent_=bootId_+"-"+eventId("listen-stop");
+    audioGrantAt_=millis();audioPhase_=AudioPhase::StopAck;audioPhaseAt_=audioGrantAt_;audioEvent_=eventId("listen-stop");
+    if(!audioEvent_.length()) {audioTransferCancel_=true;finishAudioTransfer(false);return false;}
     if(sendEvent("listen_stop",",\"turn_id\":\""+jsonEscape(turnId)+"\",\"serial_audio\":true",audioEvent_)) return true;
     audioTransferCancel_=true;finishAudioTransfer(false);return false;
   }
@@ -1444,11 +1453,13 @@ void FireBackendClient::handleHandshake() {
   handshakeStartedAt_=lastReceiveAt_; // fresh application-session stage; never refreshed by PONG
   lastPongAt_ = millis();
   setState(State::Connected, "Waiting for backend session");
+  const String startEvent=eventId("evt");
+  if(!startEvent.length()) {disconnect();setState(State::Offline,"Backend event identity unavailable");return;}
   String payload;
   bool built=true;
   const auto append=[&](const char* value) {if(built && !payload.concat(value)) built=false;};
   append("{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"");
-  append(eventId("evt").c_str());
+  append(startEvent.c_str());
   append("\",\"device_id\":\"");
   append(jsonEscape(deviceId_).c_str());
   append("\",\"event\":\"session_start\"");
