@@ -3,6 +3,9 @@
 
 // Small, portable operations used by the existing client and settings path.
 namespace fire_backend_policy {
+// UI-owned send result, not a delivery ACK. Once writing starts, a false
+// return cannot prove that nothing reached the peer.
+enum class SendDisposition:uint8_t {NotQueued,Queued,Uncertain};
 // Arduino String's empty assignment retains its allocation. A fresh move
 // constructor steals that allocation and resets the source; destruction frees
 // it even when its logical length was already zero. Never use move-assignment.

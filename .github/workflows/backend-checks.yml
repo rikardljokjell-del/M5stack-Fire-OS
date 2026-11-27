@@ -52,6 +52,7 @@ jobs:
           tests/test_job_controls.py
           tests/test_job_reopen_delivery.py
           tests/test_package_receipt_reconnect.py
+          tests/test_run_receipt_enqueue.py
           tests/test_app_catalog_snapshot.py tests/test_storage_accounting.py
           tests/test_local_qa_uart.py
           tests/test_session_reconnect.py

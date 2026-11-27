@@ -1,4 +1,4 @@
-# Leveransestatus – 26. november 2026
+# Leveransestatus – 27. november 2026
 
 Samlet arbeid følger [godkjent plan](DELIVERY_PLAN.md). Bruk
 [oppsettsveiledningen](SETUP.md) som inngang. Dette dokumentet skiller kildekode,
@@ -130,6 +130,15 @@ serverfeil. Ingen RUN/installasjon/modell ble startet i den gruppen. RC16
 retter normal JOBBSTATUS og deler handlingsetiketten mellom visning og
 USB-observasjon; ekte runtimefeil skal fortsatt gi feilflagg. Resterende
 fysiske Run-, avbrudds- og nettbruddstester gjenstår.
+
+Den siste gjennomgangen fant også at Started-/Healthy-status kunne merkes
+som sendt selv om sendekøen avviste meldingen. RC16 får derfor én avgrenset
+tilstand for den aktuelle, allerede autoriserte kjøringen: Started må kølegges
+før Healthy, og bare sikkert ikke-kølagte meldinger forsøkes igjen innen den
+opprinnelige kjørefristen. Delvis skriving eller usikkert forbindelsesskifte
+skal vises som uavklart, uten automatisk appstart eller nytt AI-kall.
+Stabile meldings-IDer og identisk innhold beskytter eksplisitte duplikater.
+Den fysiske kontrollen av denne rettingen er fortsatt åpen.
 
 ### Historikk: gjenåpning av jobber og appoppdatering
 

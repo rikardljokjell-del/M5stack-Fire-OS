@@ -712,7 +712,12 @@ class FireOS {
   String aiInstallId_;
   String luaRunId_;
   fire_run_receipts::Ring luaRunReceipts_;
+  fire_run_receipts::Delivery luaRunDelivery_;
   bool luaHealthySent_ = false;
+  bool bindLuaRunStatus(fire_run_receipts::Entry* entry);
+  void serviceLuaRunStatus();
+  void noteRunStatusUnconfirmed();
+  bool deferLuaRunRebind() const;
   String aiAssistantText_;
   String aiWorkflowText_;
   static constexpr uint32_t kAiAudioSampleRate = 16000;

@@ -8,6 +8,7 @@
 #include "fire_async_client.h"
 #include "fire_ws_handshake.h"
 #include "fire_session_selection.h"
+#include "fire_backend_policy.h"
 
 class FireBackendClient {
  public:
@@ -65,6 +66,7 @@ class FireBackendClient {
   bool sessionReady() const { return connected() && sessionId_.length() > 0; }
   bool active() const { return state_ != State::Offline; }
   bool pendingWrites() const { return !usingReverseTransport_ && client_.pendingWrites(); }
+  fire_backend_policy::SendDisposition lastSendDisposition() const {return lastSendDisposition_;}
   bool networkIdle() const {
     return !client_.running() && !audioClient_.running() && !audioTransferRunning_;
   }
@@ -133,9 +135,9 @@ class FireBackendClient {
                            bool ok, const String& archiveHash,
                            const String& message,const String& stableEventId=String());
   bool appStarted(const String& runId, const String& packageId,
-                  const String& sourceHash, const String& diagnostics = String());
+                  const String& sourceHash, const String& diagnostics = String(),const String& stableEventId=String());
   bool appHealthy(const String& runId, const String& packageId,
-                  const String& diagnostics = String());
+                  const String& diagnostics = String(),const String& stableEventId=String());
   bool appFailed(const String& runId, const String& packageId,
                  const String& errorCode, const String& message,
                  const String& diagnostics = String());
@@ -167,6 +169,7 @@ class FireBackendClient {
   WiFiClient* audioTransportClient_ = nullptr;
   bool usingReverseTransport_ = false;
   State state_ = State::Offline;
+  fire_backend_policy::SendDisposition lastSendDisposition_=fire_backend_policy::SendDisposition::NotQueued;
   String host_;
   uint16_t port_ = 8765;
   String token_;

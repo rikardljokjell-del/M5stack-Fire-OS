@@ -13,6 +13,7 @@
 #include "fire_json_guard.h"
 #include "fire_session_json.h"
 #include "fire_worker_diagnostics.h"
+#include "fire_run_receipts.h"
 #include "fire_ws_handshake.h"
 #include <mbedtls/sha1.h>
 #include <cJSON.h>
@@ -596,6 +597,7 @@ String FireBackendClient::eventId(const char* prefix) {
 
 bool FireBackendClient::sendFrame(uint8_t opcode, const uint8_t* data,
                                   size_t length) {
+  lastSendDisposition_=fire_backend_policy::SendDisposition::NotQueued;
   WiFiClient* client = activeClient();
   if (!client || !client->connected() || length > kMaxFrameBytes) return false;
   uint8_t header[10] = {};
@@ -622,25 +624,47 @@ bool FireBackendClient::sendFrame(uint8_t opcode, const uint8_t* data,
   // one producer for this stream, so the worker can only increase free space.
   if (!usingReverseTransport_ && !client_.canWrite(headerLength + length))
     return false;
-  if (client->write(header, headerLength) != headerLength) { disconnect(); return false; }
+  lastSendDisposition_=fire_backend_policy::SendDisposition::Uncertain;
+  if (client->write(header, headerLength) != headerLength) { disconnect(); lastSendDisposition_=fire_backend_policy::SendDisposition::Uncertain;return false; }
   uint8_t chunk[256];
   size_t offset = 0;
   while (offset < length) {
     const size_t amount = min(sizeof(chunk), length - offset);
     for (size_t index = 0; index < amount; ++index)
       chunk[index] = data[offset + index] ^ mask[(offset + index) & 3];
-    if (client->write(chunk, amount) != amount) { disconnect(); return false; }
+    if (client->write(chunk, amount) != amount) { disconnect();lastSendDisposition_=fire_backend_policy::SendDisposition::Uncertain;return false; }
     offset += amount;
   }
+  lastSendDisposition_=fire_backend_policy::SendDisposition::Queued;
   return true;
 }
 
 bool FireBackendClient::sendEvent(const String& event, const String& fields,
                                   const String& stableEventId) {
+  lastSendDisposition_=fire_backend_policy::SendDisposition::NotQueued;
   // Protocol 0.2 requires session_id on every event after session_start.
   // Do not emit a malformed listen/build event while the server's
   // session_started message is still in flight.
   if (!sessionReady()) return false;
+  if(stableEventId.length() && (event=="app_started" || event=="app_healthy")) {
+    // Only canonical run receipts use this checked, single-owner envelope.
+    // Wire IDs need no escaping; OOM cannot silently substitute/truncate an
+    // event ID and turn a later explicit duplicate into a different event.
+    const String* const ids[]={&stableEventId,&deviceId_,&bootId_,&sessionId_};
+    for(const String* id:ids)
+      if(!fire_run_receipts::Delivery::wireId(id->c_str())) return false;
+    String payload;
+    const size_t size=sizeof("{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"")-1+
+      stableEventId.length()+sizeof("\",\"device_id\":\"")-1+deviceId_.length()+sizeof("\",\"event\":\"")-1+
+      event.length()+sizeof("\",\"boot_id\":\"")-1+bootId_.length()+sizeof("\",\"session_id\":\"")-1+
+      sessionId_.length()+sizeof("\"")-1+fields.length()+1;
+    if(!payload.reserve(size) || !payload.concat("{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"") ||
+       !payload.concat(stableEventId.c_str()) || !payload.concat("\",\"device_id\":\"") || !payload.concat(deviceId_.c_str()) ||
+       !payload.concat("\",\"event\":\"") || !payload.concat(event.c_str()) || !payload.concat("\",\"boot_id\":\"") ||
+       !payload.concat(bootId_.c_str()) || !payload.concat("\",\"session_id\":\"") || !payload.concat(sessionId_.c_str()) ||
+       !payload.concat("\"") || !payload.concat(fields.c_str()) || !payload.concat("}") || payload.length()!=size) return false;
+    return sendFrame(0x1,reinterpret_cast<const uint8_t*>(payload.c_str()),payload.length());
+  }
   String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
                    (stableEventId.length() ? jsonEscape(stableEventId) : eventId("evt")) + "\",\"device_id\":\"" +
                    jsonEscape(deviceId_) + "\",\"event\":\"" + event +
@@ -931,20 +955,38 @@ bool FireBackendClient::deviceInstallResult(const String& installId,
 }
 
 bool FireBackendClient::appStarted(const String& runId, const String& packageId,
-                                   const String& sourceHash, const String& diagnostics) {
+                                   const String& sourceHash, const String& diagnostics,const String& stableEventId) {
+  lastSendDisposition_=fire_backend_policy::SendDisposition::NotQueued;
+  if(stableEventId.length()) {
+    if(diagnostics.length() || !fire_run_receipts::Delivery::wireId(runId.c_str(),61) ||
+       !fire_run_receipts::Delivery::wireId(packageId.c_str()) || !fire_lua_install::hash(sourceHash.c_str())) return false;
+    String fields;
+    if(!fields.concat(",\"run_id\":\"") || !fields.concat(runId.c_str()) || !fields.concat("\",\"package_id\":\"") ||
+       !fields.concat(packageId.c_str()) || !fields.concat("\",\"source_sha256\":\"") || !fields.concat(sourceHash.c_str()) || !fields.concat("\"")) return false;
+    return sendEvent("app_started",fields,stableEventId);
+  }
   String fields = ",\"run_id\":\"" + jsonEscape(runId) +
                   "\",\"package_id\":\"" + jsonEscape(packageId) +
                   "\",\"source_sha256\":\"" + jsonEscape(sourceHash) + "\"";
   if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
-  return sendEvent("app_started", fields);
+  return sendEvent("app_started", fields,stableEventId);
 }
 
 bool FireBackendClient::appHealthy(const String& runId, const String& packageId,
-                                   const String& diagnostics) {
+                                   const String& diagnostics,const String& stableEventId) {
+  lastSendDisposition_=fire_backend_policy::SendDisposition::NotQueued;
+  if(stableEventId.length()) {
+    if(diagnostics.length() || !fire_run_receipts::Delivery::wireId(runId.c_str(),61) ||
+       !fire_run_receipts::Delivery::wireId(packageId.c_str())) return false;
+    String fields;
+    if(!fields.concat(",\"run_id\":\"") || !fields.concat(runId.c_str()) || !fields.concat("\",\"package_id\":\"") ||
+       !fields.concat(packageId.c_str()) || !fields.concat("\"")) return false;
+    return sendEvent("app_healthy",fields,stableEventId);
+  }
   String fields = ",\"run_id\":\"" + jsonEscape(runId) +
                   "\",\"package_id\":\"" + jsonEscape(packageId) + "\"";
   if (diagnostics.length() > 0) fields += ",\"diagnostics\":" + diagnostics;
-  return sendEvent("app_healthy", fields);
+  return sendEvent("app_healthy", fields,stableEventId);
 }
 
 bool FireBackendClient::appFailed(const String& runId, const String& packageId,

@@ -573,7 +573,7 @@ int jsonIntField(const String& json, const char* key, int fallback = 0) {
   const int colon = json.indexOf(':', keyAt + marker.length());
   if (colon < 0) return fallback;
   int end = colon + 1;
-  while (end < json.length() && (json[end] == ' ' || json[end] == '\t')) ++end;
+  while (end < static_cast<int>(json.length()) && (json[end] == ' ' || json[end] == '\t')) ++end;
   return json.substring(end).toInt();
 }
 
@@ -1299,6 +1299,7 @@ void FireOS::update() {
   serviceLocalQa();
   serviceFirmwareAction();
   servicePackageInstall();
+  serviceLuaRunStatus();
   if (auto* request = setupPortal_.take()) {
     const bool provision = request->operation == FireSetupPortal::Operation::Provision;
     bool ok = wifiSetupActive_ && !portalCloseAt_ && setupPortal_.current(*request) &&
@@ -4146,6 +4147,7 @@ void FireOS::invalidateBackendCatalog() {
   backendCatalogRequested_=false;
 }
 void FireOS::clearBackendCatalog() {
+  luaRunDelivery_.clear(); // Successful owner/endpoint/credential change revokes old receipt scope.
   for (uint8_t i=0;i<backendAppCount_;++i) backendApps_[i]=BackendAppInfo();
   backendAppCount_=0;backendCatalogEpoch_=backendCatalogAt_=backendCatalogSeen_=0;
   backendCatalogRequested_=backendCatalogLoading_=backendCatalogOverflow_=backendCatalogDirty_=false;
@@ -6203,6 +6205,7 @@ void FireOS::updateAiAudioOutput() {
 
 bool FireOS::startLuaApp(const String& path, const String& name,
                          const String& launchPackageId,const String& expectedSourceHash) {
+  luaRunDelivery_.clear();
   aiJobViewing_=aiJobOpenPending_=false;appUpdateStage_=0;
   luaSdkFrame_.invalidate();
   if (!luaRuntime_) {
@@ -6520,6 +6523,12 @@ bool FireOS::startLuaApp(const String& path, const String& name,
 }
 
 void FireOS::stopLuaApp(const String& reason) {
+  const bool canReportNaturalStop=backendClient_ && backendClient_->sessionReady() &&
+      luaRunDelivery_.scope(backendClient_->sessionId().c_str(),backendClient_->bootId().c_str()) &&
+      luaRunId_==luaRunDelivery_.entry->id && luaPackageId_==luaRunDelivery_.entry->package && luaSourceHash_==luaRunDelivery_.entry->source &&
+      luaRunDelivery_.started() && !luaRunDelivery_.uncertain() &&
+      backendCommandUnexpired(luaRunDelivery_.entry->expires);
+  luaRunDelivery_.clear(); // Revoke pending status before stopping/clearing VM identity.
   luaSdkFrame_.invalidate();
   const String stoppedRunId = luaRunId_;
   const String stoppedAppId = luaAppId_;
@@ -6601,12 +6610,10 @@ void FireOS::stopLuaApp(const String& reason) {
   luaHealthySent_ = false;
   flushLuaDiagnostic();
   if (stoppedRunId.length() > 0 && backendClient_) {
-    if (userExit)
-      backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "user_exit",
-                                 stoppedDiagnostics);
-    else if (reason == "runtime_limit")
-      backendClient_->appStopped(stoppedRunId, stoppedPackageId, "", "runtime_limit",
-                                 stoppedDiagnostics);
+    if (userExit || reason=="runtime_limit") {
+      if(canReportNaturalStop) backendClient_->appStopped(stoppedRunId,stoppedPackageId,"",
+          userExit?"user_exit":"runtime_limit",stoppedDiagnostics);
+    }
     else if (reason.length() > 0 && !requestedStop && !osNavigation)
       backendClient_->appFailed(stoppedRunId, stoppedPackageId, "runtime_error",
                                 reason, stoppedDiagnostics);
@@ -7275,6 +7282,63 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
   redrawRequested_ = true;
 }
 
+bool FireOS::deferLuaRunRebind() const {
+  const auto* entry=luaRunDelivery_.entry;
+  return entry && luaAppActive_ && luaRuntime_ && luaRuntime_->running() &&
+    luaRunId_==entry->id && luaPackageId_==entry->package && luaSourceHash_==entry->source &&
+    (luaRunDelivery_.pending() || luaRunDelivery_.uncertain());
+}
+
+void FireOS::noteRunStatusUnconfirmed() {
+  if(luaRunDelivery_.uncertain() && deferLuaRunRebind() && luaAiBindPackageId_==luaPackageId_) {
+    luaAiBindPackageId_=String();luaAiBindSent_=false;
+  }
+  const String text="Kjørestatus uavklart";
+  bool changed=aiWorkflowText_!=text || managerStatus_!=text;
+  aiWorkflowText_=text;managerStatus_=text;
+  if(luaPackageId_==luaRepairReadyPackageId_) {changed=changed || luaRepairMessage_!=text;luaRepairMessage_=text;}
+  if(changed) redrawRequested_=true; // Never turn a healthy local VM into APP ERROR.
+}
+
+bool FireOS::bindLuaRunStatus(fire_run_receipts::Entry* entry) {
+  luaHealthySent_=false;
+  return backendClient_ && backendClient_->sessionReady() &&
+    luaRunDelivery_.arm(entry,backendClient_->sessionId().c_str(),backendClient_->bootId().c_str(),backendClient_->connectionEpoch());
+}
+
+void FireOS::serviceLuaRunStatus() {
+  auto& delivery=luaRunDelivery_;
+  if(!delivery.entry) return;
+  const auto& entry=*delivery.entry;
+  if(wifiMode_==2 || backendMode_==2 || !backendClient_ || !luaAppActive_ || !luaRuntime_ || !luaRuntime_->running() ||
+      luaRunId_!=entry.id || luaPackageId_!=entry.package || luaSourceHash_!=entry.source ||
+      !backendCommandUnexpired(entry.expires) || backendClient_->bootId()!=delivery.boot ||
+      (backendClient_->sessionReady() && backendClient_->sessionId()!=delivery.session)) {
+    const bool pending=delivery.pending();delivery.clear();if(pending) noteRunStatusUnconfirmed();return;
+  }
+  if(!backendClient_->sessionReady()) return; // Original grant expiry still bounds this wait.
+  if(delivery.uncertain()) return;
+  if(!delivery.epochSafe(backendClient_->connectionEpoch())) {delivery.unknown();noteRunStatusUnconfirmed();return;}
+  if(!delivery.pending() || !delivery.due(millis())) return;
+  const bool start=delivery.flags&fire_run_receipts::Delivery::StartPending;
+  if(!start && !delivery.wantHealthy()) return;
+  char event[65];
+  if(!delivery.eventId(!start,event)) {delivery.unknown();noteRunStatusUnconfirmed();return;}
+  delivery.attempt(millis());
+  // Canonical stable body: optional diagnostics are absent even on the FIRST
+  // send, so an explicit duplicate has the identical existing event digest.
+  const String stableEvent(event);
+  if(stableEvent.length()!=strlen(event)) return; // Known local OOM; nothing queued, cadence still bounds retry.
+  const bool queued=start?backendClient_->appStarted(luaRunId_,luaPackageId_,luaSourceHash_,String(),stableEvent):
+    backendClient_->appHealthy(luaRunId_,luaPackageId_,String(),stableEvent);
+  const auto disposition=queued?fire_backend_policy::SendDisposition::Queued:
+    backendClient_->lastSendDisposition()==fire_backend_policy::SendDisposition::NotQueued?
+      fire_backend_policy::SendDisposition::NotQueued:fire_backend_policy::SendDisposition::Uncertain;
+  delivery.sent(!start,disposition,backendClient_->connectionEpoch());
+  if(!start && queued) luaHealthySent_=true;
+  if(delivery.uncertain()) noteRunStatusUnconfirmed();
+}
+
 void FireOS::updateLuaApp() {
   if (!luaAppActive_) return;
   const uint32_t now = millis();
@@ -7289,11 +7353,9 @@ void FireOS::updateLuaApp() {
                                      : String("runtime unavailable");
     const bool runtimeLimit = error == "Lua app runtime limit exceeded";
     stopLuaApp(runtimeLimit ? "runtime_limit" : error);
-  } else if (luaRunId_.length() > 0 && !luaHealthySent_) {
-    if (backendClient_)
-      backendClient_->appHealthy(luaRunId_, luaPackageId_,
-                                 luaDiagnosticsJson("update"));
-    luaHealthySent_ = true;
+  } else {
+    luaRunDelivery_.sawUpdate();
+    serviceLuaRunStatus();
   }
   if (luaAppActive_) flushLuaRgb();
 }
@@ -7363,6 +7425,7 @@ void FireOS::updateBackend() {
   // Quick Settings is an overlay, not an exit from its live conversation.
   const Screen demandScreen=fire_ui_cadence::contentScreen(screen_,previousScreen_,Screen::QuickSettings);
   const bool backendDemand = (packageManager_ && packageManager_->busy()) || evolutionDemand || demandScreen == Screen::AiDeveloper ||
+                              luaRunDelivery_.pending() ||
                               (luaAppActive_ && (luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_)) ||
                               luaAiBindPackageId_.length()>0 ||
                               demandScreen == Screen::AiApi ||
@@ -7436,7 +7499,7 @@ void FireOS::updateBackend() {
   if(luaAiBindPackageId_.length()) {
     if(!luaAppActive_ || !(luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_) || luaPackageId_!=luaAiBindPackageId_ ||
        millis()-luaAiBindAt_>30000) {luaAiBindPackageId_=String();luaAiBindSent_=false;}
-    else if(!luaAiBindSent_ && !appInventoryPending_ && !luaScanPending_ &&
+    else if(!luaAiBindSent_ && !deferLuaRunRebind() && !appInventoryPending_ && !luaScanPending_ &&
             luaCacheComplete_ && !(packageManager_ && packageManager_->busy()) && !backendClient_->pendingWrites() && backendClient_->sessionReady())
       luaAiBindSent_=backendClient_->confirmRun(luaAiBindPackageId_);
   }
@@ -7459,7 +7522,7 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
       os->cancelLuaRuntimeAi(job,"not_connected");
     for (LuaHardwareJob& job:os->luaJobs_) if (job.kind==LuaJobKind::Data && job.state==0 && job.started && job.aiRequestId.length())
       os->cancelLuaDataJob(job,"not_connected");
-    if(os->luaAppActive_ && (os->luaRuntimeAiAllowed_ || os->luaDataAllowed_ || os->luaDevelopJob_)) {
+    if(os->luaAppActive_ && !os->deferLuaRunRebind() && (os->luaRuntimeAiAllowed_ || os->luaDataAllowed_ || os->luaDevelopJob_)) {
       // A new authenticated session must bind the real VM again. Failed jobs
       // stay failed; reconnect never replays a paid request.
       os->luaRunId_=String();os->luaAiBindPackageId_=os->luaPackageId_;
@@ -8107,7 +8170,8 @@ void FireOS::handleBackendMessage(const String& message) {
     const String commandSource = jsonStringField(message,"source_sha256");
     const uint32_t expiresAt = static_cast<uint32_t>(jsonIntField(message, "expires_at"));
     if (runId.length() == 0 || packageId.length() == 0 ||
-        !backendClient_ || commandBoot!=backendClient_->bootId()) {
+        !backendClient_ || !backendClient_->sessionReady() || commandBoot!=backendClient_->bootId() ||
+        jsonStringField(message,"session_id")!=backendClient_->sessionId()) {
       if (backendClient_)
         backendClient_->appFailed(runId, packageId, "invalid_command",
                                   "Invalid or stale run command");
@@ -8125,15 +8189,26 @@ void FireOS::handleBackendMessage(const String& message) {
     const auto admission=luaRunReceipts_.admit(runId.c_str(),packageId.c_str(),commandSource.c_str(),commandHash.c_str(),
       expiresAt,backendCommandNow(),commandBoot==backendClient_->bootId(),receipt);
     if(admission==fire_run_receipts::Admission::Busy || admission==fire_run_receipts::Admission::Invalid) {
+      if(admission==fire_run_receipts::Admission::Busy && runId!=luaRunId_) luaRunDelivery_.clear();
       backendClient_->appFailed(runId,packageId,
         admission==fire_run_receipts::Admission::Busy?"command_busy":"invalid_command",
         admission==fire_run_receipts::Admission::Busy?"Unexpired command receipts are full":"Invalid command identity");
       return;
     }
+    if(admission==fire_run_receipts::Admission::New) luaRunDelivery_.clear();
+    if(!fire_run_receipts::Delivery::canBind(receipt,backendClient_->sessionId().c_str(),commandBoot.c_str())) {
+      receipt->state=fire_run_receipts::State::Failed;
+      aiWorkflowText_="Run-identiteten kunne ikke bindes";
+      backendClient_->appFailed(runId,packageId,"invalid_command","Run receipt identity exceeds bounded wire fields");return;
+    }
     if(admission==fire_run_receipts::Admission::Duplicate) {
       const bool started=receipt->state==fire_run_receipts::State::Started || receipt->state==fire_run_receipts::State::Healthy;
       if(started && luaAppActive_ && luaRuntime_ && luaRuntime_->running() && luaRunId_==runId &&
-         luaPackageId_==packageId && luaSourceHash_==commandSource) backendClient_->appStarted(runId,packageId,luaSourceHash_);
+         luaPackageId_==packageId && luaSourceHash_==commandSource) {
+        if(luaRunDelivery_.entry==receipt && luaRunDelivery_.scope(backendClient_->sessionId().c_str(),commandBoot.c_str())) {
+          luaRunDelivery_.duplicate();serviceLuaRunStatus();
+        } else noteRunStatusUnconfirmed();
+      }
       else backendClient_->appFailed(runId,packageId,"previous_failure","Run command was already consumed");
       return;
     }
@@ -8155,7 +8230,7 @@ void FireOS::handleBackendMessage(const String& message) {
       luaDataStore_.bindRun(runId);
       evolution_.bindRun(runId,millis());
       receipt->state=fire_run_receipts::State::Started;
-      if(backendClient_) backendClient_->appStarted(runId,packageId,luaSourceHash_,luaDiagnosticsJson("start"));
+      if(bindLuaRunStatus(receipt)) serviceLuaRunStatus();else noteRunStatusUnconfirmed();
       redrawRequested_=true;return;
     }
     if (path.length() > 0 &&
@@ -8175,9 +8250,7 @@ void FireOS::handleBackendMessage(const String& message) {
         luaRepairMessage_ = "Fixed app running";
       }
       receipt->state=fire_run_receipts::State::Started;
-      if (backendClient_)
-        backendClient_->appStarted(runId, packageId, luaSourceHash_,
-                                   luaDiagnosticsJson("start"));
+      if(bindLuaRunStatus(receipt)) serviceLuaRunStatus();else noteRunStatusUnconfirmed();
     } else {
       receipt->state=fire_run_receipts::State::Failed;
       const String failure = path.length() > 0 && luaAppError_.length() > 0
