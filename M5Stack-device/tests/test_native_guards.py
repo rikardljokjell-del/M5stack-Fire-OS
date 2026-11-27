@@ -136,9 +136,34 @@ class NativeGuardTests(unittest.TestCase):
             "run_id": values["runId"], "package_id": values["packageId"],
             "source_sha256": values["sourceHash"],
         })
-        calls = re.findall(r'appStarted\(\s*runId\s*,\s*packageId\s*,\s*([^,)]+)',
-                           (ROOT / "src/fire_os.cpp").read_text(encoding="utf-8"))
-        self.assertEqual(calls, ["luaSourceHash_"] * 3)
+        # Canonical receipts now share one checked sending path. Both actual
+        # launch/bind branches and an explicit duplicate must reach that path
+        # with the current verified VM identity; centralization is not a reason
+        # to weaken the source binding or permit a second VM launch.
+        self.assertIn('fire_lua_install::hash(sourceHash.c_str())', method)
+        self.assertIn('fields.concat(sourceHash.c_str())', method)
+        os_source = (ROOT / "src/fire_os.cpp").read_text(encoding="utf-8")
+        service = os_source.split('void FireOS::serviceLuaRunStatus()', 1)[1].split(
+            'void FireOS::updateLuaApp()', 1)[0]
+        calls = re.findall(r'appStarted\(\s*luaRunId_\s*,\s*luaPackageId_\s*,\s*([^,)]+)', service)
+        self.assertEqual(calls, ["luaSourceHash_"])
+        self.assertIn('luaRunId_!=entry.id', service)
+        self.assertIn('luaPackageId_!=entry.package', service)
+        self.assertIn('luaSourceHash_!=entry.source', service)
+        self.assertIn('backendClient_->sessionId()!=delivery.session', service)
+        self.assertIn('backendClient_->bootId()!=delivery.boot', service)
+        run = os_source.split('if (type == "run_request")', 1)[1].split(
+            'if (type == "stop_request")', 1)[0]
+        duplicate = run.split('if(admission==fire_run_receipts::Admission::Duplicate)', 1)[1].split(
+            'String path;', 1)[0]
+        self.assertIn('luaSourceHash_==commandSource', duplicate)
+        self.assertIn('luaRunDelivery_.duplicate();serviceLuaRunStatus();', duplicate)
+        self.assertNotIn('startLuaApp(', duplicate)
+        self.assertEqual(run.count('if(bindLuaRunStatus(receipt)) serviceLuaRunStatus();'), 2)
+        self.assertIn('validSha256Hex(commandSource) && luaSourceHash_==commandSource', run)
+        self.assertIn('resolveLuaPackage(packageId,commandHash,commandSource,path)', run)
+        self.assertIn('startLuaApp(path, sdBaseName(path), packageId,commandSource)', run)
+        self.assertLess(run.index('resolveLuaPackage('), run.index('startLuaApp('))
 
     def test_actual_cpp_guards(self):
         output = self.run_native("native_guards.cpp")
