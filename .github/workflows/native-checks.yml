@@ -40,3 +40,5 @@ jobs:
           python -m unittest discover -s M5Stack-device/tests -p 'test_native_guards.py' -v
           python -m unittest discover -s M5Stack-device/tests -p 'test_local_qa.py' -v
           python -m unittest discover -s M5Stack-device/tests -p 'test_production_app_flow.py' -v
+          python -m unittest discover -s M5Stack-device/tests -p 'test_session_transport.py' -v
+          python -m unittest discover -s M5Stack-device/tests -p 'test_session_ui.py' -v

@@ -25,11 +25,14 @@ bool FireOS::requestAppDownload(const String& project,const String& package,cons
 }
 
 void FireOS::cancelAppDownload() {
+  const bool waitingForOffer=downloadPhase_==1;
   // Synchronous revocation precedes asynchronous worker/socket cleanup and ACKs.
   if(userRunAfterInstall_==downloadPackage_) userRunAfterInstall_=String();
   if(downloadPhase_==2 && packageManager_ && packageManager_->packageId()==downloadPackage_)
     packageManager_->cancel();
   downloadPhase_=3;
+  if(waitingForOffer && aiJobViewing_ && aiJobNeedsInstall_ && downloadPackage_.length() && downloadPackage_==aiReadyPackageId_)
+    aiWorkflowState_=5; // The selected authoritative READY job remains retryable.
   if(appUpdateCandidate_==downloadPackage_ && appUpdateStage_==2) {
     appUpdateStage_=1;appUpdateFailure_=1;appUpdateSelection_=1;
   }

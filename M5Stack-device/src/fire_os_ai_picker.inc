@@ -137,6 +137,8 @@ void FireOS::openAiJob() {
   if(route==fire_ai_menu::OpenRoute::None) return;
   if ((packageManager_ && packageManager_->busy()) || luaRepairCancelPending_ || luaRepairConfirmPending_ || userRunAfterInstall_.length()) {aiWorkflowText_="Venter på jobbhandlingen";return;}
   aiJobOpenPending_=true;aiJobViewing_=true;aiJobNeedsInstall_=false;
+  aiJobOpenRequest_=String();
+  aiJobOpenAt_=millis();aiJobOpenEpoch_=backendClient_->connectionEpoch();
   aiWorkflowText_="Henter jobbstatus";
   if (route==fire_ai_menu::OpenRoute::Repair) {
     // Open is read-only, including an awaiting-confirmation repair. It never
@@ -150,11 +152,26 @@ void FireOS::openAiJob() {
     luaErrorAppId_=String();luaErrorAppName_=aiJobName_;luaAppError_="Reparasjon av "+aiJobName_;
     aiRepairResumePending_=false;aiProjectPickerActive_=false;
     previousScreen_=Screen::AiDeveloper;screen_=Screen::LuaApp;
-    requestLuaRepairStatus();
+    luaRepairStatusQueryPending_=false;
+    aiJobOpenRequest_="jo-"+String(esp_random(),HEX);
+    if(!backendClient_->appRepairStatus(luaRepairId_,luaRepairAppId_,aiJobOpenRequest_))
+      failAiJobOpen("Kunne ikke hente jobben. Prøv igjen");
   } else if (backendClient_->buildJobs(buildJobsOffset_)) {
     buildJobsRequested_=true;buildJobsRequestAt_=millis();
   } else {aiJobOpenPending_=false;aiWorkflowText_="Kunne ikke hente jobben";}
   redrawRequested_=true;
+}
+
+void FireOS::failAiJobOpen(const char* message) {
+  aiJobOpenPending_=false;aiJobOpenRequest_=String();luaRepairStatusQueryPending_=false;
+  aiWorkflowText_=message;luaRepairMessage_=message;redrawRequested_=true;
+}
+
+void FireOS::serviceAiJobOpen() {
+  if(!aiJobViewing_ || !aiJobOpenPending_) return;
+  if(uint32_t(millis()-aiJobOpenAt_)>=10000 || !backendClient_ ||
+     backendClient_->connectionEpoch()!=aiJobOpenEpoch_)
+    failAiJobOpen("Ingen jobbstatus. Tilbake og prøv igjen");
 }
 
 void FireOS::restoreAiJob(const cJSON* row) {
@@ -362,7 +379,13 @@ bool FireOS::requestLuaAppOpen(const String& path,const String& name,const Strin
 void FireOS::handleAppUpdateButton(uint8_t index) {
   const auto action=fire_app_updates::confirm(appUpdateStage_,appUpdateSelection_,appUpdateReady_);
   if(appUpdateStage_==3) {
-    if(index==1 && action==fire_app_updates::Action::RunVerified && backendClient_ && backendClient_->sessionReady() && backendClient_->confirmRun(appUpdateCandidate_)) {appUpdateStage_=0;appUpdateReady_=false;redrawRequested_=true;}
+    if(index==2) {appUpdateStage_=0;appUpdateReady_=false;redrawRequested_=true;return;}
+    if(index==1 && action==fire_app_updates::Action::RunVerified) {
+      if(!backendClient_ || !backendClient_->sessionReady()) appUpdateFailure_=3;
+      else if(!backendClient_->confirmRun(appUpdateCandidate_)) appUpdateFailure_=4;
+      else {appUpdateStage_=0;appUpdateReady_=false;aiWorkflowText_="Starter app";managerStatus_="Starter app";}
+      redrawRequested_=true;
+    }
     return;
   }
   if(appUpdateStage_==2) {if(index==2) {cancelAppDownload();return;}if(index==1 && action==fire_app_updates::Action::Minimize) {appUpdateStage_=0;redrawRequested_=true;}return;} // minimize transfer view
@@ -387,11 +410,11 @@ void FireOS::handleAppUpdateButton(uint8_t index) {
 
 void FireOS::drawAppUpdatePrompt() {
   drawPanel(12,32,296,178);
-  drawText(24,45,appUpdateFailure_==2?"Valget ikke lagret":appUpdateFailure_?"Nedlasting mislyktes":"Ny versjon finnes",appUpdateFailure_?kOrange:kText,2,kPanel);
+  drawText(24,45,appUpdateStage_==3?"Oppdatering installert":appUpdateFailure_==2?"Valget ikke lagret":appUpdateFailure_?"Nedlasting mislyktes":"Ny versjon finnes",appUpdateFailure_?kOrange:kText,2,kPanel);
   if(appUpdateStage_==3) {
     drawText(24,90,"Oppdatering installert",kText,1,kPanel);
-    drawText(24,120,"Åpne oppdatert app?",kText,1,kPanel);
-    drawFooter("","Åpne","");return;
+    drawText(24,120,appUpdateFailure_==3?"Backend ikke klar. Prøv igjen":appUpdateFailure_==4?"Kunne ikke sende. Prøv igjen":"Åpne oppdatert app?",kText,1,kPanel);
+    drawFooter("","Åpne","Tilbake");return;
   }
   if(appUpdateStage_==2) {
     drawText(24,90,"Laster ned oppdatering",kText,1,kPanel);

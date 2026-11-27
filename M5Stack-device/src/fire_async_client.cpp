@@ -149,7 +149,9 @@ void FireAsyncClient::run() {
     tls.setTimeout(1);
     if (!stop_ && time(nullptr) >= 1700000000) {
       const uint32_t connectStarted=millis();
+      fireNetMemory(1,0);
       ok=tls.connect(host_,port_,5000);
+      if(ok && !stop_) fireNetMemory(2,0);
       if (ok && !stop_) Serial.printf("FIRE net_ready connect_ms=%lu\n",static_cast<unsigned long>(millis()-connectStarted));
     }
   } else {

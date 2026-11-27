@@ -78,7 +78,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc14";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc15";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -6836,13 +6836,18 @@ void FireOS::cancelLuaRepair() {
 void FireOS::handleLuaRepairStatus(const String& message) {
   const String incomingRepair = jsonStringField(message, "repair_id");
   const String incomingApp = jsonStringField(message, "app_id");
+  if(aiJobViewing_ && aiJobRepair_.length() &&
+     (!aiJobOpenPending_ && aiJobOpenRequest_.length()==0 && luaRepairStatus_=="loading")) return;
+  if(aiJobViewing_ && aiJobOpenPending_ &&
+     (!backendClient_ || backendClient_->connectionEpoch()!=aiJobOpenEpoch_ ||
+      uint32_t(millis()-aiJobOpenAt_)>=10000 || incomingRepair!=aiJobRepair_)) return;
   if ((luaRepairId_.length() > 0 && incomingRepair.length() > 0 &&
        incomingRepair != luaRepairId_) ||
       (incomingApp.length() > 0 && luaRepairAppId_.length() > 0 && incomingApp != luaRepairAppId_) ||
       (luaRepairId_.length()==0 && luaRepairRequested_ && incomingApp.length()>0 && incomingApp!=luaErrorAppId_))
     return;
   const bool opened=aiJobViewing_ && aiJobOpenPending_ && incomingRepair==aiJobRepair_;
-  if (opened) {luaErrorAppId_=incomingApp;aiJobOpenPending_=false;}
+  if (opened) {luaErrorAppId_=incomingApp;aiJobOpenPending_=false;aiJobOpenRequest_=String();}
   if (incomingApp.length()) luaRepairAppId_=incomingApp;
   const String incomingName=jsonStringField(message,"app_name");
   if (incomingName.length()) luaRepairAppName_=incomingName;
@@ -6953,7 +6958,16 @@ void FireOS::handleLuaErrorButton(uint8_t index) {
     else if(index==0) {home();} // Minimize retains explicit Run intent; Cancel never does.
     return;
   }
-  if (aiJobViewing_ && aiJobOpenPending_ && index==1) {luaRepairMessage_="Venter på jobbstatus";return;}
+  if(aiJobViewing_ && index==2) {
+    aiJobViewing_=aiJobOpenPending_=false;aiJobOpenRequest_=String();luaRepairStatusQueryPending_=false;
+    screen_=Screen::AiDeveloper;aiProjectPickerActive_=true;aiPickerPage_=fire_ai_menu::Page::Job;
+    redrawRequested_=true;return; // Read-only Back never cancels or resumes a job.
+  }
+  if(aiJobViewing_ && index==1 && (aiJobOpenPending_ || luaRepairStatus_=="loading")) {
+    if(aiJobOpenPending_) luaRepairMessage_="Venter på jobbstatus";
+    else openAiJob(); // Explicit retry is read-only, never repair/build resume.
+    redrawRequested_=true;return;
+  }
   if (aiJobViewing_ && index==1 && luaRepairStatus_=="awaiting_confirmation") {
     aiJobViewing_=false;sendAiJobAction("resume");return;
   }
@@ -7461,7 +7475,7 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
     os->buildJobsRequested_ = false;
     os->buildJobsRequestAt_ = 0;
   }
-  if (connected && os->luaRepairId_.length() > 0)
+  if (connected && os->luaRepairId_.length() > 0 && !os->aiJobViewing_)
     os->luaRepairStatusQueryPending_ = true;
   if (!connected && os->luaRepairPrepareSent_ &&
       os->luaRepairId_.length() == 0) {
@@ -7529,6 +7543,7 @@ void FireOS::packageResult(void* context, bool ok, const String& packageId,
 }
 
 void FireOS::servicePackageInstall() {
+  serviceAiJobOpen();
   serviceDownloadIntent();
   if (!packageManager_ || !packageManager_->busy()) return;
   const bool allowed=wifiMode_!=2 && backendMode_!=2;
@@ -7662,6 +7677,16 @@ void FireOS::backendMessage(void* context, const String& message) {
 void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
+  if(aiJobViewing_ && aiJobOpenPending_ && aiJobOpenRequest_.length() &&
+     jsonStringField(message,"event_id")==aiJobOpenRequest_ && (type=="error" || type=="event_ack")) {
+    cJSON* reply=cJSON_Parse(message.c_str());
+    const cJSON* result=cJSON_GetObjectItemCaseSensitive(reply,"result");
+    const String status=aiJobText(reply,"status");
+    const bool failed=type=="error" || (status!="accepted" && status!="duplicate") || cJSON_GetObjectItemCaseSensitive(result,"error");
+    cJSON_Delete(reply);
+    if(failed) failAiJobOpen("Jobbvisningen ble avvist. Prøv igjen");
+    return; // The read-only status itself supplies the exact repair/epoch view.
+  }
   if (handlePackageReceipt(message)) return;
   if (handleDownloadIntent(message)) return;
   if (handleFeedbackAck(message)) return;
@@ -11143,7 +11168,7 @@ void FireOS::drawLuaApp() {
     const uint16_t actionColor = luaErrorAction_ == 0 ? kCyan : kGreen;
     const bool waitingForRepair = luaRepairRequested_ && luaErrorAction_ == 0;
     drawSelection(58, 170, 204, 30, actionColor);
-    drawText(160, 185, waitingForRepair ? "Venter" :
+    drawText(160, 185, aiJobViewing_ && luaRepairStatus_=="loading"?(aiJobOpenPending_?"Venter":"Prøv igjen"):waitingForRepair ? "Venter" :
              luaErrorAction_ == 0 ? "Fiks feil" : "Kjør rettet app", kText, 2,
              FireUI::Selected);
     if (luaRepairStatus_ == "ready")
@@ -11152,7 +11177,7 @@ void FireOS::drawLuaApp() {
                kBg);
     else
       drawText(160, 207, "B starter valgt handling", kMuted, 1, kBg);
-    drawFooter("Minimer",waitingForRepair?"Arbeid":"Velg","Avbryt");
+    drawFooter("Minimer",waitingForRepair?"Arbeid":"Velg",aiJobViewing_?"Tilbake":"Avbryt");
     ui.setTextDatum(TL_DATUM);
   }
 }

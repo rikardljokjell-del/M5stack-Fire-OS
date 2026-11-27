@@ -11,6 +11,8 @@
 #include "fire_hardware_policy.h"
 #include "fire_firmware_http.h"
 #include "fire_json_guard.h"
+#include "fire_session_json.h"
+#include "fire_worker_diagnostics.h"
 #include "fire_ws_handshake.h"
 #include <mbedtls/sha1.h>
 #include <cJSON.h>
@@ -69,7 +71,7 @@ String jsonStringField(const String& json, const char* key) {
   if (colon < 0 || quote < 0) return "";
   String value;
   bool escaped = false;
-  for (int index = quote + 1; index < json.length(); ++index) {
+  for (int index = quote + 1; index < static_cast<int>(json.length()); ++index) {
     const char c = json[index];
     if (escaped) {
       value += c == 'n' ? '\n' : c == 'r' ? '\r' : c;
@@ -92,7 +94,7 @@ uint32_t jsonUintField(const String& json, const char* key) {
   const int colon = json.indexOf(':', keyAt + marker.length());
   if (colon < 0) return 0;
   int start = colon + 1;
-  while (start < json.length() && (json[start] == ' ' || json[start] == '\t')) ++start;
+  while (start < static_cast<int>(json.length()) && (json[start] == ' ' || json[start] == '\t')) ++start;
   return static_cast<uint32_t>(json.substring(start).toInt());
 }
 }  // namespace
@@ -148,41 +150,58 @@ void FireBackendClient::observeSession(const String& type,const String& message)
   selectionReply_=0;
   const bool bootstrap=type=="session_started" || type=="session_snapshot";
   if (!bootstrap && type!="app_selected" && type!="conversation_mode" && type!="event_ack" && type!="error") return;
-  cJSON* document=cJSON_Parse(message.c_str());
-  if (!cJSON_IsObject(document)) {cJSON_Delete(document);return;}
-  const auto text=[](const cJSON* object,const char* key) -> String {
-    const cJSON* value=cJSON_GetObjectItemCaseSensitive(object,key);
-    return cJSON_IsString(value) && value->valuestring && strlen(value->valuestring)<=128?String(value->valuestring):String();
-  };
-  const auto scope=[&](const cJSON* object) {
-    const cJSON* project=cJSON_GetObjectItemCaseSensitive(object,"project_id");
-    const cJSON* base=cJSON_GetObjectItemCaseSensitive(object,"base_package_id");
-    if (project) confirmedProject_=text(object,"project_id");
-    if (base) confirmedBase_=text(object,"base_package_id");
-    const String mode=text(object,"conversation_mode"),app=text(object,"app_mode");
-    if (mode=="chat" || mode=="develop") confirmedMode_=mode;
-    if (app=="new" || app=="update") confirmedAppMode_=app;
-  };
-  const String event=text(document,"event_id");
-  if (bootstrap || type=="app_selected" || type=="conversation_mode") scope(document);
-  if (type=="app_selected" && selection_.appAck(event)) selectionReply_|=1;
-  if (type=="conversation_mode" && selection_.modeAck(event)) selectionReply_|=2;
+  const fire_session_json::Document document(message.c_str(),message.length());
+  if(!document.valid()) return;
+  const auto root=document.root();
+  const auto result=document.field(root,"result");
+  const auto receipts=document.field(root,"selection_ack");
+  // Complete validation before ANY acknowledged scope/selection mutation.
+  // cJSON lookup semantics for missing/null/wrong-type and first duplicate
+  // members are retained; oversized or NUL-containing selected text fails closed.
+  for(const auto object:{root,result}) {
+    for(const char* key:{"project_id","base_package_id","conversation_mode","app_mode"})
+      if(!fire_session_json::Document::selected(document.field(object,key))) return;
+  }
+  if(!fire_session_json::Document::selected(document.field(root,"event_id")) ||
+     !fire_session_json::Document::selected(document.field(receipts,"app_select")) ||
+     !fire_session_json::Document::selected(document.field(receipts,"mode_select"))) return;
+  const auto event=document.field(root,"event_id");
+  const bool appEvent=selection_.appEvent.length() && fire_session_json::Document::equal(event,selection_.appEvent.c_str());
+  const bool modeEvent=selection_.modeEvent.length() && fire_session_json::Document::equal(event,selection_.modeEvent.c_str());
+  bool appAck=false,modeAck=false,rejected=false;
   if (bootstrap) {
-    const cJSON* receipts=cJSON_GetObjectItemCaseSensitive(document,"selection_ack");
-    if (selection_.appAck(text(receipts,"app_select"))) selectionReply_|=1;
-    if (selection_.modeAck(text(receipts,"mode_select"))) selectionReply_|=2;
-  } else if (type=="event_ack") {
-    const cJSON* result=cJSON_GetObjectItemCaseSensitive(document,"result");
-    if (cJSON_GetObjectItemCaseSensitive(result,"error")) {
-      if (selection_.rejected(event)) selectionReply_|=4;
-    } else {
-      const bool app=selection_.appAck(event),mode=selection_.modeAck(event);
-      if (app || mode) scope(result);
-      if (app) selectionReply_|=1;
-      if (mode) selectionReply_|=2;
-    }
-  } else if (type=="error" && selection_.rejected(event)) selectionReply_|=4;
-  cJSON_Delete(document);
+    appAck=selection_.appSent && selection_.appEvent.length() &&
+      fire_session_json::Document::equal(document.field(receipts,"app_select"),selection_.appEvent.c_str());
+    modeAck=selection_.modeSent && selection_.modeEvent.length() &&
+      fire_session_json::Document::equal(document.field(receipts,"mode_select"),selection_.modeEvent.c_str());
+  } else if(type=="error" || (type=="event_ack" && document.field(result,"error").present())) {
+    rejected=appEvent || modeEvent;
+  } else {
+    appAck=(type=="app_selected" || type=="event_ack") && appEvent && selection_.appSent;
+    modeAck=(type=="conversation_mode" || type=="event_ack") && modeEvent && selection_.modeSent;
+  }
+  const auto scope=bootstrap || type=="app_selected" || type=="conversation_mode"?root:
+    type=="event_ack" && !rejected && (appAck || modeAck)?result:fire_session_json::Span();
+  const auto project=document.field(scope,"project_id"),base=document.field(scope,"base_package_id");
+  String projectText,baseText,modeText,appText;
+  if(!fire_session_json::Document::text(project,projectText) ||
+     !fire_session_json::Document::text(base,baseText) ||
+     !fire_session_json::Document::text(document.field(scope,"conversation_mode"),modeText) ||
+     !fire_session_json::Document::text(document.field(scope,"app_mode"),appText)) return;
+  // Commit only after EVERY needed decode/allocation succeeded. Pinned
+  // WString::move copies only into sufficient capacity, otherwise steals the
+  // staged allocation; neither branch allocates. IDs are matched as spans
+  // against already owned pending IDs, so no receipt/event copy is needed.
+  if(project.present()) confirmedProject_=static_cast<String&&>(projectText);
+  if(base.present()) confirmedBase_=static_cast<String&&>(baseText);
+  if(modeText=="chat" || modeText=="develop") confirmedMode_=static_cast<String&&>(modeText);
+  if(appText=="new" || appText=="update") confirmedAppMode_=static_cast<String&&>(appText);
+  if(rejected) {
+    if(selection_.rejected(appEvent?selection_.appEvent:selection_.modeEvent)) selectionReply_|=4;
+  } else {
+    if(appAck && selection_.appAck(selection_.appEvent)) selectionReply_|=1;
+    if(modeAck && selection_.modeAck(selection_.modeEvent)) selectionReply_|=2;
+  }
 }
 
 void FireBackendClient::setRuntimeAiMode(const String& mode,bool publish) {
@@ -841,7 +860,7 @@ bool FireBackendClient::appRepairPrepare(
 }
 
 bool FireBackendClient::appRepairStatus(const String& repairId,
-                                        const String& appId) {
+                                        const String& appId,const String& stableEventId) {
   if (repairId.length() == 0 && appId.length() == 0) return false;
   String fields;
   if (repairId.length() > 0)
@@ -849,7 +868,7 @@ bool FireBackendClient::appRepairStatus(const String& repairId,
   if (appId.length() > 0) {
     fields += ",\"app_id\":\"" + jsonEscape(appId) + "\"";
   }
-  return sendEvent("app_repair_status", fields);
+  return sendEvent("app_repair_status", fields,stableEventId);
 }
 
 bool FireBackendClient::appRepairCancel(const String& repairId) {
@@ -1123,27 +1142,48 @@ void FireBackendClient::handleHandshake() {
     return;
   }
   bootstrapDiagnostic(1);
+  fire_backend_policy::releaseTextBuffer(handshakeBuffer_);
+  memoryKinds_=0;
   sessionStarted_ = false;
   lastReceiveAt_ = millis();
   handshakeStartedAt_=lastReceiveAt_; // fresh application-session stage; never refreshed by PONG
   lastPongAt_ = millis();
   setState(State::Connected, "Waiting for backend session");
-  const String fields = ",\"target\":\"device\",\"boot_id\":\"" +
-                        jsonEscape(bootId_) +
-                        "\",\"capabilities\":{\"api_version\":\"fire-lua-0.2\",\"api_contract\":\"" +
-                        FireLuaRuntime::hardwareApiContract() +
-                        "\",\"app_sdk\":{\"version\":\"" + FireLuaRuntime::appSdkVersion() +
-                        "\",\"contract\":\"" + FireLuaRuntime::appSdkContract() +
-                        "\"},\"runtime_ai\":{\"version\":\""+FireRuntimeAiContract::kVersion+
-                        "\",\"contract\":\""+FireRuntimeAiContract::kContract+"\"},\"evolution\":{\"version\":\""+FireEvolutionContract::kVersion+
-                        "\",\"contract\":\""+FireEvolutionContract::kContract+"\"},\"data_engine\":"+dataCapabilities() +
-                        hardwareServiceCapabilities() + ",\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":"+i2cWriteResources()+",\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":false,\"firmware_max_bytes\":4194304,\"firmware_version\":\"" +
-                        jsonEscape(firmwareVersion_) + "\"}";
-  String payload = "{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"" +
-                   eventId("evt") + "\",\"device_id\":\"" +
-                   jsonEscape(deviceId_) + "\",\"event\":\"session_start\"" +
-                   fire_session::startFields(resumeSessionId_,developmentContext_) +
-                   fields + "}";
+  String payload;
+  bool built=true;
+  const auto append=[&](const char* value) {if(built && !payload.concat(value)) built=false;};
+  append("{\"type\":\"device_event\",\"protocol_version\":\"0.2\",\"event_id\":\"");
+  append(eventId("evt").c_str());
+  append("\",\"device_id\":\"");
+  append(jsonEscape(deviceId_).c_str());
+  append("\",\"event\":\"session_start\"");
+  append(fire_session::startFields(resumeSessionId_,developmentContext_).c_str());
+  append(",\"target\":\"device\",\"boot_id\":\"");
+  append(jsonEscape(bootId_).c_str());
+  append("\",\"capabilities\":{\"api_version\":\"fire-lua-0.2\",\"api_contract\":\"");
+  append(FireLuaRuntime::hardwareApiContract());
+  append("\",\"app_sdk\":{\"version\":\"");
+  append(FireLuaRuntime::appSdkVersion());
+  append("\",\"contract\":\"");
+  append(FireLuaRuntime::appSdkContract());
+  append("\"},\"runtime_ai\":{\"version\":\"");
+  append(FireRuntimeAiContract::kVersion);
+  append("\",\"contract\":\"");
+  append(FireRuntimeAiContract::kContract);
+  append("\"},\"evolution\":{\"version\":\"");
+  append(FireEvolutionContract::kVersion);
+  append("\",\"contract\":\"");
+  append(FireEvolutionContract::kContract);
+  append("\"},\"data_engine\":");
+  append(dataCapabilities().c_str());
+  append(hardwareServiceCapabilities().c_str());
+  append(",\"hardware\":{\"gpio_read\":[26,35,36],\"gpio_write\":[26],\"adc\":[36],\"dac\":[26],\"pwm\":[26],\"i2c\":[0],\"i2c_write_addresses\":");
+  append(i2cWriteResources().c_str());
+  append(",\"uart\":[2],\"spi\":[2]},\"max_memory\":131072,\"max_runtime_ms\":0,\"audio_input\":true,\"audio_output\":true,\"firmware_storage\":false,\"firmware_max_bytes\":4194304,\"firmware_version\":\"");
+  append(jsonEscape(firmwareVersion_).c_str());
+  append("\"}");
+  append("}");
+  if(!built) {disconnect();setState(State::Offline,"Backend start allocation failed");return;}
   // Pending choices are separate normal events, consumed only on server ACK.
   sendFrame(0x1,reinterpret_cast<const uint8_t*>(payload.c_str()),payload.length());
 }
@@ -1281,44 +1321,42 @@ void FireBackendClient::readFrames() {
       }
       if (receivePayloadBytes_ < receiveLength_) return;
       if (receiveOpcode_ == 0x0) {
-        fragmentBuffer_ += frameBuffer_;
-        if (fragmentBuffer_.length() > kMaxFrameBytes) {
+        if (frameBuffer_.length()>kMaxFrameBytes-fragmentBuffer_.length() ||
+            !fragmentBuffer_.concat(frameBuffer_.c_str(),frameBuffer_.length())) {
           disconnect();
           setState(State::Offline, "Fragmented WebSocket frame too large");
           return;
         }
         if (receiveFin_) {
-          handleFrame(fragmentOpcode_,
-                      reinterpret_cast<const uint8_t*>(fragmentBuffer_.c_str()),
-                      fragmentBuffer_.length());
+          handleFrame(fragmentOpcode_,fragmentBuffer_);
           fragmentOpcode_ = 0;
           fragmentBuffer_ = "";
         }
       } else if (receiveOpcode_ == 0x1 && fragmentOpcode_ == 0 &&
                  !receiveFin_) {
         fragmentOpcode_ = receiveOpcode_;
-        fragmentBuffer_ = frameBuffer_;
+        fire_backend_policy::releaseTextBuffer(fragmentBuffer_);
+        fragmentBuffer_=static_cast<String&&>(frameBuffer_);
       } else if (receiveOpcode_ == 0x1 && fragmentOpcode_ != 0) {
         disconnect();
         setState(State::Offline, "Overlapping WebSocket fragments");
         return;
       } else {
-        handleFrame(receiveOpcode_,
-                    reinterpret_cast<const uint8_t*>(frameBuffer_.c_str()),
-                    frameBuffer_.length());
+        handleFrame(receiveOpcode_,frameBuffer_);
       }
       resetReceiveFrame();
     }
   }
 }
 
-void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
-                                    size_t length) {
+void FireBackendClient::handleFrame(uint8_t opcode, String& payload) {
   receiveCallbackActive_=true;
   struct ReceiveLifetime {
     FireBackendClient* owner;
     ~ReceiveLifetime() {owner->receiveCallbackActive_=false;owner->releaseReadBuffers();}
   } lifetime{this}; // Declared first: all message copies/callbacks finish before release.
+  const auto* data=reinterpret_cast<const uint8_t*>(payload.c_str());
+  const size_t length=payload.length();
   lastReceiveAt_ = millis();
   if (!sessionStarted_) bootstrapDiagnostic(3,opcode,length);
   if (opcode == 0x8) {
@@ -1334,11 +1372,15 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
       Serial.printf("FIRE backend rejected_json bytes=%u max_bytes=%u max_tokens=1024\n",unsigned(length),unsigned(kMaxFrameBytes));
       disconnect(); setState(State::Offline, "Invalid backend message"); return;
     }
-    String message;
-    message.reserve(length);
-    for (size_t index = 0; index < length; ++index) message += static_cast<char>(data[index]);
+    // Own the existing allocation throughout callbacks, even if they disconnect
+    // and clear the receive members. A fresh move constructor never reuses an
+    // older destination allocation (unlike Arduino String move assignment).
+    String message(static_cast<String&&>(payload));
     selectionReply_=0;
     const String type = jsonStringField(message, "type");
+    const unsigned memoryKind=type=="session_started"?1:type=="session_snapshot"?2:type=="app_catalog"?3:type=="build_jobs"?4:0;
+    const bool measure=memoryKind && !(memoryKinds_&(1u<<memoryKind));
+    if(measure) {memoryKinds_|=1u<<memoryKind;fireNetMemory(3,memoryKind);}
     if (!sessionStarted_ && type=="error") {
       cJSON* envelope=cJSON_Parse(message.c_str());
       const cJSON* code=cJSON_GetObjectItemCaseSensitive(envelope,"code");
@@ -1386,8 +1428,10 @@ void FireBackendClient::handleFrame(uint8_t opcode, const uint8_t* data,
       }
     }
     observeSession(type,message);
+    if(measure) fireNetMemory(4,memoryKind);
     const int64_t callbackStartedUs = esp_timer_get_time();
     messageCallback_(callbackContext_, message);
+    if(measure) fireNetMemory(5,memoryKind);
     const int64_t callbackUs = esp_timer_get_time() - callbackStartedUs;
     if (callbackUs >= 10000)
       Serial.printf("FIRE backend callback_us=%lu\n", static_cast<unsigned long>(callbackUs));

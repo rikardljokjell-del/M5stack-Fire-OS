@@ -103,8 +103,19 @@ Minste observerte internminnemargin var likevel bare 620 byte under prøven.
 RC14 retter derfor levetiden til den eksisterende pakkearbeideren: den parkeres
 på UI-eierens kjerne etter ferdig arbeid, og UI sletter den synkront før
 `running=false` publiseres og neste TLS-fase kan begynne. Samme stakkstørrelse
-og grenser beholdes. Ny fysisk minnemargin og de resterende flytene må
-kontrolleres før produksjonsaksept.
+og grenser beholdes. RC14 er fysisk installert; tre nye offentlige
+installasjoner har korrekte COMPLETED-kvitteringer på samme oppstart og sesjon.
+To lokale Launch/Back-runder er observert. Internminnets levetidsminimum falt
+likevel til 648 byte etter pakkearbeidet ved gjenoppkobling. En uteblitt
+UART-observasjon under tredje runde var heller ikke installasjonsfeil. Dette
+lukker ikke kravet til minnemargin eller de resterende brukerflytene.
+
+RC15 arbeides med som en avgrenset ressursretting: én eid mottatt tekstbuffer,
+selektiv sesjonslesing uten cJSON-tre, frigjøring av ferdig HTTP-header og én
+utgående oppstartsmelding. Faste numeriske fasepunkter skal skille TLS- og
+meldingsbehandlingens minnebruk. Tre konkrete UI-blindveier får tidsgrense,
+feilrespons eller trygg Tilbake/Prøv igjen i eksisterende kontrollere. Ingen
+ny fysisk RC15-verifikasjon eller produksjonsaksept foreligger ennå.
 
 ### Pågående: gjenåpning av jobber og appoppdatering
 

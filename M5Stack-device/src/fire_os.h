@@ -660,6 +660,8 @@ class FireOS {
   int32_t aiBuildResumeCount_ = -1;
   uint8_t buildJobCount_ = 0;
   bool aiJobCanOpen_=false,aiJobOpenPending_=false,aiJobViewing_=false,aiJobNeedsInstall_=false;
+  String aiJobOpenRequest_;
+  uint32_t aiJobOpenAt_=0,aiJobOpenEpoch_=0;
   bool aiWorkReturnRepair_=false,jobControlsSupported_=false,buildJobsNext_=false,aiJobCanResume_=false,aiJobCanDelete_=false,aiJobCanPause_=false,aiJobCanContext_=false;
   uint32_t buildJobsOffset_=0;
   uint8_t aiJobShownSelection_=255;
@@ -670,6 +672,8 @@ class FireOS {
   void drawAiJobMenu();
   void openAiWork();
   void openAiJob();
+  void failAiJobOpen(const char* message);
+  void serviceAiJobOpen();
   void restoreAiJob(const cJSON* row);
   void backAiDeveloper();
   bool sendAiJobAction(const String& action);

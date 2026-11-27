@@ -119,7 +119,7 @@ class FireBackendClient {
                         const String& appVersion, const String& sha256,
                         const String& errorCode, const String& message,
                         const String& diagnostics, const String& runId = String());
-  bool appRepairStatus(const String& repairId, const String& appId = String());
+  bool appRepairStatus(const String& repairId, const String& appId = String(),const String& stableEventId=String());
   bool appRepairCancel(const String& repairId);
   bool buildBackground(const String& buildId);
   bool buildJobs(uint32_t offset = 0);
@@ -186,6 +186,7 @@ class FireBackendClient {
   uint32_t lastServerSeq_ = 0,connectionEpoch_=0;
   uint32_t handshakeStartedAt_ = 0;
   uint8_t bootstrapStages_=0; // at most eight fixed numeric lines per attempt
+  uint8_t memoryKinds_=0; // first fixed memory observation per message kind/connection
   uint32_t lastReceiveAt_ = 0;
   uint32_t lastPingAt_ = 0;
   uint32_t lastPongAt_ = 0;
@@ -252,7 +253,7 @@ class FireBackendClient {
   void observeSession(const String& type,const String& message);
   void bootstrapDiagnostic(uint8_t stage,uint32_t first=0,uint32_t second=0);
   void readFrames();
-  void handleFrame(uint8_t opcode, const uint8_t* data, size_t length);
+  void handleFrame(uint8_t opcode, String& payload);
   WiFiClient* activeClient() {
     return transportClient_ ? transportClient_ : &client_;
   }

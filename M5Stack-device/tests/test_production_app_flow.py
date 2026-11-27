@@ -25,10 +25,27 @@ def source():
     manager='String FireOS::managerIdentity() const {\n'+manager.rsplit('}',1)[0]+'\n}\n'
     backend=(ROOT/'src/fire_backend_client.cpp').read_text(encoding='utf-8')
     release=backend.split('void FireBackendClient::releaseReadBuffers()',1)[1].split('void FireBackendClient::resetReceiveFrame',1)[0]
-    lifetime=backend.split('void FireBackendClient::handleFrame(',1)[1].split('  lastReceiveAt_',1)[0].split('{',1)[1]
+    lifetime=backend.split('void FireBackendClient::handleFrame(',1)[1].split('  const auto* data=',1)[0].split('{',1)[1]
     release='void FireBackendClient::releaseReadBuffers()'+release
     lifetime='void FireBackendClient::callbackLifetimeTest() {'+lifetime+"\n releaseReadBuffersPending_=true;releaseReadBuffers();assert(frameBuffer_.length()==8192);\n}\n"
-    return PREAMBLE+'\n#include "fire_os_download.inc"\n'+methods+manager+release+lifetime+MAIN
+    picker=(ROOT/'src/fire_os_ai_picker.inc').read_text(encoding='utf-8')
+    def block(text,marker):
+        at=text.index(marker);start=text.index('{',at);depth=1;end=start+1
+        while depth:
+            if text[end]=='{':depth+=1
+            elif text[end]=='}':depth-=1
+            end+=1
+        return text[at:end]
+    update=picker.split('void FireOS::handleAppUpdateButton',1)[1]
+    ui='void FireOS::updateRunButton(uint8_t index){const auto action=fire_app_updates::confirm(appUpdateStage_,appUpdateSelection_,appUpdateReady_);'+block(update,'if(appUpdateStage_==3)')+'}\n'
+    error=os_source.split('void FireOS::handleLuaErrorButton(',1)[1]
+    ui+='void FireOS::readOnlyBack(uint8_t index){'+block(error,'if(aiJobViewing_ && index==2)')+block(error,'if(aiJobViewing_ && index==1')+'}\n'
+    for signature in ('void FireOS::failAiJobOpen(','void FireOS::serviceAiJobOpen('):
+        at=picker.index(signature);ui+=picker[at:picker.index('\n}\n',at)+3]
+    ui+='void FireOS::jobAck(const String& message){const String type=jsonStringField(message,"type");'+block(os_source.split('void FireOS::handleBackendMessage(',1)[1],'if(aiJobViewing_ && aiJobOpenPending_ && aiJobOpenRequest_.length()')+'}\n'
+    repair=os_source.split('void FireOS::handleLuaRepairStatus(',1)[1].split('  if (incomingApp.length())',1)[0]
+    ui+='bool FireOS::repairGate(const String& message) {'+repair.split('{',1)[1].replace('return;','return false;')+'return opened;}\n'
+    return PREAMBLE+'\n#include "fire_os_download.inc"\n'+methods+manager+release+lifetime+ui+MAIN
 
 PREAMBLE=r'''
 #include <string>
@@ -41,6 +58,7 @@ PREAMBLE=r'''
 #include "fire_buttons.h"
 #include "fire_backend_policy.h"
 #include "fire_package_delivery.h"
+#include "fire_ai_menu.h"
 constexpr unsigned HEX=16;
 class String {
   std::string s;
@@ -67,11 +85,12 @@ String aiJobText(const cJSON* p,const char* key){const auto* v=cJSON_GetObjectIt
 String jsonStringField(const String&,const char* key){return aiJobText(&reply,key);}
 struct Backend {
   bool ready=true,send=true;unsigned downloads=0,runs=0;
+  uint32_t epoch=111;
   String sid="session-one",boot="boot-one",project,package,app,event;
-  uint32_t connectionEpoch(){return 111;}
+  uint32_t connectionEpoch(){return epoch;}
   bool sessionReady(){return ready;}const String& sessionId(){return sid;}const String& bootId(){return boot;}
   bool appDownload(const String&p,const String&k,const String&a,const String&e){++downloads;project=p;package=k;app=a;event=e;return send;}
-  bool confirmRun(const String& k){++runs;package=k;return true;}
+  bool confirmRun(const String& k){++runs;package=k;return send;}
 };
 struct Package {
   bool active=false,receipt=true,ok=true,cancelled=false;
@@ -82,7 +101,7 @@ struct Package {
   void finishReceipt(){receipt=active=false;}
 };
 struct FireOS {
-  enum class Screen {Main,AppsSettings};Screen screen_=Screen::Main;
+  enum class Screen {Main,AppsSettings,AiDeveloper};Screen screen_=Screen::Main;
   Backend* backendClient_=nullptr;Package* packageManager_=nullptr;
   String downloadRequest_,downloadProject_,downloadApp_,downloadPackage_,downloadSession_,downloadBoot_;
   uint32_t downloadRequestedAt_=0;uint8_t downloadPhase_=0;
@@ -93,6 +112,14 @@ struct FireOS {
   String appUpdateCandidate_,appUpdateRequest_;uint8_t appUpdateStage_=0,appUpdateFailure_=0,appUpdateSelection_=0,aiWorkflowState_=0,luaErrorAction_=0;
   bool repairCancelSupported_=true,luaRepairRequested_=false,luaRepairPrepareSent_=false,luaRepairBuildConfirmed_=false,luaRepairConfirmPending_=false,luaRepairCancelPending_=false;
   String luaRepairId_;unsigned inventories=0,homes=0;
+  bool aiJobViewing_=false;
+  bool aiJobOpenPending_=false,luaRepairStatusQueryPending_=false,aiProjectPickerActive_=false;
+  fire_ai_menu::Page aiPickerPage_=fire_ai_menu::Page::Main;
+  String aiJobOpenRequest_,aiJobRepair_,luaRepairAppId_,luaErrorAppId_;
+  uint32_t aiJobOpenAt_=0,aiJobOpenEpoch_=111;unsigned opened=0;
+  void openAiJob(){++opened;}
+  void updateRunButton(uint8_t);void readOnlyBack(uint8_t);void jobAck(const String&);bool repairGate(const String&);
+  void failAiJobOpen(const char*);void serviceAiJobOpen();
   struct ManagerItem {String appId,localPath,localPackageId,projectId,packageId;uint8_t kind=1;};
   ManagerItem managerTarget_,managerItems_[2];uint8_t managerItemCount_=0,managerSelection_=0;
   String appManagerVersionPackageIds_[8];uint8_t appManagerVersionSelection_=0,appManagerVersionCount_=0;
@@ -193,6 +220,40 @@ int main(){
   assert(!fire_buttons::visibleClick(tap,42,sameRowView,sameRowView,upcoming==painted));
   assert(!fire_buttons::visibleClick(tap,43,sameRowView,sameRowView,true)); // old B cannot approve a newly shown row
   tap.context=43;assert(fire_buttons::visibleClick(tap,43,sameRowView,sameRowView,true));
+  // The exact post-update handler reports both unsent cases and requires a
+  // separate B. C is Back and never consumes a latent Run intent.
+  os.appUpdateStage_=3;os.appUpdateSelection_=0;os.appUpdateReady_=true;os.appUpdateCandidate_="verified-new";
+  b.ready=false;const unsigned runs=b.runs;os.updateRunButton(1);
+  assert(os.appUpdateStage_==3 && os.appUpdateFailure_==3 && b.runs==runs);
+  b.ready=true;b.send=false;os.updateRunButton(1);assert(os.appUpdateStage_==3 && os.appUpdateFailure_==4);
+  b.send=true;os.updateRunButton(1);assert(os.appUpdateStage_==0 && b.package=="verified-new" && os.managerStatus_=="Starter app");
+  os.appUpdateStage_=3;os.appUpdateReady_=true;const unsigned afterRun=b.runs;os.updateRunButton(2);
+  assert(os.appUpdateStage_==0 && !os.appUpdateReady_ && b.runs==afterRun);
+  // Dropped read-only status is bounded, explicit retry stays a read-only Open,
+  // and Back returns to this Job rather than cancelling any repair.
+  os.aiJobViewing_=os.aiJobOpenPending_=true;os.aiJobRepair_="repair-a";os.luaRepairId_="repair-a";
+  os.luaRepairStatus_="loading";os.aiJobOpenRequest_="read-a";os.aiJobOpenAt_=nowMs;
+  nowMs+=10000;os.serviceAiJobOpen();assert(!os.aiJobOpenPending_ && !os.aiJobOpenRequest_.length());
+  os.readOnlyBack(1);assert(os.opened==1 && b.runs==afterRun);
+  reply=cJSON();reply.fields["repair_id"].text="repair-a";assert(!os.repairGate("late"));
+  os.aiJobOpenPending_=true;os.aiJobOpenRequest_="read-b";os.aiJobOpenAt_=nowMs;
+  reply.fields["repair_id"].text="repair-b";assert(!os.repairGate("wrong-target") && os.aiJobOpenPending_);
+  reply.fields["repair_id"].text="repair-a";b.epoch=112;assert(!os.repairGate("wrong-epoch"));b.epoch=111;
+  assert(os.repairGate("current") && !os.aiJobOpenPending_);
+  os.aiJobOpenPending_=true;os.aiJobOpenRequest_="read-c";
+  ack("unrelated","accepted","recorded",true);os.jobAck("ack");assert(os.aiJobOpenPending_);
+  ack("read-c","accepted","recorded",true);os.jobAck("ack");assert(!os.aiJobOpenPending_);
+  os.luaRepairCancelPending_=false;os.readOnlyBack(2);
+  assert(!os.aiJobViewing_ && os.screen_==FireOS::Screen::AiDeveloper && os.aiPickerPage_==fire_ai_menu::Page::Job && !os.luaRepairCancelPending_);
+  // Cancel/error/offer timeout restores ONLY the selected actual READY job.
+  os.aiJobViewing_=os.aiJobNeedsInstall_=true;os.aiReadyPackageId_="ready-job";os.aiWorkflowState_=4;
+  os.downloadPackage_="other-job";os.cancelAppDownload();assert(os.aiWorkflowState_==4);
+  os.downloadPackage_="ready-job";os.downloadPhase_=1;os.userRunAfterInstall_="ready-job";os.cancelAppDownload();
+  assert(os.aiWorkflowState_==5 && os.aiJobNeedsInstall_ && !os.userRunAfterInstall_.length());
+  os.downloadPhase_=1;os.aiWorkflowState_=4;os.downloadRequest_="reject-ready";
+  ack("reject-ready","accepted","rejected");os.handleDownloadIntent("ack");assert(os.aiWorkflowState_==5 && b.runs==afterRun);
+  os.downloadPhase_=1;os.aiWorkflowState_=4;os.downloadRequestedAt_=nowMs;nowMs+=15000;os.serviceDownloadIntent();assert(os.aiWorkflowState_==5);
+  os.downloadPhase_=2;os.aiWorkflowState_=4;os.cancelAppDownload();assert(os.aiWorkflowState_==4);
   puts("PASS production download intent cancel receipt no paid replay and exact manager target");
 }
 '''
