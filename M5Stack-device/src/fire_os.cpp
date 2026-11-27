@@ -78,7 +78,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc21";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc22";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -5958,6 +5958,8 @@ void FireOS::finishAiRecording() {
 
 const char* FireOS::audioWorkflowLabel() const {
   if(backendClient_ && backendClient_->audioOtherNetworksPaused()) return backendClient_->audioStatus();
+  if(backendClient_ && backendClient_->audioFailure() && !aiAudioCaptureActive_ && !aiAudioUploadStarted_ &&
+      aiTurnId_.length() && backendClient_->audioTransferTurn()==aiTurnId_ && aiWorkflowText_==aiAudioError_) return backendClient_->audioFailureStatus();
   if(aiWorkflowText_=="SENDING AUDIO" || aiWorkflowText_=="PROCESSING AUDIO") return "Sender opptak";
   if(aiWorkflowText_=="TRANSCRIBING") return "Tolker tale";
   if(aiWorkflowText_=="AUDIO SEND FAILED - TRY AGAIN" || aiWorkflowText_=="Opptaket ble ikke sendt. Ta nytt opptak") return "Opptaket ble ikke sendt";
@@ -5985,7 +5987,8 @@ void FireOS::completeAiAudioUpload(bool ok,bool uncertain,const String& turn) {
       aiProposalId_.length() || aiTranscriptText_.length() || aiAssistantText_.length()) return;
   if(ok) aiWorkflowText_="TRANSCRIBING";
   else {
-    aiWorkflowText_=uncertain?"Talestatus uavklart. Ta nytt opptak":"Opptaket ble ikke sendt. Ta nytt opptak";
+    aiAudioError_=uncertain?"Talestatus uavklart. Ta nytt opptak":backendClient_ && backendClient_->audioFailure()?backendClient_->audioFailureStatus():"Opptaket ble ikke sendt. Ta nytt opptak";
+    aiWorkflowText_=aiAudioError_;
     aiWorkflowState_=0;aiDeveloperMode_=0;
   }
   redrawRequested_=true;
@@ -6085,7 +6088,7 @@ void FireOS::updateAiAudio() {
     const bool uncertain=backendClient_->audioTransferUncertain();
     aiAudioUploadFinished_ = backendClient_->audioTransferTurn()==aiTurnId_;
     backendClient_->releaseAudioResult();
-    if (!aiAudioUploadOk_) aiAudioError_ = uncertain?"Talestatus uavklart. Ta nytt opptak":"Opptaket ble ikke sendt. Ta nytt opptak";
+    if (!aiAudioUploadOk_) aiAudioError_ = uncertain?"Talestatus uavklart. Ta nytt opptak":backendClient_->audioFailureStatus();
   }
   if (aiAudioCaptureFinished_ && !aiAudioStopSent_) finishAiRecording();
   if (aiAudioUploadFinished_) {
@@ -8094,6 +8097,8 @@ void FireOS::handleBackendMessage(const String& message) {
     // Generic activity/state messages do not replace a concrete app-choice
     // receipt. A real user action or correlated ACK/error owns that feedback.
     if(fire_ai_menu::choiceLabel(aiWorkflowText_.c_str())) return;
+    if(backendClient_ && backendClient_->audioFailure() && !aiAudioCaptureActive_ && !aiAudioUploadStarted_ &&
+        aiTurnId_.length() && backendClient_->audioTransferTurn()==aiTurnId_ && aiWorkflowText_==aiAudioError_) return;
     String state = jsonStringField(message, "state");
     if (state.length() == 0) state = jsonStringField(message, "activity");
     if (state == "listening") {

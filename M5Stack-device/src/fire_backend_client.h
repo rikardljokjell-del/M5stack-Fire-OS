@@ -72,6 +72,8 @@ class FireBackendClient {
   bool serialAudioSupported() const {return serialAudioSupported_;}
   uint8_t audioPhase() const {return static_cast<uint8_t>(audioPhase_);}
   const char* audioStatus() const;
+  uint8_t audioFailure() const {return static_cast<uint8_t>(audioFailure_.load());}
+  const char* audioFailureStatus() const;
   bool handleAudioMessage(const String& type,const String& message);
 
   bool sessionRejected() const { return !sessionAdmission_.allowed(); }
@@ -211,6 +213,8 @@ class FireBackendClient {
   AudioTransfer audioTransfer_ = AudioTransfer::None;
   enum class AudioPhase:uint8_t {Idle,StopAck,Queued,Quiet,Http,Cleanup,Resume,Commit,Finished};
   AudioPhase audioPhase_=AudioPhase::Idle;
+  enum class AudioFailure:uint8_t {None,Connect,Write,Drain,Header,Body,Payload,Scope,Expiry,Uncertain,Cancelled,Allocation,Other};
+  std::atomic<AudioFailure> audioFailure_{AudioFailure::None};
   bool serialAudioSupported_=false,serialAudioTransfer_=false,audioCommitSent_=false,audioPausedControl_=false;
   std::atomic<bool> audioWorkerFinished_{false};
   int audioOwnerCore_=-1;
@@ -243,6 +247,7 @@ class FireBackendClient {
   bool audioScope(bool admitted) const;
   uint32_t audioNow() const;
   bool audioDeadlineLive(bool uploadStart) const;
+  void markAudioFailure(AudioFailure failure);
   void finishAudioTransfer(bool ok);
   void reapAudioWorker();
   bool startAudioWorker();

@@ -22,6 +22,9 @@ PCM = struct.pack('<hhhh', 0, 100, -100, 0)
 WAV = (b'RIFF' + struct.pack('<I', 36 + len(PCM)) + b'WAVEfmt ' +
        struct.pack('<IHHIIHH', 16, 1, 1, 8000, 16000, 2, 16) + b'data' +
        struct.pack('<I', len(PCM)) + PCM)
+LARGE_WAV = (b'RIFF' + struct.pack('<I', 36 + 16340) + b'WAVEfmt ' +
+             struct.pack('<IHHIIHH', 16, 1, 1, 8000, 16000, 2, 16) + b'data' +
+             struct.pack('<I', 16340) + bytes(16340))  # Eight actual2048-byte body writes.
 
 
 def method(text, signature):
@@ -29,8 +32,8 @@ def method(text, signature):
     return text[at:text.index('\n}\n', at) + 3]
 
 
-def source():
-    cpp = (ROOT / 'src/fire_backend_client.cpp').read_text(encoding='utf-8')
+def source(backend_source=None):
+    cpp = backend_source if backend_source is not None else (ROOT / 'src/fire_backend_client.cpp').read_text(encoding='utf-8')
     header = (ROOT / 'src/fire_backend_client.h').read_text(encoding='utf-8')
     strings = transport.PREAMBLE.split('struct SerialSpy', 1)[0]
     strings = strings.replace('String()=default;', '''String()=default;
@@ -53,6 +56,7 @@ def source():
         'uint32_t FireBackendClient::audioNow(', 'bool FireBackendClient::audioDeadlineLive(', 'bool FireBackendClient::audioScope(',
         'bool FireBackendClient::audioNetworkPaused(', 'bool FireBackendClient::audioOtherNetworksPaused(',
         'bool FireBackendClient::audioOwnsNetwork(', 'bool FireBackendClient::audioOwnsBuffer(',
+        'void FireBackendClient::markAudioFailure(', 'const char* FireBackendClient::audioFailureStatus(',
         'const char* FireBackendClient::audioStatus(', 'void FireBackendClient::finishAudioTransfer(',
         'void FireBackendClient::releaseAudioResult(', 'void FireBackendClient::reapAudioWorker(',
         'bool FireBackendClient::startAudioWorker(', 'bool FireBackendClient::sendAudioCommit(',
@@ -70,7 +74,7 @@ def source():
     golden = '\n'.join(
         'static const std::vector<uint8_t> %s={%s};\nstatic const char* %sHash="%s";' %
         (name, ','.join(map(str, data)), name, hashlib.sha256(data).hexdigest())
-        for name, data in (('wav', WAV), ('pcm', PCM), ('badPcm', PCM[:-1] + b'\x01')))
+        for name, data in (('wav', WAV), ('pcm', PCM), ('badPcm', PCM[:-1] + b'\x01'), ('largeWav', LARGE_WAV)))
     qa = (ROOT / 'src/fire_os_local_qa.inc').read_text(encoding='utf-8')
     actual_qa = method(qa, 'bool FireOS::localQaActionAllowed(') + method(qa, 'fire_local_qa::Code FireOS::localQaAct(')
     os_source = (ROOT / 'src/fire_os.cpp').read_text(encoding='utf-8')
@@ -85,7 +89,7 @@ def source():
     start_producer = 'void FireBackendClient::startProducer(){\n' + handshake[handshake.index('  const String startEvent='):]
     return (INCLUDES + strings + ADAPTERS.replace('/*GOLDEN*/', golden) + relative + ops +
             CLASS.replace('/*FIELDS*/', fields).replace('/*BEGIN_SELECTION*/', begin_selection) + '\n'.join(method(cpp, n) for n in names) +
-            start_producer + wav_helpers + QA_CLASS + actual_qa + output + QA_MAIN + MAIN.replace('int main(){', 'int main(){eventIdentityMatrix();qaMatrix();outputMatrix();completionMatrix();newIntentMatrix();deadlineMatrix();autoStopMatrix();'))
+            start_producer + wav_helpers + QA_CLASS + actual_qa + output + QA_MAIN + MAIN.replace('int main(){', 'int main(){httpDrainMatrix();eventIdentityMatrix();qaMatrix();outputMatrix();completionMatrix();newIntentMatrix();deadlineMatrix();autoStopMatrix();'))
 
 
 INCLUDES = r'''
@@ -170,7 +174,7 @@ void mbedtls_sha256_init(mbedtls_sha256_context* p){p->bytes.clear();}
 int mbedtls_sha256_starts_ret(mbedtls_sha256_context* p,int){p->bytes.clear();return 0;}
 int mbedtls_sha256_update_ret(mbedtls_sha256_context* p,const uint8_t* bytes,size_t n){p->bytes.insert(p->bytes.end(),bytes,bytes+n);return 0;}
 int mbedtls_sha256_finish_ret(mbedtls_sha256_context* p,uint8_t* out){
-  const char* hex=p->bytes==wav?wavHash:p->bytes==pcm?pcmHash:p->bytes==badPcm?badPcmHash:nullptr;
+  const char* hex=p->bytes==wav?wavHash:p->bytes==pcm?pcmHash:p->bytes==badPcm?badPcmHash:p->bytes==largeWav?largeWavHash:nullptr;
   assert(hex && "Unexpected bytes reached SHA primitive adapter");
   for(unsigned i=0;i<32;++i){unsigned value=0;assert(std::sscanf(hex+2*i,"%2x",&value)==1);out[i]=static_cast<uint8_t>(value);}return 0;
 }
@@ -178,14 +182,17 @@ void mbedtls_sha256_free(mbedtls_sha256_context*){}
 int mbedtls_sha256_ret(const uint8_t* p,size_t n,uint8_t* out,int){mbedtls_sha256_context c;c.bytes.assign(p,p+n);return mbedtls_sha256_finish_ret(&c,out);}
 struct WiFiClient {
   bool opened=false,worker=false,holdStop=false,pending=false,connectOk=true;
-  unsigned connects=0,stops=0;size_t cursor=0,chunk=3;std::string response,request,body;
-  bool connected()const{return opened;}bool running()const{return worker;}
-  bool pendingWrites()const{return pending;}void secure(bool){}
+  bool delayed=false;uint32_t drainAt=0,responseAt=0,cancelAt=0,failAt=0;std::atomic<bool>* cancel=nullptr;
+  unsigned connects=0,stops=0;uint32_t queueWriteDelay=0,firstRequestAt=0;size_t cursor=0,chunk=3;std::string response,request,body;
+  bool reached(uint32_t at)const{return at && static_cast<int32_t>(nowMs-at)>=0;}
+  void tick()const{if(cancel && reached(cancelAt))*cancel=true;}
+  bool connected()const{tick();return opened && !reached(failAt);}bool running()const{return worker;}
+  bool pendingWrites()const{tick();return pending || (delayed && opened && !reached(drainAt));}void secure(bool){}
   void stop(){++stops;opened=false;if(!holdStop)worker=false;}
-  bool connectBlocking(const char*,uint16_t,uint32_t,std::atomic<bool>* cancel){++connects;if(*cancel||!connectOk)return false;opened=worker=true;cursor=0;return true;}
-  size_t print(const String& s){request+=s.value;return s.length();}
-  size_t write(const uint8_t* p,size_t n){n=min(n,chunk);body.append(reinterpret_cast<const char*>(p),n);return n;}
-  int available()const{return opened?static_cast<int>(min(chunk,response.size()-cursor)):0;}
+  bool connectBlocking(const char*,uint16_t,uint32_t,std::atomic<bool>* flag){cancel=flag;++connects;if(*flag||!connectOk)return false;opened=worker=true;cursor=0;return true;}
+  size_t print(const String& s){if(request.empty())firstRequestAt=nowMs;request+=s.value;return s.length();}
+  size_t write(const uint8_t* p,size_t n){n=min(n,chunk);body.append(reinterpret_cast<const char*>(p),n);if(queueWriteDelay)delay(queueWriteDelay);return n;}
+  int available()const{tick();return opened && (!delayed || reached(responseAt))?static_cast<int>(min(chunk,response.size()-cursor)):0;}
   int read(){return cursor<response.size()?static_cast<unsigned char>(response[cursor++]):-1;}
   size_t read(uint8_t* p,size_t n){n=min(n,min(chunk,response.size()-cursor));memcpy(p,response.data()+cursor,n);cursor+=n;return n;}
 };
@@ -233,6 +240,8 @@ struct FireBackendClient {
   bool selectionPending()const{return selection_.pending();}
   /*BEGIN_SELECTION*/
   bool serialAudioSupported()const{return serialAudioSupported_;}
+  uint8_t audioFailure()const{return static_cast<uint8_t>(audioFailure_.load());}
+  const char* audioFailureStatus()const;
   const String& confirmedProject()const{return confirmedProject_;}
   const String& confirmedMode()const{return confirmedMode_;}
   const String& confirmedAppMode()const{return confirmedAppMode_;}
@@ -609,6 +618,53 @@ static void newIntentMatrix(){
   assert(!blocked.sendAudioCommit() && blocked.events.size()==1);
   puts("PASS extracted successful new intent immediately revokes commit pending unclear and failed selection do not send");
 }
+static void httpDrainMatrix(){
+  nowMs=1000;FireBackendClient c;stopped(c);startWorker(c);
+  const uint32_t queuedAt=nowMs;c.audioClient_.delayed=true;
+  c.audioClient_.drainAt=queuedAt+4000;c.audioClient_.responseAt=queuedAt+5500;c.audioClient_.response=http(staged());
+  runTask(c.audioTask_);
+  // The wire response took1.5s after4s of pending TX, not5.5s of response wait.
+  assert(c.audioTransferOk_ && !c.audioFailure() && uint32_t(nowMs-queuedAt)==5500 && c.audioClient_.connects==1);
+  assert(c.audioOwnsBuffer(wav.data()) && c.events.size()==1);
+  c.serviceAudioTransfer(true,true,false);c.serviceAudioTransfer(true,true,false);
+  assert(!c.audioTask_ && c.audioPhase_==Phase::Resume);
+  admitted(c);c.serviceAudioTransfer(true,true,false);nowMs+=250;c.serviceAudioTransfer(true,true,false);
+  assert(c.audioPhase_==Phase::Commit && c.events.size()==2 && c.events.back().kind=="audio_input_commit");
+  const String result="{\"turn_id\":\"turn-one\",\"status\":\"queued\",\"sha256\":\""+String(wavHash)+"\"}";
+  assert(c.handleAudioMessage("event_ack",ack(c,result.c_str())) && c.audioTransferOk_ && c.audioPhase_==Phase::Finished);
+  c.releaseAudioResult();
+  for(unsigned fault=0;fault<5;++fault){
+    nowMs=1000;FireBackendClient failed;stopped(failed);
+    if(fault==3)assert(failed.beginAudioUpload("turn-one",largeWav.data(),largeWav.size()));
+    startWorker(failed);
+    if(fault==3)nowMs+=24000; // POST starts within25s; eight2s writes finish at40s.
+    if(fault==4)nowMs+=25000; // First POST byte is forbidden at the exact25s boundary.
+    const uint8_t* const buffer=fault==3?largeWav.data():wav.data();
+    const uint32_t begin=nowMs;failed.audioClient_.delayed=true;
+    failed.audioClient_.drainAt=begin+(fault==0?5500:4000);
+    if(fault==3){failed.audioClient_.chunk=2048;failed.audioClient_.queueWriteDelay=2000;failed.audioClient_.drainAt=begin+20000;}
+    failed.audioClient_.responseAt=failed.audioClient_.drainAt+1500;failed.audioClient_.response=http(staged(fault==3?largeWavHash:nullptr));
+    if(fault==1)failed.audioClient_.cancelAt=begin+2000;
+    if(fault==2)failed.audioClient_.failAt=begin+2000;
+    runTask(failed.audioTask_);
+    assert(!failed.audioTransferOk_ && failed.audioOwnsBuffer(buffer));
+    const uint8_t firstFailure=failed.audioFailure();assert(firstFailure);
+    if(fault==0)assert(firstFailure==3); // Bounded pending-TX drain.
+    if(fault==1)assert(firstFailure==10); // Explicit cancellation.
+    if(fault>=3)assert(firstFailure==8); // Original start/total lease expiry.
+    assert(failed.events.size()==1 && failed.audioClient_.connects==1);
+    if(fault==0)assert(uint32_t(nowMs-begin)<=5000);
+    if(fault==3){assert(uint32_t(failed.audioClient_.firstRequestAt-failed.audioGrantAt_)==24000 && failed.audioClient_.body.size()==16384);assert(uint32_t(nowMs-failed.audioGrantAt_)<=45000);}
+    if(fault==4)assert(failed.audioClient_.request.empty() && failed.audioClient_.body.empty());
+    failed.releaseAudioResult();assert(failed.audioTransferUploadData_==buffer);
+    for(unsigned i=0;i<3;++i)failed.serviceAudioTransfer(true,true,false);
+    assert(!failed.audioTask_);
+    if(failed.audioPhase_==Phase::Resume){admitted(failed);failed.serviceAudioTransfer(true,true,false);}
+    assert(failed.audioPhase_==Phase::Finished && !failed.audioTransferOk_ && failed.events.size()==1);
+    failed.releaseAudioResult();assert(!failed.audioTransferUploadData_ && failed.audioClient_.connects==1 && failed.audioFailure()==firstFailure);
+  }
+  puts("PASS actual HTTP response clock starts after bounded TX drain cancel failure total cap cleanup no retry");
+}
 static void uploadMatrix(){
   nowMs=1000;FireBackendClient c;bootstrap(c);assert(c.listenStop("turn-one"));
   assert(!c.listenStop("turn-two") && !c.beginAudioUpload("wrong",wav.data(),wav.size()));
@@ -763,7 +819,8 @@ class SerialAudioTests(unittest.TestCase):
                        'PASS extracted actual QA', 'PASS extracted actual audio_ready',
                        'PASS extracted actual upload completion', 'PASS extracted successful new intent',
                        'PASS actual fractional server grant', 'PASS actual immutable local grant caps',
-                       'PASS actual OS autoStop', 'PASS actual boot-bound auto event producers'):
+                       'PASS actual OS autoStop', 'PASS actual boot-bound auto event producers',
+                       'PASS actual HTTP response clock starts'):
             self.assertIn(marker, result)
 
 

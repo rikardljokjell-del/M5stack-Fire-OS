@@ -19,7 +19,7 @@ lokale tester og faktisk fysisk verifikasjon.
 ## Status nå
 
 
-### Under retting: tale etter New app — RC21
+### Under retting: tale etter New app — RC22
 
 Brukeren presiserte flyten: New app → snakke → Think → «Apphandling feilet».
 Selve appvalget og opptaksstart/-stopp ble godtatt, men ingen lydfil eller
@@ -46,6 +46,15 @@ nettforbindelse kom opp, men appøkten ble avvist før lydprøven; ingen mikrofo
 eller modellhandling ble utført. Meldingsnumre basert bare på oppstartstid og
 teller kan kollidere mellom omstarter. RC21 binder automatisk genererte
 meldingsnumre til oppstarten uten å svekke backendens duplikatkontroll.
+
+RC21 er installert i B70 med RC20 A69 bevart. Begge installasjonsoppstarter og
+en senere normal omstart fikk godkjent backend-økt. Fysisk mikrofonopptak og
+offentlig HTTPS-mellomlagring er bekreftet. Ett forløp nådde eksplisitt commit
+og transkribering uten påvist tale; testavspilling på PC feilet først, og PC-lyden
+viste seg dessuten å være dempet. Et annet forløp manglet commit etter vellykket
+mellomlagring. RC22 retter at svarfristen startet før sendekøen var tømt, og
+bevarer konkret lydfeil på skjermen fremfor å overskrive den med «Tenker».
+Full tale → AI-svar/appforslag → talesvar er fortsatt ikke fysisk bekreftet.
 
 RC18 ryddet tidligere byggefeil ved
 nytt appvalg og rettet naturlig avslutning etter startfrist. En fysisk New app-

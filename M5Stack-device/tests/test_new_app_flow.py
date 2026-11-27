@@ -74,6 +74,7 @@ def source():
     production += '\n' + '\n'.join(method(picker, name) for name in (
         'bool FireOS::selectAiProject(', 'void FireOS::handleAiPicker('))
     production += '\n' + method(os_source, 'bool FireOS::aiBuildForeground(')
+    production += '\n' + method(os_source, 'void FireOS::completeAiAudioUpload(')
     return (text + PREAMBLE.replace('/*ACTUAL_ACCESSORS*/', accessors) + production +
             '\nvoid FireOS::adopt(const String& type) {\n' + adoption + '}\n' +
             'void FireOS::drawFailureProbe(){const int cx=160;' + failed_condition + failed_draw + '}\n' +
@@ -113,6 +114,10 @@ struct FireBackendClient {
   bool ready=true,writeOk=true;unsigned disconnects=0;uint32_t eventCounter_=0;
   unsigned runtimePolicies=0;String runtimeMode;
   bool serialAudioTransfer_=false;unsigned audioCancels=0;
+  uint8_t audioFailureCode=0;String audioFailureTurn;
+  uint8_t audioFailure()const{return audioFailureCode;}
+  const String& audioTransferTurn()const{return audioFailureTurn;}
+  const char* audioFailureStatus()const{return "Sending ble ikke ferdig";} // Injected typed failure query boundary.
   void cancelAudioTransfer(){++audioCancels;}
   String projectId_="stale-project",bootId_="boot-one",developmentContext_;
   String confirmedProject_="old-project",confirmedBase_="old-base",confirmedMode_="develop",confirmedAppMode_="update";
@@ -133,7 +138,8 @@ struct FireOS {
   bool redrawRequested_=false,aiVoiceTestMode_=false,aiEvolutionNewPending_=false;
   bool aiProjectPickerActive_=true,aiJobViewing_=false,aiJobOpenPending_=false,aiJobNeedsInstall_=false;
   bool aiRuntimeAuto_=true,aiRuntimeModeAcked_=false,runtimeAiEnabled_=true;
-  bool aiAudioCaptureActive_=false,aiAudioStopSent_=false,aiAudioOutputActive_=false,aiAudioDownloadPending_=false;
+  bool aiAudioCaptureActive_=false,aiAudioStopSent_=false,aiAudioOutputActive_=false,aiAudioDownloadPending_=false,aiAudioUploadStarted_=false;
+  String aiAudioError_,aiTranscriptText_;
   const char* audioWorkflowLabel()const{return nullptr;} // No audio in this inert New-choice matrix.
   enum class LuaJobKind {RuntimeAi,Other};
   struct LuaHardwareJob {LuaJobKind kind=LuaJobKind::RuntimeAi;uint8_t state=0;};
@@ -168,6 +174,7 @@ struct FireOS {
   bool aiBuildForeground(const String&,const String& build=String())const;
   void proposalFrame(const String&);void errorFrame(const String&);void progressGuard(const String&);
   void uiEventFrame(const String&);
+  void completeAiAudioUpload(bool,bool,const String&);
   String lcdChoice()const;String qaChoice()const;
   bool selectAiProject(fire_ai_menu::Kind,uint8_t=0);void handleAiPicker(uint8_t);void adopt(const String&);
 };
@@ -224,7 +231,24 @@ static void choiceRevokesOldVoice() {
   FireBackendClient sdkData;sdkData.serialAudioTransfer_=false;assert(sdkData.beginSelection() && !sdkData.audioCancels);
   puts("PASS actual new intent revokes serial voice before reset failed begin retains and SDK data unaffected");
 }
+static void audioFailureSurvivesActivity() {
+  FireBackendClient backend;backend.audioFailureCode=3;backend.audioFailureTurn="failed-current-turn";
+  FireOS os;os.backendClient_=&backend;os.aiTurnId_="failed-current-turn";os.aiProjectPickerActive_=false;
+  os.aiWorkflowState_=2;os.aiWorkflowText_="SENDING AUDIO";
+  os.completeAiAudioUpload(false,false,os.aiTurnId_);
+  assert(os.aiWorkflowState_==0 && os.aiWorkflowText_=="Sending ble ikke ferdig" && os.aiAudioError_==os.aiWorkflowText_);
+  const char* messages[]={"{\"type\":\"ui_event\",\"state\":\"processing\"}","{\"type\":\"ui_event\",\"state\":\"thinking\"}","{\"type\":\"ui_event\",\"state\":\"idle\"}"};
+  for(const char* message:messages){os.uiEventFrame(message);assert(os.aiWorkflowState_==0 && os.aiWorkflowText_=="Sending ble ikke ferdig");}
+  // A genuine server error remains visible; only generic activity is held.
+  os.errorFrame("{\"type\":\"error\",\"display_text\":\"Actual current audio error\"}");
+  assert(os.aiWorkflowText_=="Actual current audio error" && os.aiWorkflowState_==0);
+  os.aiTurnId_="explicit-new-turn";os.aiAudioCaptureActive_=true;os.aiWorkflowText_="Explicit new recording";
+  os.uiEventFrame("{\"type\":\"ui_event\",\"state\":\"processing\"}");
+  assert(os.aiWorkflowState_==2 && os.aiWorkflowText_=="processing");
+  puts("PASS actual terminal audio failure survives activity until new action and genuine errors remain visible");
+}
 int main() {
+  audioFailureSurvivesActivity();
   choiceRevokesOldVoice();
   FireBackendClient client;FireOS os;os.backendClient_=&client;
   os.aiProjectId_="old-project";os.aiBuildProjectId_="old-project";
@@ -386,6 +410,7 @@ class NewAppFlowTests(unittest.TestCase):
         self.assertIn('PASS actual New app menu pending producer matched receipt and UI adoption', output)
         self.assertIn('PASS actual New app busy rejection lost receipt explicit choices and no blind replay', output)
         self.assertIn('PASS actual new intent revokes serial voice', output)
+        self.assertIn('PASS actual terminal audio failure survives activity', output)
 
 
 if __name__ == '__main__':
