@@ -214,7 +214,7 @@ class FireBackendClient {
   bool serialAudioSupported_=false,serialAudioTransfer_=false,audioCommitSent_=false,audioPausedControl_=false;
   std::atomic<bool> audioWorkerFinished_{false};
   int audioOwnerCore_=-1;
-  uint32_t audioUploadExpires_=0,audioCommitExpires_=0,audioPhaseAt_=0,audioEpoch_=0;
+  uint32_t audioUploadExpires_=0,audioCommitExpires_=0,audioPhaseAt_=0,audioEpoch_=0,audioGrantAt_=0;
   uint32_t audioServerTime_=0,audioServerAt_=0;
   String audioBoot_,audioProject_,audioBase_,audioMode_,audioEvent_;
   char audioHash_[65]={};
@@ -242,6 +242,7 @@ class FireBackendClient {
   void closeControl(bool plannedAudio);
   bool audioScope(bool admitted) const;
   uint32_t audioNow() const;
+  bool audioDeadlineLive(bool uploadStart) const;
   void finishAudioTransfer(bool ok);
   void reapAudioWorker();
   bool startAudioWorker();

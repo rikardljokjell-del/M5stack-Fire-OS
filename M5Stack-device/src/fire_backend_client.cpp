@@ -19,6 +19,7 @@
 #include "fire_ws_handshake.h"
 #include <mbedtls/sha1.h>
 #include <cJSON.h>
+#include <cmath>
 #include <M5Unified.h>
 
 namespace {
@@ -624,6 +625,12 @@ void FireBackendClient::snapshotAudioEndpoint() {
 uint32_t FireBackendClient::audioNow() const {
   return audioServerTime_?audioServerTime_+uint32_t(millis()-audioServerAt_)/1000u:0;
 }
+bool FireBackendClient::audioDeadlineLive(bool uploadStart) const {
+  const uint32_t expires=uploadStart?audioUploadExpires_:audioCommitExpires_;
+  const uint32_t now=audioNow();
+  return now && expires>now &&
+      (audioTransfer_!=AudioTransfer::Upload || uint32_t(millis()-audioGrantAt_)<(uploadStart?25000u:45000u));
+}
 bool FireBackendClient::audioScope(bool admitted) const {
   return audioBoot_==bootId_ && audioProject_==confirmedProject_ && audioBase_==confirmedBase_ && audioMode_==confirmedMode_ &&
       (!admitted || (sessionReady() && sessionId_==audioSession_ && connectionEpoch_!=audioEpoch_));
@@ -673,7 +680,7 @@ bool FireBackendClient::startAudioWorker() {
 }
 bool FireBackendClient::sendAudioCommit() {
   lastSendDisposition_=fire_backend_policy::SendDisposition::NotQueued;
-  if(selection_.pending() || selection_.unclear() || !audioScope(true) || !audioNow() || audioNow()>=audioCommitExpires_ || audioTransferCancel_ || !fire_lua_install::hash(audioHash_)) return false;
+  if(selection_.pending() || selection_.unclear() || !audioScope(true) || !audioDeadlineLive(false) || audioTransferCancel_ || !fire_lua_install::hash(audioHash_)) return false;
   if(!audioEvent_.length()) {
     String event=bootId_+"-"+eventId("audio-commit");
     if(!fire_package_delivery::wireId(event.c_str())) return false;
@@ -702,17 +709,21 @@ bool FireBackendClient::handleAudioMessage(const String& type,const String& mess
   bool valid=false;
   if(audioPhase_==AudioPhase::StopAck && accepted) {
     const cJSON* serial=cJSON_GetObjectItemCaseSensitive(result,"serial_audio"),*upload=cJSON_GetObjectItemCaseSensitive(result,"upload_expires_at"),*commit=cJSON_GetObjectItemCaseSensitive(result,"commit_expires_at");
-    if(cJSON_IsTrue(serial) && cJSON_IsNumber(upload) && cJSON_IsNumber(commit) && audioNow() &&
-       upload->valuedouble>audioNow() && upload->valuedouble<=audioNow()+26 &&
-       commit->valuedouble>=upload->valuedouble && commit->valuedouble<=audioNow()+46) {
-      // Server deadlines can include fractional seconds. Store their FLOOR;
-      // the one-second validation allowance never extends an actual deadline.
+    if(!audioTransferCancel_ && uint32_t(millis()-audioGrantAt_)<5000u &&
+       cJSON_IsTrue(serial) && cJSON_IsNumber(upload) && cJSON_IsNumber(commit) && audioNow() &&
+       std::isfinite(upload->valuedouble) && std::isfinite(commit->valuedouble) &&
+       upload->valuedouble>0 && upload->valuedouble<=static_cast<double>(UINT32_MAX) &&
+       commit->valuedouble>0 && commit->valuedouble<=static_cast<double>(UINT32_MAX) &&
+       upload->valuedouble>audioNow() && commit->valuedouble>=upload->valuedouble &&
+       commit->valuedouble-upload->valuedouble<=20.0) {
+      // The authenticated grant supplies absolute deadlines. Keep their FLOOR;
+      // original-stop monotonic caps independently prevent any lease extension.
       audioUploadExpires_=static_cast<uint32_t>(upload->valuedouble);audioCommitExpires_=static_cast<uint32_t>(commit->valuedouble);
       audioEvent_=String();audioPhase_=AudioPhase::Queued;valid=true;
     }
   } else if(audioPhase_==AudioPhase::Commit && accepted) {
     const cJSON* hash=cJSON_GetObjectItemCaseSensitive(result,"sha256"),*queued=cJSON_GetObjectItemCaseSensitive(result,"status");
-    valid=audioScope(true) && audioNow()<audioCommitExpires_ && !audioTransferCancel_ && cJSON_IsString(hash) && !strcmp(hash->valuestring,audioHash_) && cJSON_IsString(queued) && !strcmp(queued->valuestring,"queued");
+    valid=audioScope(true) && audioDeadlineLive(false) && !audioTransferCancel_ && cJSON_IsString(hash) && !strcmp(hash->valuestring,audioHash_) && cJSON_IsString(queued) && !strcmp(queued->valuestring,"queued");
     if(valid) finishAudioTransfer(true);
   }
   cJSON_Delete(doc);
@@ -723,22 +734,23 @@ void FireBackendClient::serviceAudioTransfer(bool allowed,bool otherIdle,bool bu
   reapAudioWorker();
   if(!serialAudioTransfer_ || audioPhase_==AudioPhase::Idle || audioPhase_==AudioPhase::Finished) return;
   if(!allowed || !audioScope(false) || (sessionReady() && sessionId_!=audioSession_) ||
-      (audioCommitExpires_ && (!audioNow() || audioNow()>=audioCommitExpires_))) audioTransferCancel_=true;
+      (audioTransfer_==AudioTransfer::Upload && uint32_t(millis()-audioGrantAt_)>=45000u) ||
+      (audioCommitExpires_ && !audioDeadlineLive(false))) audioTransferCancel_=true;
   if(audioTransferCancel_) {
     audioClient_.stop();if(audioPhase_!=AudioPhase::Resume) audioPhase_=AudioPhase::Cleanup;
     if(audioTransferRunning_ || audioClient_.running() || (audioPausedControl_ && client_.running() && audioPhase_!=AudioPhase::Resume)) return;
-    if(allowed && audioScope(false) && audioCommitExpires_ && audioNow()<audioCommitExpires_ && audioPausedControl_ && !sessionReady()) {
+    if(allowed && audioScope(false) && audioDeadlineLive(false) && audioPausedControl_ && !sessionReady()) {
       audioPhase_=AudioPhase::Resume;reconnectAt_=0;return;
     }
     finishAudioTransfer(false);
     return;
   }
   if(audioPhase_==AudioPhase::StopAck) {
-    if(uint32_t(millis()-audioPhaseAt_)>=5000) {audioTransferCancel_=true;finishAudioTransfer(false);}
+    if(uint32_t(millis()-audioGrantAt_)>=5000u) {audioTransferCancel_=true;finishAudioTransfer(false);}
     return;
   }
   if(audioPhase_==AudioPhase::Queued) {
-    if(!audioNow() || audioNow()>=audioUploadExpires_) {audioTransferCancel_=true;finishAudioTransfer(false);return;}
+    if(!audioDeadlineLive(true)) {audioTransferCancel_=true;finishAudioTransfer(false);return;}
     if(busy || (audioTransfer_==AudioTransfer::Upload && !audioTransferUploadData_)) return;
     audioPhase_=AudioPhase::Quiet;return;
   }
@@ -747,7 +759,7 @@ void FireBackendClient::serviceAudioTransfer(bool allowed,bool otherIdle,bool bu
     if(pendingWrites()) return;
     if(active() || sessionReady()) closeControl(true);
     if(!client_.running() && !audioClient_.running() && otherIdle) {
-      if(!audioNow() || audioNow()>=audioUploadExpires_) {audioTransferCancel_=true;return;}
+      if(!audioDeadlineLive(true)) {audioTransferCancel_=true;return;}
       audioPhase_=startAudioWorker()?AudioPhase::Http:AudioPhase::Cleanup;
     }
     return;
@@ -918,7 +930,7 @@ bool FireBackendClient::listenStop(const String& turnId) {
     audioTransferUploadData_=nullptr;audioTransferDownloadBuffer_=nullptr;audioTransferBytes_=0;audioTransferLength_=0;
     audioUploadExpires_=audioCommitExpires_=0;audioEpoch_=connectionEpoch_;audioCommitSent_=false;audioPausedControl_=false;
     audioTransferCancel_=false;audioTransferFinished_=false;audioTransferOk_=false;serialAudioTransfer_=true;
-    audioPhase_=AudioPhase::StopAck;audioPhaseAt_=millis();audioEvent_=bootId_+"-"+eventId("listen-stop");
+    audioGrantAt_=millis();audioPhase_=AudioPhase::StopAck;audioPhaseAt_=audioGrantAt_;audioEvent_=bootId_+"-"+eventId("listen-stop");
     if(sendEvent("listen_stop",",\"turn_id\":\""+jsonEscape(turnId)+"\",\"serial_audio\":true",audioEvent_)) return true;
     audioTransferCancel_=true;finishAudioTransfer(false);return false;
   }

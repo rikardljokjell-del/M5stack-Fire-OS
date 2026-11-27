@@ -50,7 +50,7 @@ def source():
         'String jsonStringField(', 'uint32_t jsonUintField(',
         'void FireBackendClient::snapshotAudioEndpoint(',
         'void FireBackendClient::closeControl(',
-        'uint32_t FireBackendClient::audioNow(', 'bool FireBackendClient::audioScope(',
+        'uint32_t FireBackendClient::audioNow(', 'bool FireBackendClient::audioDeadlineLive(', 'bool FireBackendClient::audioScope(',
         'bool FireBackendClient::audioNetworkPaused(', 'bool FireBackendClient::audioOtherNetworksPaused(',
         'bool FireBackendClient::audioOwnsNetwork(', 'bool FireBackendClient::audioOwnsBuffer(',
         'const char* FireBackendClient::audioStatus(', 'void FireBackendClient::finishAudioTransfer(',
@@ -75,16 +75,20 @@ def source():
     audio_ready = run_status.block(os_source.split('void FireOS::handleBackendMessage(', 1)[1], 'if (type == "audio_ready")')
     output = (method(os_source, 'bool validSha256Hex(') + method(os_source, 'void FireOS::completeAiAudioUpload(') +
               method(os_source, 'void FireOS::updateAiAudioOutput(') +
+              method(os_source, 'void FireOS::finishAiRecording(') + method(os_source, 'void FireOS::updateAiAudio(') +
+              method(os_source, 'void FireOS::serviceAiAudioTransport(') +
               'void FireOS::audioReady(const String& message){const String type="audio_ready";' + audio_ready + '}\n')
+    wav_helpers = method(os_source, 'void writeWavHeader(') + method(os_source, 'size_t normalizePcmDuration(')
     return (INCLUDES + strings + ADAPTERS.replace('/*GOLDEN*/', golden) + relative + ops +
             CLASS.replace('/*FIELDS*/', fields).replace('/*BEGIN_SELECTION*/', begin_selection) + '\n'.join(method(cpp, n) for n in names) +
-            QA_CLASS + actual_qa + output + QA_MAIN + MAIN.replace('int main(){', 'int main(){qaMatrix();outputMatrix();completionMatrix();newIntentMatrix();'))
+            wav_helpers + QA_CLASS + actual_qa + output + QA_MAIN + MAIN.replace('int main(){', 'int main(){qaMatrix();outputMatrix();completionMatrix();newIntentMatrix();deadlineMatrix();autoStopMatrix();'))
 
 
 INCLUDES = r'''
 #include <atomic>
 #include <cctype>
 #include <cstring>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -97,14 +101,23 @@ INCLUDES = r'''
 #include "fire_buttons.h"
 #include "fire_ai_menu.h"
 #include "fire_ai_workflow.h"
+#define FIRE_AUDIO_CAPTURE_ENABLED 1
 '''
 
 ADAPTERS = r'''
 /*GOLDEN*/
 constexpr int HEX=16;
+using std::max;
 static uint32_t nowMs=1000;
 uint32_t millis(){return nowMs;}
 void delay(unsigned ms){nowMs+=ms;}
+struct SerialSpy {template<class... Args>void printf(const char*,Args...) {}} Serial;
+static bool micFailed=false,micRunning=false,micRelease=true;static size_t micSamples=0;static unsigned micStops=0;
+bool fireMicCaptureFailed(){return micFailed;}bool fireMicCaptureRunning(){return micRunning;}
+bool fireReleaseMicCapture(){return micRelease;}size_t fireMicCapturedSamples(){return micSamples;}
+void fireStopMicCapture(){++micStops;micRunning=false;}
+constexpr int WL_CONNECTED=3;
+struct {int status()const{return WL_CONNECTED;}} WiFi;
 String jsonEscape(const String& s){return fire_session::escape(s);}
 // cJSON compatibility adapter over the actual bounded production JSON reader.
 // It parses real test wire bytes; it does not choose expected branch results.
@@ -226,6 +239,8 @@ struct FireBackendClient {
   bool audioTransferActive()const{return audioTransferRunning_ || (serialAudioTransfer_ && audioPhase_!=AudioPhase::Idle);}
   bool audioTransferFinished()const{return (dataTransferActive_ && dataChunkDone_) || (!audioTransferRunning_ && audioTransferFinished_);}
   bool audioTransferOk()const{return audioTransferOk_;}size_t audioTransferLength()const{return audioTransferLength_;}
+  bool audioTransferUncertain()const{return serialAudioTransfer_ && audioTransfer_==AudioTransfer::Upload && audioCommitSent_ && !audioTransferOk_;}
+  const String& audioTransferTurn()const{return audioTransferTurnId_;}
   bool audioPlaybackStarted(const String&,const String&);bool audioPlaybackFinished(const String&,const String&);
   bool audioPlaybackFailed(const String&,const String&,const String&,const String&,const String&){return false;}
   bool beginAudioUpload(const String&,const uint8_t*,size_t);
@@ -289,6 +304,14 @@ struct FireOS {
   String aiAudioOutputId_,aiAudioOutputTurnId_,aiLastAudioId_,aiLastAudioTurnId_;
   uint32_t aiAudioFetchExpires_=0;unsigned aiDeveloperMode_=0,playbackErrors=0;String playbackCode;
   String aiTranscriptText_,aiAssistantText_;bool redrawRequested_=false;
+  uint8_t* aiAudioBuffer_=nullptr;size_t aiAudioCapturedSamples_=0,aiAudioWavLength_=0;
+  bool aiAudioUploadStarted_=false,aiAudioUploadFinished_=false,aiAudioUploadOk_=false,aiAudioReleasePending_=false;
+  String aiAudioError_;uint32_t aiAudioCaptureStartedAt_=0,aiAudioCaptureElapsedMs_=0,aiWorkflowStarted_=0,aiAudioCaptureRms_=0;int32_t aiAudioCapturePeak_=0;
+  static constexpr uint32_t kAiAudioSampleRate=16000;static constexpr size_t kAiAudioSamples=240000;
+  uint8_t wifiMode_=1,backendMode_=1;bool firmwareNetworkPaused_=false;
+  enum class LuaJobKind {Other,RuntimeAi,Data};struct LuaHardwareJob {uint8_t state=1;LuaJobKind kind=LuaJobKind::Other;};
+  LuaHardwareJob luaJobs_[1];
+  struct HomeSpy {bool idle=true;unsigned quietCalls=0;bool networkIdle()const{return idle;}void service(bool,bool allowed){if(!allowed)++quietCalls;}} homeApp_;
   FireOS(){current.context=7;current.view=11;current.presented=1;memset(current.identity,'a',64);qa.presented=current;}
   uint64_t buttonView()const{return 11;}String buttonViewIdentity()const{return "shown";}
   void localQaSnapshot(fire_local_qa::Snapshot& out){out=current;}
@@ -300,6 +323,8 @@ struct FireOS {
   bool localQaActionAllowed(uint8_t,bool)const;
   static fire_local_qa::Code localQaAct(void*,const fire_local_qa::Command&,fire_local_qa::Snapshot&);
   void updateAiAudioOutput();void audioReady(const String&);
+  void finishAiRecording();void updateAiAudio();void serviceAiAudioTransport();bool firmwareBusy()const{return false;}
+  void cancelConversationTurn(const String& reason,bool){fireStopMicCapture();if(backendClient_)backendClient_->cancelAudioTransfer();aiAudioCaptureActive_=false;aiAudioError_=reason;aiTurnId_=String();}
   void completeAiAudioUpload(bool,bool,const String&);
   void restoreVoiceTestRadio(){}String audioDiagnosticsJson(const char*){return "{}";}
   void failAiAudioPlayback(const String&,const String&,const String& code,const String&,const String&,bool release=true){
@@ -428,6 +453,87 @@ static void admitted(FireBackendClient& c){
   c.state_=FireBackendClient::State::Connected;c.sessionStarted_=true;
   c.sessionId_=c.audioSession_;++c.connectionEpoch_;
 }
+static void fractionalGrantMatrix(){
+  // Both server_time and elapsed millis are floored in audioNow(). A valid
+  // finite server grant can therefore be almost two seconds ahead of that
+  // estimate. These are the actual grant numbers from the failed physical
+  // attempt; this clock alignment is a deterministic source reproduction,
+  // not a claim that the physical clocks were measured at these fractions.
+  nowMs=1000;FireBackendClient c;
+  c.handleAudioMessage("session_snapshot","{\"backend_features\":[\"serial_audio_v1\"],\"server_time\":1795761720}");
+  nowMs+=14511;
+  assert(c.audioNow()==1795761734);
+  assert(c.listenStop("turn-one") && c.beginAudioUpload("turn-one",wav.data(),wav.size()));
+  assert(c.audioPhase_==Phase::StopAck && !c.audioClient_.connects && !c.audioTask_);
+  const char* grant="{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1795761760.50245,\"commit_expires_at\":1795761780.50245}";
+  assert(c.handleAudioMessage("event_ack",ack(c,grant)));
+  assert(c.audioPhase_==Phase::Queued && !c.audioTransferCancel_);
+  assert(c.audioTransferUploadData_==wav.data() && c.audioTransferBytes_==wav.size());
+  c.serviceAudioTransfer(true,true,false);
+  assert(c.audioPhase_==Phase::Quiet && !c.audioClient_.connects && !c.audioTask_);
+  puts("PASS actual fractional server grant survives double-floor clock lag and reaches quiet with WAV");
+}
+static void deadlineMatrix(){
+  for(const uint32_t start:{uint32_t(1000),uint32_t(UINT32_MAX-100u)}) {
+    for(const uint32_t age:{uint32_t(4999),uint32_t(5000)}) {
+      nowMs=start;FireBackendClient c;bootstrap(c);assert(c.listenStop("turn-one"));
+      const uint32_t original=c.audioGrantAt_;nowMs=uint32_t(start+age);
+      assert(c.handleAudioMessage("event_ack",ack(c,deadlines)));
+      assert(c.audioGrantAt_==original);
+      assert((c.audioPhase_==Phase::Queued)==(age<5000));
+      assert(bool(c.audioTransferCancel_)==(age>=5000));
+    }
+    nowMs=start;FireBackendClient c;bootstrap(c);assert(c.listenStop("turn-one"));
+    const char* future="{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":2000000000,\"commit_expires_at\":2000000020}";
+    assert(c.handleAudioMessage("event_ack",ack(c,future)) && c.audioPhase_==Phase::Queued);
+    const uint32_t original=c.audioGrantAt_;
+    nowMs=uint32_t(start+24999);assert(c.audioDeadlineLive(true) && c.audioDeadlineLive(false));
+    nowMs=uint32_t(start+25000);assert(!c.audioDeadlineLive(true) && c.audioDeadlineLive(false));
+    // A new admitted connection/snapshot can refresh the server clock, but
+    // cannot restart the original monotonic grant or revive upload admission.
+    const uint32_t beforeReconnect=c.connectionEpoch_;admitted(c);
+    c.handleAudioMessage("session_snapshot","{\"backend_features\":[\"serial_audio_v1\"],\"server_time\":1025}");
+    assert(c.connectionEpoch_!=beforeReconnect && c.audioGrantAt_==original && !c.audioDeadlineLive(true));
+    nowMs=uint32_t(start+44999);assert(c.audioDeadlineLive(false));
+    nowMs=uint32_t(start+45000);assert(!c.audioDeadlineLive(false));
+    c.serviceAudioTransfer(true,true,false);assert(c.audioTransferCancel_ && !c.audioClient_.connects && c.events.size()==1);
+  }
+  const char* invalid[]={
+    "{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1e309,\"commit_expires_at\":1e309}",
+    "{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":-1,\"commit_expires_at\":10}",
+    "{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":4294967296,\"commit_expires_at\":4294967296}",
+    "{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1025,\"commit_expires_at\":1e309}",
+    "{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1025,\"commit_expires_at\":1046}",
+    "{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1025,\"commit_expires_at\":1024}"};
+  for(const char* grant:invalid){
+    nowMs=1000;FireBackendClient c;bootstrap(c);assert(c.listenStop("turn-one"));
+    assert(c.handleAudioMessage("event_ack",ack(c,grant)));
+    assert(c.audioTransferCancel_ && c.audioPhase_==Phase::Cleanup && !c.audioClient_.connects);
+  }
+  puts("PASS actual immutable local grant caps 5 25 45 seconds wrap reconnect finite order and gap");
+}
+static void autoStopMatrix(){
+  nowMs=1000;FireBackendClient backend;
+  backend.handleAudioMessage("session_snapshot","{\"backend_features\":[\"serial_audio_v1\"],\"server_time\":1795761720}");
+  FireOS os;os.backendClient_=&backend;os.aiTurnId_="turn-one";os.aiWorkflowState_=1;
+  os.aiAudioCaptureActive_=true;os.aiAudioCaptureStartedAt_=nowMs;
+  std::vector<uint8_t> buffer(44+FireOS::kAiAudioSamples*2);os.aiAudioBuffer_=buffer.data();
+  micFailed=false;micRunning=false;micRelease=true;micSamples=232176;micStops=0;nowMs+=14511;
+  os.updateAiAudio(); // Actual automatic mic completion -> WAV -> listenStop -> attach.
+  assert(!os.aiAudioCaptureActive_ && os.aiAudioCaptureFinished_ && os.aiAudioStopSent_ && os.aiAudioUploadStarted_);
+  assert(os.aiWorkflowState_==2 && os.aiAudioWavLength_==464396 && os.aiAudioCapturedSamples_==232176 && micStops==1);
+  assert(!memcmp(buffer.data(),"RIFF",4) && !memcmp(buffer.data()+8,"WAVEfmt ",8));
+  uint32_t bytes=0;memcpy(&bytes,buffer.data()+40,4);assert(bytes==464352);
+  assert(backend.audioPhase_==Phase::StopAck && backend.audioTransferUploadData_==buffer.data() && backend.audioTransferBytes_==os.aiAudioWavLength_);
+  const uint32_t grantAt=backend.audioGrantAt_;os.serviceAiAudioTransport();
+  assert(backend.audioPhase_==Phase::StopAck && !backend.audioClient_.connects);
+  const char* grant="{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1795761760.50245,\"commit_expires_at\":1795761780.50245}";
+  assert(backend.handleAudioMessage("event_ack",ack(backend,grant)) && backend.audioPhase_==Phase::Queued);
+  os.serviceAiAudioTransport();
+  assert(backend.audioPhase_==Phase::Quiet && backend.audioGrantAt_==grantAt && !backend.audioClient_.connects && !backend.audioTask_);
+  assert(os.aiAudioUploadStarted_ && !os.aiAudioError_.length() && backend.events.size()==1);
+  puts("PASS actual OS autoStop WAV attach client fractional ACK next transport service reaches quiet");
+}
 static void newIntentMatrix(){
   for(const Phase phase:{Phase::Resume,Phase::Commit}){
     nowMs=1000;FireBackendClient c;stopped(c);admitted(c);c.audioPhase_=phase;memcpy(c.audioHash_,wavHash,65);
@@ -502,7 +608,7 @@ static void negativeMatrix(){
     if(fault==0)result="{\"turn_id\":\"wrong\",\"serial_audio\":true,\"upload_expires_at\":1025,\"commit_expires_at\":1045}";
     if(fault==1)result="{\"turn_id\":\"turn-one\",\"serial_audio\":false,\"upload_expires_at\":1025,\"commit_expires_at\":1045}";
     if(fault==2)result="{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1000,\"commit_expires_at\":1045}";
-    if(fault==3)result="{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1027,\"commit_expires_at\":1045}";
+    if(fault==3)result="{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1045,\"commit_expires_at\":1025}";
     if(fault==4)result="{\"turn_id\":\"turn-one\",\"serial_audio\":true,\"upload_expires_at\":1025,\"commit_expires_at\":1047}";
     if(fault<5){assert(c.handleAudioMessage("event_ack",ack(c,result.c_str())));}
     else {assert(c.handleAudioMessage("event_ack",ack(c,deadlines)));if(fault==5)c.bootId_="boot-two";if(fault==6)c.confirmedProject_="other";if(fault==7)c.confirmedBase_="other";if(fault==8)c.confirmedMode_="chat";if(fault==9)nowMs+=45000;c.serviceAudioTransfer(true,true,false);}
@@ -560,7 +666,7 @@ static void downloadMatrix(){
   }
   puts("PASS extracted immutable output quiet GET size hash cleanup admission no input commit");
 }
-int main(){uploadMatrix();negativeMatrix();httpNegativeMatrix();downloadMatrix();assert(created==destroyed);}
+int main(){fractionalGrantMatrix();uploadMatrix();negativeMatrix();httpNegativeMatrix();downloadMatrix();assert(created==destroyed);}
 '''
 
 
@@ -599,7 +705,9 @@ class SerialAudioTests(unittest.TestCase):
         for marker in ('PASS extracted serial upload', 'PASS extracted wrongscope',
                        'PASS extracted actual HTTP', 'PASS extracted immutable output',
                        'PASS extracted actual QA', 'PASS extracted actual audio_ready',
-                       'PASS extracted actual upload completion', 'PASS extracted successful new intent'):
+                       'PASS extracted actual upload completion', 'PASS extracted successful new intent',
+                       'PASS actual fractional server grant', 'PASS actual immutable local grant caps',
+                       'PASS actual OS autoStop'):
             self.assertIn(marker, result)
 
 

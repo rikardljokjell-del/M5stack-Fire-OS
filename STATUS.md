@@ -19,7 +19,7 @@ lokale tester og faktisk fysisk verifikasjon.
 ## Status nå
 
 
-### Under retting: tale etter New app — RC19
+### Under retting: tale etter New app — RC20
 
 Brukeren presiserte flyten: New app → snakke → Think → «Apphandling feilet».
 Selve appvalget og opptaksstart/-stopp ble godtatt, men ingen lydfil eller
@@ -31,10 +31,17 @@ RC19 serialiserer inn- og utgående lydoverføring med frosset økt/opptak og
 eksisterende tids- og størrelsesgrenser. Opplastet lyd mellomlagres; bare en
 eksplisitt, deduplisert commit etter samme økt/boot-gjenoppkobling kan starte
 transkribering. Gjenoppkobling alene starter aldri nye AI-kall. Ferdige talesvar
-kan hentes uten ny modellforespørsel. Backend- og native-testene er under arbeid;
-hele den fysiske taleflyten er ennå ikke bekreftet rettet.
+kan hentes uten ny modellforespørsel. Eksakt RC19-kilde bestod backend-, native-
+og firmware-CI. RC19 er installert i B68 med RC18 A67 bevart. Den første fysiske
+prøven startet mikrofonen og fikk godkjent avslutningskvittering, men stoppet
+før HTTP; ingen transkribering eller modellforespørsel ble startet.
 
-RC18 er installert i A67 med RC17 B66 bevart. Den ryddet tidligere byggefeil ved
+En konkret RC20-regresjon dekker at et gyldig serversvar kunne avvises når den
+lokale klokkeestimeringen rundet ned. Rettelsen beholder serverfristene og
+innfører uavhengige, ufornybare grenser fra opprinnelig opptaksstopp. Hele den
+fysiske taleflyten er fortsatt under kontroll; ingen ferdigpåstand er gjort.
+
+RC18 ryddet tidligere byggefeil ved
 nytt appvalg og rettet naturlig avslutning etter startfrist. En fysisk New app-
 kvittering ble bekreftet, men generelle aktivitetsmeldinger kunne erstatte
 kvitteringen på skjermen. En trygg teststopp bevarte denne feilen; RC19 retter
