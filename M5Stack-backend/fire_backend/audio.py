@@ -12,7 +12,7 @@ import wave
 
 from .models import State
 from .capabilities import policy, require_audio_input
-from .storage import identifier, new_id
+from .storage import identifier, new_id, canonical
 from .metering import session_usage
 
 
@@ -78,15 +78,95 @@ class AudioManager:
         self.store, self.settings = service.store, service.settings
         self.uploads = {}
         self.awaiting = {}
+        self.serial_turns = {}
+        self.ready_tasks = {}
         # No audio survives a backend restart. Metadata is retained briefly only
         # for deduplication, and its previous URLs become immediately unavailable.
         for path in (self.store.root / "audio").iterdir():
             if path.suffix in {".pcm", ".wav", ".part"}:
                 path.unlink(missing_ok=True)
         for item in self.store.list("audio"):
-            if item["status"] in {"receiving", "processing", "ready"}:
+            if item["status"] in {"receiving", "processing", "ready", "staged", "committed"}:
                 item.update(status="expired", expires_at=time.time())
                 self.store.put("audio", item["id"], item, critical=True)
+
+    def serial_available(self, session):
+        return bool(self.settings.fire_audio_enabled and session.protocol_version == '0.2'
+                    and session.target == 'device')
+
+    @staticmethod
+    def serial_scope(session):
+        return {**{name: getattr(session, name) for name in ('id', 'device_id', 'boot_id', 'project_id',
+            'base_package_id', 'conversation_mode', 'app_mode', 'development_context_id', 'turn_id')},
+            'capabilities_sha256': hashlib.sha256(canonical(session.capabilities)).hexdigest()}
+
+    def serial_turn(self, session, kind):
+        handoff = self.serial_turns.get(session.id)
+        if (not handoff or handoff['kind'] != kind or session.stopped
+                or handoff['scope'] != self.serial_scope(session) or session.turn_id in session.retired_turns):
+            return None
+        try:
+            project = self.store.get('projects', session.project_id)
+        except FileNotFoundError:
+            return None
+        if project.get('owner_device_id') != session.device_id:
+            return None
+        if self.service.device_record(session).get('boot_id') != session.boot_id:
+            return None
+        if kind in {'input', 'output'} and (time.monotonic() >= handoff['deadline']
+                or time.time() >= handoff['expires_at']):
+            return None
+        return handoff
+
+    def preserve_handoff(self, session):
+        # No provider work is retained merely because the transport reconnects.
+        if session.lock.locked() or any(task and not task.done() for task in (session.input_task, session.operation_task, session.speech_task)):
+            return False
+        handoff = self.serial_turn(session, 'input') or self.serial_turn(session, 'output')
+        if not handoff:
+            return False
+        if handoff['kind'] == 'output':
+            if handoff.get('proposal_id') != session.proposal_id or session.audio_id != handoff['audio_id']:
+                return False
+        return True
+
+    async def resume_handoff(self, session):
+        handoff = self.serial_turn(session, 'output')
+        if handoff and self.preserve_handoff(session):
+            item = self.store.get('audio', handoff['audio_id'])
+            if item['status'] == 'ready':
+                await self.announce(session, item)
+
+    def schedule_serial_ready(self, session, item):
+        async def finished():
+            try:
+                # speak has finished writing immutable PCM, but its task and
+                # the input task may still have harmless persistence epilogues.
+                tasks = {t for t in (session.input_task, session.operation_task, session.speech_task) if t}
+                if tasks:
+                    await asyncio.gather(*(asyncio.shield(t) for t in tasks))
+                handoff = self.serial_turn(session, 'processing')
+                if not handoff or session.audio_id != item['id'] or item['status'] != 'ready':
+                    return
+                deadline = min(item['expires_at'], item['ready_at'] + 35)
+                handoff.update(kind='output', audio_id=item['id'], proposal_id=session.proposal_id,
+                    expires_at=deadline, deadline=time.monotonic() + max(0, deadline-time.time()))
+                if self.serial_turn(session, 'output'):
+                    await self.announce(session, item)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if not session.stopped and session.audio_id == item['id']:
+                    await self.playback_failed(session, item, 'audio_handoff_failed',
+                        'Talesvaret kunne ikke klargjøres. Tekst og forslag er beholdt.')
+        task = asyncio.create_task(finished())
+        self.ready_tasks[session.id] = task
+        def done(completed):
+            if self.ready_tasks.get(session.id) is completed:
+                self.ready_tasks.pop(session.id, None)
+            if not completed.cancelled():
+                completed.exception()
+        task.add_done_callback(done)
 
     def cleanup(self):
         now = time.time()
@@ -99,6 +179,10 @@ class AudioManager:
                     self.store.path("audio", item["id"]).unlink(missing_ok=True)
 
     def cancel(self, session):
+        self.serial_turns.pop(session.id, None)
+        ready = self.ready_tasks.pop(session.id, None)
+        if ready and ready is not asyncio.current_task() and not ready.done():
+            ready.cancel()
         self.awaiting.pop(session.id, None)
         if session.audio_status.get("phase") in {"recording", "awaiting_upload", "transcribing", "generating_reply", "reply_ready", "playing"}:
             session.audio_status = {**session.audio_status, "phase": "cancelled"}
@@ -112,24 +196,45 @@ class AudioManager:
                     task.cancel()
                     self.uploads.pop(key, None)
         for item in self.store.list("audio"):
-            if item["session_id"] == session.id and item["status"] in {"processing", "ready"}:
+            if item["session_id"] == session.id and item["status"] in {"processing", "ready", "staged", "committed"}:
                 item.update(status="cancelled", expires_at=time.time())
                 self.store.put("audio", item["id"], item, critical=True)
                 for suffix in (".pcm", ".wav", ".part"):
                     self.store.path("audio", item["id"], suffix).unlink(missing_ok=True)
         session.audio_id = None
 
-    def expect_upload(self, session):
+    def expect_upload(self, session, *, serial_audio=False):
+        if serial_audio and not self.serial_available(session):
+            raise ValueError('Serial audio was not advertised for this device session')
         self.awaiting[session.id] = (session.turn_id, time.monotonic() + 25)
         session.audio_status = {**session.audio_status, "phase": "awaiting_upload", "turn_id": session.turn_id}
+        if serial_audio:
+            now = time.time()
+            handoff = {'scope': self.serial_scope(session), 'kind': 'input', 'deadline': time.monotonic()+45,
+                'expires_at': now+45, 'upload_expires_at': now+25}
+            self.serial_turns[session.id] = handoff
+            session.audio_status.update(serial_audio=True, upload_expires_at=handoff['upload_expires_at'],
+                commit_expires_at=handoff['expires_at'])
+            return {'serial_audio': True, 'upload_expires_at': handoff['upload_expires_at'],
+                'commit_expires_at': handoff['expires_at']}
+        return {}
 
     async def expire_waiting(self):
+        for session_id, handoff in list(self.serial_turns.items()):
+            if handoff['kind'] != 'input' or time.monotonic() < handoff['deadline']:
+                continue
+            session = self.service.sessions.get(session_id)
+            if session and self.serial_turns.get(session_id) is handoff:
+                self.cancel(session)
+                if not session.stopped and session.turn_id == handoff['scope']['turn_id']:
+                    await self.service.input_retry(session, 'Lydomgangen utløp. Ta et nytt opptak.', 'audio_upload_missing')
         for session_id, (turn_id, deadline) in list(self.awaiting.items()):
             if time.monotonic() < deadline or (session_id, turn_id) in self.uploads:
                 continue
             self.awaiting.pop(session_id, None)
             session = self.service.sessions.get(session_id)
             if session and not session.stopped and session.turn_id == turn_id:
+                self.serial_turns.pop(session.id, None)
                 session.audio_status["phase"] = "upload_missing"
                 await self.service.input_retry(session, "Lydfilen kom ikke frem. Trykk B for et nytt opptak.", "audio_upload_missing")
         for item in self.store.list("audio"):
@@ -152,8 +257,14 @@ class AudioManager:
 
     async def announce(self,session,item):
         keys=("turn_id","sha256","size_bytes","expires_at","sample_rate","channels","format","synthetic","mode")
+        serial = {}
+        if item.get('serial_audio'):
+            handoff = self.serial_turn(session, 'output')
+            if not handoff or handoff['audio_id'] != item['id']:
+                return
+            serial = {'serial_audio': True, 'fetch_expires_at': handoff['expires_at']}
         await self.service.emit(session,{"type":"audio_ready","audio_id":item["id"],"download_url":f"/audio/{item['id']}",
-            **{k:item[k] for k in keys}})
+            **{k:item[k] for k in keys}, **serial})
 
     async def replay(self,session,test=False):
         if not getattr(self.settings,'fire_speech_enabled',True):
@@ -180,6 +291,7 @@ class AudioManager:
                 "project_id":session.project_id,"summary":session.summary,"turn_id":session.turn_id})
 
     async def playback_failed(self,session,item,code,message):
+        self.serial_turns.pop(session.id, None)
         item.update(status="playback_failed",error_code=code,expires_at=time.time())
         self.store.put("audio",item["id"],item,critical=True)
         self.store.path("audio",item["id"],".pcm").unlink(missing_ok=True)
@@ -206,7 +318,13 @@ class AudioManager:
         self.uploads[upload_key] = asyncio.current_task()
         try:
             data = bytearray()
-            async with asyncio.timeout(20):
+            handoff = self.serial_turn(session, 'input') if session.audio_status.get('serial_audio') else None
+            if session.audio_status.get('serial_audio') and not handoff:
+                raise ValueError('Serial audio handoff is no longer current')
+            if handoff and time.time() >= handoff['upload_expires_at'] and not handoff.get('input_id'):
+                raise ValueError('Audio upload start deadline expired')
+            timeout = min(20, max(0, handoff['deadline']-time.monotonic())) if handoff else 20
+            async with asyncio.timeout(timeout):
                 async for chunk in stream:
                     if len(data) + len(chunk) > self.settings.fire_audio_max_input_bytes:
                         raise ValueError("Audio input size limit exceeded")
@@ -222,6 +340,11 @@ class AudioManager:
             if previous:
                 if previous["sha256"] != digest:
                     raise ValueError("turn_id reused with different audio")
+                if previous.get('serial_audio'):
+                    if not handoff or previous['status'] != 'staged' or handoff.get('input_id') != item_id:
+                        raise ValueError('Serial audio was already consumed or expired')
+                    return {'status': 'staged', 'turn_id': turn_id, 'duplicate': True,
+                        'sha256': digest, 'expires_at': handoff['expires_at']}
                 return {"status": previous["status"], "turn_id": turn_id, "duplicate": True}
             # HTTP and control use different pool sockets. A small bounded wait
             # tolerates the final WAV bytes overtaking listen_stop on the wire;
@@ -234,6 +357,8 @@ class AudioManager:
                 raise ValueError("Upload must follow matching listen_start/listen_stop")
             if session.lock.locked() or (session.input_task and not session.input_task.done()):
                 raise ValueError("Session is busy")
+            if handoff and self.serial_turn(session, 'input') is not handoff:
+                raise ValueError('Serial audio handoff changed during upload')
             prepared, metrics = prepare_recording(data)
             wall = session.audio_status.get("recording_wall_seconds", 0)
             if wall:
@@ -244,9 +369,19 @@ class AudioManager:
             item = {"id": item_id, "session_id": session.id, "device_id": session.device_id,
                     "turn_id": turn_id, "sha256": digest, "status": "processing", **metrics,
                     "expires_at": time.time() + self.settings.fire_audio_ttl_seconds}
+            if handoff:
+                item.update(status='staged', serial_audio=True, expires_at=handoff['expires_at'],
+                    prepared_sha256=hashlib.sha256(prepared).hexdigest(), prepared_size_bytes=len(prepared))
             self.store.put("audio", item_id, item)
             path = self.store.path("audio", item_id, ".wav")
             path.write_bytes(prepared)
+            if handoff:
+                handoff.update(input_id=item_id, sha256=digest)
+                session.audio_status.update(phase='awaiting_commit')
+                self.awaiting.pop(session.id, None)
+                self.service.persist(session)
+                return {'status': 'staged', 'turn_id': turn_id, 'duplicate': False,
+                    'sha256': digest, 'expires_at': handoff['expires_at']}
             session.audio_status = {"phase": "transcribing", "turn_id": turn_id, **metrics}
             self.store.log(session.id, "Audio input accepted: " + str(metrics))
             self.awaiting.pop(session.id, None)
@@ -257,6 +392,8 @@ class AudioManager:
                 return {"status": "cancelled", "turn_id": turn_id, "duplicate": False}
             raise
         except Exception as error:
+            if session.audio_status.get('serial_audio'):
+                self.serial_turns.pop(session.id, None)
             pending = self.awaiting.get(session.id)
             if pending and pending[0] == turn_id and session.turn_id == turn_id and not session.stopped:
                 self.awaiting.pop(session.id, None)
@@ -272,6 +409,31 @@ class AudioManager:
             raise ValueError("Lydopplastingen ble avbrutt. Prøv et nytt opptak.") from None
         finally:
             self.uploads.pop(upload_key, None)
+
+    async def commit(self, session, event):
+        require_audio_input(self.settings, session)
+        handoff = self.serial_turn(session, 'input')
+        if (not session.sockets or not handoff or event.turn_id != session.turn_id
+                or event.sha256 != handoff.get('sha256') or not handoff.get('input_id')
+                or session.lock.locked() or any(task and not task.done() for task in
+                    (session.input_task, session.operation_task, session.speech_task))):
+            raise ValueError('No matching staged audio for this admitted turn')
+        item = self.store.get('audio', handoff['input_id'])
+        path = self.store.path('audio', item['id'], '.wav')
+        if (item['status'] != 'staged' or item['session_id'] != session.id
+                or item['device_id'] != session.device_id or item['turn_id'] != event.turn_id
+                or item['sha256'] != event.sha256 or item['expires_at'] <= time.time()
+                or path.stat().st_size != item['prepared_size_bytes']
+                or hashlib.sha256(path.read_bytes()).hexdigest() != item['prepared_sha256']):
+            raise ValueError('Staged audio is expired, consumed or changed')
+        # Consumption precedes scheduling. A crash or unknown ACK cannot pay twice.
+        item.update(status='committed', commit_event_id=event.event_id, committed_at=time.time())
+        self.store.put('audio', item['id'], item, critical=True)
+        handoff['kind'] = 'processing'
+        session.audio_status.update(phase='transcribing')
+        self.service.persist(session)
+        session.input_task = asyncio.create_task(self.transcribe(session, item, path))
+        return {'status': 'queued', 'turn_id': event.turn_id, 'sha256': event.sha256}
 
     @session_usage
     async def transcribe(self, session, item, path):
@@ -354,11 +516,17 @@ class AudioManager:
                     "expires_at": int(time.time()) + self.settings.fire_audio_ttl_seconds,
                     "sample_rate": 24000, "channels": 1, "format": "pcm_s16le", "synthetic": True,
                     "mode": self.settings.fire_ai_mode,"ready_at":time.time(),"announcements":1}
+            if self.serial_turn(session, 'processing'):
+                item['serial_audio'] = True
             self.store.put("audio", audio_id, item)
             session.audio_id = audio_id
-            session.audio_status = {**session.audio_status, "phase": "reply_ready", "output_bytes": size}
+            session.audio_status = {**session.audio_status, "phase": "reply_ready", "output_bytes": size,
+                'audio_id': audio_id}
             self.service.persist(session)
-            await self.announce(session,item)
+            if item.get('serial_audio'):
+                self.schedule_serial_ready(session, item)
+            else:
+                await self.announce(session,item)
         except asyncio.CancelledError:
             path.unlink(missing_ok=True)
             raise
@@ -374,12 +542,18 @@ class AudioManager:
         finally:
             partial.unlink(missing_ok=True)
 
-    def clip(self, audio_id, identity):
+    def clip(self, audio_id, identity, *, playback=False):
         item = self.store.get("audio", audio_id)
         if identity != "admin" and item["device_id"] != identity:
             raise PermissionError("Audio belongs to another device")
         if item["status"] != "ready" or item["expires_at"] <= time.time():
             raise FileNotFoundError("Audio expired")
+        if item.get('serial_audio'):
+            session = self.service.sessions.get(item['session_id'])
+            handoff = (self.serial_turn(session, 'output') or
+                       (self.serial_turn(session, 'playing') if playback else None)) if session else None
+            if not handoff or handoff.get('audio_id') != audio_id:
+                raise FileNotFoundError('Serial audio fetch expired or scope changed')
         path = self.store.path("audio", audio_id, ".pcm")
         if path.stat().st_size != item["size_bytes"] or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
             raise ValueError("Audio integrity check failed")
@@ -408,7 +582,7 @@ class AudioManager:
             return "ignored"  # Late ack after timeout cannot resurrect a cancelled clip.
         if event.audio_id != session.audio_id or event.turn_id != session.turn_id:
             raise ValueError("Playback does not match the current turn/clip")
-        item, _ = self.clip(event.audio_id, session.device_id if session.target == "device" else "admin")
+        item, _ = self.clip(event.audio_id, session.device_id if session.target == "device" else "admin", playback=True)
         if item["session_id"] != session.id:
             raise ValueError("Audio session mismatch")
         if event.event=="audio_playback_failed":
@@ -419,6 +593,8 @@ class AudioManager:
                 raise ValueError("Cannot start playback while recording/processing")
             await self.service.activity(session, "speaking")
             session.audio_status["phase"] = "playing"
+            if item.get('serial_audio'):
+                self.serial_turns[session.id]['kind'] = 'playing'
         else:
             if session.activity != "speaking":
                 raise ValueError("Playback was not started")

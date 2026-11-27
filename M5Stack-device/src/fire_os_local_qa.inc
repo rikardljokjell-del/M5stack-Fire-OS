@@ -7,6 +7,8 @@ struct FireOS::LocalQa {
   char tx[fire_local_qa::kMaxWireBytes]={};
   uint16_t txAt=0,txBytes=0;
   uint32_t bootTag=0;
+  char voiceTurn[65]={};
+  bool voiceConsumed=false;
 };
 namespace {
 constexpr char kQaPackage[]="build-67b5836c92034bebb8f0";
@@ -57,7 +59,7 @@ bool FireOS::localQaRead(void* context,fire_local_qa::Snapshot& out) {
 }
 void FireOS::localQaSnapshot(fire_local_qa::Snapshot& out) const {
   out=fire_local_qa::Snapshot();out.screen=uint16_t(screen_);out.context=inputContext_;out.view=buttonView();
-  out.busy=downloadPhase_==1 || downloadPhase_==2 || (packageManager_ && packageManager_->busy());
+  out.busy=downloadPhase_==1 || downloadPhase_==2 || (packageManager_ && packageManager_->busy()) || aiAudioCaptureActive_ || (backendClient_ && backendClient_->audioTransferActive());
   String label,detail;
   if(appUpdateStage_) {
     out.index=appUpdateSelection_;out.count=appUpdateStage_==1?3:1;
@@ -113,7 +115,8 @@ void FireOS::localQaSnapshot(fire_local_qa::Snapshot& out) const {
         }
       } else {
         out.count=1;const char* choice=fire_ai_menu::choiceLabel(aiWorkflowText_.c_str());
-        label=choice?choice:aiWorkflowState_==5?"Kjør app":aiWorkflowState_==3?"Build proposal":"Developer";
+        const char* audio=audioWorkflowLabel();
+        label=aiAudioCaptureActive_ && !aiAudioStopSent_ && aiWorkflowState_==1?"Fullfør":audio?audio:choice?choice:aiWorkflowState_==5?"Kjør app":aiWorkflowState_==3?"Build proposal":"Developer";
       }break;
     case Screen::LuaApp: {
       const auto panel=fire_ai_menu::repairPanel(aiJobViewing_,luaAppActive_,luaRepairStatus_.c_str(),aiJobOpenPending_,luaRepairRequested_,luaErrorAction_);
@@ -130,8 +133,9 @@ void FireOS::localQaSnapshot(fire_local_qa::Snapshot& out) const {
   const bool online=backendClient_ && backendClient_->sessionReady();
   const bool publicProfile=fireNetworkHost(backendHost_)=="fire-device.ljoekjell.no" && backendPort_==443 && fireNetworkTls(backendHost_,backendPort_);
   const bool current=online && backendCatalogAt_ && fire_app_updates::knownEpoch(backendClient_->connectionEpoch(),backendCatalogEpoch_);
-  snprintf(out.detail,sizeof(out.detail),"B%uW%uR%uP%uC%uE%uL%uD%uT%08lx",unsigned(backendMode_),unsigned(wifiMode_),unsigned(online),unsigned(publicProfile),
-      unsigned(backendAppCount_),unsigned(current),unsigned(backendCatalogLoading_),unsigned(downloadPhase_),static_cast<unsigned long>(localQa_?localQa_->bootTag:0));
+  snprintf(out.detail,sizeof(out.detail),"B%uW%uR%uP%uC%uE%uL%uD%uT%08lxA%uV%uM%u",unsigned(backendMode_),unsigned(wifiMode_),unsigned(online),unsigned(publicProfile),
+      unsigned(backendAppCount_),unsigned(current),unsigned(backendCatalogLoading_),unsigned(downloadPhase_),static_cast<unsigned long>(localQa_?localQa_->bootTag:0),
+      unsigned(backendClient_?min<uint8_t>(9,backendClient_->audioPhase()):0),unsigned(localQa_ && localQa_->voiceConsumed),unsigned(aiAudioCaptureActive_));
   // Index and label bind the shown row as well as the existing confirmation ID.
   const String identity=String(out.view)+"|"+String(out.index)+"|"+label+"|"+buttonViewIdentity();
   uint8_t hash[32];mbedtls_sha256_ret(reinterpret_cast<const uint8_t*>(identity.c_str()),identity.length(),hash,0);qaHex(hash,32,out.identity);
@@ -155,6 +159,7 @@ bool FireOS::localQaActionAllowed(uint8_t button,bool hold) const {
   if(appUpdateStage_)return button!=1 || appUpdateSelection_==1 || (appUpdateCandidate_==kQaPackage && (appUpdateStage_!=3 || safeInstalled(appUpdateCandidate_)));
   if(buildNoticeActive_)return button==2; // Opening arbitrary build notices can RUN.
   if(button!=1) {
+    if(screen_==Screen::AiDeveloper && !aiProjectPickerActive_ && button==0 && aiWorkflowState_==3) return false; // Proposal BUILD is never automated.
     if(screen_==Screen::AiDeveloper && !aiProjectPickerActive_ && button==0 && aiWorkflowState_==5)
       return aiReadyPackageId_==kQaPackage && (aiJobNeedsInstall_ || safeInstalled(aiReadyPackageId_));
     return screen_!=Screen::FactoryReset && screen_!=Screen::Power && screen_!=Screen::Firmware && screen_!=Screen::FileExplorer;
@@ -188,7 +193,14 @@ bool FireOS::localQaActionAllowed(uint8_t button,bool hold) const {
           !aiAudioCaptureActive_ && !aiAudioOutputActive_ && !aiConversationCancelPending_ &&
           aiWorkflowState_!=1 && aiWorkflowState_!=2 && aiWorkflowState_!=4;
         return item.kind==fire_ai_menu::Kind::Jobs || item.kind==fire_ai_menu::Kind::Back || item.kind==fire_ai_menu::Kind::SelectApp;
-      }return false; // No BUILD/model/voice action through unattended QA.
+      }
+      if(!backendClient_ || !backendClient_->sessionReady() || !localQa_ || aiVoiceTestMode_) return false;
+      if(aiAudioCaptureActive_) return !aiAudioStopSent_ && localQa_->voiceConsumed && aiTurnId_==localQa_->voiceTurn;
+      return !localQa_->voiceConsumed && backendClient_->serialAudioSupported() && !backendClient_->selectionPending() &&
+          backendClient_->confirmedAppMode()=="new" && backendClient_->confirmedMode()=="develop" &&
+          aiProjectId_.length() && aiProjectId_==backendClient_->confirmedProject() && aiWorkflowText_=="Valg bekreftet" &&
+          aiWorkflowState_==0 && !aiJobViewing_ && !aiProposalId_.length() && !luaAppActive_ && !luaRunId_.length() &&
+          !backgroundBuildActive_ && !(packageManager_ && packageManager_->busy()) && !backendClient_->audioTransferActive();
     case Screen::LuaApp:return luaAppActive_?safeLocal(luaPackageId_,luaSourceHash_):luaErrorAction_==1 && luaRepairReadyPackageId_==kQaPackage;
     case Screen::Help:return true;
     default:return false;
@@ -202,7 +214,11 @@ fire_local_qa::Code FireOS::localQaAct(void* context,const fire_local_qa::Comman
   if(!os->localQaActionAllowed(command.button,hold))return fire_local_qa::Code::Blocked;
   fire_buttons::Event event;event.kind=fire_buttons::Kind::Click;event.context=command.context;
   if(command.button==1 && !hold && !fire_buttons::visibleClick(event,os->inputContext_,os->buttonView(),os->inputShownView_,os->buttonViewIdentity()==os->inputShownIdentity_))return fire_local_qa::Code::Stale;
+  const bool voiceStart=!hold && command.button==1 && os->screen_==Screen::AiDeveloper && !os->aiProjectPickerActive_ && !os->aiAudioCaptureActive_;
+  if(voiceStart) os->localQa_->voiceConsumed=true; // Consume before any production action, including a failed start.
   os->lastActivity_=millis();os->onButton(command.button,hold); // Same production handler and confirmations.
+  if(voiceStart && os->aiAudioCaptureActive_ && os->aiTurnId_.length()<sizeof(os->localQa_->voiceTurn))
+    strlcpy(os->localQa_->voiceTurn,os->aiTurnId_.c_str(),sizeof(os->localQa_->voiceTurn));
   out=os->localQa_->presented;return fire_local_qa::Code::Ok;
 }
 void FireOS::serviceLocalQa() {

@@ -744,6 +744,11 @@
   },
   "additionalProperties": false,
   "properties": {
+    "serial_audio": {
+      "default": false,
+      "title": "Serial Audio",
+      "type": "boolean"
+    },
     "expected_revision": {
       "anyOf": [
         {
@@ -1070,6 +1075,7 @@
         "cancel_turn",
         "listen_start",
         "listen_stop",
+        "audio_input_commit",
         "install_retry",
         "app_list",
         "app_versions",
@@ -1758,6 +1764,25 @@
     {
       "if": {
         "properties": {
+          "serial_audio": {
+            "const": true
+          }
+        },
+        "required": [
+          "serial_audio"
+        ]
+      },
+      "then": {
+        "properties": {
+          "event": {
+            "const": "listen_stop"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
           "event": {
             "const": "evolution_status"
           }
@@ -2345,6 +2370,31 @@
             }
           }
         ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "audio_input_commit"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "turn_id",
+          "sha256"
+        ],
+        "properties": {
+          "turn_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          }
+        }
       }
     },
     {

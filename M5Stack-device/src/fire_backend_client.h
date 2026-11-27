@@ -18,7 +18,7 @@ class FireBackendClient {
   void configure(const String& host, uint16_t port, const String& token,
                  const String& deviceId, const String& firmwareVersion);
   void setProjectId(const String& projectId) { projectId_ = projectId; }
-  bool beginSelection() { selectionReply_=0;return selection_.begin(); }
+  bool beginSelection() { selectionReply_=0;if(!selection_.begin())return false;if(serialAudioTransfer_)cancelAudioTransfer();return true; }
   bool selectionPending() const { return selection_.pending(); }
   bool selectionUnclear() const { return selection_.unclear(); }
   bool selectionAppAck() const { return selectionReply_&1; }
@@ -49,16 +49,30 @@ class FireBackendClient {
                      size_t& length);
   bool beginAudioUpload(const String& turnId, const uint8_t* wavData,
                         size_t wavLength);
-  bool beginAudioDownload(const String& url, uint8_t* buffer, size_t capacity);
+  bool beginAudioDownload(const String& url, uint8_t* buffer, size_t capacity,
+                          const String& audioId=String(),const String& turn=String(),
+                          const String& hash=String(),uint32_t fetchExpires=0,bool serial=false);
   bool beginDataUpload(const String& request,const String& dataset,const String& part,
                        uint32_t offset,const String& chunkHash,const uint8_t* bytes,size_t length);
   const String& dataUploadNext() const {return dataUploadNext_;}
   void cancelAudioTransfer();
-  bool audioTransferActive() const { return audioTransferRunning_; }
+  bool audioTransferActive() const { return audioTransferRunning_ || (serialAudioTransfer_ && audioPhase_!=AudioPhase::Idle); }
   bool audioTransferFinished() const { return (dataTransferActive_ && dataChunkDone_) || (!audioTransferRunning_ && audioTransferFinished_); }
   bool dataTransferActive() const {return dataTransferActive_;}
   bool audioTransferOk() const { return audioTransferOk_; }
+  bool audioTransferUncertain() const {return serialAudioTransfer_ && audioTransfer_==AudioTransfer::Upload && audioCommitSent_ && !audioTransferOk_;}
   size_t audioTransferLength() const { return audioTransferLength_; }
+  const String& audioTransferTurn() const {return audioTransferTurnId_;}
+  void serviceAudioTransfer(bool allowed,bool otherIdle,bool busy);
+  void releaseAudioResult();
+  bool audioNetworkPaused() const;
+  bool audioOtherNetworksPaused() const;
+  bool audioOwnsNetwork() const;
+  bool audioOwnsBuffer(const uint8_t* buffer) const;
+  bool serialAudioSupported() const {return serialAudioSupported_;}
+  uint8_t audioPhase() const {return static_cast<uint8_t>(audioPhase_);}
+  const char* audioStatus() const;
+  bool handleAudioMessage(const String& type,const String& message);
 
   bool sessionRejected() const { return !sessionAdmission_.allowed(); }
   bool configured() const { return host_.length() > 0 && token_.length() >= 24; }
@@ -195,6 +209,15 @@ class FireBackendClient {
   uint32_t lastPongAt_ = 0;
   enum class AudioTransfer : uint8_t { None, Upload, Download, DataUpload };
   AudioTransfer audioTransfer_ = AudioTransfer::None;
+  enum class AudioPhase:uint8_t {Idle,StopAck,Queued,Quiet,Http,Cleanup,Resume,Commit,Finished};
+  AudioPhase audioPhase_=AudioPhase::Idle;
+  bool serialAudioSupported_=false,serialAudioTransfer_=false,audioCommitSent_=false,audioPausedControl_=false;
+  std::atomic<bool> audioWorkerFinished_{false};
+  int audioOwnerCore_=-1;
+  uint32_t audioUploadExpires_=0,audioCommitExpires_=0,audioPhaseAt_=0,audioEpoch_=0;
+  uint32_t audioServerTime_=0,audioServerAt_=0;
+  String audioBoot_,audioProject_,audioBase_,audioMode_,audioEvent_;
+  char audioHash_[65]={};
   TaskHandle_t audioTask_ = nullptr;
   std::atomic<bool> audioTransferRunning_{false};
   std::atomic<bool> audioTransferFinished_{false};
@@ -216,6 +239,13 @@ class FireBackendClient {
   FireReverseTransport* audioReverse_ = nullptr;
   uint32_t audioReverseGeneration_ = 0;
   void snapshotAudioEndpoint();
+  void closeControl(bool plannedAudio);
+  bool audioScope(bool admitted) const;
+  uint32_t audioNow() const;
+  void finishAudioTransfer(bool ok);
+  void reapAudioWorker();
+  bool startAudioWorker();
+  bool sendAudioCommit();
   static void audioTaskEntry(void* context);
   void runAudioTransfer();
   bool receiveCallbackActive_=false,releaseReadBuffersPending_=false;

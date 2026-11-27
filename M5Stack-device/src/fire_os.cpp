@@ -78,7 +78,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc18";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc19";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -490,6 +490,7 @@ String compactStatusText(const String& raw) {
   String lower = value;
   lower.toLowerCase();
   if(lower=="backend session rejected") return "Tilkobling avvist";
+  if(lower.indexOf("audio send failed")>=0 || lower.indexOf("audio upload failed")>=0) return "Opptaket ble ikke sendt";
   if(lower.indexOf("callback time budget")>=0) return "Appen brukte for lang tid";
   if(lower.indexOf("instruction budget")>=0 || lower.indexOf("io budget")>=0) return "Appens arbeidsgrense nådd";
   if(lower.indexOf("memory")>=0 && (lower.indexOf("budget")>=0 || lower.indexOf("error")>=0)) return "Appen mangler minne";
@@ -1297,6 +1298,7 @@ void FireOS::update() {
     }
   }
   serviceLocalQa();
+  serviceAiAudioTransport();
   serviceFirmwareAction();
   servicePackageInstall();
   serviceLuaRunStatus();
@@ -1328,7 +1330,7 @@ void FireOS::update() {
   if (homeApp_.configured() && screen_ == Screen::Home && wifiMode_ != 2 &&
       WiFi.status() != WL_CONNECTED && !wifiConnectActive_ && wifiSsid_.length())
     requestWifi(true);
-  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2 && !firmwareNetworkPaused_ && !(packageManager_ && packageManager_->otherNetworksPaused())); }
+  { FireUiPhaseTimer timing("home_service"); homeApp_.service(WiFi.status() == WL_CONNECTED, wifiMode_ != 2 && !firmwareNetworkPaused_ && !(packageManager_ && packageManager_->otherNetworksPaused()) && !(backendClient_ && backendClient_->audioOtherNetworksPaused())); }
   if (homeApp_.takeSetupRequest()) {
     startWifiSetup(); homeApp_.setupHint(wifiSetupPassword_);
   }
@@ -1339,7 +1341,7 @@ void FireOS::update() {
   serviceDataDevelopHandoff();
   {
   FireUiPhaseTimer timing("reverse_service");
-  reverseTransport_.service(!firmwareNetworkPaused_ && !(packageManager_ && packageManager_->networkPaused()) && WiFi.status() == WL_CONNECTED &&
+  reverseTransport_.service(!firmwareNetworkPaused_ && !(packageManager_ && packageManager_->networkPaused()) && !(backendClient_ && backendClient_->audioNetworkPaused()) && WiFi.status() == WL_CONNECTED &&
                             backendClient_ && backendClient_->configured());
   }
   { FireUiPhaseTimer timing("time_sync"); updateTimeSync(); }
@@ -5780,6 +5782,9 @@ bool FireOS::startAiRecording() {
     aiAudioError_=backendClient_->selectionUnclear()?"Valg uavklart. Velg app igjen":"Venter på appvalg";
     return false;
   }
+  if(!localVoiceTest && backendClient_ && backendClient_->audioTransferActive()) {
+    aiAudioError_="Lydoverføringen avsluttes. Vent litt";return false;
+  }
   if ((!localVoiceTest &&
        (!backendClient_ || !backendClient_->sessionReady())) ||
       !M5.Mic.isEnabled() || aiAudioCaptureActive_) {
@@ -5839,6 +5844,8 @@ bool FireOS::startAiRecording() {
   }
   aiWorkflowState_ = 1;
   aiDeveloperMode_ = 1;
+  aiTranscriptText_=aiAssistantText_=aiProposalId_=String();
+  aiProposalProjectId_=aiProposalJobId_=aiProposalAppName_=String();
   aiWorkflowText_ = localVoiceTest ? "VOICE TEST - LISTENING"
                                    : "LISTENING (15 SEC MAX)";
   aiWorkflowStarted_ = millis();
@@ -5876,7 +5883,9 @@ bool FireOS::stopAiAudioOutput() {
     return true;
   if (backendClient_) backendClient_->cancelAudioTransfer();
   M5.Speaker.stop();
-  if (M5.Speaker.isPlaying()) return false;
+  if (M5.Speaker.isPlaying() || (backendClient_ && backendClient_->audioOwnsBuffer(aiAudioOutputBuffer_))) {
+    aiAudioReleasePending_=true;return false;
+  }
   free(aiAudioOutputBuffer_);
   aiAudioOutputBuffer_ = nullptr;
   aiAudioOutputLength_ = 0;
@@ -5887,6 +5896,7 @@ bool FireOS::stopAiAudioOutput() {
   aiAudioDownloadStarted_ = false;
   aiAudioDownloadUrl_ = "";
   aiVoiceTestPlaybackActive_ = false;
+  if(backendClient_) backendClient_->releaseAudioResult();
   return true;
 }
 
@@ -5946,6 +5956,40 @@ void FireOS::finishAiRecording() {
   aiWorkflowStarted_ = millis();
 }
 
+const char* FireOS::audioWorkflowLabel() const {
+  if(backendClient_ && backendClient_->audioOtherNetworksPaused()) return backendClient_->audioStatus();
+  if(aiWorkflowText_=="SENDING AUDIO" || aiWorkflowText_=="PROCESSING AUDIO") return "Sender opptak";
+  if(aiWorkflowText_=="TRANSCRIBING") return "Tolker tale";
+  if(aiWorkflowText_=="AUDIO SEND FAILED - TRY AGAIN" || aiWorkflowText_=="Opptaket ble ikke sendt. Ta nytt opptak") return "Opptaket ble ikke sendt";
+  if(aiWorkflowText_=="Talestatus uavklart. Ta nytt opptak") return "Talestatus uavklart";
+  if(aiWorkflowState_==2 && aiTurnId_.length()) return "Tenker";
+  return nullptr;
+}
+void FireOS::serviceAiAudioTransport() {
+  if(!backendClient_) return;
+  const bool allowed=wifiMode_!=2 && backendMode_!=2 && WiFi.status()==WL_CONNECTED && !firmwareNetworkPaused_;
+  bool busy=firmwareBusy() || (packageManager_ && packageManager_->busy()) || aiAudioCaptureActive_;
+  for(const LuaHardwareJob& job:luaJobs_) if(job.state==0 && (job.kind==LuaJobKind::RuntimeAi || job.kind==LuaJobKind::Data)) busy=true;
+  if(backendClient_->audioOtherNetworksPaused()) homeApp_.service(WiFi.status()==WL_CONNECTED,false);
+  backendClient_->serviceAudioTransfer(allowed,homeApp_.networkIdle(),busy);
+  if(aiAudioReleasePending_ && !M5.Speaker.isPlaying() && !backendClient_->audioOwnsBuffer(aiAudioOutputBuffer_)) {
+    free(aiAudioOutputBuffer_);aiAudioOutputBuffer_=nullptr;aiAudioOutputLength_=0;aiAudioOutputActive_=false;
+    aiAudioOutputId_=aiAudioOutputTurnId_=String();aiAudioDownloadPending_=aiAudioDownloadStarted_=false;aiAudioReleasePending_=false;
+  }
+  if(!aiAudioUploadStarted_ && !aiAudioDownloadStarted_ && !aiAudioCaptureActive_ && backendClient_->audioTransferFinished()) backendClient_->releaseAudioResult();
+}
+void FireOS::completeAiAudioUpload(bool ok,bool uncertain,const String& turn) {
+  // A completed transport is older than any already received server response
+  // in the same WS batch. It never replaces that response or a newer action.
+  if(!turn.length() || turn!=aiTurnId_ || aiWorkflowState_!=2 || aiProjectPickerActive_ ||
+      aiProposalId_.length() || aiTranscriptText_.length() || aiAssistantText_.length()) return;
+  if(ok) aiWorkflowText_="TRANSCRIBING";
+  else {
+    aiWorkflowText_=uncertain?"Talestatus uavklart. Ta nytt opptak":"Opptaket ble ikke sendt. Ta nytt opptak";
+    aiWorkflowState_=0;aiDeveloperMode_=0;
+  }
+  redrawRequested_=true;
+}
 void FireOS::updateAiAudio() {
   if (aiAudioCaptureActive_) {
 #if FIRE_AUDIO_CAPTURE_ENABLED
@@ -6038,19 +6082,15 @@ void FireOS::updateAiAudio() {
       backendClient_->audioTransferFinished()) {
     aiAudioUploadStarted_ = false;
     aiAudioUploadOk_ = backendClient_->audioTransferOk();
-    aiAudioUploadFinished_ = true;
-    if (!aiAudioUploadOk_) aiAudioError_ = "Backend audio upload failed";
+    const bool uncertain=backendClient_->audioTransferUncertain();
+    aiAudioUploadFinished_ = backendClient_->audioTransferTurn()==aiTurnId_;
+    backendClient_->releaseAudioResult();
+    if (!aiAudioUploadOk_) aiAudioError_ = uncertain?"Talestatus uavklart. Ta nytt opptak":"Opptaket ble ikke sendt. Ta nytt opptak";
   }
   if (aiAudioCaptureFinished_ && !aiAudioStopSent_) finishAiRecording();
   if (aiAudioUploadFinished_) {
     aiAudioUploadFinished_ = false;
-    if (!aiAudioUploadOk_) {
-      aiWorkflowText_ = "AUDIO SEND FAILED - TRY AGAIN";
-      aiWorkflowState_ = 0;
-      aiDeveloperMode_ = 0;
-    } else {
-      aiWorkflowText_ = "TRANSCRIBING";
-    }
+    completeAiAudioUpload(aiAudioUploadOk_,aiAudioError_=="Talestatus uavklart. Ta nytt opptak",aiTurnId_);
   }
 }
 
@@ -6063,8 +6103,12 @@ void FireOS::failAiAudioPlayback(const String& audioId, const String& turnId,
                                         audioDiagnosticsJson(phase));
   }
   if (releaseBuffer) {
+    if(backendClient_ && backendClient_->audioOwnsBuffer(aiAudioOutputBuffer_)) {
+      backendClient_->cancelAudioTransfer();aiAudioReleasePending_=true;
+    } else {
     free(aiAudioOutputBuffer_);
     aiAudioOutputBuffer_ = nullptr;
+    }
     aiAudioOutputLength_ = 0;
     aiAudioDownloadPending_ = false;
     aiAudioDownloadStarted_ = false;
@@ -6111,7 +6155,8 @@ void FireOS::updateAiAudioOutput() {
       if (backendClient_->audioTransferActive()) return;
       if (!backendClient_->beginAudioDownload(
               aiAudioDownloadUrl_, aiAudioOutputBuffer_,
-              aiAudioDownloadSize_)) {
+              aiAudioDownloadSize_,aiAudioDownloadId_,aiAudioDownloadTurnId_,aiAudioDownloadHash_,
+              aiAudioFetchExpires_,aiAudioDownloadSerial_)) {
         failAiAudioPlayback(aiAudioDownloadId_, aiAudioDownloadTurnId_,
                             "download_start_failed",
                             "Audio download could not start", "audio_download");
@@ -6125,6 +6170,7 @@ void FireOS::updateAiAudioOutput() {
     const bool transferOk = backendClient_->audioTransferOk() &&
                             backendClient_->audioTransferLength() ==
                                 aiAudioDownloadSize_;
+    backendClient_->releaseAudioResult();
     if (!transferOk) {
       const String code = backendClient_->audioTransferOk()
                               ? "audio_length_mismatch"
@@ -7470,6 +7516,7 @@ void FireOS::updateBackend() {
   // Quick Settings is an overlay, not an exit from its live conversation.
   const Screen demandScreen=fire_ui_cadence::contentScreen(screen_,previousScreen_,Screen::QuickSettings);
   const bool backendDemand = (packageManager_ && packageManager_->busy()) || evolutionDemand || demandScreen == Screen::AiDeveloper ||
+                              backendClient_->audioOtherNetworksPaused() ||
                               luaRunDelivery_.pending() ||
                               (luaAppActive_ && (luaRuntimeAiAllowed_ || luaDataAllowed_ || luaDevelopJob_)) ||
                               luaAiBindPackageId_.length()>0 ||
@@ -7560,9 +7607,11 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   auto* os = static_cast<FireOS*>(context);
   if (!os) return;
   const bool transfer=os->packageManager_ && os->packageManager_->networkPaused();
-  os->backendStatus_ = transfer?String("Overfører app"):status;
+  const bool audio=os->backendClient_ && os->backendClient_->audioOtherNetworksPaused();
+  os->backendStatus_ = audio?String(os->backendClient_->audioStatus()):transfer?String("Overfører app"):status;
   if(!connected) {
     os->backendCatalogEpoch_=0;os->backendCatalogLoading_=false;os->backendCatalogRequested_=false;os->backendCatalogRequest_=String();
+    if(!audio) {
     for(LuaHardwareJob& job:os->luaJobs_) if(job.kind==LuaJobKind::RuntimeAi && job.state==0)
       os->cancelLuaRuntimeAi(job,"not_connected");
     for (LuaHardwareJob& job:os->luaJobs_) if (job.kind==LuaJobKind::Data && job.state==0 && job.started && job.aiRequestId.length())
@@ -7572,6 +7621,7 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
       // stay failed; reconnect never replays a paid request.
       os->luaRunId_=String();os->luaAiBindPackageId_=os->luaPackageId_;
       os->luaAiBindAt_=millis();os->luaAiBindSent_=false;
+    }
     }
   }
   if (connected) {
@@ -7602,7 +7652,7 @@ void FireOS::backendState(void* context, bool connected, const String& status) {
   os->redrawRequested_ = true;
   if (!connected && os->screen_ == Screen::AiDeveloper &&
       os->aiWorkflowState_ > 0) {
-    os->aiWorkflowText_ = transfer?"Overfører app":"BACKEND OFFLINE";
+    os->aiWorkflowText_ = audio?os->backendClient_->audioStatus():transfer?"Overfører app":"BACKEND OFFLINE";
   }
 }
 
@@ -7785,6 +7835,7 @@ void FireOS::backendMessage(void* context, const String& message) {
 void FireOS::handleBackendMessage(const String& message) {
   redrawRequested_ = true;
   const String type = jsonStringField(message, "type");
+  if(backendClient_ && backendClient_->handleAudioMessage(type,message)) {redrawRequested_=true;return;}
   if(aiJobViewing_ && aiJobOpenPending_ && aiJobOpenRequest_.length() &&
      jsonStringField(message,"event_id")==aiJobOpenRequest_ && (type=="error" || type=="event_ack")) {
     cJSON* reply=cJSON_Parse(message.c_str());
@@ -7923,6 +7974,10 @@ void FireOS::handleBackendMessage(const String& message) {
       (restoredState=="ready_to_run" || restoredState=="installed")?String("App klar til kjøring"):
       (restoredState=="building" || restoredState=="testing")?compactStatusText(jsonStringField(message,"phase")):String("Tilkoblet");
     if (backendClient_ && backendClient_->selectionPending()) aiWorkflowText_=backendClient_->selectionUnclear()?"Valg uavklart. Velg app igjen":"Venter på appvalg";
+    if(!aiJobViewing_ && proposal.length() && restoredState=="awaiting_build_confirmation" && jsonStringField(message,"project_id")==aiProjectId_) {
+      aiWorkflowState_=3;aiDeveloperMode_=2;aiWorkflowText_="READY TO BUILD";
+      aiAssistantText_=jsonStringField(message,"summary");
+    }
     return;
   }
   if (type == "app_inventory_request") {
@@ -7982,6 +8037,8 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "assistant_message" || type == "transcript") {
+    const String turn=jsonStringField(message,"turn_id");
+    if(turn.length() && turn!=aiTurnId_) return;
     const String text = jsonStringField(message, "text");
     String display=jsonStringField(message,"display_text");
     if(!display.length()) display=type=="transcript"?String("Tale mottatt"):compactStatusText(text);
@@ -8034,6 +8091,9 @@ void FireOS::handleBackendMessage(const String& message) {
         cancelLuaRuntimeAi(job,"disabled");
       return;
     }
+    // Generic activity/state messages do not replace a concrete app-choice
+    // receipt. A real user action or correlated ACK/error owns that feedback.
+    if(fire_ai_menu::choiceLabel(aiWorkflowText_.c_str())) return;
     String state = jsonStringField(message, "state");
     if (state.length() == 0) state = jsonStringField(message, "activity");
     if (state == "listening") {
@@ -8096,6 +8156,8 @@ void FireOS::handleBackendMessage(const String& message) {
     const int sampleRate = jsonIntField(message, "sample_rate");
     const int channels = jsonIntField(message, "channels");
     const uint32_t size = static_cast<uint32_t>(jsonIntField(message, "size_bytes"));
+    if(!aiTurnId_.length() || turnId!=aiTurnId_) return; // Cancelled/old replies never replace this turn.
+    if(audioId==aiAudioDownloadId_ && turnId==aiAudioDownloadTurnId_ && expectedHash==aiAudioDownloadHash_ && size==aiAudioDownloadSize_) return;
     constexpr uint32_t kMaxPcmBytes = 1440000;
     if (!backendClient_ || audioId.length() == 0 || turnId.length() == 0 ||
         (aiTurnId_.length() > 0 && turnId != aiTurnId_) ||
@@ -8112,6 +8174,9 @@ void FireOS::handleBackendMessage(const String& message) {
     // answer can supersede the old one, but the old playback must be stopped
     // and observed idle before its memory is reused.
     if (aiAudioOutputActive_ || aiAudioOutputBuffer_) {
+      if(backendClient_ && backendClient_->audioOwnsBuffer(aiAudioOutputBuffer_)) {
+        failAiAudioPlayback(audioId,turnId,"audio_busy","Forrige lyd avsluttes","audio_download",false);return;
+      }
       M5.Speaker.stop();
       if (M5.Speaker.isPlaying()) {
         if (backendClient_ && audioId.length() > 0 && turnId.length() > 0)
@@ -8135,6 +8200,8 @@ void FireOS::handleBackendMessage(const String& message) {
     aiAudioDownloadUrl_ = url;
     aiAudioDownloadHash_ = expectedHash;
     aiAudioDownloadSize_ = size;
+    aiAudioDownloadSerial_=jsonBoolField(message,"serial_audio",false);
+    aiAudioFetchExpires_=static_cast<uint32_t>(jsonIntField(message,"fetch_expires_at"));
     aiAudioDownloadPending_ = true;
     aiAudioDownloadStarted_ = false;
     if (!aiAudioOutputBuffer_) {
@@ -10312,7 +10379,7 @@ void FireOS::drawStatusBar(const char* title) {
   const bool backendWorking = !backendConnected && backendClient_ &&
                               backendClient_->configured() && !backendClient_->sessionRejected() &&
                               backendMode_ != 2 && wifiMode_ != 2 &&
-                              ((packageManager_ && packageManager_->networkPaused()) || backendClient_->active() || backendBootPending_ ||
+                              ((packageManager_ && packageManager_->networkPaused()) || backendClient_->audioOtherNetworksPaused() || backendClient_->active() || backendBootPending_ ||
                                (backendMode_ == 1 &&
                                 WiFi.status() == WL_CONNECTED));
   drawBackendIcon(232, 5, backendConnected ? 2 : backendWorking ? 1 : 0);
@@ -11125,6 +11192,7 @@ void FireOS::drawAiDeveloper() {
                              ? aiWorkflowText_
                              : workflowLabels[min<uint8_t>(aiWorkflowState_, 6)];
   if(const char* choice=fire_ai_menu::choiceLabel(aiWorkflowText_.c_str())) workflowLabel=choice;
+  if(const char* audio=audioWorkflowLabel()) workflowLabel=audio;
   if (aiWorkflowState_ == 1 && aiAudioCaptureStartedAt_ > 0) {
     workflowLabel = "REC " + String((millis() - aiAudioCaptureStartedAt_) / 1000.0f, 1) +
                     "s - SPEAK NEAR MIC";

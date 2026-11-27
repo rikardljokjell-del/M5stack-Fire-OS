@@ -320,6 +320,49 @@ generation failure preserves the text answer/proposal and sends audio_error.
 Input and output audio expire after at most 300 seconds by default; no audio goes
 into application ZIPs or ordinary logs. No full-duplex requirement in 0.2.
 
+### Opt-in serial audio transport
+
+`serial_audio_v1` in `backend_features` advertises protocol-0.2 device support.
+Legacy clients omit `serial_audio` and retain the original flow. Its false
+default is excluded from event digests, preserving existing persisted replays.
+Only `listen_stop` may set `serial_audio:true`. Its matching accepted ACK adds
+`serial_audio:true, upload_expires_at, commit_expires_at` to `result` with the
+same `turn_id`. Native waits for that ACK before closing its WSS transport.
+
+The upload must start within the existing 25 seconds after stop and streaming
+still has at most 20 seconds. The total upload/resume/commit deadline is fixed
+at stop+45 seconds. Bytes, duplicate requests and reconnects never renew it.
+Only this exact owner/device/SID/boot/project/base/mode/context/capability/turn
+handoff may retain an awaiting upload during disconnect. The same authenticated
+WAV POST stages validated bytes and returns HTTP202
+`{status:"staged",turn_id,sha256,expires_at,duplicate:false}`. Identical uploads
+can return `duplicate:true`; changed bytes are rejected. Staging does not call
+transcription or dialogue. The SHA identifies original wire bytes; backend
+separately verifies the normalized stored WAV before consumption.
+
+Native fully closes/reaps HTTP, resumes the same SID/boot, and sends exactly one
+`audio_input_commit` with stable `event_id`, `turn_id` and `sha256`. Its result
+is `{status:"queued",turn_id,sha256}`. Backend records consumption before starting
+the existing transcription task. Resume alone and duplicate/unknown commits
+never start another provider request. A crash or ambiguous consumed operation
+requires a new explicit recording; it is not automatically retried.
+
+The serial turn's completed TTS clip adds `serial_audio:true,fetch_expires_at`
+to the existing `audio_ready`. It is announced only after all input/dialogue/
+speech tasks finish. The fetch deadline is min(clip expiry,ready_at+35 seconds),
+never renewed. Only these finished bytes and their existing proposal may survive
+output quiet; active model tasks still use ordinary disconnect cancellation.
+Native closes WSS, GETs the same authenticated clip, verifies size/hash, fully
+closes/reaps HTTP, resumes the same SID/boot, then sends the existing playback
+receipts. This does not regenerate speech or authorize a build. The existing
+clip TTL and playback completion deadlines remain in force.
+
+Cancel, a new turn/selection/context, changed scope, expiry or another SID/boot
+invalidates the handoff. Backend restart invalidates staged input and output;
+ordinary saved authoring context/proposals remain subject to existing lifecycle
+rules. No offline provider work, new command grant or automatic paid retry is
+implied by serial audio.
+
 Backend removes ADC DC bias with bounded gain and records only numeric signal
 diagnostics (sample count, duration, level, clipping, capture/wall-time ratio).
 Original wire bytes remain the deduplication identity. It does not invent speech

@@ -9,6 +9,7 @@ from .api_registry import REGISTRY,API_CONTRACT,ALL_SERVICES
 
 
 REQUIRED = {
+    'audio_input_commit':['turn_id','sha256'],
     'job_control':['job_action'],
     "build_background":["build_id"],"build_resume":["build_id"],"build_cancel":["build_id"],
     "build_notice_ack":["build_id","notification_action"],
@@ -44,6 +45,8 @@ def schemas():
 
     event["properties"]["event_id"] = nonnull("event_id")
     conditions = []
+    conditions.append({'if': {'properties': {'serial_audio': {'const': True}}, 'required': ['serial_audio']},
+        'then': {'properties': {'event': {'const': 'listen_stop'}}}})
     from .evolution_contract import REGISTRY as EVOLUTION
     for name,spec in EVOLUTION['events'].items():
         required=spec['required']

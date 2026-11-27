@@ -16,6 +16,8 @@ bool FireOS::selectAiProject(fire_ai_menu::Kind kind,uint8_t index) {
   if (kind!=Kind::Voice && backendClient_ && !backendClient_->beginSelection()) {
     aiWorkflowText_="Venter på appvalg";redrawRequested_=true;return false;
   }
+  if(aiTurnId_.length() || aiAudioCaptureActive_ || aiAudioOutputActive_ || aiAudioDownloadPending_)
+    cancelConversationTurn("Velger app",false);
   aiVoiceTestMode_=kind==Kind::Voice;aiConversationMode_=(kind==Kind::Chat || aiVoiceTestMode_)?1:0;
   aiProjectId_=String();aiBasePackageId_=String();aiProposalProjectId_=String();aiProposalJobId_=String();aiProposalAppName_=String();
   aiEvolutionGoal_=String();aiEvolutionGoalProject_=String();aiDevelopmentContext_=String();aiEvolutionNewPending_=false;

@@ -755,6 +755,8 @@ class FireOS {
   String aiAudioDownloadUrl_;
   String aiAudioDownloadHash_;
   uint32_t aiAudioDownloadSize_ = 0;
+  uint32_t aiAudioFetchExpires_=0;
+  bool aiAudioDownloadSerial_=false,aiAudioReleasePending_=false;
   bool aiAudioDownloadStarted_ = false;
   bool aiConversationCancelPending_ = false;
 
@@ -1052,6 +1054,9 @@ class FireOS {
   void restoreVoiceTestRadio();
   void finishAiRecording();
   void updateAiAudio();
+  void completeAiAudioUpload(bool ok,bool uncertain,const String& turn);
+  void serviceAiAudioTransport();
+  const char* audioWorkflowLabel() const;
   void updateAiAudioOutput();
   void failAiAudioPlayback(const String& audioId, const String& turnId,
                            const String& errorCode, const String& message,

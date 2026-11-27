@@ -131,6 +131,8 @@ async def dispatch(service, session, event):
 
 async def handle(service, session, event):
     name = event.event
+    if name == 'audio_input_commit':
+        return await service.audio.commit(session, event)
     if name=='runtime_ai_request':return await service.runtime_ai.request(session,event)
     if name=='runtime_ai_cancel':return await service.runtime_ai.cancel_event(session,event)
     if name.startswith('backend_settings_'):return await service.backend_settings.event(session,event)
@@ -236,6 +238,8 @@ async def handle(service, session, event):
         await service.emit(session, {"type": "ui_event", "event": "button_received", "button": event.button, "action": event.action})
         return {"status": "received"}
     if name in {"text", "listen_start", "listen_stop"}:
+        if event.serial_audio and not service.audio.serial_available(session):
+            raise ValueError('Serial audio was not advertised for this device session')
         if name in {'text','listen_start'}:
             service.detach_device_build(session)
         from .quality import repair_requested
@@ -287,7 +291,10 @@ async def handle(service, session, event):
                 session.audio_status["recording_wall_seconds"] = round(time.monotonic() - session.recording_started_at, 3)
                 session.recording_started_at = None
             await service.activity(session, "processing")
-            service.audio.expect_upload(session)
+            handoff = service.audio.expect_upload(session, serial_audio=event.serial_audio)
+            if handoff:
+                service.persist(session)
+                return {'turn_id': session.turn_id, **handoff}
         return {"turn_id": session.turn_id}
     if session.input_task and not session.input_task.done():
         pending=session.input_task

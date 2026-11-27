@@ -44,3 +44,4 @@ jobs:
           python -m unittest discover -s M5Stack-device/tests -p 'test_session_ui.py' -v
           python -m unittest discover -s M5Stack-device/tests -p 'test_run_status.py' -v
           python -m unittest discover -s M5Stack-device/tests -p 'test_new_app_flow.py' -v
+          python -m unittest discover -s M5Stack-device/tests -p 'test_serial_audio.py' -v

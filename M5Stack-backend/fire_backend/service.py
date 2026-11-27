@@ -292,7 +292,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
     def snapshot(self, session):
         return {"session_id": session.id, "device_id": session.device_id,
                 **({'selection_ack':acks} if (acks:=self.acknowledged_selections(session)) else {}),
-                "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1","repair_cancel_v1","job_controls_v1"],
+                "backend_features":["background_builds_v1","status_text_v1","failed_build_resume_v1","repair_cancel_v1","job_controls_v1"]
+                    + (['serial_audio_v1'] if hasattr(self, 'audio') and self.audio.serial_available(session) else []),
                 "resumed_from_build_id":session.resumed_from_build_id,
                 "evolution_job_id":session.evolution_job_id,
                 "project_id": session.project_id, "state": session.state,
@@ -785,7 +786,10 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(previous.close(code=1000), timeout=1)
         active_task = any(task and not task.done() for task in (session.input_task, session.operation_task, session.speech_task))
-        if not active_task and (session.state in {State.listening, State.processing}
+        serial_handoff = hasattr(self, 'audio') and self.audio.preserve_handoff(session)
+        if not serial_handoff and not active_task and session.audio_status.get('serial_audio'):
+            self.audio.cancel(session)
+        if not serial_handoff and not active_task and (session.state in {State.listening, State.processing}
                 or session.activity in {"listening", "processing", "speaking"}
                 or session.audio_status.get("phase") in {"recording", "awaiting_upload", "transcribing", "generating_reply", "reply_ready", "playing"}):
             session.state, session.activity, session.turn_id = State.idle, "idle", None
@@ -805,6 +809,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
         await self.session_snapshot(session)
         await self.report_capabilities(session)
         await self.request_inventory(session)
+        if serial_handoff:
+            await self.audio.resume_handoff(session)
         # A local deletion may have happened while offline. Preserve the tested
         # package, but do not issue a fresh install command just from reconnect.
         return session
@@ -848,7 +854,8 @@ class Backend(DeviceLifecycle, AppLifecycle, BuildLifecycle):
             return
         session.disconnected_at = session.last_seen = time.time()
         active_task = any(task and not task.done() for task in (session.input_task, session.operation_task, session.speech_task))
-        if active_task or session.activity in {"listening", "processing", "speaking"} or session.audio_status.get("phase") in {"recording", "awaiting_upload", "transcribing", "generating_reply", "reply_ready", "playing"}:
+        serial_handoff = hasattr(self, 'audio') and self.audio.preserve_handoff(session)
+        if not serial_handoff and (active_task or session.activity in {"listening", "processing", "speaking"} or session.audio_status.get("phase") in {"recording", "awaiting_upload", "transcribing", "generating_reply", "reply_ready", "playing"}):
             from .protocol import cancel_turn
             await cancel_turn(self, session)
             session.audio_status = {"phase": "interrupted", "reason": "disconnected"}

@@ -422,6 +422,7 @@ APP_EVENT_DEFAULTS = {"app_mode": None, "app_id": None, "base_package_id": None,
                       "firmware_id":None,"transfer_id":None,"sha256":None,"delete_id":None,"delete_scope":None,
                       "repair_id":None,"app_version":None,"build_id":None,"notification_action":None,"request_id":None,"source_sha256":None,"instructions":None,"data_json":None,"schema_json":None,"timeout_ms":None,'runtime_ai_mode':None,"operation":None,"dataset_id":None,"options_json":None,"datasets":[],"mode":None,"instruction":None,"dataset_ids":[],"context_id":None,"development_context_id":None,"observation_action":None}
 APP_EVENT_DEFAULTS.update({k:None for k in ('expected_revision','evolution_json','telemetry_json','evolution_action','evolution_job_id','evolution_mandate_id','view','settings_json','role','job_action')})
+APP_EVENT_DEFAULTS['serial_audio'] = False
 CAPABILITY_DEFAULTS={"firmware_storage":False,"firmware_max_bytes":4194304,"api_contract":None,"hardware":None,'app_sdk':None,'runtime_ai':None,'data_engine':None,'service_methods':None,'service_modes':None,'evolution':None}
 
 
@@ -437,6 +438,7 @@ class DeviceDiagnostics(StrictModel):
 
 
 class DeviceEvent(StrictModel):
+    serial_audio: bool = Field(default=False, strict=True)
     expected_revision: int | None = Field(default=None,ge=0,strict=True)
     evolution_json: str | None = Field(default=None,max_length=EVOLUTION_LIMITS['control_json_bytes'])
     telemetry_json: str | None = Field(default=None,max_length=EVOLUTION_LIMITS['telemetry_json_bytes'])
@@ -459,7 +461,7 @@ class DeviceEvent(StrictModel):
     runtime_ai_mode: Literal['auto','off'] | None = None
     type: Literal["device_event"] = "device_event"
     device_id: str = Field(pattern=ID_PATTERN)
-    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "job_control", "runtime_ai_request", "runtime_ai_cancel", "data_request", "data_cancel", "app_develop_request", "app_observation_confirm", "evolution_status", "evolution_prepare", "evolution_confirm", "evolution_control", "evolution_telemetry", "backend_settings_status", "backend_settings_prepare", "backend_settings_confirm"]
+    event: Literal["session_start", "session_stop", "text", "button", "build_confirm", "run_confirm", "ping", "app_failed", "app_stopped", "device_install_result", "app_started", "app_healthy", "rollback_result", "app_stop", "audio_playback_started", "audio_playback_finished", "cancel_turn", "listen_start", "listen_stop", "audio_input_commit", "install_retry", "app_list", "app_versions", "app_select", "app_deleted", "app_inventory", "mode_select", "app_diagnostic", "audio_playback_failed", "firmware_store_result", "app_download", "app_backend_delete_prepare", "app_backend_delete_confirm", "app_repair_prepare", "app_repair_status", "app_repair_cancel", "build_background", "build_jobs", "build_notice_ack", "build_resume", "build_cancel", "job_control", "runtime_ai_request", "runtime_ai_cancel", "data_request", "data_cancel", "app_develop_request", "app_observation_confirm", "evolution_status", "evolution_prepare", "evolution_confirm", "evolution_control", "evolution_telemetry", "backend_settings_status", "backend_settings_prepare", "backend_settings_confirm"]
     request_id: str | None = Field(default=None,pattern=ID_PATTERN)
     source_sha256: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
     instructions: str | None = Field(default=None,max_length=AI_LIMITS['instructions_bytes'])
@@ -512,6 +514,10 @@ class DeviceEvent(StrictModel):
 
     @model_validator(mode="after")
     def versioned_envelope(self):
+        if self.event == 'audio_input_commit' and self.protocol_version != '0.2':
+            raise ValueError('Audio commit requires protocol 0.2')
+        if self.serial_audio and (self.event != 'listen_stop' or self.protocol_version != '0.2'):
+            raise ValueError('Serial audio requires protocol 0.2 listen_stop')
         if self.event=='job_control':
             if self.protocol_version!='0.2' or not self.job_action or bool(self.build_id)==bool(self.repair_id):
                 raise ValueError('Job control requires exactly one owned build or repair')
@@ -555,6 +561,7 @@ class DeviceEvent(StrictModel):
                 "app_failed": ("run_id", "package_id", "error_code"), "app_stopped": ("run_id", "package_id"),
                 "rollback_result": ("rollback_id", "package_id", "status"),
                 "listen_start": ("turn_id",), "listen_stop": ("turn_id",),
+                "audio_input_commit": ("turn_id", "sha256"),
                 "app_diagnostic": ("app_id", "package_id", "error_code"),
                 "app_repair_prepare": ("app_id",),
                 "app_repair_cancel": ("repair_id",),

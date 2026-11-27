@@ -53,6 +53,7 @@ def source():
     dispatch = os_source.split('void FireOS::handleBackendMessage(', 1)[1]
     proposal = run_status.block(dispatch, 'if (type == "build_proposal")')
     error = run_status.block(dispatch, 'if (type == "error" || type == "app_failed")')
+    activity = run_status.block(dispatch, 'if (type == "ui_event")')
     background = os_source.split('void FireOS::handleBackgroundBuildMessage(', 1)[1]
     start = background.index('  const bool buildEvent =')
     end = background.index('  if(buildEvent && !independentNotice && !aiBuildForeground', start)
@@ -62,7 +63,9 @@ def source():
     qa = (native.ROOT / 'src/fire_os_local_qa.inc').read_text(encoding='utf-8')
     choice_start = qa.index('const char* choice=fire_ai_menu::choiceLabel(')
     qa_choice = qa[choice_start:qa.index(';', choice_start) + 1]
-    choice_start = qa.index('label=choice?', choice_start)
+    audio_start = qa.index('const char* audio=audioWorkflowLabel();', choice_start)
+    qa_choice += qa[audio_start:qa.index(';', audio_start) + 1]
+    choice_start = qa.index('label=aiAudioCaptureActive_', choice_start)
     qa_choice += qa[choice_start:qa.index(';', choice_start) + 1]
     production = '\n'.join(method(backend, name) for name in (
         'String jsonStringField(', 'String FireBackendClient::eventId(', 'void FireBackendClient::setConversationMode(',
@@ -76,6 +79,7 @@ def source():
             'void FireOS::drawFailureProbe(){const int cx=160;' + failed_condition + failed_draw + '}\n' +
             'void FireOS::proposalFrame(const String& message){const String type=jsonStringField(message,"type");' + proposal + '}\n' +
             'void FireOS::errorFrame(const String& message){const String type=jsonStringField(message,"type");' + error + '}\n' +
+            'void FireOS::uiEventFrame(const String& message){const String type=jsonStringField(message,"type");' + activity + '}\n' +
             'void FireOS::progressGuard(const String& message){const String type=jsonStringField(message,"type"),buildId=jsonStringField(message,"build_id");' + background_guard + '++foregroundProgressAdoptions;}\n' +
             'String FireOS::lcdChoice()const{String workflowLabel=aiWorkflowText_;' + lcd_choice + 'return workflowLabel;}\n' +
             'String FireOS::qaChoice()const{String label;' + qa_choice + 'return label;}\n' + MAIN)
@@ -83,6 +87,7 @@ def source():
 
 PREAMBLE = r'''
 #include "fire_ai_menu.h"
+#include "fire_ai_workflow.h"
 uint32_t millis(){return 100;}
 unsigned installedAppIo=0;
 struct Sd {} SD;
@@ -94,15 +99,20 @@ namespace fire_lua_install {
 }
 struct Preferences {
   String getString(const char*,const String& fallback){++installedAppIo;return fallback;}
+  void putBool(const char*,bool){}
 } preferences;
 String compactPreferenceKey(const String& prefix,const String& key){return prefix+key;}
 String compactStatusText(const String& text){return text;} // Formatting adapter; draw decision is actual production.
 constexpr int kOrange=1,kMuted=2,kBg=3;
 int constrain(int value,int low,int high){return std::min(high,std::max(low,value));}
 int buildProgressField(const String&,int fallback){return fallback;} // Parsed progress value is not under test.
+bool jsonBoolField(const String&,const char*,bool fallback){return fallback;} // Runtime-policy parsed-field boundary spy.
 struct FireBackendClient {
   struct Event {String type,fields,id;};std::vector<Event> events;
   bool ready=true,writeOk=true;unsigned disconnects=0;uint32_t eventCounter_=0;
+  unsigned runtimePolicies=0;String runtimeMode;
+  bool serialAudioTransfer_=false;unsigned audioCancels=0;
+  void cancelAudioTransfer(){++audioCancels;}
   String projectId_="stale-project",bootId_="boot-one",developmentContext_;
   String confirmedProject_="old-project",confirmedBase_="old-base",confirmedMode_="develop",confirmedAppMode_="update";
   fire_session::Selection<String> selection_;uint8_t selectionReply_=0;
@@ -113,6 +123,7 @@ struct FireBackendClient {
   String eventId(const char*);void setConversationMode(const String&);
   void setAppMode(const String&,const String& base=String());void serviceSelection();
   void observeSession(const String&,const String&);
+  void setRuntimeAiMode(const String& mode,bool publish){assert(!publish);++runtimePolicies;runtimeMode=mode;}
 };
 struct FireBackendSettingsUi {enum Page {None};Page page=None;};
 struct FireOS {
@@ -120,6 +131,13 @@ struct FireOS {
   FireBackendClient* backendClient_=nullptr;FireBackendSettingsUi backendSettingsUi_;
   bool redrawRequested_=false,aiVoiceTestMode_=false,aiEvolutionNewPending_=false;
   bool aiProjectPickerActive_=true,aiJobViewing_=false,aiJobOpenPending_=false,aiJobNeedsInstall_=false;
+  bool aiRuntimeAuto_=true,aiRuntimeModeAcked_=false,runtimeAiEnabled_=true;
+  bool aiAudioCaptureActive_=false,aiAudioStopSent_=false,aiAudioOutputActive_=false,aiAudioDownloadPending_=false;
+  const char* audioWorkflowLabel()const{return nullptr;} // No audio in this inert New-choice matrix.
+  enum class LuaJobKind {RuntimeAi,Other};
+  struct LuaHardwareJob {LuaJobKind kind=LuaJobKind::RuntimeAi;uint8_t state=0;};
+  LuaHardwareJob luaJobs_[1];unsigned runtimeCancels=0;
+  void cancelLuaRuntimeAi(LuaHardwareJob& job,const char*){++runtimeCancels;job.state=1;}
   uint8_t aiConversationMode_=0,luaAppCount_=0,aiProjectSelection_=2,aiProjectOffset_=0;
   uint8_t aiDeveloperMode_=0,aiWorkflowState_=0;uint32_t aiEvolutionNewAt_=0;
   fire_ai_menu::Page aiPickerPage_=fire_ai_menu::Page::Main;
@@ -137,6 +155,8 @@ struct FireOS {
   std::vector<String> drawn;
   String luaAppPaths_[1],luaAppDisplayNames_[1],luaAppNames_[1],luaAppPackageIds_[1],luaAppIds_[1];
   unsigned unrelatedUi=0;
+  unsigned conversationCancels=0;String cancelledTurn,cancelReason;
+  void cancelConversationTurn(const String& reason,bool send){assert(!send);++conversationCancels;cancelledTurn=aiTurnId_;cancelReason=reason;aiAudioCaptureActive_=aiAudioOutputActive_=aiAudioDownloadPending_=false;}
   String sdBaseName(const String& value){++installedAppIo;return value;}
   void handleBackendSettingsButton(uint8_t){++unrelatedUi;}void handleAiJobMenu(uint8_t){++unrelatedUi;}
   void back(){++unrelatedUi;}void openAiJobs(){++unrelatedUi;}void scanLuaApps(){++unrelatedUi;}
@@ -146,6 +166,7 @@ struct FireOS {
   void drawFailureProbe();
   bool aiBuildForeground(const String&,const String& build=String())const;
   void proposalFrame(const String&);void errorFrame(const String&);void progressGuard(const String&);
+  void uiEventFrame(const String&);
   String lcdChoice()const;String qaChoice()const;
   bool selectAiProject(fire_ai_menu::Kind,uint8_t=0);void handleAiPicker(uint8_t);void adopt(const String&);
 };
@@ -173,7 +194,37 @@ static String selected(const String& id,const char* project,const char* type="ap
 static void deliver(FireOS& os,const String& type,const String& json) {
   os.backendClient_->observeSession(type,json);os.adopt(type);
 }
+static void activityKeepsChoice(FireOS& os,const String& expected) {
+  const char* messages[]={"{\"type\":\"ui_event\",\"state\":\"idle\"}",
+    "{\"type\":\"ui_event\",\"state\":\"listening\"}",
+    "{\"type\":\"ui_event\",\"activity\":\"\"}"};
+  const uint8_t mode=os.aiDeveloperMode_,state=os.aiWorkflowState_;
+  for(const char* message:messages) {
+    os.uiEventFrame(message);
+    assert(os.aiWorkflowText_==expected && os.aiDeveloperMode_==mode && os.aiWorkflowState_==state);
+  }
+}
+static void choiceRevokesOldVoice() {
+  for(unsigned old=0;old<4;++old){
+    FireBackendClient backend;backend.serialAudioTransfer_=true;FireOS os;os.backendClient_=&backend;
+    if(old==0)os.aiTurnId_="older-voice-turn";
+    if(old==1)os.aiAudioCaptureActive_=true;
+    if(old==2)os.aiAudioOutputActive_=true;
+    if(old==3)os.aiAudioDownloadPending_=true;
+    assert(os.selectAiProject(fire_ai_menu::Kind::NewApp));
+    assert(backend.audioCancels==1 && os.conversationCancels==1 && os.cancelReason=="Velger app");
+    if(old==0)assert(os.cancelledTurn=="older-voice-turn"); // Cancel boundary runs BEFORE foreground reset.
+    assert(!os.aiTurnId_.length() && backend.events.empty());
+  }
+  FireBackendClient busy;busy.serialAudioTransfer_=true;busy.selection_.queueApp("new","","","existing-choice");busy.selection_.appSent=true;
+  FireOS os;os.backendClient_=&busy;os.aiTurnId_="still-owned-turn";
+  assert(!os.selectAiProject(fire_ai_menu::Kind::NewApp));
+  assert(!busy.audioCancels && !os.conversationCancels && os.aiTurnId_=="still-owned-turn" && busy.events.empty());
+  FireBackendClient sdkData;sdkData.serialAudioTransfer_=false;assert(sdkData.beginSelection() && !sdkData.audioCancels);
+  puts("PASS actual new intent revokes serial voice before reset failed begin retains and SDK data unaffected");
+}
 int main() {
+  choiceRevokesOldVoice();
   FireBackendClient client;FireOS os;os.backendClient_=&client;
   os.aiProjectId_="old-project";os.aiBuildProjectId_="old-project";
   os.aiBuildId_="old-failed-build";os.backgroundBuildId_="old-failed-build";os.aiProposalId_="old-proposal";
@@ -186,6 +237,7 @@ int main() {
   chooseNew(os);
   assert(client.selectionPending() && os.aiWorkflowText_=="Venter på appvalg");
   assert(os.lcdChoice()=="Venter på appvalg" && os.qaChoice()==os.lcdChoice());
+  activityKeepsChoice(os,"Venter på appvalg");
   os.proposalFrame("{\"type\":\"build_proposal\",\"project_id\":\"old-project\",\"proposal_id\":\"late-old\"}");
   assert(!os.aiProposalId_.length() && os.aiWorkflowText_=="Venter på appvalg");
   assert(!os.aiProjectPickerActive_ && os.aiProjectName_=="New app");
@@ -204,6 +256,11 @@ int main() {
   assert(os.aiProjectId_=="new-project-one" && !os.aiBasePackageId_.length());
   assert(os.aiWorkflowText_=="Valg bekreftet" && os.aiConversationMode_==0 && os.unrelatedUi==0);
   assert(os.lcdChoice()=="Valg bekreftet" && os.qaChoice()==os.lcdChoice());
+  activityKeepsChoice(os,"Valg bekreftet");
+  os.runtimeAiEnabled_=false;
+  os.uiEventFrame("{\"type\":\"ui_event\",\"event\":\"runtime_ai_policy\",\"mode\":\"off\"}");
+  assert(client.runtimePolicies==1 && client.runtimeMode=="off" && os.runtimeCancels==1);
+  assert(!os.aiRuntimeAuto_ && os.aiRuntimeModeAcked_ && os.aiWorkflowText_=="Valg bekreftet");
   os.drawFailureProbe();assert(os.drawn.empty()); // Current code before RC18 clearing fails here at runtime.
   assert(!os.aiBuildResumePending_ && !os.aiBuildRetryPending_ && !os.aiBuildErrorStatus_.length());
   assert(!os.aiBuildDiagnosticMessage_.length() && !os.aiProposalId_.length());
@@ -231,6 +288,7 @@ int main() {
   assert(!client.selectionPending() && client.confirmedProject_=="new-project-one");
   assert(os.aiProjectId_=="new-project-one" && os.aiWorkflowText_=="Valg avvist. Velg app igjen");
   assert(os.lcdChoice()=="Valg avvist" && os.qaChoice()==os.lcdChoice());
+  activityKeepsChoice(os,"Valg avvist. Velg app igjen");
   for(unsigned i=0;i<20;++i) {client.serviceSelection();}assertOnlyNew(client,2);
 
   chooseNew(os);client.serviceSelection();assertOnlyNew(client,3);
@@ -279,6 +337,13 @@ int main() {
   os.aiBuildResumePending_=true;os.aiBuildErrorStatus_="Current genuine failure";
   os.aiBuildDiagnosticMessage_=String();os.drawFailureProbe();
   assert(os.drawn.size()==1 && os.drawn[0]=="Current genuine failure");
+  // A real user workflow change ends choice feedback protection. The normal
+  // activity interpreter still runs, and a real error is never hidden.
+  os.aiWorkflowText_="Explicit user listening action";os.aiWorkflowState_=0;
+  os.uiEventFrame("{\"type\":\"ui_event\",\"state\":\"listening\"}");
+  assert(os.aiWorkflowState_==1 && os.aiDeveloperMode_==1 && os.aiWorkflowText_=="listening");
+  os.errorFrame("{\"type\":\"error\",\"display_text\":\"Real current dialog failure\"}");
+  assert(os.aiWorkflowText_=="Real current dialog failure" && os.aiWorkflowState_==0);
   assertOnlyNew(client,3);
   puts("PASS actual New app busy rejection lost receipt explicit choices and no blind replay");
 }
@@ -319,6 +384,7 @@ class NewAppFlowTests(unittest.TestCase):
         output = self.build(True)
         self.assertIn('PASS actual New app menu pending producer matched receipt and UI adoption', output)
         self.assertIn('PASS actual New app busy rejection lost receipt explicit choices and no blind replay', output)
+        self.assertIn('PASS actual new intent revokes serial voice', output)
 
 
 if __name__ == '__main__':

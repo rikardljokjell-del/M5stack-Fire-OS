@@ -19,18 +19,26 @@ lokale tester og faktisk fysisk verifikasjon.
 ## Status nå
 
 
-### Under retting: New app — RC18
+### Under retting: tale etter New app — RC19
 
-Brukeren meldte «Apphandling feilet» ved AI Developer → New app etter RC17.
-Tre faktiske valg 27. november ble godtatt med korrekt minimal New app-melding
-og hvert sitt nye prosjekt. Ingen ny Run eller provideraktivitet forekom.
-Native-koden kan vise en tidligere byggefeil etter appbytte; rettingen binder
-foregroundstatus til riktig prosjekt og rydder gammel feilvisning ved nytt valg.
-En separat ekte WS-regresjon viser at naturlig avslutning av en allerede startet
-app ble avvist etter utløpt startfrist og kunne blokkere neste appvalg. Denne
-avslutningen rettes uten å tillate sen start eller gi nye kjøretillatelser.
-RC18 er under implementering og kontroll. Ingen fysisk RC18-verifikasjon er
-foreløpig utført, og en ny betalt appgenerering inngår ikke i prøvene.
+Brukeren presiserte flyten: New app → snakke → Think → «Apphandling feilet».
+Selve appvalget og opptaksstart/-stopp ble godtatt, men ingen lydfil eller
+providerforespørsel kom frem. En eksisterende fysisk RC18-logg viser to
+TLS-allokeringsfeil før HTTP mens WebSocket-forbindelsen fortsatt var oppe.
+Den generiske feilmeldingen skjulte at dette gjaldt lydopplasting.
+
+RC19 serialiserer inn- og utgående lydoverføring med frosset økt/opptak og
+eksisterende tids- og størrelsesgrenser. Opplastet lyd mellomlagres; bare en
+eksplisitt, deduplisert commit etter samme økt/boot-gjenoppkobling kan starte
+transkribering. Gjenoppkobling alene starter aldri nye AI-kall. Ferdige talesvar
+kan hentes uten ny modellforespørsel. Backend- og native-testene er under arbeid;
+hele den fysiske taleflyten er ennå ikke bekreftet rettet.
+
+RC18 er installert i A67 med RC17 B66 bevart. Den ryddet tidligere byggefeil ved
+nytt appvalg og rettet naturlig avslutning etter startfrist. En fysisk New app-
+kvittering ble bekreftet, men generelle aktivitetsmeldinger kunne erstatte
+kvitteringen på skjermen. En trygg teststopp bevarte denne feilen; RC19 retter
+også denne overstyringen. Dette var ikke tilstrekkelig bevis for taleflyten.
 
 ### Tidligere verifisert offentlig appflyt — RC17
 
