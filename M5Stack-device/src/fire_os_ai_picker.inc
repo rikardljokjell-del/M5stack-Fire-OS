@@ -40,6 +40,15 @@ bool FireOS::selectAiProject(fire_ai_menu::Kind kind,uint8_t index) {
     else if (kind==Kind::App) backendClient_->setAppMode("update",aiBasePackageId_);
     else backendClient_->setConversationMode("chat");
   }
+  // A new explicit choice owns the foreground. Old jobs remain in Resume and
+  // the background indicator; their failed proposal is not this app's view.
+  aiBuildResumePending_=aiBuildRetryPending_=aiBuildCanResume_=aiBuildCanRetry_=false;
+  aiBuildErrorCode_=aiBuildErrorStatus_=aiBuildDiagnosticMessage_=String();
+  if(backgroundBuildActive_ && !backgroundBuildId_.length() && aiBuildId_.length()<=64) backgroundBuildId_=aiBuildId_;
+  aiBuildId_=aiBuildProjectId_=String();aiBuildResumeCount_=-1;aiBuildProgress_=0;
+  aiPackageId_=aiReadyPackageId_=String();
+  aiProposalId_=aiTurnId_=String();aiJobViewing_=aiJobOpenPending_=aiJobNeedsInstall_=false;
+  aiJobBuild_=aiJobRepair_=aiJobOpenRequest_=String();
   aiProjectPickerActive_=false;aiDeveloperMode_=0;aiWorkflowState_=0;aiAssistantText_=String();
   aiWorkflowText_=aiVoiceTestMode_?"VOICE TEST - PRESS B TO RECORD":kind==Kind::App?"EDIT "+aiProjectName_:kind==Kind::Chat?"Chat er klar":"NEW APP";
   if (!aiVoiceTestMode_ && backendClient_ && backendClient_->selectionPending()) aiWorkflowText_="Venter på appvalg";
@@ -180,7 +189,7 @@ void FireOS::restoreAiJob(const cJSON* row) {
   if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(row,"can_open"))) {aiWorkflowText_="Jobben kan ikke åpnes";return;}
   const String project=aiJobText(row,"project_id"),status=aiJobText(row,"status"),package=aiJobText(row,"package_id");
   if (!project.length() || (status=="ready" && !package.length())) {aiWorkflowText_="Jobbgrunnlag mangler";return;}
-  aiBuildId_=aiJobBuild_;aiProjectId_=project;aiProjectName_=aiJobText(row,"app_name");
+  aiBuildId_=aiJobBuild_;aiBuildProjectId_=project;aiProjectId_=project;aiProjectName_=aiJobText(row,"app_name");
   if (!aiProjectName_.length()) aiProjectName_=aiJobText(row,"name");
   if(!aiProjectName_.length()) aiProjectName_="Appnavn ikke hentet";
   aiJobName_=aiProjectName_;aiProjectPickerActive_=false;aiDeveloperMode_=2;
@@ -235,7 +244,7 @@ bool FireOS::sendAiJobAction(const String& action) {
   if (action=="background") {home();}
   else if (action=="resume") {
     aiProjectName_=aiJobName_;aiProjectPickerActive_=false;
-    if (aiJobBuild_.length()) {aiBuildId_=aiJobBuild_;aiBuildResumePending_=false;aiWorkflowState_=4;aiDeveloperMode_=2;}
+    if (aiJobBuild_.length()) {aiBuildId_=aiJobBuild_;aiBuildProjectId_=String();aiConversationMode_=0;aiBuildResumePending_=false;aiWorkflowState_=4;aiDeveloperMode_=2;}
     else {
       luaRepairId_=aiJobRepair_;luaRepairAppId_=String();luaRepairRequested_=true;aiRepairResumePending_=true;
       luaRepairAppName_=aiJobName_;luaErrorAppName_=aiJobName_;luaAppError_="Reparasjon av "+aiJobName_;

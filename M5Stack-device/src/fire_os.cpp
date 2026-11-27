@@ -78,7 +78,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc17";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc18";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -4845,6 +4845,7 @@ void FireOS::onButton(uint8_t index, bool longPress) {
       buildNoticeActive_ = false;
       open(Screen::AiDeveloper);
       aiBuildId_ = noticeBuild;
+      aiBuildProjectId_=String();aiConversationMode_=0;
       backgroundBuildActive_ = false;
       aiWorkflowState_ = 4;
       aiWorkflowText_ = "Åpner ferdig app";
@@ -5700,6 +5701,8 @@ void FireOS::handleAiDeveloperButton(uint8_t index) {
   } else if (index == 0 && aiWorkflowState_ == 3) {
     if (backendClient_ && backendClient_->connected() && aiProposalId_.length() > 0) {
       if (backendClient_->confirmBuild(aiProposalId_)) {
+        aiBuildProjectId_=aiProposalProjectId_.length()?aiProposalProjectId_:aiProjectId_;
+        aiBuildId_=String(); // The next current-scope progress supplies its actual ID.
         aiBuildRetryPending_ = aiBuildResumePending_;
         aiBuildResumePending_ = false;
         aiBuildErrorStatus_ = "";
@@ -6523,11 +6526,10 @@ bool FireOS::startLuaApp(const String& path, const String& name,
 }
 
 void FireOS::stopLuaApp(const String& reason) {
-  const bool canReportNaturalStop=backendClient_ && backendClient_->sessionReady() &&
+  const bool canReportNaturalStop=wifiMode_!=2 && backendMode_!=2 && backendClient_ && backendClient_->sessionReady() &&
       luaRunDelivery_.scope(backendClient_->sessionId().c_str(),backendClient_->bootId().c_str()) &&
       luaRunId_==luaRunDelivery_.entry->id && luaPackageId_==luaRunDelivery_.entry->package && luaSourceHash_==luaRunDelivery_.entry->source &&
-      luaRunDelivery_.started() && !luaRunDelivery_.uncertain() &&
-      backendCommandUnexpired(luaRunDelivery_.entry->expires);
+      luaRunDelivery_.started() && !luaRunDelivery_.uncertain();
   luaRunDelivery_.clear(); // Revoke pending status before stopping/clearing VM identity.
   luaSdkFrame_.invalidate();
   const String stoppedRunId = luaRunId_;
@@ -6610,9 +6612,9 @@ void FireOS::stopLuaApp(const String& reason) {
   luaHealthySent_ = false;
   flushLuaDiagnostic();
   if (stoppedRunId.length() > 0 && backendClient_) {
-    if (userExit || reason=="runtime_limit") {
+    if (userExit || osNavigation || reason=="runtime_limit") {
       if(canReportNaturalStop) backendClient_->appStopped(stoppedRunId,stoppedPackageId,"",
-          userExit?"user_exit":"runtime_limit",stoppedDiagnostics);
+          userExit || osNavigation?"user_exit":"runtime_limit",stoppedDiagnostics);
     }
     else if (reason.length() > 0 && !requestedStop && !osNavigation)
       backendClient_->appFailed(stoppedRunId, stoppedPackageId, "runtime_error",
@@ -7018,6 +7020,20 @@ void FireOS::requestBackgroundBuildJobs() {
   }
 }
 
+bool FireOS::aiBuildForeground(const String& project,const String& build) const {
+  if(backendClient_ && backendClient_->selectionPending()) return false;
+  if(aiJobViewing_) return !aiJobRepair_.length() && build.length() && build==aiJobBuild_ &&
+      (!project.length() || project==aiProjectId_);
+  if(aiVoiceTestMode_ || aiConversationMode_==1) return false;
+  if(build.length() && aiBuildId_.length()) return build==aiBuildId_ &&
+      (!project.length() || !aiBuildProjectId_.length() || project==aiBuildProjectId_);
+  if(!aiProjectId_.length() || (project.length() && project!=aiProjectId_)) return false;
+  // Legacy foreground progress lacks project_id. Its binding is established
+  // only by an explicit current proposal BUILD or a typed job/status response.
+  return !aiBuildId_.length() && aiBuildProjectId_==aiProjectId_ && aiWorkflowState_==4 &&
+      aiProposalId_.length() && aiProposalProjectId_==aiProjectId_;
+}
+
 void FireOS::handleBackgroundBuildMessage(const String& message) {
   const String type = jsonStringField(message, "type");
   const String buildId = jsonStringField(message, "build_id");
@@ -7065,24 +7081,32 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       if (openingBuild && buildJobIds_[i]==aiJobBuild_) {restoreAiJob(item);opened=true;}
       const String phase=aiJobText(item,"phase");String text=aiJobText(item,"display_text");
       if(!text.length()) text=aiJobText(item,"message");
-      if (fire_ai_menu::stopsTrackedWork(aiBuildId_.c_str(),buildJobIds_[i].c_str(),buildJobStatuses_[i].c_str(),phase.c_str())) {
+      if (fire_ai_menu::stopsTrackedWork(backgroundBuildId_.c_str(),buildJobIds_[i].c_str(),buildJobStatuses_[i].c_str(),phase.c_str())) {
         const String package=aiJobText(item,"package_id");
         if (fire_ai_menu::workReady(buildJobStatuses_[i].c_str(),phase.c_str(),package.c_str()) && buildPhase_!="ready") workCompletedAt_=millis();
         else if (buildJobStatuses_[i]!="ready") workCompletedAt_=0;
         backgroundBuildActive_=false;buildPhase_=phase;
       }
-      const bool selected=!aiJobViewing_ || (!aiJobRepair_.length() && aiJobBuild_==buildJobIds_[i]);
-      const bool active=selected && buildJobIds_[i].length() && fire_ai_menu::workActive(buildJobStatuses_[i].c_str(),phase.c_str());
+      const String project=aiJobText(item,"project_id");
+      const bool selected=aiBuildForeground(project,buildJobIds_[i]);
+      const bool active=buildJobIds_[i].length() && fire_ai_menu::workActive(buildJobStatuses_[i].c_str(),phase.c_str());
       const uint8_t priority=buildJobStatuses_[i]=="queued" && phase=="queued"?1:2;
+      const cJSON* progress=cJSON_GetObjectItemCaseSensitive(item,"progress");
+      const uint8_t percent=cJSON_IsNumber(progress)?constrain(progress->valueint,0,100):0;
+      if(selected && active) {
+        aiBuildId_=buildJobIds_[i];aiBuildProjectId_=project;
+        aiProjectName_=buildJobNames_[i].length()?buildJobNames_[i]:String("Appnavn ikke hentet");
+        const cJSON* count=cJSON_GetObjectItemCaseSensitive(item,"resume_count");
+        aiBuildResumeCount_=cJSON_IsNumber(count)?count->valueint:-1;aiBuildProgress_=percent;
+        aiWorkflowText_=text.length()?text:phase.length()?phase:String("Lager app");
+        aiWorkflowState_=4;aiDeveloperMode_=2;aiBuildResumePending_=aiBuildRetryPending_=false;
+      }
       if(active && (!activeBuildFound || priority>activeBuildPriority)) {
         workCompletedAt_=0;
-        activeBuildFound=true;activeBuildPriority=priority;aiBuildId_=buildJobIds_[i];
-        aiProjectName_=buildJobNames_[i].length()?buildJobNames_[i]:String("Appnavn ikke hentet");
-        const cJSON* value=cJSON_GetObjectItemCaseSensitive(item,"progress");
-        buildProgress_=cJSON_IsNumber(value)?constrain(value->valueint,0,100):0;aiBuildProgress_=buildProgress_;
-        value=cJSON_GetObjectItemCaseSensitive(item,"resume_count");aiBuildResumeCount_=cJSON_IsNumber(value)?value->valueint:-1;
-        buildPhase_=phase;buildStatusMessage_=text;aiWorkflowText_=text.length()?text:phase.length()?phase:String("Lager app");
-        aiWorkflowState_=4;aiDeveloperMode_=2;backgroundBuildActive_=true;aiBuildResumePending_=aiBuildRetryPending_=false;
+        activeBuildFound=true;activeBuildPriority=priority;
+        if(buildJobIds_[i].length()<=64) backgroundBuildId_=buildJobIds_[i];
+        buildProgress_=percent;
+        buildPhase_=phase;buildStatusMessage_=text;backgroundBuildActive_=true;
       }
       ++buildJobCount_;
     }
@@ -7099,6 +7123,22 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
                           type == "build_backgrounded" ||
                           type == "build_cancelled";
   const bool independentNotice = type == "build_ready_notice";
+  if(buildEvent && !independentNotice && !aiBuildForeground(jsonStringField(message,"project_id"),buildId)) {
+    // An old project can still finish in the background. Preserve those work
+    // facts without restoring its proposal/error into the new foreground.
+    if(buildId.length() && buildId==backgroundBuildId_ && type!="build_backgrounded") {
+      const String status=jsonStringField(message,"status"),phase=jsonStringField(message,"phase");
+      workCompletedAt_=fire_ai_menu::completionStamp(millis(),workCompletedAt_,buildPhase_=="ready",
+          status.c_str(),phase.c_str(),jsonStringField(message,"package_id").c_str());
+      buildPhase_=phase;buildProgress_=constrain(buildProgressField(message,buildProgress_),0,100);
+      backgroundBuildActive_=fire_ai_menu::workActive(status.c_str(),phase.c_str());redrawRequested_=true;
+    }
+    return;
+  }
+  if(buildEvent && !independentNotice) {
+    const String project=jsonStringField(message,"project_id");
+    if(project.length()) {aiBuildProjectId_=project;aiProjectId_=project;}
+  }
   if (buildEvent && buildId.length() > 0 && aiBuildId_.length() > 0 &&
       buildId != aiBuildId_ && !aiBuildRetryPending_ && !independentNotice) {
     // A delayed event from the previous failed job must not overwrite a
@@ -7165,7 +7205,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       aiProposalProjectId_=jsonStringField(message,"project_id");aiProposalJobId_=jsonStringField(message,"evolution_job_id");aiProposalAppName_=jsonStringField(message,"app_name");
       aiBuildResumePending_ = true;
       aiBuildRetryPending_ = false;
-      backgroundBuildActive_ = false;
+      if(backgroundBuildId_==buildId) backgroundBuildActive_ = false;
       aiWorkflowState_ = aiProposalId_.length() > 0 ? 3 : 2;
       aiDeveloperMode_ = 2;
       aiWorkflowText_ = aiBuildErrorStatus_.length() > 0
@@ -7187,22 +7227,22 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
       aiBuildRetryPending_ = false;
       aiAssistantText_ = "";
     }
-    workCompletedAt_=fire_ai_menu::completionStamp(millis(),workCompletedAt_,wasReady,
-        status.c_str(),incomingPhase.c_str(),readyPackage.c_str());
-    buildProgress_ = static_cast<uint8_t>(
-        constrain(buildProgressField(message,aiBuildProgress_), 0, 100));
-    buildPhase_ = incomingPhase;
-    buildStatusMessage_ = jsonStringField(message, "display_text");
-    if(!buildStatusMessage_.length()) buildStatusMessage_=jsonStringField(message,"message");
-    aiBuildProgress_ = buildProgress_;
-    aiWorkflowText_ = buildStatusMessage_.length() > 0
-                          ? buildStatusMessage_
-                          : buildPhase_;
-    if (buildPhase_ == "ready" || status == "ready") {
+    const uint8_t percent=constrain(buildProgressField(message,aiBuildProgress_),0,100);
+    const bool tracksBar=backgroundBuildId_==buildId || !backgroundBuildId_.length() || fire_ai_menu::workActive(status.c_str(),incomingPhase.c_str());
+    const String display=jsonStringField(message,"display_text"),text=display.length()?display:jsonStringField(message,"message");
+    if(tracksBar && buildId.length()<=64) {
+      backgroundBuildId_=buildId;
+      workCompletedAt_=fire_ai_menu::completionStamp(millis(),workCompletedAt_,wasReady,
+          status.c_str(),incomingPhase.c_str(),readyPackage.c_str());
+      buildProgress_=percent;buildPhase_=incomingPhase;buildStatusMessage_=text;
+      backgroundBuildActive_=fire_ai_menu::workActive(status.c_str(),incomingPhase.c_str());
+    }
+    aiBuildProgress_=percent;aiWorkflowText_=text.length()?text:incomingPhase;
+    if (incomingPhase == "ready" || status == "ready") {
       if(aiJobViewing_ && !aiJobRepair_.length()) aiJobNeedsInstall_=true;
       if(readyPackage.length()) {aiReadyPackageId_=readyPackage;aiPackageId_=readyPackage;}
       aiWorkflowState_ = 5;
-      backgroundBuildActive_ = false;
+      if(backgroundBuildId_==buildId) backgroundBuildActive_ = false;
       aiBuildResumePending_ = false;
       if(type=="build_resumed" && buildNoticeRunBuildId_==buildId &&
          buildNoticeRunPackageId_.length() && buildNoticeRunPackageId_==readyPackage) {
@@ -7212,10 +7252,10 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
           aiWorkflowState_=6;aiWorkflowText_="Starter app";
         } else aiWorkflowText_="App klar – velg Kjør";
       }
-    } else if (buildPhase_ == "failed" || status == "failed") {
+    } else if (incomingPhase == "failed" || status == "failed") {
       aiWorkflowState_ = 0;
       aiDeveloperMode_ = 2;
-      backgroundBuildActive_ = false;
+      if(backgroundBuildId_==buildId) backgroundBuildActive_ = false;
       aiResumeAvailable_ = true;
       aiBuildResumePending_ = false;
       aiWorkflowText_ = aiBuildErrorStatus_.length() > 0
@@ -7224,7 +7264,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     } else {
       aiWorkflowState_ = 4;
       aiDeveloperMode_ = 2;
-      backgroundBuildActive_ = fire_ai_menu::workActive(status.c_str(),buildPhase_.c_str());
+      if(backgroundBuildId_==buildId) backgroundBuildActive_ = fire_ai_menu::workActive(status.c_str(),incomingPhase.c_str());
     }
   } else if (type == "build_ready_notice") {
     if (buildId == buildNoticePendingId_) return;
@@ -7235,7 +7275,7 @@ void FireOS::handleBackgroundBuildMessage(const String& message) {
     const String noticePackage=jsonStringField(message,"package_id");
     if (buildId.length() && fire_ai_menu::workReady(jsonStringField(message,"status").c_str(),jsonStringField(message,"phase").c_str(),noticePackage.c_str())) {
       if (buildId!=buildNoticeId_ || noticePackage!=buildNoticePackageId_) workCompletedAt_=millis();
-      if (buildId==aiBuildId_) backgroundBuildActive_=false;
+      if (buildId==backgroundBuildId_) backgroundBuildActive_=false;
     }
     buildNoticeActive_ = true;
     buildNoticeId_ = buildId;
@@ -7286,7 +7326,7 @@ bool FireOS::deferLuaRunRebind() const {
   const auto* entry=luaRunDelivery_.entry;
   return entry && luaAppActive_ && luaRuntime_ && luaRuntime_->running() &&
     luaRunId_==entry->id && luaPackageId_==entry->package && luaSourceHash_==entry->source &&
-    (luaRunDelivery_.pending() || luaRunDelivery_.uncertain());
+    (luaRunDelivery_.pending() || luaRunDelivery_.uncertain() || luaRunDelivery_.admissionClosed());
 }
 
 void FireOS::noteRunStatusUnconfirmed() {
@@ -7312,9 +7352,14 @@ void FireOS::serviceLuaRunStatus() {
   const auto& entry=*delivery.entry;
   if(wifiMode_==2 || backendMode_==2 || !backendClient_ || !luaAppActive_ || !luaRuntime_ || !luaRuntime_->running() ||
       luaRunId_!=entry.id || luaPackageId_!=entry.package || luaSourceHash_!=entry.source ||
-      !backendCommandUnexpired(entry.expires) || backendClient_->bootId()!=delivery.boot ||
+      backendClient_->bootId()!=delivery.boot ||
       (backendClient_->sessionReady() && backendClient_->sessionId()!=delivery.session)) {
     const bool pending=delivery.pending();delivery.clear();if(pending) noteRunStatusUnconfirmed();return;
+  }
+  if(!backendCommandUnexpired(entry.expires)) {
+    if(delivery.started()) delivery.closeAdmission();
+    else {const bool pending=delivery.pending();delivery.clear();if(pending) noteRunStatusUnconfirmed();}
+    return; // The admission deadline never authorizes a new Start/Healthy retry.
   }
   if(!backendClient_->sessionReady()) return; // Original grant expiry still bounds this wait.
   if(delivery.uncertain()) return;
@@ -7844,6 +7889,10 @@ void FireOS::handleBackendMessage(const String& message) {
       requestBackgroundBuildJobs();
     backendServerTime_ = jsonIntField(message, "server_time");
     backendServerSeenAt_ = millis();
+    if(backendClient_ && backendClient_->selectionPending()) {
+      aiWorkflowText_=backendClient_->selectionUnclear()?"Valg uavklart. Velg app igjen":"Venter på appvalg";
+      return; // The old admission snapshot cannot restore an old foreground offer.
+    }
     const String mode = backendClient_?backendClient_->confirmedMode():String();
     if (mode == "chat") aiConversationMode_ = 1;
     else if (mode == "develop") aiConversationMode_ = 0;
@@ -8005,6 +8054,10 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "build_proposal") {
+    const String proposalProject=jsonStringField(message,"project_id");
+    if((backendClient_ && backendClient_->selectionPending()) || !proposalProject.length() || proposalProject!=aiProjectId_) return;
+    const String proposalTurn=jsonStringField(message,"turn_id");
+    if(proposalTurn.length() && proposalTurn!=aiTurnId_) return;
     aiReadyPackageId_=String();
     aiProposalId_ = jsonStringField(message, "proposal_id");
     aiProposalProjectId_=jsonStringField(message,"project_id");aiProposalJobId_=jsonStringField(message,"evolution_job_id");aiProposalAppName_=jsonStringField(message,"app_name");
@@ -8187,7 +8240,7 @@ void FireOS::handleBackendMessage(const String& message) {
     }
     fire_run_receipts::Entry* receipt=nullptr;
     const auto admission=luaRunReceipts_.admit(runId.c_str(),packageId.c_str(),commandSource.c_str(),commandHash.c_str(),
-      expiresAt,backendCommandNow(),commandBoot==backendClient_->bootId(),receipt);
+      expiresAt,backendCommandNow(),commandBoot==backendClient_->bootId(),receipt,luaRunDelivery_.entry);
     if(admission==fire_run_receipts::Admission::Busy || admission==fire_run_receipts::Admission::Invalid) {
       if(admission==fire_run_receipts::Admission::Busy && runId!=luaRunId_) luaRunDelivery_.clear();
       backendClient_->appFailed(runId,packageId,
@@ -8312,6 +8365,13 @@ void FireOS::handleBackendMessage(const String& message) {
     return;
   }
   if (type == "error" || type == "app_failed") {
+    const String project=jsonStringField(message,"project_id"),build=jsonStringField(message,"build_id"),turn=jsonStringField(message,"turn_id");
+    if((backendClient_ && backendClient_->selectionPending()) ||
+       (project.length() && project!=aiProjectId_) ||
+       (build.length() && !aiBuildForeground(project,build)) ||
+       (turn.length() && turn!=aiTurnId_)) return;
+    const String run=jsonStringField(message,"run_id");
+    if(run.length() && run!=luaRunId_) return;
     aiWorkflowState_ = 0;
     aiDeveloperMode_ = 0;
     aiWorkflowText_ = jsonStringField(message, "display_text");
@@ -10269,7 +10329,7 @@ void FireOS::drawStatusBar(const char* title) {
                 : (bluetoothEnabled_ || bluetoothRadioReady) ? 3 : 0;
   drawBluetoothIcon(276, 5, bluetoothState);
   drawBatteryIcon(298, 6, batteryLevel(), batteryCharging());
-  const bool build=backgroundBuildActive_ && aiBuildId_.length() && fire_ai_menu::workPhase(buildPhase_.c_str());
+  const bool build=backgroundBuildActive_ && backgroundBuildId_.length() && fire_ai_menu::workPhase(buildPhase_.c_str());
   const bool repair=luaRepairId_.length() && fire_ai_menu::workActive(luaRepairStatus_.c_str(),luaRepairPhase_.c_str());
   const auto indicator=fire_ai_menu::workIndicator(build,repair,millis(),workCompletedAt_);
   fire_ai_menu_ui::workStatus(surface,indicator,build?buildProgress_:luaRepairProgress_);
@@ -11057,13 +11117,14 @@ void FireOS::drawAiDeveloper() {
   static const char* const workflowLabels[] = {
       "PRESS CENTER TO LISTEN", "LISTENING", "UNDERSTANDING...",
       "READY TO BUILD", "BUILDING...", "READY TO RUN", "RUNNING"};
-  const bool failedBuildView = aiBuildResumePending_ &&
+  const bool failedBuildView = aiBuildForeground(aiBuildProjectId_,aiBuildId_) && aiBuildResumePending_ &&
                                aiBuildErrorStatus_.length() > 0;
   ui.setTextDatum(MC_DATUM);
   if (!failedBuildView && aiWorkflowState_ != 4) drawText(cx, 190, stateLabel, kMuted, 1, kBg);
   String workflowLabel = aiWorkflowText_.length() > 0
                              ? aiWorkflowText_
                              : workflowLabels[min<uint8_t>(aiWorkflowState_, 6)];
+  if(const char* choice=fire_ai_menu::choiceLabel(aiWorkflowText_.c_str())) workflowLabel=choice;
   if (aiWorkflowState_ == 1 && aiAudioCaptureStartedAt_ > 0) {
     workflowLabel = "REC " + String((millis() - aiAudioCaptureStartedAt_) / 1000.0f, 1) +
                     "s - SPEAK NEAR MIC";

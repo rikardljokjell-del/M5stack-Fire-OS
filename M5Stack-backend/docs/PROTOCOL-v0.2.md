@@ -247,6 +247,11 @@ NEVER use installExternalApp, OTA partitions, .bin or ESP restart for these apps
 All receipts require package_id. Operation IDs and boot_id must match an issued,
 unexpired command for this exact device/session/package. Server receipt replay
 with the same event_id returns an acknowledgement, not another state change.
+The exception is natural `app_stopped` completion of the exact current active
+run already recorded as started/healthy for the same owner/project/device/session/
+boot/package. Its original launch deadline may have elapsed; this permits only
+completion, never a late start, another run or a new authorization. Pending runs,
+explicit stop commands and other receipts still require an unexpired command.
 
 | event | Additional required fields | Effect |
 | --- | --- | --- |

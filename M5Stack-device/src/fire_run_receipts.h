@@ -13,7 +13,7 @@ class Ring {
  public:
   static constexpr size_t kCapacity=8;
   Admission admit(const char* run,const char* package,const char* source,const char* archive,
-                  uint32_t expires,uint32_t now,bool currentBoot,Entry*& result) {
+                  uint32_t expires,uint32_t now,bool currentBoot,Entry*& result,const Entry* protectedEntry=nullptr) {
     result=nullptr;
     if(!currentBoot || !now || expires<=now || !fire_lua_install::id(run) ||
        !fire_lua_install::id(package) || !fire_lua_install::hash(source) || !fire_lua_install::hash(archive)) return Admission::Invalid;
@@ -21,7 +21,7 @@ class Ring {
       if(e.expires!=expires || strcmp(e.package,package) || strcmp(e.source,source) || strcmp(e.archive,archive)) return Admission::Invalid;
       result=&e;return Admission::Duplicate;
     }
-    for(auto& e:entries_) if(e.expires<=now) {
+    for(auto& e:entries_) if(e.expires<=now && &e!=protectedEntry) {
       strcpy(e.id,run);strcpy(e.package,package);strcpy(e.source,source);strcpy(e.archive,archive);
       e.expires=expires;e.state=State::Starting;result=&e;return Admission::New;
     }
@@ -36,7 +36,7 @@ class Ring {
 struct Delivery {
   Entry* entry=nullptr;
   char session[65]={},boot[65]={};
-  enum : uint8_t {Started=1,HealthySeen=2,Healthy=4,StartPending=8,Uncertain=16,Attempted=32};
+  enum : uint8_t {Started=1,HealthySeen=2,Healthy=4,StartPending=8,Uncertain=16,Attempted=32,AdmissionClosed=64};
   uint8_t flags=0;
   uint32_t epoch=0,attemptAt=0;
   static bool wireId(const char* id,size_t maximum=64) {
@@ -60,14 +60,16 @@ struct Delivery {
   bool scope(const char* sid,const char* bootId) const {
     return entry && sid && bootId && !strcmp(session,sid) && !strcmp(boot,bootId);
   }
-  bool pending() const {return entry && !(flags&Uncertain) && ((flags&StartPending) || !(flags&Healthy));}
+  bool pending() const {return entry && !(flags&(Uncertain|AdmissionClosed)) && ((flags&StartPending) || !(flags&Healthy));}
+  bool admissionClosed() const {return flags&AdmissionClosed;}
+  void closeAdmission() {flags|=AdmissionClosed;flags&=uint8_t(~StartPending);}
   bool uncertain() const {return flags&Uncertain;}
   bool started() const {return flags&Started;}
   bool healthy() const {return flags&Healthy;}
   void sawUpdate() {if(entry) flags|=HealthySeen;}
   // Only an ACTUALLY received duplicate command asks for another canonical
   // receipt. It preserves observed health and never rearms/restarts the VM.
-  void duplicate() {if(entry) {flags|=StartPending;flags&=uint8_t(~(Uncertain|Attempted));}}
+  void duplicate() {if(entry && !admissionClosed()) {flags|=StartPending;flags&=uint8_t(~(Uncertain|Attempted));}}
   bool due(uint32_t now) const {return !(flags&Attempted) || uint32_t(now-attemptAt)>=250;}
   void attempt(uint32_t now) {attemptAt=now;flags|=Attempted;}
   void unknown() {flags|=Uncertain;flags&=uint8_t(~StartPending);}

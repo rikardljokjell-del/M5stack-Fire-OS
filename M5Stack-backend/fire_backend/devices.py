@@ -36,7 +36,7 @@ class DeviceLifecycle:
         return {"type": command["kind"] + "_request", command["kind"] + "_id": command["id"],
                 **{k: v for k, v in command.items() if k not in {"id", "status", "kind", "device_id", "session_id",'sd_presence_verified'}}}
 
-    def match_command(self, session, command_id, kind, package_id):
+    def match_command(self, session, command_id, kind, package_id, *, natural_completion=False):
         if not command_id or not package_id:
             raise ValueError(f"{kind}_id and package_id are required")
         try:
@@ -45,8 +45,19 @@ class DeviceLifecycle:
             raise ValueError("Unknown device command ID") from None
         if (command["kind"] != kind or command["device_id"] != session.device_id
                 or command["session_id"] != session.id or command["boot_id"] != session.boot_id
-                or command["package_id"] != package_id or command["expires_at"] <= time.time()
+                or command["package_id"] != package_id
                 or command["status"] not in {"pending", "started", "healthy"}):
+            raise ValueError("Receipt does not match an active command for this boot/session/package")
+        if natural_completion:
+            device = self.device_record(session)
+            package = self.store.get("packages", package_id)
+            project = self.store.get("projects", package["project_id"])
+            if (kind != "run" or command["status"] not in {"started", "healthy"}
+                    or device.get("active_run_id") != command_id or device.get("running_package_id") != package_id
+                    or device.get("pending_run_id") or package["project_id"] != session.project_id
+                    or project.get("owner_device_id") != session.device_id):
+                raise ValueError("Natural stop requires the current started run for this owner/project")
+        elif command["expires_at"] <= time.time():
             raise ValueError("Receipt does not match an active command for this boot/session/package")
         return command
 
@@ -264,9 +275,9 @@ class DeviceLifecycle:
                     raise ValueError("Stopped run ID mismatch")
                 self.finish_command(command, "completed")
             else:
-                command = self.match_command(session, event.run_id, "run", package_id)
-                if command["status"] not in {"started", "healthy"} or event.reason not in {"completed", "user_exit", "runtime_limit"}:
+                if event.reason not in {"completed", "user_exit", "runtime_limit"}:
                     raise ValueError("Natural stop requires a started run and explicit reason")
+                command = self.match_command(session, event.run_id, "run", package_id, natural_completion=True)
             run = self.store.get("commands", event.run_id)
             self.finish_command(run, "stopped")
             device.update(running_package_id=None, active_run_id=None, pending_run_id=None, runtime_status="stopped")

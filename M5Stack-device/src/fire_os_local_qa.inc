@@ -103,6 +103,7 @@ void FireOS::localQaSnapshot(fire_local_qa::Snapshot& out) const {
           const auto item=fire_ai_menu::at(aiPickerPage_,out.index,false,0,luaAppCount_);
           switch(item.kind) {
             case fire_ai_menu::Kind::Jobs:label="Resume bygging";break;
+            case fire_ai_menu::Kind::NewApp:label="New app";break;
             case fire_ai_menu::Kind::SelectApp:label="Select app";break;
             case fire_ai_menu::Kind::Back:label="Back";break;
             case fire_ai_menu::Kind::Settings:label="Settings";break;
@@ -110,7 +111,10 @@ void FireOS::localQaSnapshot(fire_local_qa::Snapshot& out) const {
             default:label="Unavailable in local QA";break;
           }
         }
-      } else {out.count=1;label=aiWorkflowState_==5?"Kjør app":aiWorkflowState_==3?"Build proposal":"Developer";}break;
+      } else {
+        out.count=1;const char* choice=fire_ai_menu::choiceLabel(aiWorkflowText_.c_str());
+        label=choice?choice:aiWorkflowState_==5?"Kjør app":aiWorkflowState_==3?"Build proposal":"Developer";
+      }break;
     case Screen::LuaApp: {
       const auto panel=fire_ai_menu::repairPanel(aiJobViewing_,luaAppActive_,luaRepairStatus_.c_str(),aiJobOpenPending_,luaRepairRequested_,luaErrorAction_);
       out.count=1;label=panel.action;detail=luaRepairMessage_;out.error=panel.error;break;
@@ -178,6 +182,11 @@ bool FireOS::localQaActionAllowed(uint8_t button,bool hold) const {
           return aiProjectSelection_<n && (actions[aiProjectSelection_]==fire_ai_menu::JobAction::Open || actions[aiProjectSelection_]==fire_ai_menu::JobAction::Back || actions[aiProjectSelection_]==fire_ai_menu::JobAction::Background || actions[aiProjectSelection_]==fire_ai_menu::JobAction::Cancel);
         }
         const auto item=fire_ai_menu::at(aiPickerPage_,aiProjectSelection_,false,0,luaAppCount_);
+        if(item.kind==fire_ai_menu::Kind::NewApp) return backendClient_ && backendClient_->sessionReady() &&
+          !backendClient_->selectionPending() && !luaAppActive_ && !luaRunId_.length() &&
+          !backgroundBuildActive_ && !(packageManager_ && packageManager_->busy()) &&
+          !aiAudioCaptureActive_ && !aiAudioOutputActive_ && !aiConversationCancelPending_ &&
+          aiWorkflowState_!=1 && aiWorkflowState_!=2 && aiWorkflowState_!=4;
         return item.kind==fire_ai_menu::Kind::Jobs || item.kind==fire_ai_menu::Kind::Back || item.kind==fire_ai_menu::Kind::SelectApp;
       }return false; // No BUILD/model/voice action through unattended QA.
     case Screen::LuaApp:return luaAppActive_?safeLocal(luaPackageId_,luaSourceHash_):luaErrorAction_==1 && luaRepairReadyPackageId_==kQaPackage;

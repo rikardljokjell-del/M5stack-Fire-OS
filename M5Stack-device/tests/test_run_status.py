@@ -91,6 +91,7 @@ struct FireBackendClient {
   Wire client_;bool usingReverseTransport_=false,ready=true;
   String deviceId_="device-one",bootId_="boot-one",sessionId_="session-one";uint32_t epoch=1;
   unsigned generated=0,failures=0,stops=0,confirms=0;
+  String stoppedRun,stoppedPackage,stoppedReason;
   void (*onDisconnect)(FireBackendClient&)=nullptr;
   fire_backend_policy::SendDisposition lastSendDisposition_=fire_backend_policy::SendDisposition::NotQueued;
   WiFiClient* activeClient(){return &client_;}bool sessionReady()const{return ready;}
@@ -105,7 +106,7 @@ struct FireBackendClient {
   bool appStarted(const String&,const String&,const String&,const String& diag=String(),const String& stable=String());
   bool appHealthy(const String&,const String&,const String& diag=String(),const String& stable=String());
   bool appFailed(const String&,const String&,const String&,const String&,const String& =String()){++failures;return true;}
-  bool appStopped(const String&,const String&,const String&,const String&,const String& =String()){++stops;return true;}
+  bool appStopped(const String& run,const String& package,const String&,const String& reason,const String& =String()){++stops;stoppedRun=run;stoppedPackage=package;stoppedReason=reason;return true;}
 };
 struct Runtime {
   bool executing=false,updateOk=true;uint32_t frames=0;
@@ -234,6 +235,41 @@ int main(){
   assert(!full.os.luaRunDelivery_.entry && full.backend.client_.bytes.empty() && full.os.loads==1);
   nowMs=1000;Fixture stopped;stopped.os.runRequest(command());stopped.os.stopLuaApp("back");nowMs+=500;stopped.os.serviceLuaRunStatus();assert(stopped.backend.stops==1 && bodies(stopped.backend.client_).size()==1);
   puts("PASS actual scope expiry OFF Stop new-run invalidation no late status");
+  // Admission expiry closes retries, not the lifecycle of a Started VM.
+  for(const char* reason:{"back","home","os_navigation"}) {
+    nowMs=1000;Fixture ongoing;ongoing.os.runRequest(command());ongoing.os.updateLuaApp();
+    const auto sent=bodies(ongoing.backend.client_).size();assert(sent==2 && ongoing.os.luaRunDelivery_.healthy());
+    nowMs+=61000;ongoing.os.serviceLuaRunStatus();
+    assert(ongoing.os.luaRunDelivery_.entry && ongoing.os.luaRunDelivery_.started() && ongoing.os.luaRunDelivery_.admissionClosed());
+    assert(!ongoing.os.luaRunDelivery_.pending() && ongoing.os.deferLuaRunRebind());
+    ongoing.os.bindingState(false);assert(ongoing.os.luaRunId_=="run-one" && !ongoing.backend.confirms);
+    ongoing.os.luaRunDelivery_.duplicate();ongoing.os.updateLuaApp();ongoing.os.serviceLuaRunStatus();
+    assert(bodies(ongoing.backend.client_).size()==sent && ongoing.os.loads==1);
+    ongoing.os.stopLuaApp(reason);ongoing.os.serviceLuaRunStatus();
+    assert(ongoing.backend.stops==1 && ongoing.backend.stoppedRun=="run-one" && ongoing.backend.stoppedPackage=="package-one" && ongoing.backend.stoppedReason=="user_exit");
+    assert(!ongoing.os.luaRunDelivery_.entry && !ongoing.os.luaAppActive_);
+  }
+  nowMs=1000;Fixture lateHealth;lateHealth.os.runRequest(command());lateHealth.backend.client_.capacity=0;lateHealth.os.updateLuaApp();
+  assert(lateHealth.os.luaRunDelivery_.started() && !lateHealth.os.luaRunDelivery_.healthy());
+  nowMs+=31000;lateHealth.os.serviceLuaRunStatus();lateHealth.backend.client_.capacity=8192;
+  lateHealth.os.updateLuaApp();assert(!lateHealth.os.luaHealthySent_ && bodies(lateHealth.backend.client_).size()==1);
+  lateHealth.os.stopLuaApp("home");assert(lateHealth.backend.stops==1);
+  for(unsigned why=0;why<4;++why) {
+    nowMs=1000;Fixture invalid;invalid.os.runRequest(command());invalid.os.updateLuaApp();nowMs+=31000;invalid.os.serviceLuaRunStatus();
+    if(why==0)invalid.backend.sessionId_="other-session";
+    if(why==1)invalid.backend.bootId_="other-boot";
+    if(why==2)invalid.os.backendMode_=2;
+    if(why==3)invalid.os.wifiMode_=2;
+    invalid.os.serviceLuaRunStatus();invalid.os.stopLuaApp("back");assert(!invalid.backend.stops);
+  }
+  // An expired ongoing Entry cannot be overwritten while admission evaluates
+  // a different run. No extra Ring slot or new authority is created.
+  nowMs=1000;Fixture pinned;pinned.os.runRequest(command());pinned.os.updateLuaApp();
+  auto* live=pinned.os.luaRunDelivery_.entry;nowMs+=31000;pinned.os.serviceLuaRunStatus();
+  fire_run_receipts::Entry* fresh=nullptr;
+  assert(pinned.os.luaRunReceipts_.admit("run-next","package-one",sourceHash.c_str(),archiveHash.c_str(),1100,1032,true,fresh,live)==fire_run_receipts::Admission::New);
+  assert(fresh!=live && !strcmp(live->id,"run-one"));pinned.os.stopLuaApp("back");assert(pinned.backend.stops==1);
+  puts("PASS actual expired Started lifecycle connected Back Home navigation and no late Start Healthy replay");
 
   nowMs=1000;Fixture pendingBind;pendingBind.os.luaDataAllowed_=true;pendingBind.backend.client_.capacity=0;pendingBind.os.runRequest(command());
   pendingBind.os.bindingState(false);assert(pendingBind.os.luaRunId_=="run-one" && !pendingBind.os.luaAiBindPackageId_.length());

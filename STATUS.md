@@ -19,7 +19,20 @@ lokale tester og faktisk fysisk verifikasjon.
 ## Status nå
 
 
-### Verifisert offentlig appflyt — RC17
+### Under retting: New app — RC18
+
+Brukeren meldte «Apphandling feilet» ved AI Developer → New app etter RC17.
+Tre faktiske valg 27. november ble godtatt med korrekt minimal New app-melding
+og hvert sitt nye prosjekt. Ingen ny Run eller provideraktivitet forekom.
+Native-koden kan vise en tidligere byggefeil etter appbytte; rettingen binder
+foregroundstatus til riktig prosjekt og rydder gammel feilvisning ved nytt valg.
+En separat ekte WS-regresjon viser at naturlig avslutning av en allerede startet
+app ble avvist etter utløpt startfrist og kunne blokkere neste appvalg. Denne
+avslutningen rettes uten å tillate sen start eller gi nye kjøretillatelser.
+RC18 er under implementering og kontroll. Ingen fysisk RC18-verifikasjon er
+foreløpig utført, og en ny betalt appgenerering inngår ikke i prøvene.
+
+### Tidligere verifisert offentlig appflyt — RC17
 
 De rapporterte feilene er rettet. Katalog-, leverings-, kjøre- og nettverksflytene
 er fysisk prøvd. FIRE kjører nå

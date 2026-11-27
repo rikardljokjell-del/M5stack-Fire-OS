@@ -322,6 +322,29 @@ int main(){
 '''
 
 class ProductionAppFlowTests(unittest.TestCase):
+    def test_actual_background_rows_compile(self):
+        self.background_rows(False)
+
+    @unittest.skipIf(os.name=='nt','Windows policy4551: object only; Linux executes assertions')
+    def test_actual_background_rows_execute(self):
+        self.background_rows(True)
+
+    def background_rows(self,execute):
+        compiler=native.host_compiler()
+        if compiler is None:self.skipTest('No host C++ compiler')
+        prefix=[compiler,'c++'] if Path(compiler).stem.lower()=='zig' else [compiler]
+        if os.name=='nt' and Path(compiler).stem.lower()=='zig':prefix+=['-target','x86_64-windows-gnu']
+        with tempfile.TemporaryDirectory(prefix='fire-background-rows-') as tmp:
+            path=Path(tmp)/'rows.cpp';path.write_text(background_rows_source(),encoding='utf-8')
+            binary=Path(tmp)/('rows' if execute else 'rows.o')
+            cmd=prefix+['-std=c++17','-Os','-UNDEBUG','-Wall','-Wextra','-Werror','-pedantic','-I',str(ROOT/'src')]
+            if not execute:cmd+=['-c']
+            result=subprocess.run(cmd+[str(path),'-o',str(binary)],capture_output=True,text=True,timeout=180)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            if execute:
+                run=subprocess.run([str(binary)],capture_output=True,text=True,timeout=30)
+                self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_real_app_start_clears_readonly_view_before_load_errors(self):
         source=(ROOT/'src/fire_os.cpp').read_text(encoding='utf-8').split('bool FireOS::startLuaApp(',1)[1]
         self.assertLess(source.index('aiJobViewing_=aiJobOpenPending_=false'),source.index('if (!luaRuntime_)'))
@@ -365,5 +388,94 @@ class ProductionAppFlowTests(unittest.TestCase):
         self.assertIn('os->onButton(command.button,hold)',qa)
         self.assertIn('MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT',qa)
         self.assertIn('!fire_local_qa::equal(current.identity,out.identity,64)',qa)
+
+def background_rows_source():
+    import test_run_status as run_status
+    text=(ROOT/'src/fire_os.cpp').read_text(encoding='utf-8')
+    body=text.split('void FireOS::handleBackgroundBuildMessage(',1)[1]
+    rows=run_status.block(body,'if (type == "build_jobs")')
+    start=text.index('bool FireOS::aiBuildForeground(')
+    helper=text[start:text.index('\n}\n',start)+3]
+    # Reuse the existing bounded String adapter only. The full production row
+    # handler and foreground predicate below decide all state transitions.
+    adapter=PREAMBLE.split('uint32_t nowMs=',1)[0]
+    adapter=adapter.replace('constexpr unsigned HEX=16;','').replace('constexpr uint16_t kOrange=1,kCyan=2,kBg=3,kText=4;','').replace('namespace FireUI {constexpr uint16_t Selected=5;}','')
+    return adapter+r'''
+#include <vector>
+#include <algorithm>
+using std::max;
+uint32_t millis(){return 12345;}
+template<class T>T constrain(T n,int lo,int hi){return n<lo?T(lo):n>hi?T(hi):n;}
+struct cJSON {std::map<std::string,cJSON>fields;std::vector<cJSON>items;String text;int valueint=0;bool number=false,array=false;};
+cJSON document;
+cJSON* cJSON_Parse(const char*){return &document;}void cJSON_Delete(cJSON*){}
+const cJSON* cJSON_GetObjectItemCaseSensitive(const cJSON* p,const char* k){if(!p)return nullptr;auto it=p->fields.find(k);return it==p->fields.end()?nullptr:&it->second;}
+bool cJSON_IsNumber(const cJSON* p){return p && p->number;}
+bool cJSON_IsTrue(const cJSON* p){return p && p->valueint==1;}
+bool cJSON_IsArray(const cJSON* p){return p && p->array;}
+bool cJSON_IsObject(const cJSON* p){return p && !p->array && !p->number;}
+int cJSON_GetArraySize(const cJSON* p){return p?int(p->items.size()):0;}
+const cJSON* cJSON_GetArrayItem(const cJSON* p,int i){return p && i>=0 && size_t(i)<p->items.size()?&p->items[size_t(i)]:nullptr;}
+String aiJobText(const cJSON* p,const char* k){const auto* v=cJSON_GetObjectItemCaseSensitive(p,k);return v?v->text:String();}
+int jsonIntField(const String&,const char*,int fallback=0){return fallback;}
+struct Backend {bool pending=false;bool selectionPending()const{return pending;}};
+struct FireOS {
+ Backend* backendClient_=nullptr;
+ bool aiVoiceTestMode_=false,aiJobViewing_=false;uint8_t aiConversationMode_=0;
+ String aiProjectId_="project-a",aiBuildId_="build-a",aiBuildProjectId_="project-a",aiJobRepair_,aiJobBuild_;
+ String aiProposalId_,aiProposalProjectId_;
+ String backgroundBuildId_="build-b",aiProjectName_="Name A",aiWorkflowText_="A current",buildPhase_="generating",buildStatusMessage_;
+ bool backgroundBuildActive_=true,aiJobOpenPending_=false;
+ uint32_t buildJobsOffset_=0,buildJobsRequestAt_=0,workCompletedAt_=0;
+ bool buildJobsNext_=false,buildJobsRequested_=false,backendBootJobsReceived_=false,backendBootSyncWaiting_=false,backendBootPending_=false;
+ uint8_t buildJobsRetryCount_=0,buildJobCount_=0,buildProgress_=20,aiBuildProgress_=70,aiWorkflowState_=4,aiDeveloperMode_=2;
+ int aiBuildResumeCount_=7;
+ bool aiBuildResumePending_=false,aiBuildRetryPending_=false,aiResumeAvailable_=false,aiJobCanOpen_=false,redrawRequested_=false;
+ String buildJobIds_[4],buildJobRepairIds_[4],buildJobNames_[4],buildJobStatuses_[4],buildJobErrors_[4],buildJobErrorCodes_[4],buildJobDiagnostics_[4];
+ bool buildJobCanOpen_[4]={},buildJobCanDelete_[4]={},buildJobCanPause_[4]={},buildJobCanContext_[4]={},buildJobCanResume_[4]={},buildJobCanRetry_[4]={};
+ unsigned restoreCalls=0;
+ void restoreAiJob(const cJSON*){++restoreCalls;}
+ bool aiBuildForeground(const String&,const String& build=String())const;
+ void catalog();
+};
+'''+helper+'void FireOS::catalog(){String message;const String type="build_jobs";'+rows+r'''}
+static cJSON row(const char* id,const char* project,const char* status,int percent,int count){
+ cJSON r;r.fields["build_id"].text=id;r.fields["project_id"].text=project;r.fields["status"].text=status;
+ r.fields["phase"].text=String(status)=="building"?"generating":status;
+ r.fields["app_name"].text=String(project)=="project-a"?"Name A":"Name B";
+ r.fields["progress"].number=true;r.fields["progress"].valueint=percent;
+ r.fields["resume_count"].number=true;r.fields["resume_count"].valueint=count;
+ r.fields["display_text"].text=String(project)=="project-a"?"A current":"B background";
+ return r;
+}
+static void page(FireOS& os,std::vector<cJSON> rows){document=cJSON();document.fields["jobs"].array=true;document.fields["jobs"].items=rows;os.catalog();}
+int main(){
+ const auto a=row("build-a","project-a","building",71,8),b=row("build-b","project-b","building",30,99);
+ for(bool reverse:{false,true}) {
+   Backend client;FireOS os;os.backendClient_=&client;
+   page(os,reverse?std::vector<cJSON>{b,a}:std::vector<cJSON>{a,b});
+   assert(os.aiBuildId_=="build-a" && os.aiBuildProjectId_=="project-a" && os.aiBuildResumeCount_==8 && os.aiBuildProgress_==71);
+   assert(os.aiWorkflowText_=="A current" && os.aiProjectName_=="Name A");
+   // A page containing only B cannot retarget foreground A.
+   page(os,{b});assert(os.aiBuildId_=="build-a" && os.aiBuildResumeCount_==8 && os.aiBuildProgress_==71 && os.backgroundBuildId_=="build-b");
+   page(os,{});assert(os.backgroundBuildActive_ && os.backgroundBuildId_=="build-b" && os.aiBuildId_=="build-a");
+   page(os,{row("build-a","project-a","ready",100,8),b});
+   assert(os.aiBuildId_=="build-a" && os.backgroundBuildId_=="build-b" && os.backgroundBuildActive_);
+   page(os,{row("build-a","project-a","failed",0,8)});assert(os.backgroundBuildActive_ && os.backgroundBuildId_=="build-b");
+   page(os,{row("build-b","project-b","failed",0,99)});assert(!os.backgroundBuildActive_ && os.aiBuildId_=="build-a");
+   const auto old=row("build-old","project-a","queued",1,99);
+   page(os,reverse?std::vector<cJSON>{old,a}:std::vector<cJSON>{a,old});
+   assert(os.aiBuildId_=="build-a" && os.aiBuildResumeCount_==8 && os.aiBuildProgress_==71);
+   assert(!os.aiBuildForeground("project-a","build-old") && os.aiBuildForeground("project-a","build-a"));
+ }
+ Backend client;FireOS fresh;fresh.backendClient_=&client;fresh.aiBuildId_=fresh.aiBuildProjectId_=String();fresh.aiProjectId_="project-new";fresh.aiWorkflowText_="Valg bekreftet";fresh.aiWorkflowState_=0;
+ page(fresh,{b});assert(!fresh.aiBuildId_.length() && fresh.aiWorkflowText_=="Valg bekreftet" && fresh.backgroundBuildId_=="build-b" && fresh.backgroundBuildActive_);
+ client.pending=true;page(fresh,{a,b});assert(!fresh.aiBuildId_.length() && fresh.aiWorkflowState_==0);
+ client.pending=false;fresh.aiProjectId_="project-a";fresh.aiConversationMode_=1;
+ assert(!fresh.aiBuildForeground("project-a","build-a"));page(fresh,{a});assert(!fresh.aiBuildId_.length() && fresh.aiWorkflowState_==0);
+ fresh.aiJobViewing_=true;fresh.aiJobBuild_="build-a";assert(fresh.aiBuildForeground("project-a","build-a"));
+ puts("PASS actual background rows preserve foreground A in both page orders and Chat scope");
+}
+'''
 
 if __name__=='__main__':unittest.main()

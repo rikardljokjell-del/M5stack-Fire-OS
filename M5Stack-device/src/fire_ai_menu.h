@@ -34,6 +34,16 @@ inline WorkIndicator workIndicator(bool build,bool repair,uint32_t now,uint32_t 
 }
 
 enum class Kind:uint8_t {Chat,NewApp,SelectApp,Evolution,Settings,Back,App,Runtime,Models,Usage,Limits,Voice,Connection,Jobs};
+// Fixed user-visible choice receipts; shared by the LCD and presented UART QA.
+inline const char* choiceLabel(const char* text) {
+  if(!text) return nullptr;
+  if(!strcmp(text,"Venter på appvalg")) return "Venter på appvalg";
+  if(!strcmp(text,"Venter på modus")) return "Venter på modus";
+  if(!strcmp(text,"Valg bekreftet")) return "Valg bekreftet";
+  if(!strcmp(text,"Valg avvist. Velg app igjen")) return "Valg avvist";
+  if(!strcmp(text,"Valg uavklart. Velg app igjen")) return "Valg uavklart";
+  return nullptr;
+}
 struct Item {Kind kind;uint8_t index=0;};
 enum class Page:uint8_t {Main,Apps,Settings,Jobs,Job,Work};
 inline uint8_t count(Page page,bool repair,uint8_t builds,uint8_t apps) {

@@ -647,6 +647,9 @@ class FireOS {
   String aiProjectId_;
   String aiProjectName_;
   String aiBuildId_;
+  String aiBuildProjectId_; // Received/explicit-build scope, separate from a new foreground choice.
+  String backgroundBuildId_; // Exact identity of the one existing background indicator.
+  bool aiBuildForeground(const String& project,const String& build=String()) const;
   bool backgroundBuildsSupported_ = false;
   bool failedBuildResumeSupported_ = false;
   bool backgroundBuildActive_ = false;
