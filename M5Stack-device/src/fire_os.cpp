@@ -78,7 +78,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc16";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc17";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -5285,7 +5285,7 @@ void FireOS::back() {
   }
   if (screen_ == Screen::LuaApp) stopLuaApp("back");
   if (screen_ == Screen::Bluetooth) closeBluetoothSettings();
-  screen_ = previousScreen_;
+  screen_ = previousScreen_ == screen_ ? Screen::Main : previousScreen_;
 }
 
 void FireOS::home() {
@@ -6517,7 +6517,7 @@ bool FireOS::startLuaApp(const String& path, const String& name,
   }
   luaHealthySent_ = false;
   luaLastFrameAt_ = millis();
-  previousScreen_ = screen_;
+  if (screen_ != Screen::LuaApp) previousScreen_ = screen_;
   screen_ = Screen::LuaApp;
   return true;
 }

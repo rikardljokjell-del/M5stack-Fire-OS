@@ -53,6 +53,14 @@ def source():
     qa=(ROOT/'src/fire_os_local_qa.inc').read_text(encoding='utf-8')
     qa_case=qa.split('    case Screen::LuaApp:',1)[1].split('    case Screen::QuickSettings:',1)[0]
     ui+='void FireOS::repairQa(){struct {unsigned count=0;bool error=false;}out;String label,detail;switch(screen_){case Screen::LuaApp:'+qa_case+'default:return;}qaLabel=label;qaError=out.error;qaCount=out.count;}\n'
+    # Execute the actual successful-load route and Back tail; loader/stop I/O
+    # are spies, so these assertions establish navigation rather than VM health.
+    start=method('bool FireOS::startLuaApp(')
+    ui+='bool FireOS::successfulStartRoute(){'+start[start.rindex('  luaLastFrameAt_ = millis();'):]
+    back=method('void FireOS::back(')
+    ui+='void FireOS::backRoute(){'+back[back.index('  if (screen_ == Screen::LuaApp) stopLuaApp("back");'):]
+    quick=method('void FireOS::openQuickSettings(')
+    ui+='void FireOS::quickRoute(){'+quick[quick.index('  previousScreen_ = screen_;'):]
     return PREAMBLE+'\n#include "fire_os_download.inc"\n'+methods+manager+release+lifetime+ui+MAIN
 
 PREAMBLE=r'''
@@ -111,7 +119,12 @@ struct Package {
   void finishReceipt(){receipt=active=false;}
 };
 struct FireOS {
-  enum class Screen {Main,AppsSettings,AiDeveloper,LuaApp};Screen screen_=Screen::Main;
+  enum class Screen {Main,AppsSettings,AiDeveloper,LuaApp,QuickSettings,Bluetooth};Screen screen_=Screen::Main,previousScreen_=Screen::Main;
+  uint32_t luaLastFrameAt_=0;uint8_t quickIndex_=0;bool quickEditing_=false;
+  unsigned navigationStops=0;String lastStopReason;
+  void stopLuaApp(const String& reason){++navigationStops;lastStopReason=reason;luaAppActive_=false;}
+  void closeBluetoothSettings(){}
+  bool successfulStartRoute();void backRoute();void quickRoute();
   Backend* backendClient_=nullptr;Package* packageManager_=nullptr;
   String downloadRequest_,downloadProject_,downloadApp_,downloadPackage_,downloadSession_,downloadBoot_;
   uint32_t downloadRequestedAt_=0;uint8_t downloadPhase_=0;
@@ -283,6 +296,26 @@ int main(){
   assert(os.drawnTitle=="APP ERROR" && os.drawnAction=="Fiks feil" && os.qaLabel==os.drawnAction && os.qaError);
   os.luaRepairRequested_=true;os.repairDraw();os.repairQa();assert(os.drawnAction=="Venter" && os.qaLabel==os.drawnAction && os.qaError);
   os.luaAppActive_=true;os.repairQa();assert(!os.qaError && os.qaLabel=="App running");
+  // Repaired relaunch starts while already on LuaApp, retaining the real
+  // Developer origin. Normal AppManager launch still records its own origin.
+  os.screen_=FireOS::Screen::LuaApp;os.previousScreen_=FireOS::Screen::AiDeveloper;
+  assert(os.successfulStartRoute() && os.previousScreen_==FireOS::Screen::AiDeveloper);
+  os.luaAppActive_=true;os.backRoute();
+  assert(os.screen_==FireOS::Screen::AiDeveloper && !os.luaAppActive_ && os.navigationStops==1 && os.lastStopReason=="back");
+  os.screen_=FireOS::Screen::AppsSettings;os.previousScreen_=FireOS::Screen::Main;
+  assert(os.successfulStartRoute() && os.previousScreen_==FireOS::Screen::AppsSettings);
+  os.luaAppActive_=true;os.backRoute();assert(os.screen_==FireOS::Screen::AppsSettings && os.navigationStops==2);
+  // Existing Quick Settings uses the one saved parent. Returning to Lua is
+  // valid, but subsequent app Back must escape that self-target after stopping.
+  os.successfulStartRoute();os.luaAppActive_=true;os.quickRoute();
+  assert(os.screen_==FireOS::Screen::QuickSettings && os.previousScreen_==FireOS::Screen::LuaApp);
+  os.backRoute();assert(os.screen_==FireOS::Screen::LuaApp && os.navigationStops==2 && os.luaAppActive_);
+  os.backRoute();assert(os.screen_==FireOS::Screen::Main && os.navigationStops==3 && !os.luaAppActive_);
+  // A genuine inactive fault still renders APP ERROR; Back only exits it.
+  os.screen_=FireOS::Screen::LuaApp;os.aiJobViewing_=false;os.repairDraw();os.repairQa();assert(os.drawnTitle=="APP ERROR" && os.qaError);
+  os.previousScreen_=FireOS::Screen::LuaApp;
+  os.backRoute();assert(os.screen_==FireOS::Screen::Main && os.navigationStops==4);
+  puts("PASS actual successful start Back repair manager and Quick Settings origin");
   puts("PASS actual readonly job LCD QA title action and real fault parity");
   puts("PASS production download intent cancel receipt no paid replay and exact manager target");
 }
@@ -293,6 +326,10 @@ class ProductionAppFlowTests(unittest.TestCase):
         source=(ROOT/'src/fire_os.cpp').read_text(encoding='utf-8').split('bool FireOS::startLuaApp(',1)[1]
         self.assertLess(source.index('aiJobViewing_=aiJobOpenPending_=false'),source.index('if (!luaRuntime_)'))
         self.assertLess(source.index('aiJobViewing_=aiJobOpenPending_=false'),source.index('SD.exists(manifestPath)'))
+        start=source.split('\n}\n',1)[0]
+        # Failed loads return before the routing-only success tail.
+        self.assertLess(start.index('if (!loaded)'),start.index('if (screen_ != Screen::LuaApp) previousScreen_ = screen_;'))
+        self.assertEqual(start.count('previousScreen_ = screen_;'),1)
 
     def test_actual_handlers(self):
         compiler=native.host_compiler()

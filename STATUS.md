@@ -140,6 +140,17 @@ skal vises som uavklart, uten automatisk appstart eller nytt AI-kall.
 Stabile meldings-IDer og identisk innhold beskytter eksplisitte duplikater.
 Den fysiske kontrollen av denne rettingen er fortsatt åpen.
 
+RC16 er siden fysisk installert med eksakt tilbakekontroll og bevart RC15.
+Minimering og gjenåpning av den ferdige reparasjonen bestod uten installasjon,
+kjøring eller AI-kall. En egen eksplisitt «Kjør rettet app» fullførte offentlig
+installasjon, app_started, app_healthy og vanlig app_stopped; den mottatte
+Started-meldingen er digestbundet til riktig kilde, kjøring, sesjon og boot.
+Ingen ny callbackfeil, serveravvisning eller AI-bruk ble registrert.
+Etter vanlig Tilbake ble appen stoppet, men returskjermen pekte feilaktig tilbake
+til samme Lua-visning. RC17 retter denne navigasjonsfeilen og en tilsvarende
+selvreferanse etter Quick Settings; nettverks-, installasjons- og kjørelogikken
+beholdes. Fysisk sluttkontroll og nett-/avbruddsprøver gjenstår.
+
 ### Historikk: gjenåpning av jobber og appoppdatering
 
 Brukeren mister jobbvinduet etter minimering: ferdig «Digitalt vater» vises bare
