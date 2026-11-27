@@ -19,137 +19,74 @@ lokale tester og faktisk fysisk verifikasjon.
 ## Status nå
 
 
-### Pågående produksjonskontroll av offentlig appflyt
+### Verifisert offentlig appflyt — RC17
 
-Brukeren har autorisert backend-/firmwarearbeid og automatisert betjening via COM,
-uten egen enhetsbetjening. Kritiske flyter skal bruke offentlig strict-TLS-adresse,
-ikke en lokal reservevei. Katalog, valgt versjon, nedlasting, avbrudd, gjenåpning
-av jobber og eksplisitt kjøring testes samlet før ferdigmelding.
+De rapporterte feilene er rettet. Katalog-, leverings-, kjøre- og nettverksflytene
+er fysisk prøvd. FIRE kjører nå
+`fire-os-1.6.0-rc17`, kilde `085d657`, i B66 VALID/CRC. Eksakt bilde er lest
+tilbake og hashkontrollert; RC16 A65 og dens metadatasektor er bevart.
+Bootloader, partisjonstabell, recovery og de 68 tidligere firmwarefilene er
+uendret. Ingen stakk-, TLS-, callback-, IRAM- eller pakkegrense er økt.
 
-Én ny RC11-avlesning viser at første Vater 0.1.6-install faktisk ble fullført med
-riktig kvittering. Sju senere forsøk feilet ved opprettelse av pakkearbeideren.
-Det er dermed ikke bare en TLS-oppstartsfeil: samtidig ressursbruk må fjernes.
-Kandidaten bruker samme TLS-klient, størrelsesgrense og SD-/ZIP-installasjon, med
-avgrenset PSRAM-mellomlagring og full nettverksopprydding før SD-arbeideren starter.
+FIRE bruker `wss://fire-device.ljoekjell.no/ws/device` med sertifikatkontroll
+og direkte offentlig transport. Ingen lokal reverse-relay er i bruk.
+[Studio](https://firestudio.ljoekjell.no/ui/) er beskyttet med Cloudflare
+Access. Brukeren har bekreftet Studio og appoversikten via mobildata og
+engangskode. Tunnelens automatiske tjeneste og backendens oppstart ved
+Windows-innlogging er konfigurert. PC-en må være på og brukeren innlogget.
 
-Katalogens synkrone historikkskanning er gjenskapt på kopierte faktiske data:
-én side tok 1,413 s og leste bygg/pakker 54 ganger hver. En midlertidig indeks
-for den enkelte forespørselen reduserer dette til én lesing av hver gruppe;
-handlinger må fortsatt gjennom de vanlige ferske eier-/kvalitets-/hashportene.
-Lagringsgrensen beholdes, men fersk filstørrelseskontroll er målt redusert fra
-0,340–0,345 s til 0,023–0,025 s på samme tre og identisk byteantall.
+Katalogen bruker én midlertidig indeks per forespørsel fremfor gjentatt
+historikkskanning. Målt katalogside gikk fra 1,413 s til 0,096 s på samme
+kopierte data; faktisk serverkatalog ble lest på 0,075 s. Ferske eier-, pakke-,
+kvalitets- og hashkontroller beholdes for handlinger. Katalograder og valgt
+app beholdes under oppdatering; sene svar må matche forespørsel, side og økt.
 
-Gjennomgangen fant også meny-/svarkorrelasjon, skjulte statusmeldinger,
-uoppnåelig ACK-behandling og avbrudd som ikke straks ryddet ventende kjøring.
-Disse rettes i eksisterende kontrollflyt. En lokalt autentisert, tidsavgrenset
-COM-testinngang skal bruke vanlige knappbehandlere og gjeldende skjermbindinger;
-den skal være av som standard og kan ikke gi egne backend-/bygg-/kjørerettigheter.
-Hele backend-testpakken har bestått: 1 286 PASS, ett Windows-betinget
-symlink-skip og fire eksisterende bibliotekvarsler på 532,86 s. Alle backend-
-og testkilder var uendret gjennom kjøringen. De målrettede katalog-/leverings-
-kontrollene har i tillegg 55 PASS. Separat Linux-CI har 327 PASS og tre
-miljøbetingede skips. Backenden er aktivert én gang med uendrede innstillinger
-og nøkkelfingeravtrykk; FIRE gjenopptok samme økt automatisk. Faktisk offentlig
-kataloglesing ga 14 apper på 0,075 s.
+Nedlasting bruker samme TLS-klient og SD-/ZIP-validering i atskilte
+ressursfaser. Kvitteringen beholdes gjennom gjenoppkobling. Startstatus må
+kølegges før Healthy; bare sikkert ikke-kølagte meldinger prøves igjen innen
+opprinnelig kjørefrist. Stabile meldings-IDer hindrer duplisert arbeid.
+Jobbåpning er lesende, og Kjør krever egen bekreftelse. Normal Tilbake bevarer
+returstedet og unngår å bli stående i en avsluttet Lua-visning.
 
-RC12-kandidaten er kildefryst og lokalt objekt-/C++11-kontrollert. Den bruker
-den samme nettverksklienten og SD-/ZIP-installasjonen i atskilte ressursfaser,
-med én avgrenset PSRAM-buffer. Synlig rad og frosset appmål beskytter B-valg,
-forespørsels-IDer beskytter sene svar, og Avbryt trekker tilbake ventende kjøring
-før nettverksopprydding. COM-teststyringen er autentisert, av som standard og
-begrenset til vanlige knappbehandlere og den godkjente testappen på offentlig
-TLS-profil. Større testbuffere ligger i PSRAM; ingen global stakk-/IRAM-grense
-er økt. Første fulle firmwarebygg bestod normalfirmware, recovery og bootloader.
-Den separate strenge GCC-kontrollen fanget én misvisende innrykning i
-feedback-svarbehandlingen. Kun klammer og linjeskift er rettet, med uendret
-funksjon; ny samlet CI kreves før denne kandidaten pakkes eller installeres.
-Ny CI på `d47f0f3` bestod de 45 firmwaretestene, 18 separate strenge native-/QA-
-tester og alle tre firmwarebygg. Signert RC12 er fysisk installert i A61,
-med eksakt SHA256-tilbakekontroll og VALID/CRC; RC11 B60 er bevart. Én fersk
-sluttavlesning bekreftet offentlig socket, komplett inventar med alle 13 app-IDer
-og uendrede kontrakter. To automatiserte UART-forsøk navigerte Settings korrekt,
-men stoppet på en feilformet kandidat til et autentisert testsvar. Dette er
-avgrenset til testkanalen, og er ikke bevis for vellykket appflyt eller et
-avvist menyvalg. Testkanalen rettes med uendret HMAC-/sekvenskontroll og kun
-avgrenset gjentakelse av nøyaktig samme forespørsel. Gjentatte offentlige
-nedlastinger, faktisk kjøring og produksjonsaksept gjenstår.
+Fysisk kontroll over den offentlige forbindelsen har bekreftet:
 
-Den fysiske RC12-prøven startet en ordinær offentlig nedlasting av Vater 0.1.6.
-En TLS-forbindelse ble opprettet, men senere gjenoppkobling fikk
-`SSL_ALLOC_FAILED`; installasjonskvitteringen nådde ikke serveren. Kommandoen
-utløp som UNKNOWN etter sin opprinnelige frist, uten RUN eller nytt AI-kall.
-Avbryt ble registrert, og Wi-Fi-/backendvalg ble tilbakeført til On.
-Separat åpnet den eksisterende, kildeverifiserte 0.1.6-appen lokalt med backend
-av og kjørte i omtrent 108 sekunder, inkludert B-/C-betjening og vanlig Back,
-uten observert appfeil. Dette beviser ikke den offentlige installasjonsflyten.
+- Gjentatte nedlastinger med riktig arkivhash, bevart appoversikt og ingen nye
+  TLS-feil. Transport-/minneflyten bestod fem installasjoner og fem lokale
+  åpninger på samme boot, samt 300 sekunder med 61 stabile katalogavlesninger.
+- Åpne jobb, minimer og gjenåpne uten nytt bygg, installasjon eller AI-kall.
+  På RC17 bestod egen nedlasting → installasjonskvittering → eksplisitt Run →
+  Started → Healthy → vanlig Stopped og retur til Developer.
+- Wi-Fi og backend av/på, automatisk gjenoppkobling, komplett katalog etter
+  tilkobling og etterfølgende stabile avlesninger. Auto-modus koblet til.
+- Lokal appåpning med både Wi-Fi og backend av, uten nettventing.
+  Quick Settings → tilbake til kjørende app → Tilbake til hovedskjermen bestod.
+- Avbryt under aktiv overføring: serveren godtok kvitteringen før fristen,
+  ingen senere Run kom, og installert Vater 0.1.6 med riktig kildehash er bevart.
+  Nedlastingsvalg viste Vennligst vent før den ferske versjonslisten kom.
 
-RC13 frigjør ubrukte nettlesebufferes faktiske kapasitet etter sikker
-callback-avslutning, og holder Home tilbake mens backend alene kobler til for
-installasjonskvitteringen. Ventebildet skiller installert, feil, avbrudd og
-ventende kvittering. App Manager bruker lagrede visningsnavn. Ingen minne-,
-stakk-, TLS- eller callbackgrense er økt. Eksakt allokering bak TLS-feilen er
-fortsatt ikke målt; ny samlet CI og fysisk gjentatt levering kreves.
+Sluttavlesningen 27. november kl. 03:18 Oslo viste RC17 tilkoblet og ledig,
+ferskt komplett inventar med de samme 13 app-IDene, uendrede fem kontrakter
+og tjenestelister, og ingen ventende installasjon eller Run. Ingen nye
+provider-/AI-kall ble startet i prøvene. En avsluttende vanlig omstart er
+merket som kontrollert; teststyringen er av, COM er lukket og Wi-Fi/backend
+står på On.
 
-RC13 er siden fysisk installert og prøvd over den offentlige forbindelsen.
-Backendjournalen bekrefter seks COMPLETED-installasjoner av nøyaktig Vater
-0.1.6 med korrekt arkivhash og stabile kvitteringer. Fem lokale Launch/Back-
-runder er observert på FIRE uten appfeil. Dette er lokale åpninger via
-autoriserte COM-knappehandlinger; ingen server-RUN eller ny AI-generering ble startet. Alle seks
-gjenoppkoblingene beholdt samme sesjon og oppstarts-ID. Et ukjent UART-
-STATE-svar under siste runde var ikke bevis for mislykket installasjon;
-serverkvitteringen kom frem. De opprinnelige bevisene er bevart.
+Hele backendpakken har 1 286 PASS og ett Windows-betinget skip fra den
+bevarte fullkjøringen. Siste backend-CI har 344 PASS og tre miljøbetingede
+skips. RC17 har 25 målrettede native-tester, 53 firmwaretester og vellykket
+normal-, recovery- og bootloaderbygging. Den lokale bevisoversikten er
+`M5Stack-backend/workspace/production-flow/production-acceptance-final.json`;
+råbevis, tidligere feilede prøver og kildehasher er bevart lokalt.
+Reparasjonsknappens ventvisning er kontrollert i native-testene; ingen ny
+betalt reparasjon ble startet i sluttprøven.
 
-Minste observerte internminnemargin var likevel bare 620 byte under prøven.
-RC14 retter derfor levetiden til den eksisterende pakkearbeideren: den parkeres
-på UI-eierens kjerne etter ferdig arbeid, og UI sletter den synkront før
-`running=false` publiseres og neste TLS-fase kan begynne. Samme stakkstørrelse
-og grenser beholdes. RC14 er fysisk installert; tre nye offentlige
-installasjoner har korrekte COMPLETED-kvitteringer på samme oppstart og sesjon.
-To lokale Launch/Back-runder er observert. Internminnets levetidsminimum falt
-likevel til 648 byte etter pakkearbeidet ved gjenoppkobling. En uteblitt
-UART-observasjon under tredje runde var heller ikke installasjonsfeil. Dette
-lukker ikke kravet til minnemargin eller de resterende brukerflytene.
-
-RC15 ble ferdigstilt som en avgrenset ressursretting: én eid mottatt tekstbuffer,
-selektiv sesjonslesing uten cJSON-tre, frigjøring av ferdig HTTP-header og én
-utgående oppstartsmelding. Faste numeriske fasepunkter skal skille TLS- og
-meldingsbehandlingens minnebruk. Tre konkrete UI-blindveier får tidsgrense,
-feilrespons eller trygg Tilbake/Prøv igjen i eksisterende kontrollere.
-
-Fysisk RC15-verifikasjon er deretter utført: fem ordinære offentlige nedlastinger
-med fem COMPLETED-/checksumkvitteringer og fem lokale Launch/Back-runder.
-En femminutters katalogprøve har 61 tilkoblede, komplette målepunkter og
-uendret valgt handling; serveren journalførte 64 katalogforespørsler og bare
-de fem planlagte gjenoppkoblingene. Samme sesjon/oppstart ble beholdt. Laveste
-observerte internminne var 23 468 byte, uten net_fail eller ny AI-bruk.
-
-Gjenåpning av reparasjonsjobben stoppet riktig i USB-testen fordi normal
-jobbvisning var merket som APP ERROR og alltid ga testgrensesnittets feilflagg.
-Dette var visnings-/observasjonssemantikk, ikke en ny callbackfeil eller
-serverfeil. Ingen RUN/installasjon/modell ble startet i den gruppen. RC16
-retter normal JOBBSTATUS og deler handlingsetiketten mellom visning og
-USB-observasjon; ekte runtimefeil skal fortsatt gi feilflagg. Resterende
-fysiske Run-, avbrudds- og nettbruddstester gjenstår.
-
-Den siste gjennomgangen fant også at Started-/Healthy-status kunne merkes
-som sendt selv om sendekøen avviste meldingen. RC16 får derfor én avgrenset
-tilstand for den aktuelle, allerede autoriserte kjøringen: Started må kølegges
-før Healthy, og bare sikkert ikke-kølagte meldinger forsøkes igjen innen den
-opprinnelige kjørefristen. Delvis skriving eller usikkert forbindelsesskifte
-skal vises som uavklart, uten automatisk appstart eller nytt AI-kall.
-Stabile meldings-IDer og identisk innhold beskytter eksplisitte duplikater.
-Den fysiske kontrollen av denne rettingen er fortsatt åpen.
-
-RC16 er siden fysisk installert med eksakt tilbakekontroll og bevart RC15.
-Minimering og gjenåpning av den ferdige reparasjonen bestod uten installasjon,
-kjøring eller AI-kall. En egen eksplisitt «Kjør rettet app» fullførte offentlig
-installasjon, app_started, app_healthy og vanlig app_stopped; den mottatte
-Started-meldingen er digestbundet til riktig kilde, kjøring, sesjon og boot.
-Ingen ny callbackfeil, serveravvisning eller AI-bruk ble registrert.
-Etter vanlig Tilbake ble appen stoppet, men returskjermen pekte feilaktig tilbake
-til samme Lua-visning. RC17 retter denne navigasjonsfeilen og en tilsvarende
-selvreferanse etter Quick Settings; nettverks-, installasjons- og kjørelogikken
-beholdes. Fysisk sluttkontroll og nett-/avbruddsprøver gjenstår.
+RC17-testen stoppet én gang på et usikkert USB-statussvar under oppstart; separat
+serverbevis bekreftet vellykket gjenoppkobling. Ingen autentiseringskontroll
+ble svekket, og en ny kontrollert prøve fullførte nettverksrundene. En manuell
+Avbryt kom etter fullført nedlasting og ble derfor ikke sendt; egen rask
+knappesekvens bekreftet deretter faktisk avbrytelse. Dette skilles i bevisene.
+Annet Wi-Fi/mobilhotspot er ikke fysisk prøvd; brukeren utsatte den prøven.
+Appfiler og kildehash er kontrollert, ikke en separat hash av alle brukerdata.
 
 ### Historikk: gjenåpning av jobber og appoppdatering
 
