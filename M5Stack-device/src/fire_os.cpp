@@ -78,7 +78,7 @@ constexpr uint8_t kBrightnessValues[] = {24, 42, 60, 90, 120,
 constexpr uint8_t kBrightnessStepCount = 10;
 constexpr uint8_t kVolumeStepCount = 10;
 constexpr uint8_t kTimezoneCount = DateTimeService::kTimezoneCount;
-constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc15";
+constexpr char kFirmwareVersion[] = "fire-os-1.6.0-rc16";
 // Fixed labels only: never log app names, paths, endpoints or credentials.
 // Keep the lifetime loop maxima intact while locating blocking UI phases.
 class FireUiPhaseTimer {
@@ -11119,7 +11119,8 @@ void FireOS::drawLuaApp() {
     ui.fillSprite(kBg);
     drawPanel(10, 40, 300, 164);
     ui.setTextDatum(MC_DATUM);
-    drawText(160, 28, "APP ERROR", kOrange, 2, kBg);
+    const auto repairPanel=fire_ai_menu::repairPanel(aiJobViewing_,luaAppActive_,luaRepairStatus_.c_str(),aiJobOpenPending_,luaRepairRequested_,luaErrorAction_);
+    drawText(160, 28, repairPanel.title, repairPanel.error?kOrange:kCyan, 2, kBg);
     String appLabel = luaErrorAppName_.length() > 0 ? luaErrorAppName_
                                                      : luaAppName_;
     if (appLabel.length() > 24) appLabel = appLabel.substring(0, 21) + "...";
@@ -11168,8 +11169,7 @@ void FireOS::drawLuaApp() {
     const uint16_t actionColor = luaErrorAction_ == 0 ? kCyan : kGreen;
     const bool waitingForRepair = luaRepairRequested_ && luaErrorAction_ == 0;
     drawSelection(58, 170, 204, 30, actionColor);
-    drawText(160, 185, aiJobViewing_ && luaRepairStatus_=="loading"?(aiJobOpenPending_?"Venter":"Prøv igjen"):waitingForRepair ? "Venter" :
-             luaErrorAction_ == 0 ? "Fiks feil" : "Kjør rettet app", kText, 2,
+    drawText(160, 185, repairPanel.action, kText, 2,
              FireUI::Selected);
     if (luaRepairStatus_ == "ready")
     drawText(160, 207,

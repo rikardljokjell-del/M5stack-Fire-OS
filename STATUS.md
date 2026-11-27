@@ -110,14 +110,28 @@ likevel til 648 byte etter pakkearbeidet ved gjenoppkobling. En uteblitt
 UART-observasjon under tredje runde var heller ikke installasjonsfeil. Dette
 lukker ikke kravet til minnemargin eller de resterende brukerflytene.
 
-RC15 arbeides med som en avgrenset ressursretting: én eid mottatt tekstbuffer,
+RC15 ble ferdigstilt som en avgrenset ressursretting: én eid mottatt tekstbuffer,
 selektiv sesjonslesing uten cJSON-tre, frigjøring av ferdig HTTP-header og én
 utgående oppstartsmelding. Faste numeriske fasepunkter skal skille TLS- og
 meldingsbehandlingens minnebruk. Tre konkrete UI-blindveier får tidsgrense,
-feilrespons eller trygg Tilbake/Prøv igjen i eksisterende kontrollere. Ingen
-ny fysisk RC15-verifikasjon eller produksjonsaksept foreligger ennå.
+feilrespons eller trygg Tilbake/Prøv igjen i eksisterende kontrollere.
 
-### Pågående: gjenåpning av jobber og appoppdatering
+Fysisk RC15-verifikasjon er deretter utført: fem ordinære offentlige nedlastinger
+med fem COMPLETED-/checksumkvitteringer og fem lokale Launch/Back-runder.
+En femminutters katalogprøve har 61 tilkoblede, komplette målepunkter og
+uendret valgt handling; serveren journalførte 64 katalogforespørsler og bare
+de fem planlagte gjenoppkoblingene. Samme sesjon/oppstart ble beholdt. Laveste
+observerte internminne var 23 468 byte, uten net_fail eller ny AI-bruk.
+
+Gjenåpning av reparasjonsjobben stoppet riktig i USB-testen fordi normal
+jobbvisning var merket som APP ERROR og alltid ga testgrensesnittets feilflagg.
+Dette var visnings-/observasjonssemantikk, ikke en ny callbackfeil eller
+serverfeil. Ingen RUN/installasjon/modell ble startet i den gruppen. RC16
+retter normal JOBBSTATUS og deler handlingsetiketten mellom visning og
+USB-observasjon; ekte runtimefeil skal fortsatt gi feilflagg. Resterende
+fysiske Run-, avbrudds- og nettbruddstester gjenstår.
+
+### Historikk: gjenåpning av jobber og appoppdatering
 
 Brukeren mister jobbvinduet etter minimering: ferdig «Digitalt vater» vises bare
 med «Fjern fra listen» under Resume. Backend har allerede `can_open=true`, men

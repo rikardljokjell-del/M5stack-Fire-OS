@@ -111,7 +111,10 @@ void FireOS::localQaSnapshot(fire_local_qa::Snapshot& out) const {
           }
         }
       } else {out.count=1;label=aiWorkflowState_==5?"Kjør app":aiWorkflowState_==3?"Build proposal":"Developer";}break;
-    case Screen::LuaApp:out.count=1;label=luaAppActive_?"App running":luaErrorAction_?"Kjør rettet app":"Fiks feil";detail=luaRepairMessage_;out.error=luaAppActive_?0:1;break;
+    case Screen::LuaApp: {
+      const auto panel=fire_ai_menu::repairPanel(aiJobViewing_,luaAppActive_,luaRepairStatus_.c_str(),aiJobOpenPending_,luaRepairRequested_,luaErrorAction_);
+      out.count=1;label=panel.action;detail=luaRepairMessage_;out.error=panel.error;break;
+    }
     case Screen::QuickSettings: {
       const char* labels[]={"Brightness","Volume","Wi-Fi","Bluetooth","Backend-sync","SD card","Power","All settings","Back"};
       out.index=quickIndex_;out.count=kQuickCount;label=labels[min<uint8_t>(quickIndex_,kQuickCount-1)];detail=backendStatus_;break;

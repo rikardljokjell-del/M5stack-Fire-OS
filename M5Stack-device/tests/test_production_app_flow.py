@@ -45,6 +45,14 @@ def source():
     ui+='void FireOS::jobAck(const String& message){const String type=jsonStringField(message,"type");'+block(os_source.split('void FireOS::handleBackendMessage(',1)[1],'if(aiJobViewing_ && aiJobOpenPending_ && aiJobOpenRequest_.length()')+'}\n'
     repair=os_source.split('void FireOS::handleLuaRepairStatus(',1)[1].split('  if (incomingApp.length())',1)[0]
     ui+='bool FireOS::repairGate(const String& message) {'+repair.split('{',1)[1].replace('return;','return false;')+'return opened;}\n'
+    draw_at=os_source.index('    const auto repairPanel=')
+    draw=os_source[draw_at:os_source.index('    String appLabel',draw_at)]
+    action_at=os_source.index('    drawText(160, 185, repairPanel.action,',draw_at)
+    draw+=os_source[action_at:os_source.index('FireUI::Selected);',action_at)+len('FireUI::Selected);')]
+    ui+='void FireOS::repairDraw(){'+draw+'}\n'
+    qa=(ROOT/'src/fire_os_local_qa.inc').read_text(encoding='utf-8')
+    qa_case=qa.split('    case Screen::LuaApp:',1)[1].split('    case Screen::QuickSettings:',1)[0]
+    ui+='void FireOS::repairQa(){struct {unsigned count=0;bool error=false;}out;String label,detail;switch(screen_){case Screen::LuaApp:'+qa_case+'default:return;}qaLabel=label;qaError=out.error;qaCount=out.count;}\n'
     return PREAMBLE+'\n#include "fire_os_download.inc"\n'+methods+manager+release+lifetime+ui+MAIN
 
 PREAMBLE=r'''
@@ -60,6 +68,8 @@ PREAMBLE=r'''
 #include "fire_package_delivery.h"
 #include "fire_ai_menu.h"
 constexpr unsigned HEX=16;
+constexpr uint16_t kOrange=1,kCyan=2,kBg=3,kText=4;
+namespace FireUI {constexpr uint16_t Selected=5;}
 class String {
   std::string s;
  public:
@@ -101,7 +111,7 @@ struct Package {
   void finishReceipt(){receipt=active=false;}
 };
 struct FireOS {
-  enum class Screen {Main,AppsSettings,AiDeveloper};Screen screen_=Screen::Main;
+  enum class Screen {Main,AppsSettings,AiDeveloper,LuaApp};Screen screen_=Screen::Main;
   Backend* backendClient_=nullptr;Package* packageManager_=nullptr;
   String downloadRequest_,downloadProject_,downloadApp_,downloadPackage_,downloadSession_,downloadBoot_;
   uint32_t downloadRequestedAt_=0;uint8_t downloadPhase_=0;
@@ -113,6 +123,10 @@ struct FireOS {
   bool repairCancelSupported_=true,luaRepairRequested_=false,luaRepairPrepareSent_=false,luaRepairBuildConfirmed_=false,luaRepairConfirmPending_=false,luaRepairCancelPending_=false;
   String luaRepairId_;unsigned inventories=0,homes=0;
   bool aiJobViewing_=false;
+  bool luaAppActive_=false,qaError=false;unsigned qaCount=0;
+  String drawnTitle,drawnAction,qaLabel;
+  void drawText(int,int y,const char* text,uint16_t,unsigned,uint16_t){if(y==28)drawnTitle=text;if(y==185)drawnAction=text;}
+  void repairDraw();void repairQa();
   bool aiJobOpenPending_=false,luaRepairStatusQueryPending_=false,aiProjectPickerActive_=false;
   fire_ai_menu::Page aiPickerPage_=fire_ai_menu::Page::Main;
   String aiJobOpenRequest_,aiJobRepair_,luaRepairAppId_,luaErrorAppId_;
@@ -254,11 +268,32 @@ int main(){
   ack("reject-ready","accepted","rejected");os.handleDownloadIntent("ack");assert(os.aiWorkflowState_==5 && b.runs==afterRun);
   os.downloadPhase_=1;os.aiWorkflowState_=4;os.downloadRequestedAt_=nowMs;nowMs+=15000;os.serviceDownloadIntent();assert(os.aiWorkflowState_==5);
   os.downloadPhase_=2;os.aiWorkflowState_=4;os.cancelAppDownload();assert(os.aiWorkflowState_==4);
+  // Actual LCD statements and actual LuaApp QA switch branch share one tiny
+  // presentation, with no change to action dispatch/permission guards.
+  os.screen_=FireOS::Screen::LuaApp;os.luaAppActive_=false;os.aiJobViewing_=true;
+  os.luaRepairStatus_="loading";os.aiJobOpenPending_=true;os.luaErrorAction_=0;os.luaRepairRequested_=false;
+  os.repairDraw();os.repairQa();assert(os.drawnTitle=="JOBBSTATUS" && os.drawnAction=="Venter" && os.qaLabel==os.drawnAction && !os.qaError && os.qaCount==1);
+  os.aiJobOpenPending_=false;os.repairDraw();os.repairQa();
+  assert(os.drawnTitle=="JOBBSTATUS" && os.drawnAction=="Prøv igjen" && os.qaLabel==os.drawnAction && !os.qaError);
+  os.luaRepairStatus_="ready";os.luaErrorAction_=1;os.repairDraw();os.repairQa();
+  assert(os.drawnTitle=="JOBBSTATUS" && os.drawnAction=="Kjør rettet app" && os.qaLabel==os.drawnAction && !os.qaError);
+  os.luaRepairStatus_="building";os.luaErrorAction_=0;os.repairDraw();os.repairQa();
+  assert(os.drawnTitle=="JOBBSTATUS" && os.drawnAction=="Fiks feil" && os.qaLabel==os.drawnAction && !os.qaError);
+  os.aiJobViewing_=false;os.luaRepairStatus_="failed";os.repairDraw();os.repairQa();
+  assert(os.drawnTitle=="APP ERROR" && os.drawnAction=="Fiks feil" && os.qaLabel==os.drawnAction && os.qaError);
+  os.luaRepairRequested_=true;os.repairDraw();os.repairQa();assert(os.drawnAction=="Venter" && os.qaLabel==os.drawnAction && os.qaError);
+  os.luaAppActive_=true;os.repairQa();assert(!os.qaError && os.qaLabel=="App running");
+  puts("PASS actual readonly job LCD QA title action and real fault parity");
   puts("PASS production download intent cancel receipt no paid replay and exact manager target");
 }
 '''
 
 class ProductionAppFlowTests(unittest.TestCase):
+    def test_real_app_start_clears_readonly_view_before_load_errors(self):
+        source=(ROOT/'src/fire_os.cpp').read_text(encoding='utf-8').split('bool FireOS::startLuaApp(',1)[1]
+        self.assertLess(source.index('aiJobViewing_=aiJobOpenPending_=false'),source.index('if (!luaRuntime_)'))
+        self.assertLess(source.index('aiJobViewing_=aiJobOpenPending_=false'),source.index('SD.exists(manifestPath)'))
+
     def test_actual_handlers(self):
         compiler=native.host_compiler()
         if compiler is None:self.skipTest('No host C++ compiler')

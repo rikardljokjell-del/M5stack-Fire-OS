@@ -58,6 +58,14 @@ inline bool sameJob(const char* build,const char* repair,const char* receivedBui
   return repair && *repair && receivedRepair && !strcmp(repair,receivedRepair);
 }
 inline bool autoConfirmRepair(bool requested,bool readonlyView) {return requested && !readonlyView;}
+// One presentation for LCD and safe QA; no repair/build/run authority.
+struct RepairPanel {const char* title;const char* action;bool error;};
+inline RepairPanel repairPanel(bool viewing,bool active,const char* status,bool pending,bool requested,uint8_t action) {
+  const bool job=viewing && !active;
+  const char* label=active?"App running":job && status && !strcmp(status,"loading")?
+    (pending?"Venter":"Prøv igjen"):requested && action==0?"Venter":action==0?"Fiks feil":"Kjør rettet app";
+  return {job?"JOBBSTATUS":"APP ERROR",label,!active && !job};
+}
 enum class OpenRoute:uint8_t {None,Repair,Build};
 inline OpenRoute openRoute(bool available,const char* build,const char* repair) {
   return !available?OpenRoute::None:repair && *repair?OpenRoute::Repair:build && *build?OpenRoute::Build:OpenRoute::None;
